@@ -1,0 +1,8 @@
+{
+  "name": "pi-agent-coordination-prototypes",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prototype:live-retry": "node prototypes/live-polling-retry/tui.ts"
+  }
+}
