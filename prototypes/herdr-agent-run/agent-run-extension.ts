@@ -10,7 +10,7 @@ const MAX_REQUEST_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 2_000;
 const PROTOCOL_VERSION = 1;
 
-type Operation = "probe" | "submit" | "abort" | "request_human" | "shutdown";
+type Operation = "probe" | "submit" | "steer" | "abort" | "request_human" | "shutdown";
 
 type ControlRequest = {
 	version: number;
@@ -43,7 +43,7 @@ function isAuthorized(actual: unknown, expected: string): boolean {
 }
 
 function isOperation(value: unknown): value is Operation {
-	return ["probe", "submit", "abort", "request_human", "shutdown"].includes(String(value));
+	return ["probe", "submit", "steer", "abort", "request_human", "shutdown"].includes(String(value));
 }
 
 export default function (pi: ExtensionAPI) {
@@ -196,6 +196,22 @@ export default function (pi: ExtensionAPI) {
 						workStarting = false;
 						throw error;
 					}
+					accept(socket, request.id);
+					return;
+				case "steer":
+					if (workStarting) {
+						reject(socket, request.id, "work_starting", "Steer requires agent_start confirmation");
+						return;
+					}
+					if (idle || humanRequestController) {
+						reject(socket, request.id, "not_active", "Steer requires confirmed active work");
+						return;
+					}
+					if (typeof request.text !== "string" || request.text.trim().length === 0) {
+						reject(socket, request.id, "bad_request", "Steer requires non-empty text");
+						return;
+					}
+					pi.sendUserMessage(request.text, { deliverAs: "steer" });
 					accept(socket, request.id);
 					return;
 				case "abort":

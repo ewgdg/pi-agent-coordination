@@ -10,12 +10,12 @@ Can a normal interactive Pi TUI remain fully human-operable while a machine cont
 
 ```text
 Herdr pane PTY ───────────────→ normal Pi TUI      # human input and Human Answers
-Python driver ── AF_UNIX ─────→ Pi extension       # submit, redirect, abort, shutdown
-                                      │
-                                      ├─ pi.sendUserMessage()
-                                      ├─ ctx.abort()
-                                      ├─ ctx.ui.input()
-                                      └─ ctx.shutdown()
+Python driver ── AF_UNIX ─────→ Pi extension       # submit, steer, abort, Human Request, shutdown
+       │                              │
+       │ redirect =                   ├─ pi.sendUserMessage()
+       │ abort → settle → submit      ├─ ctx.abort()
+       │                              ├─ ctx.ui.input()
+       └──────────────────────────────└─ ctx.shutdown()
 ```
 
 Pi RPC cannot attach to an already-running interactive TUI. Starting a second RPC Pi on the same session would violate single-writer ownership. The prototype instead gives the extension inside the existing Pi process a short authenticated POSIX pathname socket.
@@ -44,10 +44,11 @@ The launcher fails before spawning Pi if a requested variable is not exported. I
 2. Press `b`: the authenticated probe, Herdr foreground process, Herdr session report, and lease must identify the same Pi Run.
 3. Press `i`: the socket opens a real Human Request in Pi’s panel. Answer it only in that panel, then press `p`.
 4. Press `w`: the socket submits deterministic long work through `pi.sendUserMessage()`.
-5. Type an unsent draft into Pi’s editor while it works, then press `x`: `ctx.abort()` must settle work while Pi remains alive and the draft remains unchanged.
-6. Press `w` again, then `s`: semantic redirect performs abort → confirmed settlement → submit new guidance. It does not place a pending Pi steering message in the editor.
-7. With unsent editor text while idle, press `k`: the socket schedules `ctx.shutdown()` without typing or clearing a shutdown command in the editor.
-8. Press `q`: explicitly close the scratch pane and soft-delete the disposable scratch directory and fail-closed lease.
+5. While that work is active, press `s`: Pi accepts non-interrupting steer for its next turn boundary; the current tool call must continue.
+6. Type an unsent draft into Pi’s editor while active work runs, then press `x`: `ctx.abort()` must settle work while Pi remains alive. If no steer is pending, the draft remains unchanged. If a steer is still pending, Pi natively restores it ahead of the draft.
+7. Press `w` again, then `r`: redirect performs abort → confirmed settlement with the admitted Pi PID still present → submit replacement guidance.
+8. With unsent editor text while idle, press `k`: the socket schedules `ctx.shutdown()` without typing or clearing a shutdown command in the editor.
+9. Press `q`: explicitly close the scratch pane and soft-delete the disposable scratch directory and fail-closed lease.
 
 Also test shutdown while a Human Request is blocked. The extension cancels its own `ctx.ui.input()` through an `AbortController`, clears Herdr’s `blocked` projection, and then requests graceful Pi shutdown.
 
@@ -56,7 +57,7 @@ Also test shutdown while a Human Request is blocked. The extension cancels its o
 One authenticated NDJSON request is allowed per connection:
 
 ```json
-{"version":1,"id":"uuid","token":"64-hex","op":"probe|submit|abort|request_human|shutdown","text":"optional"}
+{"version":1,"id":"uuid","token":"64-hex","op":"probe|submit|steer|abort|request_human|shutdown","text":"optional"}
 ```
 
 The extension:
@@ -72,9 +73,18 @@ The extension:
 - blocks session switching and forking while the fixed-session lease is held;
 - closes and rebinds the endpoint with a new runtime ID after extension reload.
 
-An `accepted` response means only that the request was authenticated, validated, and dispatched or scheduled through Pi’s public APIs. Settlement is observed separately through `agent_settled` and Herdr’s settled `idle` or `done` status. Shutdown sets the runtime closing state before acknowledgment, so no later controls are admitted, but acknowledgment and socket closure are not process-exit receipts.
+An `accepted` response means only that the request was authenticated, validated, and dispatched or scheduled through Pi’s public APIs. The public extension API does not provide queue or delivery confirmation for steer, settlement confirmation for abort, or `agent_start` confirmation for submit. Settlement is observed separately through `agent_settled`, an idle probe, and Herdr’s settled `idle` or `done` status. Shutdown sets the runtime closing state before acknowledgment, so no later controls are admitted, but acknowledgment and socket closure are not process-exit receipts.
 
-Semantic redirect deliberately composes abort → confirmed settlement → submit. It does not use Pi’s queued steering mode because Pi preserves an unconsumed steering message by restoring it into the TUI editor during native abort.
+| Operation | Admission | Meaning after acceptance |
+| --- | --- | --- |
+| `submit` | Idle, unblocked Run | Pi has accepted dispatch of new work; `agent_start` remains a separate observation. |
+| `steer` | Confirmed active work | Pi has accepted non-interrupting guidance for its next turn boundary; the current turn/tool batch continues. |
+| `abort` | Confirmed active work | Pi has received an interruption request; settlement remains a separate observation. |
+| redirect | Driver-only composition | Abort accepted → settlement and admitted-PID presence observed → replacement submit accepted. |
+
+Redirect is intentionally absent from the wire protocol. It is a driver-level composition over `abort`, independent settlement observation, and `submit`; it does not replace steer.
+
+Pi’s interactive abort natively restores any unconsumed queued steer into the TUI editor ahead of the human’s unsent draft. An abort or redirect after steer can therefore expose the pending guidance in the editor. This is expected Pi behavior: steer remains useful when guidance should wait for the next turn, while redirect is the explicit interrupt-and-replace operation.
 
 ## Result boundary
 
@@ -85,9 +95,10 @@ The prototype can prove:
 - socket, Herdr, and lease bind the same Pi process and session;
 - machine controls do not depend on editor contents, Vim mode, dialogs, or terminal focus;
 - Human Requests use Pi’s real panel;
-- submit, abort, Human Request, and shutdown call Pi’s extension APIs in the existing process;
-- semantic redirect composes abort, independently confirmed settlement, and submit;
-- abort settles work without inserting control text or terminating Pi;
+- submit, steer, abort, Human Request, and shutdown call Pi’s extension APIs in the existing process;
+- steer queues guidance without interrupting current work;
+- semantic redirect remains distinct and composes abort, independently confirmed settlement with the admitted PID still present, and submit;
+- abort settles work without injecting an abort command or terminating Pi; pending steer restoration remains Pi-owned editor behavior;
 - required Agent environment can be forwarded explicitly;
 - session replacement is refused while the lease identifies the current session.
 

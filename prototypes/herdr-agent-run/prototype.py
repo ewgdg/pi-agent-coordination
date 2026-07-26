@@ -3,7 +3,7 @@
 
 A Pi extension owns an authenticated local socket and invokes Pi's public APIs
 inside the same interactive TUI process. Human input remains in the Pi panel;
-machine submit, redirect, abort, Human Request, and shutdown never touch its editor.
+machine submit, steer, abort, Human Request, and shutdown never use editor injection.
 """
 
 from __future__ import annotations
@@ -437,12 +437,17 @@ class Prototype:
             time.sleep(0.2)
         return False
 
-    def wait_for_control_idle(self, timeout: float = 30) -> bool:
+    def wait_for_target_settled(self, timeout: float = 30) -> bool:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
                 probe = self.refresh_control_binding()
-                if probe.get("idle") is True and self.snapshot().herdr_status in {"idle", "done"}:
+                state = self.snapshot()
+                if (
+                    probe.get("idle") is True
+                    and state.herdr_status in {"idle", "done"}
+                    and state.pi_pid == self.admitted_pid
+                ):
                     return True
             except (ConnectionError, FileNotFoundError, OSError, RuntimeError):
                 pass
@@ -468,14 +473,21 @@ class Prototype:
     def interrupt_active_work(self) -> dict[str, Any]:
         self.refresh_control_binding()
         response = self.require_control("abort")
-        settled = self.wait_for_control_idle(timeout=30)
-        process_present = self.snapshot().pi_pid == self.admitted_pid
-        if not settled or not process_present:
-            raise RuntimeError(
-                f"abort boundary not observed: settled={settled}, "
-                f"processPresent={process_present}, response={response}"
-            )
+        if not self.wait_for_target_settled(timeout=30):
+            raise RuntimeError(f"abort boundary not observed for admitted Pi process: response={response}")
         return response
+
+    def steer(self) -> None:
+        self.refresh_control_binding()
+        response = self.require_control(
+            "steer",
+            text="After the current tool call completes, stop and wait for further instructions without running more tools.",
+        )
+        self.last_proof = (
+            "Steer accepted by the extension; delivery remains pending until Pi's next turn boundary"
+            if response.get("ok") is True
+            else f"Steer submission failed: {response}"
+        )
 
     def redirect(self) -> None:
         self.interrupt_active_work()
@@ -526,8 +538,9 @@ class Prototype:
         print(f"{BOLD}last proof{RESET}:        {self.last_proof}\n")
         print(f"{BOLD}[a]{RESET} reject second writer       {BOLD}[b]{RESET} verify session binding")
         print(f"{BOLD}[i]{RESET} open Human Request         {BOLD}[p]{RESET} refresh observations")
-        print(f"{BOLD}[w]{RESET} socket-submit long work    {BOLD}[s]{RESET} abort-settle-submit redirect")
-        print(f"{BOLD}[x]{RESET} socket semantic abort      {BOLD}[k]{RESET} socket graceful shutdown")
+        print(f"{BOLD}[w]{RESET} socket-submit long work    {BOLD}[s]{RESET} queue non-interrupting steer")
+        print(f"{BOLD}[r]{RESET} abort-settle-submit redirect {BOLD}[x]{RESET} socket semantic abort")
+        print(f"{BOLD}[k]{RESET} socket graceful shutdown")
         print(f"{BOLD}[q]{RESET} explicit prototype cleanup")
         print(f"\n{DIM}Human input stays in Pi's panel. Machine controls never type into its editor.{RESET}")
 
@@ -542,7 +555,7 @@ class Prototype:
                 probe = self.control_request("probe")
                 if probe.get("ok") and probe.get("idle") is False:
                     self.control_request("abort")
-                    self.wait_for_control_idle(timeout=10)
+                    self.wait_for_target_settled(timeout=10)
                 self.control_request("shutdown")
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and self.snapshot().pi_pid is not None:
@@ -580,6 +593,8 @@ class Prototype:
                     elif action == "w":
                         self.start_work()
                     elif action == "s":
+                        self.steer()
+                    elif action == "r":
                         self.redirect()
                     elif action == "x":
                         self.abort()
