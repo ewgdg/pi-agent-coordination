@@ -1,49 +1,83 @@
 #!/usr/bin/env python3
-"""PROTOTYPE — prove Herdr/Pi Agent Run admission and termination boundaries.
+"""PROTOTYPE — test native interactive Pi Agent Run boundaries in Herdr.
 
-Question: can a small Herdr-hosted runner fence one Pi session writer, prove RPC
-readiness and binding, keep process/work/attention observations separate,
-interrupt work semantically, and confirm the exact Pi incarnation terminated?
+Question: can a normal Pi TUI enforce cooperating single-writer admission, prove
+its intended session binding, expose process/work/attention observations, use
+Pi-native steer/abort/Human Requests, and terminate through Pi itself?
 
-This is deliberately throwaway. It uses one runner process in a Herdr pane and
-an independent controller-held pidfd. It is not a production backend design.
+This is throwaway evidence. It deliberately does not add RPC mode, a custom
+control socket, pidfds, signal handling, or a replacement UI.
 """
 
 from __future__ import annotations
 
-import argparse
-import hashlib
 import json
 import os
-import select
 import shutil
-import signal
-import socket
 import subprocess
-import sys
 import tempfile
-import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 SCRIPT_PATH = Path(__file__).resolve()
-EXTENSION_PATH = SCRIPT_PATH.with_name("attention-extension.ts")
+EXTENSION_PATH = SCRIPT_PATH.with_name("agent-run-extension.ts")
 BOLD = "\033[1m"
 DIM = "\033[2m"
 RESET = "\033[0m"
-DIALOG_METHODS = {"select", "confirm", "input", "editor"}
 
 
-def emit(message: dict[str, Any]) -> None:
-    print(json.dumps(message, separators=(",", ":")), flush=True)
+def run_json(command: list[str], *, check: bool = True) -> dict[str, Any]:
+    completed = subprocess.run(command, text=True, capture_output=True)
+    if check and completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise RuntimeError(f"{' '.join(command)} failed: {detail}")
+    output = completed.stdout.strip() or completed.stderr.strip()
+    if not output:
+        return {"returncode": completed.returncode}
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        return {"returncode": completed.returncode, "output": output}
+    if isinstance(parsed, dict):
+        parsed.setdefault("returncode", completed.returncode)
+        return parsed
+    return {"returncode": completed.returncode, "result": parsed}
 
 
-def lease_key(session_directory: Path, session_id: str) -> str:
-    identity = f"{session_directory.resolve()}\0{session_id}".encode()
-    return hashlib.sha256(identity).hexdigest()
+def walk(value: Any):
+    yield value
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from walk(child)
+
+
+def find_first(value: Any, keys: set[str]) -> Any:
+    for candidate in walk(value):
+        if not isinstance(candidate, dict):
+            continue
+        for key in keys:
+            if key in candidate:
+                return candidate[key]
+    return None
+
+
+def find_session_path(value: Any) -> str | None:
+    direct = find_first(value, {"agent_session_path", "session_path"})
+    if isinstance(direct, str):
+        return direct
+    for candidate in walk(value):
+        if not isinstance(candidate, dict):
+            continue
+        session = candidate.get("agent_session")
+        if isinstance(session, dict) and session.get("kind") == "path" and isinstance(session.get("value"), str):
+            return session["value"]
+    return None
 
 
 def acquire_lease(lease_path: Path, record: dict[str, Any]) -> None:
@@ -55,501 +89,308 @@ def acquire_lease(lease_path: Path, record: dict[str, Any]) -> None:
         os.fsync(lease_file.fileno())
 
 
-def release_lease(lease_path: Path, fence_token: str) -> bool:
-    try:
-        record = json.loads(lease_path.read_text())
-    except FileNotFoundError:
-        return False
-    if record.get("fenceToken") != fence_token:
-        raise RuntimeError("lease fence token changed; refusing release")
-    lease_path.unlink()
-    return True
-
-
-def send_fd(socket_path: Path, pidfd: int, metadata: dict[str, Any]) -> None:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as channel:
-        channel.connect(str(socket_path))
-        payload = json.dumps(metadata).encode()
-        channel.sendmsg([payload], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, pidfd.to_bytes(4, sys.byteorder))])
-
-
-def receive_fd(listener: socket.socket) -> tuple[int, dict[str, Any]]:
-    connection, _ = listener.accept()
-    with connection:
-        payload, ancillary, _flags, _address = connection.recvmsg(65536, socket.CMSG_SPACE(4))
-    for level, kind, data in ancillary:
-        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
-            return int.from_bytes(data[:4], sys.byteorder), json.loads(payload)
-    raise RuntimeError("runner did not transfer a pidfd")
+def parse_pane_id(response: dict[str, Any]) -> str:
+    pane_id = find_first(response, {"pane_id"})
+    if not isinstance(pane_id, str):
+        raise RuntimeError(f"Herdr split did not return a pane ID: {response}")
+    return pane_id
 
 
 @dataclass
-class Observation:
-    process: str = "alive"
-    work: str = "settled"
-    attention: str = "none"
-    session_file: str | None = None
-    session_id: str | None = None
-    last_event: str = "RPC process spawned"
-    pending_dialog_id: str | None = None
-    event_counts: dict[str, int] = field(default_factory=dict)
-
-    def event(self, event: dict[str, Any]) -> None:
-        event_type = str(event.get("type", "unknown"))
-        self.event_counts[event_type] = self.event_counts.get(event_type, 0) + 1
-        self.last_event = event_type
-        if event_type == "agent_start":
-            self.work = "active"
-        elif event_type == "agent_settled":
-            self.work = "settled"
-        elif event_type == "extension_ui_request" and event.get("method") in DIALOG_METHODS:
-            self.attention = "input-required"
-            self.pending_dialog_id = str(event["id"])
-
-    def snapshot(self) -> dict[str, Any]:
-        return {
-            "process": self.process,
-            "work": self.work,
-            "attention": self.attention,
-            "sessionFile": self.session_file,
-            "sessionId": self.session_id,
-            "pendingDialogId": self.pending_dialog_id,
-            "lastEvent": self.last_event,
-            "eventCounts": self.event_counts,
-        }
+class Snapshot:
+    process: str
+    work: str
+    attention: str
+    herdr_status: str
+    session_path: str | None
+    pi_pid: int | None
 
 
-class PiRpc:
-    def __init__(self, process: subprocess.Popen[str]) -> None:
-        self.process = process
-        self.observation = Observation()
-        self._condition = threading.Condition()
-        self._responses: dict[str, dict[str, Any]] = {}
-        self._reader = threading.Thread(target=self._read_stdout, daemon=True)
-        self._reader.start()
+class Prototype:
+    def __init__(self) -> None:
+        self.scratch = Path(tempfile.mkdtemp(prefix="herdr-interactive-run-prototype."))
+        self.session_directory = self.scratch / "sessions"
+        self.session_directory.mkdir()
+        self.session_id = str(uuid.uuid4())
+        self.agent_name = f"agent-run-proof-{self.session_id[:8]}"
+        self.run_token = str(uuid.uuid4())
+        self.lease_path = self.scratch / "leases" / f"{self.session_id}.json"
+        self.pane_id: str | None = None
+        self.last_proof = "Not launched"
+        self.shutdown_requested = False
 
-    def _read_stdout(self) -> None:
-        assert self.process.stdout is not None
-        for line in self.process.stdout:
-            try:
-                message = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            with self._condition:
-                response_id = message.get("id")
-                if message.get("type") == "response" and response_id:
-                    self._responses[str(response_id)] = message
-                else:
-                    self.observation.event(message)
-                self._condition.notify_all()
-        with self._condition:
-            self.observation.process = "terminated"
-            self.observation.last_event = "stdout-closed"
-            self._condition.notify_all()
+    def launch(self) -> None:
+        acquire_lease(
+            self.lease_path,
+            {
+                "sessionId": self.session_id,
+                "sessionDirectory": str(self.session_directory),
+                "runToken": self.run_token,
+                "state": "admitting",
+            },
+        )
+        split = run_json(
+            [
+                "herdr",
+                "pane",
+                "split",
+                "--current",
+                "--direction",
+                "down",
+                "--ratio",
+                "0.35",
+                "--cwd",
+                str(Path.cwd()),
+                "--no-focus",
+            ]
+        )
+        self.pane_id = parse_pane_id(split)
+        try:
+            self.start_agent_when_shell_ready()
+            session_path = self.wait_for_session_path()
+            if not self.binding_matches(session_path):
+                self.request_shutdown()
+                raise RuntimeError(
+                    f"interactive readiness bound the wrong session: expected {self.session_id} in "
+                    f"{self.session_directory}, observed {session_path}"
+                )
+            record = json.loads(self.lease_path.read_text())
+            record.update({"state": "ready", "paneId": self.pane_id, "sessionFile": session_path})
+            self.lease_path.write_text(json.dumps(record))
+            self.last_proof = "PASS — normal Pi TUI ready with intended session binding"
+        except Exception:
+            self.close_pane()
+            raise
 
-    def send(self, command: dict[str, Any]) -> str:
-        request_id = str(command.setdefault("id", str(uuid.uuid4())))
-        assert self.process.stdin is not None
-        self.process.stdin.write(json.dumps(command) + "\n")
-        self.process.stdin.flush()
-        return request_id
-
-    def request(self, command: dict[str, Any], timeout: float = 30) -> dict[str, Any]:
-        request_id = self.send(command)
-        deadline = time.monotonic() + timeout
-        with self._condition:
-            while request_id not in self._responses:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError(f"Pi RPC response timed out: {command['type']}")
-                self._condition.wait(remaining)
-            return self._responses.pop(request_id)
-
-    def wait_for(self, predicate, timeout: float = 30) -> bool:
-        deadline = time.monotonic() + timeout
-        with self._condition:
-            while not predicate(self.observation):
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                self._condition.wait(remaining)
-            return True
-
-
-class Runner:
-    def __init__(self, arguments: argparse.Namespace) -> None:
-        self.arguments = arguments
-        self.lease_path = Path(arguments.lease_path)
-        self.fence_token = str(uuid.uuid4())
-        self.run_id = str(uuid.uuid4())
-        self.pi: PiRpc | None = None
-        self.child: subprocess.Popen[str] | None = None
-        self.pidfd: int | None = None
-
-    def start(self) -> None:
-        session_directory = Path(self.arguments.session_directory).resolve()
-        record = {
-            "sessionKey": f"{session_directory}:{self.arguments.session_id}",
-            "runId": self.run_id,
-            "fenceToken": self.fence_token,
-            "state": "admitting",
-        }
-        acquire_lease(self.lease_path, record)
-
-        pi_command = [
-            shutil.which("pi") or "pi",
-            "--mode",
-            "rpc",
+    def start_agent_when_shell_ready(self) -> None:
+        assert self.pane_id is not None
+        command = [
+            "herdr",
+            "agent",
+            "start",
+            self.agent_name,
+            "--kind",
+            "pi",
+            "--pane",
+            self.pane_id,
+            "--timeout",
+            "30000",
+            "--",
             "--session-dir",
-            str(session_directory),
+            str(self.session_directory),
             "--session-id",
-            self.arguments.session_id,
+            self.session_id,
             "--extension",
             str(EXTENSION_PATH),
             "--no-skills",
             "--no-prompt-templates",
         ]
-        self.child = subprocess.Popen(
-            pi_command,
-            cwd=self.arguments.working_directory,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
-        )
-        self.pidfd = os.pidfd_open(self.child.pid)
-        self.pi = PiRpc(self.child)
-
-        response = self.pi.request({"id": "readiness", "type": "get_state"})
-        data = response.get("data", {})
-        actual_file = Path(str(data.get("sessionFile", ""))).resolve()
-        actual_id = data.get("sessionId")
-        binding_ok = (
-            response.get("success") is True
-            and actual_id == self.arguments.session_id
-            and actual_file.parent == session_directory
-            and self.child.poll() is None
-        )
-        if not binding_ok:
-            signal.pidfd_send_signal(self.pidfd, signal.SIGTERM)
-            self.child.wait(timeout=10)
-            release_lease(self.lease_path, self.fence_token)
-            raise RuntimeError(f"readiness binding rejected: {response}")
-
-        self.pi.observation.session_file = str(actual_file)
-        self.pi.observation.session_id = str(actual_id)
-        record.update({"state": "ready", "pid": self.child.pid, "sessionFile": str(actual_file)})
-        self.lease_path.write_text(json.dumps(record))
-        send_fd(
-            Path(self.arguments.fd_socket),
-            self.pidfd,
-            {
-                "pid": self.child.pid,
-                "runId": self.run_id,
-                "fenceToken": self.fence_token,
-                "leasePath": str(self.lease_path),
-                "sessionFile": str(actual_file),
-                "sessionId": str(actual_id),
-            },
-        )
-        self.serve()
-
-    def serve(self) -> None:
-        control_path = Path(self.arguments.control_socket)
-        control_path.unlink(missing_ok=True)
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
-            server.bind(str(control_path))
-            server.listen()
-            while True:
-                connection, _ = server.accept()
-                with connection:
-                    request = json.loads(connection.recv(65536))
-                    try:
-                        response = self.handle(request)
-                    except Exception as error:
-                        response = {"ok": False, "error": f"{type(error).__name__}: {error}"}
-                    connection.sendall(json.dumps(response).encode())
-                if request.get("command") == "detach":
-                    return
-
-    def handle(self, request: dict[str, Any]) -> dict[str, Any]:
-        assert self.pi is not None
-        command = request.get("command")
-        if command == "snapshot":
-            return {"ok": True, "observation": self.pi.observation.snapshot()}
-        if command == "verify-binding":
-            expected_id = request.get("expectedSessionId")
-            state = self.pi.request({"type": "get_state"})
-            actual_id = state.get("data", {}).get("sessionId")
-            return {"ok": actual_id == expected_id, "expected": expected_id, "actual": actual_id}
-        if command == "attention":
-            self.pi.send({"id": "attention-prompt", "type": "prompt", "message": "/prototype-attention"})
-            appeared = self.pi.wait_for(lambda state: state.attention == "input-required", timeout=10)
-            return {"ok": appeared}
-        if command == "answer-attention":
-            dialog_id = self.pi.observation.pending_dialog_id
-            if not dialog_id:
-                return {"ok": False, "error": "no pending dialog"}
-            assert self.child is not None and self.child.stdin is not None
-            self.child.stdin.write(json.dumps({"type": "extension_ui_response", "id": dialog_id, "value": "released"}) + "\n")
-            self.child.stdin.flush()
-            self.pi.observation.attention = "none"
-            self.pi.observation.pending_dialog_id = None
-            return {"ok": True}
-        if command == "start-work":
-            response = self.pi.request(
-                {
-                    "type": "prompt",
-                    "message": "Use the bash tool to run `sleep 60`. Do not do anything else.",
-                }
-            )
-            active = self.pi.wait_for(lambda state: state.work == "active", timeout=15)
-            return {"ok": response.get("success") is True and active, "rpc": response}
-        if command == "steer":
-            return self.pi.request({"type": "steer", "message": "Stop the current approach and wait for further instructions."})
-        if command == "abort":
-            response = self.pi.request({"type": "abort"})
-            settled = self.pi.wait_for(lambda state: state.work == "settled", timeout=30)
-            return {
-                "ok": response.get("success") is True and settled and self.child is not None and self.child.poll() is None,
-                "rpc": response,
-                "settled": settled,
-                "processAlive": self.child is not None and self.child.poll() is None,
-            }
-        if command == "detach":
-            return {"ok": True, "note": "runner detached without releasing the lease"}
-        return {"ok": False, "error": f"unknown command: {command}"}
-
-
-def call_runner(control_path: Path, command: str, **fields: Any) -> dict[str, Any]:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(45)
-        client.connect(str(control_path))
-        client.sendall(json.dumps({"command": command, **fields}).encode())
-        payload = client.recv(65536)
-    if not payload:
-        raise ConnectionError("runner closed the control connection without a response")
-    return json.loads(payload)
-
-
-def parse_pane_id(payload: str) -> str:
-    response = json.loads(payload)
-    return str(response["result"]["pane"]["pane_id"])
-
-
-@dataclass
-class ControllerState:
-    pane_id: str
-    control_path: Path
-    lease_path: Path
-    pidfd: int
-    metadata: dict[str, Any]
-    independent_exit_confirmed: bool = False
-    lease_released_after_exit: bool = False
-    pane_closed: bool = False
-    last_proof: str = "Runner admitted after correlated get_state binding proof"
-
-
-class Controller:
-    def __init__(self) -> None:
-        self.scratch = Path(tempfile.mkdtemp(prefix="herdr-agent-run-prototype."))
-        self.session_directory = self.scratch / "sessions"
-        self.session_directory.mkdir()
-        self.session_id = str(uuid.uuid4())
-        leases = self.scratch / "leases"
-        self.lease_path = leases / f"{lease_key(self.session_directory, self.session_id)}.json"
-        self.control_path = self.scratch / "control.sock"
-        self.fd_path = self.scratch / "pidfd.sock"
-        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.listener.bind(str(self.fd_path))
-        self.listener.listen()
-        self.state = self._launch()
-        self._start_exit_watcher()
-
-    def _launch(self) -> ControllerState:
-        split = subprocess.run(
-            ["herdr", "pane", "split", "--current", "--direction", "down", "--ratio", "0.20", "--cwd", str(SCRIPT_PATH.parent), "--no-focus"],
-            check=True,
-            text=True,
-            capture_output=True,
-        )
-        pane_id = parse_pane_id(split.stdout)
-        runner_command = [
-            sys.executable,
-            str(SCRIPT_PATH),
-            "runner",
-            "--control-socket",
-            str(self.control_path),
-            "--fd-socket",
-            str(self.fd_path),
-            "--lease-path",
-            str(self.lease_path),
-            "--session-directory",
-            str(self.session_directory),
-            "--session-id",
-            self.session_id,
-            "--working-directory",
-            str(Path.cwd()),
-        ]
-        subprocess.run(["herdr", "pane", "run", pane_id, *runner_command], check=True, capture_output=True, text=True)
-        self.listener.settimeout(30)
-        pidfd, metadata = receive_fd(self.listener)
         deadline = time.monotonic() + 10
-        while not self.control_path.exists():
-            if time.monotonic() >= deadline:
-                raise TimeoutError("runner control socket did not appear")
-            time.sleep(0.05)
-        return ControllerState(pane_id, self.control_path, self.lease_path, pidfd, metadata)
+        while True:
+            response = run_json(command, check=False)
+            if response.get("returncode") == 0:
+                return
+            error_code = find_first(response, {"code"})
+            # A newly split pane exists before its interactive shell reaches a prompt.
+            if error_code != "agent_pane_busy" or time.monotonic() >= deadline:
+                raise RuntimeError(f"Herdr could not start interactive Pi: {response}")
+            time.sleep(0.1)
 
-    def _start_exit_watcher(self) -> None:
-        def watch() -> None:
-            poller = select.poll()
-            poller.register(self.state.pidfd, select.POLLIN)
-            poller.poll()
-            self.state.independent_exit_confirmed = True
-            self.state.lease_released_after_exit = release_lease(
-                self.state.lease_path, str(self.state.metadata["fenceToken"])
-            )
-            self.state.last_proof = "Independent pidfd became readable; matching fenced lease released"
+    def agent_info(self) -> dict[str, Any]:
+        return run_json(["herdr", "agent", "get", self.agent_name], check=False)
 
-        threading.Thread(target=watch, daemon=True).start()
+    def process_info(self) -> dict[str, Any]:
+        if not self.pane_id:
+            return {}
+        return run_json(["herdr", "pane", "process-info", "--pane", self.pane_id], check=False)
 
-    def runner(self, command: str, **fields: Any) -> dict[str, Any]:
-        if self.state.pane_closed:
-            return {"ok": False, "error": "runner pane is closed; observation channel is unavailable"}
+    def wait_for_session_path(self, timeout: float = 10) -> str | None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            session_path = find_session_path(self.agent_info())
+            if session_path:
+                return session_path
+            time.sleep(0.1)
+        return None
+
+    def binding_matches(self, session_path: str | None) -> bool:
+        if not session_path:
+            return False
+        actual = Path(session_path).resolve()
+        return actual.parent == self.session_directory.resolve() and self.session_id in actual.name
+
+    def snapshot(self) -> Snapshot:
+        agent = self.agent_info()
+        process = self.process_info()
+        status_value = find_first(agent, {"agent_status", "status", "state"})
+        herdr_status = str(status_value) if status_value in {"idle", "working", "blocked", "done", "unknown"} else "unknown"
+
+        foreground = find_first(process, {"foreground_processes"})
+        pi_pid: int | None = None
+        if isinstance(foreground, list):
+            for entry in foreground:
+                if not isinstance(entry, dict):
+                    continue
+                argv = entry.get("argv")
+                name = str(entry.get("name", ""))
+                executable = str(argv[0]) if isinstance(argv, list) and argv else ""
+                if name == "pi" or Path(executable).name == "pi":
+                    pid = entry.get("pid")
+                    pi_pid = pid if isinstance(pid, int) else None
+                    break
+
+        process_state = f"present (PID {pi_pid})" if pi_pid is not None else "absent or unknown"
+        if herdr_status == "working":
+            work = "active"
+        elif herdr_status == "idle":
+            work = "settled"
+        elif herdr_status == "blocked":
+            # Herdr's single status gives attention precedence, so it cannot also prove work state.
+            work = "unknown while attention is projected"
+        else:
+            work = "unknown"
+        attention = "input-required" if herdr_status == "blocked" else "none" if herdr_status in {"idle", "working"} else "unknown"
+        return Snapshot(process_state, work, attention, herdr_status, find_session_path(agent), pi_pid)
+
+    def attempt_second_writer(self) -> None:
         try:
-            return call_runner(self.state.control_path, command, **fields)
-        except (ConnectionError, FileNotFoundError, socket.timeout) as error:
-            return {"ok": False, "error": str(error)}
-
-    def process_state(self) -> str:
-        poller = select.poll()
-        poller.register(self.state.pidfd, select.POLLIN)
-        return "terminated" if poller.poll(0) else "alive"
-
-    def attempt_second_writer(self) -> str:
-        try:
-            acquire_lease(self.lease_path, {"fenceToken": "loser", "state": "must-not-spawn"})
+            acquire_lease(self.lease_path, {"runToken": "loser", "state": "must-not-spawn"})
         except FileExistsError:
-            return "PASS — second launch rejected before spawning Pi"
-        release_lease(self.lease_path, "loser")
-        return "FAIL — second launch acquired the live session lease"
+            self.last_proof = "PASS — second cooperating launch rejected before Pi spawn"
+            return
+        self.last_proof = "FAIL — second launch acquired the live session lease"
 
-    def terminate_exact(self) -> None:
-        if self.process_state() == "alive":
-            signal.pidfd_send_signal(self.state.pidfd, signal.SIGTERM)
-            deadline = time.monotonic() + 5
-            while self.process_state() == "alive" and time.monotonic() < deadline:
-                time.sleep(0.05)
-            if self.process_state() == "alive":
-                signal.pidfd_send_signal(self.state.pidfd, signal.SIGKILL)
-        deadline = time.monotonic() + 10
-        while not self.state.independent_exit_confirmed and time.monotonic() < deadline:
-            time.sleep(0.05)
-        if not self.state.independent_exit_confirmed:
-            raise TimeoutError("independent pidfd watcher did not confirm termination")
+    def send_prompt(self, text: str) -> dict[str, Any]:
+        return run_json(["herdr", "agent", "prompt", self.agent_name, text], check=False)
 
-    def close_pane(self) -> None:
-        if not self.state.pane_closed:
-            self.state.last_proof = "pane.close requested; awaiting independent pidfd exit proof"
-            subprocess.run(["herdr", "pane", "close", self.state.pane_id], check=False, capture_output=True)
-            self.state.pane_closed = True
+    def wait_for_status(self, desired: set[str], timeout: float = 30) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.snapshot().herdr_status in desired:
+                return True
+            time.sleep(0.2)
+        return False
 
-    def cleanup(self) -> None:
-        try:
-            self.terminate_exact()
-        finally:
-            self.close_pane()
+    def request_human_input(self) -> None:
+        response = self.send_prompt("/prototype-request")
+        blocked = self.wait_for_status({"blocked"}, timeout=10)
+        self.last_proof = (
+            "PASS — Human Request is waiting in the normal Pi panel"
+            if blocked
+            else f"Human Request did not reach blocked state: {response}"
+        )
+
+    def start_work(self) -> None:
+        response = self.send_prompt("Use the bash tool to run `sleep 60`. Do not do anything else.")
+        working = self.wait_for_status({"working"}, timeout=15)
+        self.last_proof = "PASS — normal Pi work became active" if working else f"Work did not become active: {response}"
+
+    def steer(self) -> None:
+        response = self.send_prompt("/prototype-steer")
+        self.last_proof = f"Pi steering command submitted through its normal TUI: {response.get('returncode') == 0}"
+
+    def abort(self) -> None:
+        response = self.send_prompt("/prototype-abort")
+        settled = self.wait_for_status({"idle"}, timeout=30)
+        process_present = self.snapshot().pi_pid is not None
+        self.last_proof = (
+            "PASS — Pi abort settled work; Pi remains alive. Idle-close is downstream policy."
+            if settled and process_present
+            else f"Abort boundary not observed: settled={settled}, processPresent={process_present}, response={response}"
+        )
+
+    def request_shutdown(self) -> None:
+        if self.shutdown_requested:
+            return
+        if self.snapshot().herdr_status == "blocked":
+            run_json(["herdr", "agent", "send-keys", self.agent_name, "esc"], check=False)
+            self.wait_for_status({"idle"}, timeout=5)
+        self.shutdown_requested = True
+        response = self.send_prompt("/prototype-shutdown")
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and self.snapshot().pi_pid is not None:
+            time.sleep(0.2)
+        pi_absent = self.snapshot().pi_pid is None
+        self.last_proof = (
+            "Pi requested graceful shutdown and is no longer observed; exact-incarnation exit remains unproven"
+            if pi_absent
+            else f"Pi shutdown was requested but Pi remains observed: {response}"
+        )
 
     def render(self) -> None:
-        observation = self.runner("snapshot")
-        observed = observation.get("observation", {})
-        process = self.process_state()
-        work = observed.get("work", "unknown")
-        attention = observed.get("attention", "unknown")
-        lease = "held" if self.lease_path.exists() else "released"
+        state = self.snapshot()
         os.system("clear")
-        print(f"{BOLD}PROTOTYPE — Herdr Agent Run admission and termination{RESET}\n")
-        print(f"{BOLD}process{RESET}:   {process}  {DIM}(independent pidfd){RESET}")
-        print(f"{BOLD}work{RESET}:      {work}  {DIM}(Pi agent events){RESET}")
-        print(f"{BOLD}attention{RESET}: {attention}  {DIM}(Pi dialog request){RESET}")
-        print(f"{BOLD}lease{RESET}:     {lease}")
-        print(f"{BOLD}pane{RESET}:      {self.state.pane_id} ({'closed' if self.state.pane_closed else 'open'})")
-        print(f"{BOLD}session{RESET}:   {self.state.metadata['sessionId']}")
-        print(f"{BOLD}file{RESET}:      {self.state.metadata['sessionFile']}")
-        print(f"{BOLD}last proof{RESET}: {self.state.last_proof}\n")
-        print(f"{BOLD}[a]{RESET} second-writer admission   {BOLD}[b]{RESET} wrong-binding rejection")
-        print(f"{BOLD}[i]{RESET} require input attention   {BOLD}[r]{RESET} answer input")
-        print(f"{BOLD}[w]{RESET} start long agent work     {BOLD}[s]{RESET} steer work   {BOLD}[x]{RESET} abort work")
-        print(f"{BOLD}[c]{RESET} close Herdr pane          {BOLD}[k]{RESET} exact pidfd termination")
-        print(f"{BOLD}[q]{RESET} quit and clean up")
+        print(f"{BOLD}PROTOTYPE — normal interactive Pi Agent Run{RESET}\n")
+        print(f"{BOLD}process presence{RESET}: {state.process}")
+        print(f"{BOLD}work{RESET}:             {state.work}")
+        print(f"{BOLD}attention{RESET}:        {state.attention}")
+        print(f"{BOLD}Herdr status{RESET}:      {state.herdr_status}")
+        print(f"{BOLD}lease{RESET}:             {'held' if self.lease_path.exists() else 'missing'}")
+        print(f"{BOLD}session expected{RESET}:  {self.session_id}")
+        print(f"{BOLD}session observed{RESET}:  {state.session_path or 'unknown'}")
+        print(f"{BOLD}pane{RESET}:              {self.pane_id}")
+        print(f"{BOLD}last proof{RESET}:        {self.last_proof}\n")
+        print(f"{BOLD}[a]{RESET} reject second writer       {BOLD}[b]{RESET} verify session binding")
+        print(f"{BOLD}[i]{RESET} open Human Request         {BOLD}[p]{RESET} refresh observations")
+        print(f"{BOLD}[w]{RESET} start long work            {BOLD}[s]{RESET} semantic steer")
+        print(f"{BOLD}[x]{RESET} semantic abort             {BOLD}[k]{RESET} ask Pi to shut down")
+        print(f"{BOLD}[q]{RESET} explicit prototype cleanup")
+        print(f"\n{DIM}Answer Human Requests in the Pi pane itself. The lease is never auto-released from disappearance alone.{RESET}")
+
+    def close_pane(self) -> None:
+        if self.pane_id:
+            run_json(["herdr", "pane", "close", self.pane_id], check=False)
+            self.pane_id = None
+
+    def cleanup(self) -> None:
+        if self.pane_id and self.snapshot().pi_pid is not None:
+            self.request_shutdown()
+        self.close_pane()
+        if self.scratch.exists():
+            subprocess.run(["trash-put", str(self.scratch)], check=False)
 
     def run(self) -> None:
         try:
+            self.launch()
             while True:
                 self.render()
-                key = input("\nAction: ").strip().lower()
-                if key == "a":
-                    self.state.last_proof = self.attempt_second_writer()
-                elif key == "b":
-                    result = self.runner("verify-binding", expectedSessionId="deliberately-wrong")
-                    rejected = result.get("ok") is False and result.get("actual") == self.session_id
-                    self.state.last_proof = "PASS — mismatched session ID rejected" if rejected else f"FAIL — binding probe: {result}"
-                elif key == "i":
-                    result = self.runner("attention")
-                    self.state.last_proof = f"attention request: {result.get('ok')}"
-                elif key == "r":
-                    result = self.runner("answer-attention")
-                    self.state.last_proof = f"attention released: {result.get('ok')}"
-                elif key == "w":
-                    result = self.runner("start-work")
-                    self.state.last_proof = "Pi accepted work and emitted agent_start" if result.get("ok") else f"work probe failed: {result}"
-                elif key == "s":
-                    result = self.runner("steer")
-                    self.state.last_proof = f"semantic steer acknowledged: {result.get('success', result.get('ok'))}"
-                elif key == "x":
-                    result = self.runner("abort")
-                    self.state.last_proof = "PASS — abort settled work and Pi stayed alive" if result.get("ok") else f"abort probe failed: {result}"
-                elif key == "c":
-                    self.close_pane()
-                elif key == "k":
-                    self.terminate_exact()
-                elif key == "q":
+                try:
+                    action = input("\nAction: ").strip().lower()
+                except EOFError:
+                    self.last_proof = "No interactive stdin; run this command in a normal terminal"
+                    return
+                if action == "a":
+                    self.attempt_second_writer()
+                elif action == "b":
+                    observed = self.snapshot().session_path
+                    self.last_proof = (
+                        "PASS — Herdr reports the intended Pi session"
+                        if self.binding_matches(observed)
+                        else f"FAIL — binding mismatch: {observed}"
+                    )
+                elif action == "i":
+                    self.request_human_input()
+                elif action == "p":
+                    self.last_proof = "Observations refreshed without collapsing their meanings"
+                elif action == "w":
+                    self.start_work()
+                elif action == "s":
+                    self.steer()
+                elif action == "x":
+                    self.abort()
+                elif action == "k":
+                    self.request_shutdown()
+                elif action == "q":
                     return
         finally:
             self.cleanup()
 
 
-def run_controller() -> None:
-    required = ["herdr", "pi"]
-    missing = [command for command in required if not shutil.which(command)]
+def main() -> None:
+    missing = [command for command in ("herdr", "pi", "trash-put") if not shutil.which(command)]
     if missing:
         raise SystemExit(f"missing required commands: {', '.join(missing)}")
-    if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
-        raise SystemExit("this prototype requires Linux pidfd support")
-    Controller().run()
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="mode")
-    runner = subparsers.add_parser("runner")
-    runner.add_argument("--control-socket", required=True)
-    runner.add_argument("--fd-socket", required=True)
-    runner.add_argument("--lease-path", required=True)
-    runner.add_argument("--session-directory", required=True)
-    runner.add_argument("--session-id", required=True)
-    runner.add_argument("--working-directory", required=True)
-    return parser
-
-
-def main() -> None:
-    arguments = build_parser().parse_args()
-    if arguments.mode == "runner":
-        Runner(arguments).start()
-    else:
-        run_controller()
+    Prototype().run()
 
 
 if __name__ == "__main__":

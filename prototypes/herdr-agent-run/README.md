@@ -1,38 +1,51 @@
-# Herdr Agent Run admission and termination prototype
+# Interactive Herdr Agent Run prototype
 
-> **Throwaway prototype.** This branch exists only as primary evidence for the Wayfinder decision [Prove Herdr Agent Run admission and termination](https://github.com/ewgdg/pi-agent-coordination/issues/17). It is not an implementation base.
+> **Throwaway prototype.** This branch is primary evidence for the Wayfinder decision [Prove Herdr Agent Run admission and termination](https://github.com/ewgdg/pi-agent-coordination/issues/17). It is not an implementation base.
 
 ## Question
 
-Can a Herdr-hosted runner enforce one live Pi writer per session, prove RPC readiness and intended-session binding, expose process/work/attention as separate observations, interrupt current work semantically, and independently confirm that the exact bound Pi process incarnation exited?
+Can a normal interactive Pi TUI in a Herdr pane enforce cooperating single-writer admission, prove its intended session binding, expose process/work/attention observations, host Human Requests, use Pi-native steer and abort, and terminate through Pi itself?
+
+The prototype also tests whether Pi `0.82.1` and Herdr `0.7.5` can independently confirm the exact interactive Pi process incarnation exited without adding a custom process supervisor.
 
 ## Run
 
-Requirements: Linux with pidfd support, Herdr `0.7.5`, Pi `0.82.1`, and an active Herdr pane.
+Requirements: Herdr `0.7.5`, Pi `0.82.1`, `trash-put`, and an active Herdr pane.
 
 ```bash
 uv run --python /usr/bin/python prototypes/herdr-agent-run/prototype.py
 ```
 
-The explicit interpreter is required because the current uv-managed Python lacks the standard-library pidfd APIs used by the prototype.
+Run this in a normal terminal, not through a non-interactive command capture. The driver creates another Herdr pane containing an ordinary Pi TUI. Human input remains in that Pi pane.
 
-The controller creates a scratch Pi session and a child Herdr pane. The pane hosts a runner that owns Pi's RPC pipes. The runner transfers a pidfd to the controller, so the controller can observe and signal the exact Pi incarnation independently of the pane.
+## Drive-through
 
-Suggested path through the prototype:
+1. Press `a`: the live lease rejects a second cooperating launch before another Pi writer is spawned.
+2. Press `b`: compare the expected session with the session path reported by Pi's installed Herdr integration.
+3. Press `i`: a real Human Request appears in the Pi panel and Herdr reports `blocked`. Answer it in the Pi panel, then press `p` to refresh.
+4. Press `w`: submit normal Pi work and observe `working` without changing process presence or attention.
+5. Press `s`: queue a steering message through Pi's extension API.
+6. Press `x`: request Pi-native abort and observe `idle` while Pi remains alive. Automatic Idle closure is downstream policy, not part of this prototype.
+7. Press `k`: ask Pi to terminate itself gracefully. Herdr releases the Agent and Pi disappears from the pane's foreground process snapshot.
+8. Press `q`: close the empty scratch pane and soft-delete the disposable scratch directory and fail-closed lease.
 
-1. Press `a`: the live lease rejects a second cooperating writer before it can spawn Pi.
-2. Press `b`: the readiness predicate rejects a deliberately wrong expected session ID.
-3. Press `i`, then `r`: attention changes without implying process or work changes.
-4. Press `w`, wait for work to become active, then press `s` or `x`: Pi acknowledges semantic steer/abort; abort must settle work while the process remains alive.
-5. Press `c`: closing the Herdr pane is not itself accepted as termination or lease-release proof.
-6. Press `k`: the controller signals through the retained pidfd, waits for that exact incarnation to exit, then releases the matching fenced lease.
-7. Press `q`: clean up any remaining scratch process and pane.
+## Result boundary
 
-The long-work case makes one normal model request and asks Pi to run `sleep 60`; the remaining cases do not call a model.
+The native interactive topology can prove:
 
-## Deliberate limits
+- a normal human-operable Pi TUI remains the Agent Run;
+- cooperating single-writer admission occurs before Pi spawn;
+- Herdr readiness plus Pi's session report binds the intended session;
+- work and attention observations remain distinct and may explicitly be `unknown` when Herdr's coarse status cannot prove both axes simultaneously;
+- Human Requests use Pi's real panel;
+- steering and abort use Pi semantics;
+- abort settles work without terminating Pi;
+- Pi can request its own graceful shutdown.
 
-- The lease fences cooperating adapter launches, not arbitrary manual `pi` invocations.
-- A controller crash leaves the lease stale and fail-closed; recovery policy is a later design decision.
-- The prototype proves the direct Pi child only. Descendant containment would require a cgroup or equivalent backend boundary.
-- Herdr remains hosting and presentation. Pi RPC remains the control and work-observation seam.
+It cannot prove through the current native surface:
+
+- an independently waitable handle for the exact normal-TUI Pi process incarnation;
+- Pi's exit code or terminating signal;
+- safe automatic lease release gated by exact-incarnation exit.
+
+Herdr's `pane.process-info` can show that Pi is no longer observed and the shell regained the pane. Pi's integration can cooperatively release Agent status on a real quit. Neither is an exact process-exit receipt. The prototype therefore leaves the lease fail-closed until explicit human cleanup rather than inventing pidfd transfer, a custom socket, or a separate process supervisor.
