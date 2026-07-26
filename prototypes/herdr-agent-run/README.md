@@ -1,51 +1,103 @@
-# Interactive Herdr Agent Run prototype
+# Interactive Herdr Agent Run control prototype
 
 > **Throwaway prototype.** This branch is primary evidence for the Wayfinder decision [Prove Herdr Agent Run admission and termination](https://github.com/ewgdg/pi-agent-coordination/issues/17). It is not an implementation base.
 
 ## Question
 
-Can a normal interactive Pi TUI in a Herdr pane enforce cooperating single-writer admission, prove its intended session binding, expose process/work/attention observations, host Human Requests, use Pi-native steer and abort, and terminate through Pi itself?
+Can a normal interactive Pi TUI remain fully human-operable while a machine controls the same Pi process reliably—without RPC mode, a second writer, a replacement UI, or typing commands into Pi’s editor?
 
-The prototype also tests whether Pi `0.82.1` and Herdr `0.7.5` can independently confirm the exact interactive Pi process incarnation exited without adding a custom process supervisor.
+## Shape
+
+```text
+Herdr pane PTY ───────────────→ normal Pi TUI      # human input and Human Answers
+Python driver ── AF_UNIX ─────→ Pi extension       # submit, redirect, abort, shutdown
+                                      │
+                                      ├─ pi.sendUserMessage()
+                                      ├─ ctx.abort()
+                                      ├─ ctx.ui.input()
+                                      └─ ctx.shutdown()
+```
+
+Pi RPC cannot attach to an already-running interactive TUI. Starting a second RPC Pi on the same session would violate single-writer ownership. The prototype instead gives the extension inside the existing Pi process a short authenticated POSIX pathname socket.
 
 ## Run
 
-Requirements: Herdr `0.7.5`, Pi `0.82.1`, `trash-put`, and an active Herdr pane.
+Requirements: Pi `0.82.1`, Herdr `0.7.5`, POSIX `AF_UNIX`, `trash-put`, and an active Herdr pane.
 
 ```bash
 uv run --python /usr/bin/python prototypes/herdr-agent-run/prototype.py
 ```
 
-Run this in a normal terminal, not through a non-interactive command capture. The driver creates another Herdr pane containing an ordinary Pi TUI. Human input remains in that Pi pane.
+Forward only environment variables the Agent requires:
+
+```bash
+uv run --python /usr/bin/python prototypes/herdr-agent-run/prototype.py \
+  --forward-env REQUIRED_NAME \
+  --forward-env ANOTHER_NAME
+```
+
+The launcher fails before spawning Pi if a requested variable is not exported. It does not copy the entire launcher environment implicitly. It writes a private Bash launch script using the absolute resolved Pi executable, equivalent to and stronger than `command pi`, so an interactive zsh `pi()` wrapper is never invoked.
 
 ## Drive-through
 
-1. Press `a`: the live lease rejects a second cooperating launch before another Pi writer is spawned.
-2. Press `b`: compare the expected session with the session path reported by Pi's installed Herdr integration.
-3. Press `i`: a real Human Request appears in the Pi panel and Herdr reports `blocked`. Answer it in the Pi panel, then press `p` to refresh.
-4. Press `w`: submit normal Pi work and observe `working` without changing process presence or attention.
-5. Press `s`: queue a steering message through Pi's extension API.
-6. Press `x`: send Pi's native Escape abort and observe `idle` while Pi remains alive. The driver sends Escape twice so Vim INSERT mode cannot consume the abort key; existing editor text remains intact. Automatic Idle closure is downstream policy, not part of this prototype.
-7. Press `k`: ask Pi to terminate itself gracefully. Herdr releases the Agent and Pi disappears from the pane's foreground process snapshot.
-8. Press `q`: close the empty scratch pane and soft-delete the disposable scratch directory and fail-closed lease.
+1. Press `a`: a second prototype executable targets the same session lease and is rejected before it can spawn Pi.
+2. Press `b`: the authenticated probe, Herdr foreground process, Herdr session report, and lease must identify the same Pi Run.
+3. Press `i`: the socket opens a real Human Request in Pi’s panel. Answer it only in that panel, then press `p`.
+4. Press `w`: the socket submits deterministic long work through `pi.sendUserMessage()`.
+5. Type an unsent draft into Pi’s editor while it works, then press `x`: `ctx.abort()` must settle work while Pi remains alive and the draft remains unchanged.
+6. Press `w` again, then `s`: semantic redirect performs abort → confirmed settlement → submit new guidance. It does not place a pending Pi steering message in the editor.
+7. With unsent editor text while idle, press `k`: the socket schedules `ctx.shutdown()` without typing or clearing a shutdown command in the editor.
+8. Press `q`: explicitly close the scratch pane and soft-delete the disposable scratch directory and fail-closed lease.
+
+Also test shutdown while a Human Request is blocked. The extension cancels its own `ctx.ui.input()` through an `AbortController`, clears Herdr’s `blocked` projection, and then requests graceful Pi shutdown.
+
+## Control protocol
+
+One authenticated NDJSON request is allowed per connection:
+
+```json
+{"version":1,"id":"uuid","token":"64-hex","op":"probe|submit|abort|request_human|shutdown","text":"optional"}
+```
+
+The extension:
+
+- stores the socket under the private `0700` scratch directory;
+- stores the per-session lease in a verified owner-only runtime/cache directory so separate executables contend on the same path;
+- sets the socket and lease modes to `0600`;
+- limits requests to 64 KiB;
+- applies a short pre-request timeout;
+- correlates every response by request ID;
+- rejects invalid state, malformed requests, and incorrect tokens;
+- reserves non-idle state before asynchronous submit dispatch, preventing duplicate submit or shutdown admission;
+- blocks session switching and forking while the fixed-session lease is held;
+- closes and rebinds the endpoint with a new runtime ID after extension reload.
+
+An `accepted` response means only that the request was authenticated, validated, and dispatched or scheduled through Pi’s public APIs. Settlement is observed separately through `agent_settled` and Herdr’s settled `idle` or `done` status. Shutdown sets the runtime closing state before acknowledgment, so no later controls are admitted, but acknowledgment and socket closure are not process-exit receipts.
+
+Semantic redirect deliberately composes abort → confirmed settlement → submit. It does not use Pi’s queued steering mode because Pi preserves an unconsumed steering message by restoring it into the TUI editor during native abort.
 
 ## Result boundary
 
-The native interactive topology can prove:
+The prototype can prove:
 
-- a normal human-operable Pi TUI remains the Agent Run;
-- cooperating single-writer admission occurs before Pi spawn;
-- Herdr readiness plus Pi's session report binds the intended session;
-- work and attention observations remain distinct and may explicitly be `unknown` when Herdr's coarse status cannot prove both axes simultaneously;
-- Human Requests use Pi's real panel;
-- steering and abort use Pi semantics;
-- abort settles work without terminating Pi;
-- Pi can request its own graceful shutdown.
+- one normal human-operable Pi TUI remains the Agent Run;
+- a second cooperating executable admission for the same session is rejected before Pi spawn;
+- socket, Herdr, and lease bind the same Pi process and session;
+- machine controls do not depend on editor contents, Vim mode, dialogs, or terminal focus;
+- Human Requests use Pi’s real panel;
+- submit, abort, Human Request, and shutdown call Pi’s extension APIs in the existing process;
+- semantic redirect composes abort, independently confirmed settlement, and submit;
+- abort settles work without inserting control text or terminating Pi;
+- required Agent environment can be forwarded explicitly;
+- session replacement is refused while the lease identifies the current session.
 
-It cannot prove through the current native surface:
+It still cannot prove through the selected portable surface:
 
-- an independently waitable handle for the exact normal-TUI Pi process incarnation;
-- Pi's exit code or terminating signal;
-- safe automatic lease release gated by exact-incarnation exit.
+- an independently waitable handle for the exact Pi process incarnation;
+- Pi’s exit code or terminating signal;
+- safe automatic lease release gated by exact-incarnation exit;
+- an async preflight completion/failure receipt from `pi.sendUserMessage()`. Submit reserves `starting` before dispatch, but if Pi rejects before `agent_start`, control remains fail-closed until extension reload rather than risking a late duplicate start.
 
-Herdr's `pane.process-info` can show that Pi is no longer observed and the shell regained the pane. Pi's integration can cooperatively release Agent status on a real quit. Neither is an exact process-exit receipt. The prototype therefore leaves the lease fail-closed until explicit human cleanup rather than inventing pidfd transfer, a custom socket, or a separate process supervisor.
+The lease therefore remains fail-closed through abort, reload, shutdown acknowledgment, socket closure, observed Pi disappearance, EOF, exceptions, and interrupted launch. Only the explicit `q` action removes the disposable lease and scratch state; abnormal driver exit prints their locations for manual inspection. Automatic Idle-close remains a downstream policy decision.
+
+The bearer token prevents accidental cross-run control and, with directory permissions, other local users. It does not defend against malicious code running as the same OS user or root; that requires a stronger isolation boundary, not a different prototype token.
