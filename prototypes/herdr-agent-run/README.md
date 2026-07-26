@@ -25,7 +25,7 @@ Run this in a normal terminal, not through a non-interactive command capture. Th
 3. Press `i`: a real Human Request appears in the Pi panel and Herdr reports `blocked`. Answer it in the Pi panel, then press `p` to refresh.
 4. Press `w`: submit normal Pi work and observe `working` without changing process presence or attention.
 5. Press `s`: queue a steering message through Pi's extension API.
-6. Press `x`: request Pi-native abort and observe `idle` while Pi remains alive. Automatic Idle closure is downstream policy, not part of this prototype.
+6. Press `x`: send Pi's native Escape abort and observe `idle` while Pi remains alive. The driver sends Escape twice so Vim INSERT mode cannot consume the abort key; existing editor text remains intact. Automatic Idle closure is downstream policy, not part of this prototype.
 7. Press `k`: ask Pi to terminate itself gracefully. Herdr releases the Agent and Pi disappears from the pane's foreground process snapshot.
 8. Press `q`: close the empty scratch pane and soft-delete the disposable scratch directory and fail-closed lease.
 

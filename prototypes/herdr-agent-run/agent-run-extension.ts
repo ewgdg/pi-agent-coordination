@@ -41,14 +41,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("prototype-abort", {
-		description: "Abort current work through Pi semantics",
-		handler: async (_args, ctx) => {
-			ctx.abort();
-			ctx.ui.notify("Abort requested through Pi", "info");
-		},
-	});
-
 	pi.registerCommand("prototype-shutdown", {
 		description: "Ask Pi to terminate itself gracefully",
 		handler: async (_args, ctx) => {

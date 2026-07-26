@@ -290,11 +290,12 @@ class Prototype:
         self.last_proof = f"Pi steering command submitted through its normal TUI: {response.get('returncode') == 0}"
 
     def abort(self) -> None:
-        response = self.send_prompt("/prototype-abort")
+        # In Vim editor mode the first Escape leaves INSERT mode; the second reaches Pi's abort binding.
+        response = run_json(["herdr", "agent", "send-keys", self.agent_name, "esc", "esc"], check=False)
         settled = self.wait_for_status({"idle"}, timeout=30)
         process_present = self.snapshot().pi_pid is not None
         self.last_proof = (
-            "PASS — Pi abort settled work; Pi remains alive. Idle-close is downstream policy."
+            "PASS — Pi Escape abort settled work; Pi remains alive. Idle-close is downstream policy."
             if settled and process_present
             else f"Abort boundary not observed: settled={settled}, processPresent={process_present}, response={response}"
         )
