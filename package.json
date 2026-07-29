@@ -1,0 +1,23 @@
+{
+  "name": "pi-agent-coordination-prototypes",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "prototype:pi-transcript": "node prototypes/pi-transcript-conformance/cli.ts",
+    "typecheck": "tsc --noEmit --skipLibCheck --allowImportingTsExtensions --module nodenext --moduleResolution nodenext --target es2024 prototypes/pi-transcript-conformance/*.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "0.82.0",
+    "@earendil-works/pi-ai": "0.82.0",
+    "@earendil-works/pi-coding-agent": "0.82.0",
+    "@earendil-works/pi-tui": "0.82.0",
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "typescript": "7.0.2"
+  }
+}
