@@ -1,0 +1,21 @@
+{
+  "name": "pi-agent-coordination-inprocess-multiplexer-prototype",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "test": "node --test prototypes/sdk-agent-supervisor-inprocess/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.82.1",
+    "@earendil-works/pi-tui": "0.82.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@xterm/headless": "6.0.0",
+    "typescript": "7.0.2"
+  }
+}
