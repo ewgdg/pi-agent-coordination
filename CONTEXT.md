@@ -29,6 +29,15 @@ _Avoid_: Resend, new attempt
 **Request**:
 An Agent-authored question that creates exactly one Answer obligation. A Request has one stable identity and targets either another Agent or the human.
 
+**Direct Spawner**:
+The immutable Agent that created a child Agent. It may passively observe, interrupt, or terminate Runs of that immediate child across Run incarnations, but gains no authority over transitive descendants.
+
+**Agent Spawn**:
+One operation available to every normal authenticated Agent in a Workflow. It creates a fresh, context-isolated durable child Agent, makes the caller its immutable direct Spawner, and starts the child's first Run immediately without approval. The child exists permanently once its Agent Identity commits; that Identity references the Spawner's canonical Agent Spawn invocation as its creation source. Later startup or delivery failure never rolls the child back. Its initial work is the Creation Request; observation and Answer delivery use ordinary supervision and messaging semantics.
+
+**Creation Request**:
+The ordinary Agent Request committed after child creation by a direct Spawner as that child's initial work. Its correlated Agent Answer fulfills the Request's one Answer obligation without becoming an Agent lifecycle result.
+
 **Agent Request**:
 A Request targeting a known Agent in the same Workflow. Its Request identity is also the identity of its outbound Message.
 
