@@ -23,7 +23,7 @@ Batched delivery at the next safe model boundary after current generation and to
 _Avoid_: Interruption
 
 **Message Retry**:
-An explicit new Delivery Invocation for an existing Message identity. It preserves the Message while allowing a different delivery mode.
+An explicit retry of an existing Message identity without changing that Message, optionally using a different delivery mode. Retrying an Agent Request may instead schedule its already-committed Agent Answer.
 _Avoid_: Resend, new attempt
 
 **Request**:
@@ -31,6 +31,22 @@ An Agent-authored question that creates exactly one Answer obligation. A Request
 
 **Agent Request**:
 A Request targeting a known Agent in the same Workflow. Its Request identity is also the identity of its outbound Message.
+
+**Agent Answer**:
+An immutable responder-authored Message correlated to exactly one Agent Request. Its route follows from the Request, and its commit ends the responder's Answer obligation.
+
+**Answer Retrieval**:
+Requester-initiated scheduling of an already-committed Agent Answer by retrying its Request. It transports the responder's immutable Answer without impersonating the responder or authoring another Message.
+
+**Request Cancellation**:
+An immutable requester-authored Message withdrawing one Agent Request. It ends the requester's wait when committed and the responder's Answer obligation when delivered, without retracting facts or stopping work.
+
+**Run Retention Reason**:
+A transient, live-observed reason the host must retain an exact Agent Run rather than dispose it. Active work, required input, pending delivery, unresolved Request relationships, and Owner host binding may each provide one.
+_Avoid_: Completion blocker, Request blocker
+
+**Run Release Gate**:
+The live decision that permits automatic disposal of a child Agent Run only when no Run Retention Reason remains.
 
 **Human Request**:
 A blocking Request targeting the human and containing one or more Human Questions. An Agent may have at most one unresolved Human Request, while different Agents may have requests open concurrently.
