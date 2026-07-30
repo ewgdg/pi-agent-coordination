@@ -36,7 +36,7 @@ Build a throwaway, in-process Pi `AgentSession` prototype that makes close/deliv
 ## Surprises & Discoveries
 
 - A target-local promise lane is enough to make the two child close/delivery outcomes explicit: close-first recreates the Run, while delivery-first commits on the current Run and leaves its later automatic close candidate stale.
-- The Workflow Owner is the host anchor, not an automatic Idle-close target; its pre-existing Run remains until explicit host shutdown.
+- The Workflow Owner remains a normal Agent with one host-bound Run for the containing process lifetime. A compatibility adapter binds Pi's pre-existing interactive `AgentSession` as that Run; the adapter is not a domain entity. The Owner Run remains until explicit host shutdown instead of automatic Idle close.
 - A Pi `SessionManager` can remain bound to a durable child Agent identity while successive in-process `AgentSession`s are disposed and recreated around it.
 - Request retry needs no mailbox generation: direct transcript lookup can distinguish an already delivered Request, a committed Answer awaiting delivery, and a Request that needs same-identity rescheduling.
 

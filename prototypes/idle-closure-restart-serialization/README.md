@@ -30,7 +30,8 @@ npm run prototype:idle-races -- --scenario all
 ## What is real
 
 - Every Run is a real Pi `AgentSession` using Pi `0.82.1`.
-- The Workflow Owner's pre-existing Run anchors the containing Pi host and has no automatic Idle close; only explicit host shutdown disposes it.
+- The Workflow Owner has one host-bound Agent Run for the containing Pi process lifetime. It has no automatic Idle close; only explicit host shutdown disposes it.
+- A compatibility adapter binds Pi's pre-existing interactive `AgentSession` as that Owner Run. The adapter is implementation plumbing, not a separate domain entity or runtime species.
 - Each Agent owns one stable in-memory `SessionManager`; disposing and recreating a child Agent's `AgentSession` preserves the Pi session ID and transcript.
 - Pi's actual `sendCustomMessage(..., { triggerTurn: true })`, transcript commits, `agent_settled`, `isIdle`, and `dispose()` boundaries are exercised.
 - The model provider is deterministic, local, and no-network so the race result depends on host scheduling rather than model latency or credentials.
@@ -38,7 +39,7 @@ npm run prototype:idle-races -- --scenario all
 
 ## State model under test
 
-Each Agent has one host-local promise lane. Run start, recipient delivery commit, duplicate check, and disposal all enter that lane. For child Agents, automatic Idle close enters the same lane and its close candidate is bound to one Run incarnation. The Workflow Owner uses the lane for mutation but retains its pre-existing Run until explicit host shutdown:
+Each Agent—including the Workflow Owner—has an Agent Run and one host-local promise lane. Run start, recipient delivery commit, duplicate check, and disposal all enter that lane. For child Agents, automatic Idle close enters the same lane and its close candidate is bound to one Run incarnation. The Owner's compatibility binding changes only admission and retention: its host-bound Run remains until explicit host shutdown.
 
 - **delivery ordered first:** it sees the live Run and commits there;
 - **close ordered first:** it disposes that Run, then delivery sees a dormant Agent and starts a successor;
