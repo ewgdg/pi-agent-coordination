@@ -48,7 +48,10 @@ An immutable responder-authored Message correlated to exactly one Agent Request.
 Requester-initiated scheduling of an already-committed Agent Answer by retrying its Request. It transports the responder's immutable Answer without impersonating the responder or authoring another Message.
 
 **Request Cancellation**:
-An immutable requester-authored Message withdrawing one Agent Request. It ends the requester's wait when committed and the responder's Answer obligation when delivered, without retracting facts or stopping work.
+An immutable requester-authored Message withdrawing one exact Agent Request. It ends the requester's wait when committed and the responder's Answer obligation when delivered, without retracting facts or stopping work. An undelivered Request is suppressed without waking its responder; cancellation of a delivered Request may start a dormant responder through ordinary Message delivery. Cancellation remains one hop and never grants authority over the responder's Requests.
+
+**Cooperative Cancellation**:
+A responder's explicit decision, after receiving Request Cancellation, to cancel its own downstream Requests that are no longer needed. Every cancellation remains an independent requester-authored fact; there is no cascade identity or runtime claim that an entire dependency chain was cancelled.
 
 **Run Retention Reason**:
 A transient, live-observed reason the host must retain an exact Agent Run rather than dispose it. Active work, required input, pending delivery, unresolved Request relationships, interactive selection, and Owner host binding may each provide one.
@@ -59,6 +62,13 @@ The transient presentation choice of which Agent receives native editor input. I
 
 **Run Release Gate**:
 The live decision that permits automatic disposal of a child Agent Run only when no Run Retention Reason remains.
+
+**Run Termination**:
+An authorized controlled end of one exact current Agent Run that deliberately bypasses its Run Retention Reasons. It settles an exact pending Human Request through interruption but does not cancel Agent Requests, affect descendants, or create Agent lifecycle state. A later Message may start a successor Run for the same Agent.
+_Avoid_: Agent termination
+
+**Dependency Deadlock**:
+A live closed component of current Agent Runs in which every Run is settled, retained solely by unresolved Request relationships within the component, and has no admitted input or other progress source. It is a transient observation that clears when its predicate changes, grants no additional authority, and is not reconstructed after host loss.
 
 **Human Request**:
 A blocking Request targeting the human and containing one or more Human Questions. An Agent may have at most one unresolved Human Request, while different Agents may have requests open concurrently.
