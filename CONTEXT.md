@@ -42,8 +42,11 @@ Requester-initiated scheduling of an already-committed Agent Answer by retrying 
 An immutable requester-authored Message withdrawing one Agent Request. It ends the requester's wait when committed and the responder's Answer obligation when delivered, without retracting facts or stopping work.
 
 **Run Retention Reason**:
-A transient, live-observed reason the host must retain an exact Agent Run rather than dispose it. Active work, required input, pending delivery, unresolved Request relationships, and Owner host binding may each provide one.
+A transient, live-observed reason the host must retain an exact Agent Run rather than dispose it. Active work, required input, pending delivery, unresolved Request relationships, interactive selection, and Owner host binding may each provide one.
 _Avoid_: Completion blocker, Request blocker
+
+**Interactive Selection**:
+The transient presentation choice of which Agent receives native editor input. It retains that Agent's current Run without starting a dormant Agent.
 
 **Run Release Gate**:
 The live decision that permits automatic disposal of a child Agent Run only when no Run Retention Reason remains.
