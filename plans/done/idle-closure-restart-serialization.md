@@ -31,7 +31,7 @@ Build a throwaway, in-process Pi `AgentSession` prototype that makes close/deliv
 - [x] Implement the deterministic runtime and serialized host.
 - [x] Implement the terminal driver and documentation.
 - [x] Validate and publish the prototype for human drive-through.
-- [ ] Record the HITL verdict and close the decision ticket.
+- [x] Record the HITL verdict and close the decision ticket.
 
 ## Surprises & Discoveries
 
@@ -42,4 +42,4 @@ Build a throwaway, in-process Pi `AgentSession` prototype that makes close/deliv
 
 ## Outcomes & Retrospective
 
-The first HITL drive-through caught an incorrect automatic Idle close on the Workflow Owner. The corrected artifact retains the Owner's pre-existing Run and applies automatic Idle close only to child Runs. Strict typechecking, all 21 inherited tests, every scripted scenario, the explicit Owner-retention acceptance probe, and the pseudo-terminal smoke test pass again. The decision remains blocked only on the follow-up human drive-through.
+The first HITL drive-through caught an incorrect automatic Idle close on the Workflow Owner. The corrected artifact models the Owner as a normal Agent with one host-bound Run, bound from Pi's pre-existing interactive `AgentSession` by a compatibility adapter and retained until explicit host shutdown. Automatic Idle close applies only to child Runs. Strict typechecking, all 21 inherited tests, every scripted scenario, the explicit Owner-retention acceptance probe, and the pseudo-terminal smoke test pass. The human accepted the corrected close races, Request retry, and dynamic spawn outcomes as sufficient evidence.
