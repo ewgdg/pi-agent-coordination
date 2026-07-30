@@ -4,6 +4,28 @@ This context defines durable Agent identities and their transient live coordinat
 
 ## Language
 
+**Message**:
+Immutable Agent-authored communication with one stable identity, sender, recipient, Workflow, and canonical payload.
+
+**Delivery Invocation**:
+One volatile scheduling act created by an Outbound Message or Message Retry transcript entry. Its source transcript entry identifies it; it has no separate protocol identity.
+_Avoid_: Delivery attempt
+
+**Message Delivery**:
+A process-committed, model-visible projection of a Message in its recipient Agent's transcript. It proves availability to session context, not model processing or effects.
+_Avoid_: Acceptance, acknowledgment, processing confirmation
+
+**Deferred Delivery**:
+Delivery at a settled Idle boundary as its own model turn, preserving the recipient's current work.
+
+**Steer Delivery**:
+Batched delivery at the next safe model boundary after current generation and tools finish, without aborting either.
+_Avoid_: Interruption
+
+**Message Retry**:
+An explicit new Delivery Invocation for an existing Message identity. It preserves the Message while allowing a different delivery mode.
+_Avoid_: Resend, new attempt
+
 **Request**:
 An Agent-authored question that creates exactly one Answer obligation. A Request has one stable identity and targets either another Agent or the human.
 
