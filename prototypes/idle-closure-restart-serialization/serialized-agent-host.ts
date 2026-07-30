@@ -180,7 +180,7 @@ export class SerializedAgentHost {
 
 	async demonstrateDynamicSpawn(): Promise<void> {
 		await this.reset("Dynamic child starts immediately with initial work");
-		const owner = this.#createRootAgent("Owner");
+		const owner = await this.#createRootAgent("Owner");
 		const childSessionManager = SessionManager.inMemory(this.#cwd);
 		const childAgentId = childSessionManager.getSessionId();
 		const creationRequest = this.#newMessageToAgentId(
@@ -279,7 +279,7 @@ export class SerializedAgentHost {
 
 	async #resetPair(scenario: string): Promise<{ owner: AgentRecord; worker: AgentRecord }> {
 		await this.reset(scenario);
-		const owner = this.#createRootAgent("Owner");
+		const owner = await this.#createRootAgent("Owner");
 		const worker = this.#registerAgent(
 			"Worker",
 			SessionManager.inMemory(this.#cwd),
@@ -290,10 +290,12 @@ export class SerializedAgentHost {
 		return { owner, worker };
 	}
 
-	#createRootAgent(name: string): AgentRecord {
+	async #createRootAgent(name: string): Promise<AgentRecord> {
 		const sessionManager = SessionManager.inMemory(this.#cwd);
 		const agentId = sessionManager.getSessionId();
-		return this.#registerAgent(name, sessionManager, agentId, null, null);
+		const owner = this.#registerAgent(name, sessionManager, agentId, null, null);
+		await owner.lane.run(() => this.#startRunInLane(owner, "containing Workflow host"));
+		return owner;
 	}
 
 	#registerAgent(
@@ -499,6 +501,11 @@ export class SerializedAgentHost {
 		const run = record.run;
 		if (!run || incarnation === undefined || run.incarnation !== incarnation) {
 			this.#record(`${record.name} ignores stale close candidate for ${formatRun(incarnation)}`);
+			return;
+		}
+		// The Owner's pre-existing Run anchors the containing Pi host; only host shutdown ends it.
+		if (record.identity.agentId === record.identity.workflowOwnerAgentId) {
+			this.#record(`${record.name} retains run-${incarnation}; Workflow Owner has no automatic Idle close`);
 			return;
 		}
 		if (!run.session.isIdle) {

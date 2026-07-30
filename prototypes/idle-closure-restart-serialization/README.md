@@ -4,7 +4,7 @@
 
 ## Question
 
-Can one in-process host serialize all mutation of each Pi-session Agent strongly enough that an unblocked Idle `AgentSession` can be disposed while a racing inbound Message is either committed to that Run or starts a successor Run—without SQLite, mailbox generations, or a durable acceptance event? The same mechanism must also support same-identity Request retry and immediate dynamic child creation.
+Can one in-process host serialize all mutation of each Pi-session Agent strongly enough that an unblocked Idle child `AgentSession` can be disposed while a racing inbound Message is either committed to that Run or starts a successor Run—without SQLite, mailbox generations, or a durable acceptance event? The Workflow Owner's pre-existing Run must remain live until host shutdown. The same mechanism must also support same-identity Request retry and immediate dynamic child creation.
 
 ## Run
 
@@ -30,14 +30,15 @@ npm run prototype:idle-races -- --scenario all
 ## What is real
 
 - Every Run is a real Pi `AgentSession` using Pi `0.82.1`.
-- Each Agent owns one stable in-memory `SessionManager`; disposing and recreating its `AgentSession` preserves the Pi session ID and transcript.
+- The Workflow Owner's pre-existing Run anchors the containing Pi host and has no automatic Idle close; only explicit host shutdown disposes it.
+- Each Agent owns one stable in-memory `SessionManager`; disposing and recreating a child Agent's `AgentSession` preserves the Pi session ID and transcript.
 - Pi's actual `sendCustomMessage(..., { triggerTurn: true })`, transcript commits, `agent_settled`, `isIdle`, and `dispose()` boundaries are exercised.
 - The model provider is deterministic, local, and no-network so the race result depends on host scheduling rather than model latency or credentials.
 - Agent Identity, Outbound Message, Message Retry, and Message Delivery are the only protocol evidence. There is no durable acceptance record.
 
 ## State model under test
 
-Each Agent has one host-local promise lane. Run start, recipient delivery commit, duplicate check, Idle close, and disposal all enter that lane. A close candidate is bound to one Run incarnation:
+Each Agent has one host-local promise lane. Run start, recipient delivery commit, duplicate check, and disposal all enter that lane. For child Agents, automatic Idle close enters the same lane and its close candidate is bound to one Run incarnation. The Workflow Owner uses the lane for mutation but retains its pre-existing Run until explicit host shutdown:
 
 - **delivery ordered first:** it sees the live Run and commits there;
 - **close ordered first:** it disposes that Run, then delivery sees a dormant Agent and starts a successor;

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Build a throwaway, in-process Pi `AgentSession` prototype that makes close/delivery ordering visible and tests whether one host-local serialization lane per Agent is sufficient for Idle disposal, dormant restart, Request retry, and immediate dynamic spawn.
+Build a throwaway, in-process Pi `AgentSession` prototype that makes close/delivery ordering visible and tests whether one host-local serialization lane per Agent is sufficient for child Idle disposal, dormant restart, Request retry, and immediate dynamic spawn while retaining the Workflow Owner's pre-existing Run until host shutdown.
 
 ## Scope & Constraints
 
@@ -35,10 +35,11 @@ Build a throwaway, in-process Pi `AgentSession` prototype that makes close/deliv
 
 ## Surprises & Discoveries
 
-- A target-local promise lane is enough to make the two close/delivery outcomes explicit: close-first recreates the Run, while delivery-first commits on the current Run and leaves its later automatic close candidate stale.
-- A Pi `SessionManager` can remain bound to the durable Agent identity while successive in-process `AgentSession`s are disposed and recreated around it.
+- A target-local promise lane is enough to make the two child close/delivery outcomes explicit: close-first recreates the Run, while delivery-first commits on the current Run and leaves its later automatic close candidate stale.
+- The Workflow Owner is the host anchor, not an automatic Idle-close target; its pre-existing Run remains until explicit host shutdown.
+- A Pi `SessionManager` can remain bound to a durable child Agent identity while successive in-process `AgentSession`s are disposed and recreated around it.
 - Request retry needs no mailbox generation: direct transcript lookup can distinguish an already delivered Request, a committed Answer awaiting delivery, and a Request that needs same-identity rescheduling.
 
 ## Outcomes & Retrospective
 
-The executable artifact passes strict typechecking, all 21 inherited in-process supervisor tests, all scripted scenarios, and a pseudo-terminal keypress smoke test. The implementation question is now blocked only on the required human drive-through and reaction.
+The first HITL drive-through caught an incorrect automatic Idle close on the Workflow Owner. The corrected artifact retains the Owner's pre-existing Run and applies automatic Idle close only to child Runs. Strict typechecking, all 21 inherited tests, every scripted scenario, the explicit Owner-retention acceptance probe, and the pseudo-terminal smoke test pass again. The decision remains blocked only on the follow-up human drive-through.
