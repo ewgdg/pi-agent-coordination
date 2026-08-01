@@ -41,6 +41,9 @@ The ordinary Agent Request committed after child creation by a direct Spawner as
 **Agent Request**:
 A Request targeting a known Agent in the same Workflow. Its Request identity is also the identity of its outbound Message.
 
+**Answer Obligation**:
+The responder's live duty created by Agent Request Delivery and ended by committing the correlated Agent Answer or receiving Request Cancellation. Automatic moderation protects only work with at least one unresolved Answer Obligation.
+
 **Agent Answer**:
 An immutable responder-authored Message correlated to exactly one Agent Request. Its route follows from the Request, and its commit ends the responder's Answer obligation.
 
@@ -54,11 +57,14 @@ An immutable requester-authored Message withdrawing one exact Agent Request. It 
 A responder's explicit decision, after receiving Request Cancellation, to cancel its own downstream Requests that are no longer needed. Every cancellation remains an independent requester-authored fact; there is no cascade identity or runtime claim that an entire dependency chain was cancelled.
 
 **Run Retention Reason**:
-A transient, live-observed reason the host must retain an exact Agent Run rather than dispose it. Active work, required input, pending delivery, unresolved Request relationships, interactive selection, and Owner host binding may each provide one.
+A transient, live-observed reason the host must retain an exact Agent Run rather than dispose it. Active work, required input, pending delivery, unresolved Request relationships, interactive selection, interruption hold, unresolved Moderator handling, and Owner host binding may each provide one.
 _Avoid_: Completion blocker, Request blocker
 
 **Interactive Selection**:
 The transient presentation choice of which Agent receives native editor input. It retains that Agent's current Run without starting a dormant Agent.
+
+**Interruption Hold**:
+The transient exact-Run pause established by confirmed authorized-supervisor interruption or Human Escape. It retains the Run, preserves its Requests and obligations, and suppresses stuck-condition moderation until human editor input, authorized model-visible direction, or explicit Run Termination clears it.
 
 **Run Release Gate**:
 The live decision that permits automatic disposal of a child Agent Run only when no Run Retention Reason remains.
@@ -67,8 +73,44 @@ The live decision that permits automatic disposal of a child Agent Run only when
 An authorized controlled end of one exact current Agent Run that deliberately bypasses its Run Retention Reasons. It settles an exact pending Human Request through interruption but does not cancel Agent Requests, affect descendants, or create Agent lifecycle state. A later Message may start a successor Run for the same Agent.
 _Avoid_: Agent termination
 
+**Run Failure**:
+The unexpected terminal end of one exact Agent Run after any applicable Automatic Reconciliation could not preserve that Run. It starts Moderator handling only while the failed Agent retains an unresolved Answer Obligation and clears when a successor Run starts or every such obligation ends through Agent Answer commit or Request Cancellation Delivery. It does not mark the durable Agent or Workflow failed, reconstruct work, or start a successor Run automatically.
+
 **Dependency Deadlock**:
 A live closed component of current Agent Runs in which every Run is settled, retained solely by unresolved Request relationships within the component, and has no admitted input or other progress source. It is a transient observation that clears when its predicate changes, grants no additional authority, and is not reconstructed after host loss.
+
+**Obligation Stall**:
+A settled Agent Run retained by an Answer Obligation it must discharge, with no active or admitted work, external progress source, or Interruption Hold. It starts Moderator handling immediately.
+
+**Operational Incident**:
+A predefined suspicious live coordination condition blocking at least one unresolved Answer Obligation and starting Moderator handling. It is a transient occurrence rather than a durable aggregate or lifecycle; unnecessary review is preferable to silently stranded obligated work.
+
+**Handling Key**:
+A derived host-local key that suppresses repeated Moderator creation while one continuous Operational Incident is being handled or shown as exhausted Owner attention. It is transient correlation rather than Incident identity, is released when the condition clears, and is not persisted or reconstructed after host loss.
+
+**Operation Review Deadline**:
+The runtime-owned limit on how long a tool or coordination operation belonging to an Agent with an unresolved Answer Obligation may remain unresolved before operational review is required. It does not govern model generation, and expiry establishes no operational outcome; operation resolution or explicit Moderator renewal ends the current review interval, while activity, heartbeat, or partial output does not.
+
+**Automatic Reconciliation**:
+A bounded runtime response to an exactly recognized machinery fault, available only where the operation adapter explicitly guarantees a safe, idempotent recovery recipe. It may reconnect and resume the same exact Agent Run before that Run becomes terminal; it never reconstructs work in a successor Run, retries arbitrary tool effects, or resets the Operation Review Deadline. Unresolved or indeterminate reconciliation starts Moderator handling only when an Answer Obligation remains.
+
+**Moderator**:
+A fresh runtime-created normal Agent with no direct Spawner, running the predefined diagnostic role and toolset for one Operational Incident and never reused. Moderator Input foregrounds the affected Agents, while trusted workflow-wide pull visibility permits broader diagnosis without eagerly loading unrelated context. Its separate Pi session keeps automatic operational investigation out of ordinary Agent working context; voluntary diagnostic delegation uses Agent Spawn instead.
+
+**Moderator Input**:
+The compact structured transcript entry that initializes one Moderator with its trigger variant, observation time, affected Agents, qualifying Answer Obligation count, optional bounded references, requested outcome, bounded evidence snapshot, and durable inspection pointers. It is the sole durable projection of why that Moderator exists, not an Incident identity, mutable status, scope, or authority grant.
+
+**Moderator Behavioral Boundary**:
+The trusted rule that a Moderator uses its ordinary Agent tools and workflow-wide diagnostic and non-Owner supervisory controls only to restore safe progress, records its rationale, and asks the Workflow Owner for task intent, policy, value, or risk judgment. Structural invariants still prohibit impersonation, acting on another Agent's Requests, transcript or identity mutation, control of the Owner Run, and machinery retries without adapter-declared safe reconciliation.
+
+**Moderator Resolution**:
+The explicit Moderator tool outcome that records its summary and rationale, requires the Moderator's own incoming and outgoing Request relationships to be settled, verifies any mechanically checkable trigger has cleared, releases transient duplicate suppression, and permits the Moderator Run to close. If the qualifying Answer Obligations cleared externally, it reports `already_cleared`; the tool call and result are ordinary transcript evidence, not an Incident lifecycle or record.
+
+**Moderator Escalation**:
+An ordinary free-form Agent Request from a Moderator to the Workflow Owner for task intent, policy, value, risk, Owner action, or another choice the Moderator cannot verify as mechanically safe. Its ordinary Agent Answer guides further handling; it creates no special packet, handoff, or transfer of control, and the Moderator still records Moderator Resolution afterward.
+
+**Moderator Failure Fallback**:
+The bounded response when a Moderator Run terminally fails after same-Run Automatic Reconciliation: one fresh replacement Moderator continues the original handling with pointers to the first attempt. Failure of that replacement stops automatic attempts and creates a passive Workflow Owner Attention Inbox entry centered on the original condition and affected Agents rather than on Moderator recovery.
 
 **Human Request**:
 A blocking Request targeting the human and containing one or more Human Questions. An Agent may have at most one unresolved Human Request, while different Agents may have requests open concurrently.
