@@ -48,7 +48,7 @@ The responder's live duty created by Agent Request Delivery and ended by committ
 An immutable responder-authored Message correlated to exactly one Agent Request. Its route follows from the Request, and its commit ends the responder's Answer obligation.
 
 **Answer Retrieval**:
-Requester-initiated scheduling of an already-committed Agent Answer by retrying its Request. It transports the responder's immutable Answer without impersonating the responder or authoring another Message.
+Requester-initiated delivery of an already-committed Agent Answer through the model-visible result of retrying its Request. The result is the Answer's recipient-side delivery proof and transports the responder's immutable Answer without impersonating the responder or authoring another Message.
 
 **Request Cancellation**:
 An immutable requester-authored Message withdrawing one exact Agent Request. It ends the requester's wait when committed and the responder's Answer obligation when delivered, without retracting facts or stopping work. An undelivered Request is suppressed without waking its responder; cancellation of a delivered Request may start a dormant responder through ordinary Message delivery. Cancellation remains one hop and never grants authority over the responder's Requests.
