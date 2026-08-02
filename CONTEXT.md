@@ -38,6 +38,18 @@ One operation available to every normal authenticated Agent in a Workflow. It cr
 **Creation Request**:
 The ordinary Agent Request committed after child creation by a direct Spawner as that child's initial work. Its correlated Agent Answer fulfills the Request's one Answer obligation without becoming an Agent lifecycle result.
 
+**Agent Template**:
+A user-authored named partial Agent runtime configuration that may be selected during Agent Spawn. It overlays the spawning parent's effective configuration and remains overridable by that spawn without changing protocol identity or role relationships.
+_Avoid_: Agent profile, Agent role
+
+**Agent Configuration**:
+The immutable fully resolved creation configuration committed during Agent bootstrap and reused for later Runs. It snapshots parent inheritance, any selected Agent Template, and spawn-specific overrides without making live runtime state durable.
+_Avoid_: Agent settings, runtime state
+
+**Workflow Policy**:
+The Owner-scoped configuration snapshot governing new host admissions, limits, and operation review. Owner resource reload may replace it prospectively without making it transcript state or changing already-admitted work.
+_Avoid_: Workflow state, Workflow configuration lifecycle
+
 **Agent Request**:
 A Request targeting a known Agent in the same Workflow. Its Request identity is also the identity of its outbound Message.
 
