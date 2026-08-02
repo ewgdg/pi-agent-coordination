@@ -4,15 +4,30 @@ This context defines durable Agent identities and their transient live coordinat
 
 ## Language
 
+**Agent Identity**:
+The immutable transcript bootstrap facts for one Agent, bound to its expected Pi session identity. The ordinary Identity entry creates a Workflow Owner when its Agent ID equals its Workflow ID, or a spawned Agent when it names a Direct Spawner and matching Agent Spawn source. A runtime-created Moderator instead receives one atomic Moderator Input bootstrap containing its Workflow relationship, Agent Configuration, and model-visible creation reason.
+
+**Owner Fork**:
+A native Pi fork or clone of a Workflow Owner into a fresh independent Workflow. Its fresh Owner Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no Message, Request, authority, or child relationship in the new Workflow. Forking a child Agent or Moderator is not admitted.
+
+**Protocol Identity**:
+A stable identity derived from the canonical Pi invocation that first creates a coordination fact, using the fact kind to keep identities from different domains distinct. Agent Identity uses the Pi session identity directly, and Workflow identity is the Workflow Owner's Agent identity.
+
+**Evidence Pointer**:
+A durable reference to one Pi transcript entry or to one exact tool call within an assistant entry. An entry pointer contains its Agent and transcript-entry identities; a tool-call pointer additionally contains the native tool-call identity.
+
+**Append Watermark**:
+An Agent transcript entry pointer through which an all-branch inspection included every complete physical append. It identifies the observation boundary, not an active-branch position or a promise about later appends.
+
 **Message**:
-Immutable Agent-authored communication with one stable identity, sender, recipient, Workflow, and canonical payload.
+Immutable Agent-authored communication whose canonical payload and routing come from its committed authoring tool call. Its stable identity, sender, and Workflow derive from that source; the tool result reports the identity and delivery outcome to the Agent without becoming a second Message record.
 
 **Delivery Invocation**:
-One volatile scheduling act created by an Outbound Message or Message Retry transcript entry. Its source transcript entry identifies it; it has no separate protocol identity.
+One volatile scheduling act created by a Message-authoring or Message Retry tool call. It has no separate protocol identity, and delivery evidence does not retain which invocation achieved delivery.
 _Avoid_: Delivery attempt
 
 **Message Delivery**:
-A process-committed, model-visible projection of a Message in its recipient Agent's transcript. It proves availability to session context, not model processing or effects.
+A process-committed, model-visible projection of a Message in its recipient Agent's transcript, structurally identified only by the Message's original tool-call source. It proves availability to session context, not model processing or effects.
 _Avoid_: Acceptance, acknowledgment, processing confirmation
 
 **Deferred Delivery**:
@@ -39,11 +54,11 @@ One operation available to every normal authenticated Agent in a Workflow. It cr
 The ordinary Agent Request committed after child creation by a direct Spawner as that child's initial work. Its correlated Agent Answer fulfills the Request's one Answer obligation without becoming an Agent lifecycle result.
 
 **Agent Template**:
-A user-authored named partial Agent runtime configuration that may be selected during Agent Spawn. It overlays the spawning parent's effective configuration and remains overridable by that spawn without changing protocol identity or role relationships.
+A user-authored named partial Agent runtime configuration that may be selected during Agent Spawn. Its current complete definition is re-resolved on every Run, overlays the Agent's immutable creation baseline, and remains overridable by that spawn without changing protocol identity or role relationships.
 _Avoid_: Agent profile, Agent role
 
 **Agent Configuration**:
-The immutable fully resolved creation configuration committed during Agent bootstrap and reused for later Runs. It snapshots parent inheritance, any selected Agent Template, and spawn-specific overrides without making live runtime state durable.
+The immutable creation baseline committed during Agent bootstrap. For a spawned Agent it snapshots the spawning parent's inheritable runtime properties at creation, while every Run freshly applies the currently resolved selected Agent Template, canonical spawn overrides, and fixed role requirements.
 _Avoid_: Agent settings, runtime state
 
 **Workflow Policy**:
@@ -110,7 +125,7 @@ A bounded runtime response to an exactly recognized machinery fault, available o
 A fresh runtime-created normal Agent with no direct Spawner, running the predefined diagnostic role and toolset for one Operational Incident and never reused. Moderator Input foregrounds the affected Agents, while trusted workflow-wide pull visibility permits broader diagnosis without eagerly loading unrelated context. Its separate Pi session keeps automatic operational investigation out of ordinary Agent working context; voluntary diagnostic delegation uses Agent Spawn instead.
 
 **Moderator Input**:
-The compact structured transcript entry that initializes one Moderator with its trigger variant, observation time, affected Agents, qualifying Answer Obligation count, optional bounded references, requested outcome, bounded evidence snapshot, and durable inspection pointers. It is the sole durable projection of why that Moderator exists, not an Incident identity, mutable status, scope, or authority grant.
+The atomic model-visible identity bootstrap that creates and initializes one Moderator with its Workflow relationship, Agent Configuration, trigger snapshot, bounded qualifying Request sources, affected-Agent inspection watermarks, and any previous Moderator-attempt watermark. Native entry metadata supplies its time, and the entry itself truthfully establishes runtime creation with no Direct Spawner. It is the sole durable projection of why that Moderator exists, not an Incident identity, mutable status, scope, or authority grant.
 
 **Moderator Behavioral Boundary**:
 The trusted rule that a Moderator uses its ordinary Agent tools and workflow-wide diagnostic and non-Owner supervisory controls only to restore safe progress, records its rationale, and asks the Workflow Owner for task intent, policy, value, or risk judgment. Structural invariants still prohibit impersonation, acting on another Agent's Requests, transcript or identity mutation, control of the Owner Run, and machinery retries without adapter-declared safe reconciliation.
@@ -125,11 +140,11 @@ An ordinary free-form Agent Request from a Moderator to the Workflow Owner for t
 The bounded response when a Moderator Run terminally fails after same-Run Automatic Reconciliation: one fresh replacement Moderator continues the original handling with pointers to the first attempt. Failure of that replacement stops automatic attempts and creates a passive Workflow Owner Attention Inbox entry centered on the original condition and affected Agents rather than on Moderator recovery.
 
 **Human Request**:
-A blocking Request targeting the human and containing one or more Human Questions. An Agent may have at most one unresolved Human Request, while different Agents may have requests open concurrently.
+A blocking Request targeting the human and containing one or more Human Questions. Its committed `ask_user_question` tool call is the canonical Request; an Agent may have at most one unresolved Human Request, while different Agents may have requests open concurrently.
 
 **Human Question**:
-One independently presented prompt within a Human Request. A request-specific UI presents multiple Human Questions as tabs.
+One independently presented prompt within a Human Request. A request-specific UI presents multiple Human Questions as tabs, and its matching Human Answer is identified by the Question's stable position in that Request.
 
 **Human Answer**:
-The structured set of human responses to a Human Request's Questions, canonically bound to that exact Request. It ends the Request's protocol obligation without claiming that its content is semantically sufficient.
+The successful native tool result containing the structured set of human responses to a Human Request's Questions, canonically bound to that exact tool call. It ends the Request's protocol obligation without claiming that its content is semantically sufficient.
 _Avoid_: Human Response, Agent-confirmed resolution
