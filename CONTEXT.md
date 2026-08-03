@@ -20,10 +20,10 @@ A durable reference to one Pi transcript entry or to one exact tool call within 
 An Agent transcript entry pointer through which an all-branch inspection included every complete physical append. It identifies the observation boundary, not an active-branch position or a promise about later appends.
 
 **Message**:
-Immutable Agent-authored communication whose canonical payload and routing come from its committed authoring tool call. Its stable identity, sender, and Workflow derive from that source; the tool result reports the identity and delivery outcome to the Agent without becoming a second Message record.
+Immutable Agent-authored communication whose canonical payload, routing, and delivery mode come from its committed authoring tool call. Its stable identity, sender, and Workflow derive from that source; Message Retry never changes its delivery mode, and the tool result reports the identity and delivery outcome to the Agent without becoming a second Message record.
 
 **Delivery Invocation**:
-One volatile scheduling act created by a Message-authoring or Message Retry tool call. It has no separate protocol identity, and delivery evidence does not retain which invocation achieved delivery.
+One volatile scheduling act created by a Message-authoring or Message Retry tool call. At most one pending scheduling item exists for a Message in its recipient host: a retry coalesces with that item or recreates it under the Message's fixed delivery mode. The invocation has no separate protocol identity, and delivery evidence does not retain which invocation achieved delivery.
 _Avoid_: Delivery attempt
 
 **Message Delivery**:
@@ -38,7 +38,7 @@ Batched delivery at the next safe model boundary after current generation and to
 _Avoid_: Interruption
 
 **Message Retry**:
-An explicit retry of an existing Message identity without changing that Message, optionally using a different delivery mode. Retrying an Agent Request may instead schedule its already-committed Agent Answer.
+An explicit idempotent request to ensure an existing Message is scheduled under its original delivery mode without changing that Message or duplicating a still-pending scheduling item. Retrying an Agent Request may instead schedule its already-committed Agent Answer.
 _Avoid_: Resend, new attempt
 
 **Request**:
@@ -91,7 +91,10 @@ _Avoid_: Completion blocker, Request blocker
 The transient presentation choice of which Agent receives native editor input. It retains that Agent's current Run without starting a dormant Agent.
 
 **Interruption Hold**:
-The transient exact-Run pause established by confirmed authorized-supervisor interruption or Human Escape. It retains the Run, preserves its Requests and obligations, and suppresses stuck-condition moderation until human editor input, authorized model-visible direction, or explicit Run Termination clears it.
+The transient exact-Run pause established by confirmed authorized-supervisor interruption or Human Escape. It retains the Run, Requests, obligations, and pending scheduling while blocking ordinary Message Delivery commits and stuck-condition moderation. Only a native human editor Message commit or a standalone Supervisory Resume Message Delivery commit bound to that exact Hold atomically replaces it with an isolated resumption turn; explicit Run Termination instead ends the held Run and discards its undelivered backlog.
+
+**Supervisory Resume Message**:
+An authorized supervisor's free-form Message requesting that one exact held Agent Run continue. It uses reserved fixed resumption scheduling, clears only the exact Interruption Hold against which it was admitted when its standalone Delivery commits, and otherwise remains ordinary Steer direction without gaining power over a later Hold.
 
 **Run Release Gate**:
 The live decision that permits automatic disposal of a child Agent Run only when no Run Retention Reason remains.
