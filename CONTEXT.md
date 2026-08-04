@@ -54,18 +54,18 @@ One operation available to each authenticated ordinary Agent—a Workflow Owner 
 The ordinary Agent Request authored by an Agent Spawn invocation as its child's initial work. Its identity derives from that invocation as a Message, while the matching child Agent Identity supplies its recipient and makes it canonical. It then uses ordinary fixed-mode delivery, retry, cancellation, Answer, and Answer Retrieval semantics without becoming an Agent lifecycle result.
 
 **Agent Template**:
-A user-authored named partial Agent runtime configuration that may be selected during Agent Spawn. Its current complete definition is re-resolved on every Run, overlays the Agent's immutable creation baseline, and remains overridable by that spawn without changing protocol identity or role relationships. Project-scoped discovery remains anchored to the Agent's Baseline Working Directory rather than following a template-selected working directory.
+A user-authored named partial Agent runtime configuration that may be selected during Agent Spawn. Apart from its name, it can prefill only the template-enabled parts of Agent Spawn configuration; working directory and Agent display metadata remain spawn-owned. Its current complete definition is re-resolved on every Run, overlays the Agent's immutable creation baseline, and remains overridable by that spawn without changing protocol identity or role relationships. Project-scoped discovery remains anchored to the Agent's Baseline Working Directory.
 _Avoid_: Agent profile, Agent role
 
 **Agent Configuration**:
-The immutable creation baseline committed during Agent bootstrap. For a spawned Agent it snapshots the spawning parent's inheritable runtime properties at creation, while every Run freshly applies the currently resolved selected Agent Template, canonical spawn overrides, and fixed role requirements.
+The immutable Agent label, optional description, and creation baseline committed during Agent bootstrap. For a spawned Agent the baseline snapshots the spawning parent's inheritable runtime properties at creation, while every Run freshly applies the currently resolved selected Agent Template, canonical spawn overrides, and fixed role requirements.
 _Avoid_: Agent settings, runtime state
 
 **Baseline Working Directory**:
 The immutable working directory inherited from the Direct Spawner's Effective Run Working Directory at Agent Spawn admission. A Moderator instead inherits the Workflow Owner's Effective Run Working Directory at Moderator creation. It anchors project-scoped Agent Template discovery and relative template or per-spawn working-directory values on every Run.
 
 **Effective Run Working Directory**:
-The working directory obtained for one Run by applying the current selected Agent Template and then the immutable per-spawn override over the Baseline Working Directory. Pi discovers ordinary Project Context and cwd-scoped resources from this directory. Template changes may change it between Runs, but it never redirects that Agent's template discovery.
+The working directory obtained for one Run by applying the immutable per-spawn override over the Baseline Working Directory. Pi discovers ordinary Project Context and cwd-scoped resources from this directory. It never redirects that Agent's template discovery.
 
 **Workflow Policy**:
 The Owner-scoped configuration snapshot governing new host admissions, limits, and operation review. Owner resource reload may replace it prospectively without making it transcript state or changing already-admitted work.
