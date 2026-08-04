@@ -48,10 +48,10 @@ An Agent-authored question that creates exactly one Answer obligation. A Request
 The immutable Agent that created a child Agent. It may passively observe, interrupt, or terminate Runs of that immediate child across Run incarnations, but gains no authority over transitive descendants.
 
 **Agent Spawn**:
-One operation available to every normal authenticated Agent in a Workflow. It creates a fresh, context-isolated durable child Agent, makes the caller its immutable direct Spawner, and starts the child's first Run immediately without approval. The child exists permanently once its Agent Identity commits; that Identity references the Spawner's canonical Agent Spawn invocation as its creation source. Later startup or delivery failure never rolls the child back. Its initial work is the Creation Request; observation and Answer delivery use ordinary supervision and messaging semantics.
+One operation available to every normal authenticated Agent in a Workflow. It creates a fresh, context-isolated durable child Agent, makes the caller its immutable Direct Spawner, and starts the child's first Run immediately without approval. Its committed invocation also authors the child's Creation Request. The child Agent and Creation Request become canonical together when the child Agent Identity commits and references that invocation; later result, startup, or delivery failure never rolls either fact back.
 
 **Creation Request**:
-The ordinary Agent Request committed after child creation by a direct Spawner as that child's initial work. Its correlated Agent Answer fulfills the Request's one Answer obligation without becoming an Agent lifecycle result.
+The ordinary Agent Request authored by an Agent Spawn invocation as its child's initial work. Its identity derives from that invocation as a Message, while the matching child Agent Identity supplies its recipient and makes it canonical. It then uses ordinary fixed-mode delivery, retry, cancellation, Answer, and Answer Retrieval semantics without becoming an Agent lifecycle result.
 
 **Agent Template**:
 A user-authored named partial Agent runtime configuration that may be selected during Agent Spawn. Its current complete definition is re-resolved on every Run, overlays the Agent's immutable creation baseline, and remains overridable by that spawn without changing protocol identity or role relationships. Project-scoped discovery remains anchored to the Agent's Baseline Working Directory rather than following a template-selected working directory.
