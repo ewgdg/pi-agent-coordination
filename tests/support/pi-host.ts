@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	AgentSessionRuntime,
+	InteractiveMode,
 	ModelRuntime,
 	SessionManager,
 	SettingsManager,
@@ -112,12 +113,48 @@ export async function bindTestOwnerHost(
 		// the real runtime here preserves that observable startup order without a TTY.
 		host.runtime.setBeforeSessionInvalidate(() => undefined);
 		host.runtime.setRebindSession(async () => undefined);
+		await bindInteractiveTestHost(host);
+		return;
 	}
 	await host.session.bindExtensions({
 		uiContext: host.ui,
 		mode,
 		onError: (error) => host.ui.notify(error.error, "error"),
 	});
+}
+
+async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
+	type InteractiveBindingHarness = {
+		runtimeHost: AgentSessionRuntime;
+		ui: { requestRender(): void };
+		createExtensionUIContext(): ExtensionUIContext;
+		setupAutocompleteProvider(): void;
+		setupExtensionShortcuts(): void;
+		showLoadedResources(): void;
+		showStartupNoticesIfNeeded(): void;
+		showExtensionError(_extensionPath: string, error: string): void;
+	};
+	type InteractiveBindingPrototype = {
+		bindCurrentSessionExtensions(this: InteractiveBindingHarness): Promise<void>;
+	};
+
+	// Exercise Pi's real TUI-only binding seam without starting a terminal. The
+	// post-bind rendering hooks are irrelevant to extension startup in this harness.
+	const interactiveMode = Object.assign(Object.create(InteractiveMode.prototype), {
+		runtimeHost: host.runtime,
+		ui: { requestRender() {} },
+		createExtensionUIContext: () => host.ui,
+		setupAutocompleteProvider() {},
+		setupExtensionShortcuts() {},
+		showLoadedResources() {},
+		showStartupNoticesIfNeeded() {},
+		showExtensionError(_extensionPath: string, error: string) {
+			host.ui.notify(error, "error");
+		},
+	}) as InteractiveBindingHarness;
+	const { bindCurrentSessionExtensions } =
+		InteractiveMode.prototype as unknown as InteractiveBindingPrototype;
+	await bindCurrentSessionExtensions.call(interactiveMode);
 }
 
 function createTestUi(): TestUi {

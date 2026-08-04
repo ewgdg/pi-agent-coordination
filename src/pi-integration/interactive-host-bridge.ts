@@ -9,15 +9,8 @@ import {
 	assertRuntimeInstanceShape,
 } from "./host-shape.ts";
 
-type RuntimeConstructor = {
-	prototype: {
-		setRebindSession(rebindSession?: (session: unknown) => Promise<void>): void;
-	};
-};
-
 type HostModule = {
 	VERSION?: unknown;
-	AgentSessionRuntime: RuntimeConstructor;
 	InteractiveMode: {
 		prototype: {
 			bindCurrentSessionExtensions(): Promise<void>;
@@ -31,7 +24,7 @@ type RuntimeWaiter = {
 };
 
 type BridgeState = {
-	runtimes: Set<AgentSessionRuntime>;
+	runtimesBySessionManager: WeakMap<SessionManager, WeakRef<AgentSessionRuntime>>;
 	waiters: RuntimeWaiter[];
 };
 
@@ -58,54 +51,38 @@ export function installInteractiveHostBridge(hostValue: unknown): InteractiveHos
 
 	return {
 		captureRuntime(sessionManager) {
-			for (const runtime of state.runtimes) {
-				if (ownsSessionManager(runtime, sessionManager)) return Promise.resolve(runtime);
-			}
+			const runtime = state.runtimesBySessionManager.get(sessionManager)?.deref();
+			if (runtime) return Promise.resolve(runtime);
 			return new Promise((resolve) => state.waiters.push({ sessionManager, resolve }));
 		},
 	};
 }
 
 function installRuntimeCapture(host: HostModule): BridgeState {
-	const state: BridgeState = { runtimes: new Set(), waiters: [] };
-	const runtimePrototype = host.AgentSessionRuntime.prototype;
+	const state: BridgeState = {
+		runtimesBySessionManager: new WeakMap(),
+		waiters: [],
+	};
 	const interactivePrototype = host.InteractiveMode.prototype;
-	const originalSetRebindSession = runtimePrototype.setRebindSession;
 	const originalBindCurrentSessionExtensions =
 		interactivePrototype.bindCurrentSessionExtensions;
 
-	runtimePrototype.setRebindSession = function captureInteractiveRuntime(
-		rebindSession?: (session: unknown) => Promise<void>,
-	): void {
-		originalSetRebindSession.call(this, rebindSession);
-		if (!rebindSession) return;
-
-		assertRuntimeInstanceShape(this, host.VERSION);
-		const runtime = this as unknown as AgentSessionRuntime;
-		state.runtimes.add(runtime);
-		for (const waiter of [...state.waiters]) {
-			if (!ownsSessionManager(runtime, waiter.sessionManager)) continue;
-			state.waiters.splice(state.waiters.indexOf(waiter), 1);
-			waiter.resolve(runtime);
-		}
-	};
-	try {
-		interactivePrototype.bindCurrentSessionExtensions =
-			async function validateInteractiveHostBeforeBinding(): Promise<void> {
-				assertInteractiveModeInstanceShape(this, host.VERSION);
-				await originalBindCurrentSessionExtensions.call(this);
-			};
-	} catch (error) {
-		runtimePrototype.setRebindSession = originalSetRebindSession;
-		throw error;
-	}
+	interactivePrototype.bindCurrentSessionExtensions =
+		async function captureValidatedInteractiveRuntime(): Promise<void> {
+			assertInteractiveModeInstanceShape(this, host.VERSION);
+			const runtime = (this as unknown as { runtimeHost: unknown }).runtimeHost;
+			assertRuntimeInstanceShape(runtime, host.VERSION);
+			const sessionManager = runtime.session.sessionManager;
+			// TUI binding is Pi's first mode-specific seam. Keep this association weak
+			// so failed startup never turns runtime discovery into host retention.
+			state.runtimesBySessionManager.set(sessionManager, new WeakRef(runtime));
+			for (const waiter of [...state.waiters]) {
+				if (waiter.sessionManager !== sessionManager) continue;
+				state.waiters.splice(state.waiters.indexOf(waiter), 1);
+				waiter.resolve(runtime);
+			}
+			await originalBindCurrentSessionExtensions.call(this);
+		};
 
 	return state;
-}
-
-function ownsSessionManager(runtime: AgentSessionRuntime, sessionManager: SessionManager): boolean {
-	return (
-		runtime.session.sessionManager === sessionManager ||
-		runtime.session.sessionManager.getSessionId() === sessionManager.getSessionId()
-	);
 }

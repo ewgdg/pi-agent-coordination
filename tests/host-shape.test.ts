@@ -9,14 +9,21 @@ import {
 	IncompatiblePiHostError,
 } from "../src/pi-integration/host-shape.ts";
 import { installInteractiveHostBridge } from "../src/pi-integration/interactive-host-bridge.ts";
-import { createUnboundTestOwnerHost } from "./support/pi-host.ts";
+import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
+
+type InteractivePrototype = {
+	bindCurrentSessionExtensions(): Promise<void>;
+};
 
 test("host preflight identifies a missing export without installing a patch", () => {
 	const fixture = {
 		...hostPi,
 		createAgentSessionServices: undefined,
 	};
-	const originalSetRebindSession = fixture.AgentSessionRuntime.prototype.setRebindSession;
+	const interactivePrototype = fixture.InteractiveMode
+		.prototype as unknown as InteractivePrototype;
+	const originalBindCurrentSessionExtensions =
+		interactivePrototype.bindCurrentSessionExtensions;
 
 	assert.throws(
 		() => installInteractiveHostBridge(fixture),
@@ -26,8 +33,8 @@ test("host preflight identifies a missing export without installing a patch", ()
 			error.message.includes(`running Pi ${hostPi.VERSION}`),
 	);
 	assert.equal(
-		fixture.AgentSessionRuntime.prototype.setRebindSession,
-		originalSetRebindSession,
+		interactivePrototype.bindCurrentSessionExtensions,
+		originalBindCurrentSessionExtensions,
 	);
 });
 
@@ -48,7 +55,10 @@ test("host preflight identifies a malformed private seam by canonical name", () 
 
 test("host bridge installation remains idempotent across extension module reload", async () => {
 	installInteractiveHostBridge(hostPi);
-	const installedSetRebindSession = hostPi.AgentSessionRuntime.prototype.setRebindSession;
+	const interactivePrototype = hostPi.InteractiveMode
+		.prototype as unknown as InteractivePrototype;
+	const installedBindCurrentSessionExtensions =
+		interactivePrototype.bindCurrentSessionExtensions;
 	const reloadedModuleUrl = new URL(
 		"../src/pi-integration/interactive-host-bridge.ts",
 		import.meta.url,
@@ -61,8 +71,8 @@ test("host bridge installation remains idempotent across extension module reload
 	reloadedBridgeModule.installInteractiveHostBridge(hostPi);
 
 	assert.equal(
-		hostPi.AgentSessionRuntime.prototype.setRebindSession,
-		installedSetRebindSession,
+		interactivePrototype.bindCurrentSessionExtensions,
+		installedBindCurrentSessionExtensions,
 	);
 });
 
@@ -75,8 +85,8 @@ test("runtime capture rejects a malformed live AgentSession before bootstrap", a
 	});
 	host.runtime.setBeforeSessionInvalidate(() => undefined);
 
-	assert.throws(
-		() => host.runtime.setRebindSession(async () => undefined),
+	await assert.rejects(
+		() => bindTestOwnerHost(host, "tui"),
 		(error: unknown) =>
 			error instanceof IncompatiblePiHostError &&
 			error.memberName === "AgentSession.sendCustomMessage",

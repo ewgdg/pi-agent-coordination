@@ -55,6 +55,7 @@ The integration suite instantiates real `SessionManager` and `AgentSession` valu
 - [x] Owner bootstrap and retained-run coordinator.
 - [x] Rejection, headless, native-interaction, and shutdown slices.
 - [x] Documentation and full validation.
+- [x] Independent Standards and Spec review, followed by a TUI-only bridge correction.
 
 ## Decisions
 
@@ -62,6 +63,7 @@ The integration suite instantiates real `SessionManager` and `AgentSession` valu
 - Treat `/agents` as an Owner-only initial view in this ticket. Agent selection and child rows belong to later tickets.
 - Keep the implementation greenfield. Prior prototypes inform observable contracts only.
 - Keep bridge and coordinator ownership in process-global weak registries so resource/module reload re-registers surfaces without stacking private patches or shutdown wrappers.
+- Capture the live runtime only from `InteractiveMode.bindCurrentSessionExtensions`, Pi's first TUI-only host seam; headless `setRebindSession` calls must remain native and unobserved.
 
 ## Surprises and discoveries
 
@@ -70,7 +72,8 @@ The integration suite instantiates real `SessionManager` and `AgentSession` valu
 - Node 22 source tests do not resolve emitted `.js` specifiers to TypeScript sources; TypeScript's `rewriteRelativeImportExtensions` keeps source tests executable while package output uses standard `.js` imports.
 - Pi reports extension handler failures through its native extension-error path instead of rejecting `bindExtensions`; rejection tests therefore assert the canonical visible error and absence of partial tools/commands.
 - Module re-evaluation initially stacked the bridge patch. A reload-level regression test drove process-global idempotent ownership.
+- Independent review found that capturing through `AgentSessionRuntime.setRebindSession` also inspected and retained print, JSON, and RPC runtimes. A headless regression test drove capture into the TUI-only binding seam and made runtime lookup weak.
 
 ## Outcomes and retrospective
 
-Issue #35 is implemented as a greenfield installable package. Interactive Pi boot creates or validates one fixed Owner Identity, retains the native Owner session behind a role-bound coordinator, exposes `agent_observe` and `/agents`, preserves native prompting, and memoizes orderly disposal. Headless modes remain inert. The full suite passes 12 tests, strict typechecking, build, package dry-run, production-dependency audit, diff checks, and a live Pi 0.83.0 TUI smoke run.
+Issue #35 is implemented as a greenfield installable package. Interactive Pi boot creates or validates one fixed Owner Identity, retains the native Owner session behind a role-bound coordinator, exposes `agent_observe` and `/agents`, preserves native prompting, and memoizes orderly disposal. Headless modes remain inert. Independent Standards and Spec review passes after the bridge correction. The full suite passes 13 tests, strict typechecking, build, package dry-run, production-dependency audit, diff checks, and a live Pi 0.83.0 TUI smoke run.
