@@ -1,0 +1,225 @@
+import {
+	createAssistantMessageEventStream,
+	type Api,
+	type AssistantMessage,
+	type AssistantMessageEventStream,
+	type Context,
+	type Model,
+	type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
+import {
+	AgentSessionRuntime,
+	ModelRuntime,
+	SessionManager,
+	SettingsManager,
+	createAgentSessionFromServices,
+	createAgentSessionServices,
+	type AgentSession,
+	type AgentSessionServices,
+	type ExtensionFactory,
+	type ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const PROVIDER_ID = "coordination-test";
+const MODEL_ID = "deterministic-owner";
+const PROVIDER_BASE_URL = "http://coordination-test.invalid";
+
+const EMPTY_USAGE = {
+	input: 0,
+	output: 0,
+	cacheRead: 0,
+	cacheWrite: 0,
+	totalTokens: 0,
+	cost: {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		total: 0,
+	},
+} as const;
+
+export type TestUi = ExtensionUIContext & {
+	readonly agentViews: Array<{ title: string; options: string[] }>;
+	readonly notifications: Array<{ message: string; type?: "info" | "warning" | "error" }>;
+};
+
+export type TestOwnerHost = {
+	cwd: string;
+	services: AgentSessionServices;
+	session: AgentSession;
+	runtime: AgentSessionRuntime;
+	ui: TestUi;
+};
+
+export async function createTestOwnerHost(extension: ExtensionFactory): Promise<TestOwnerHost> {
+	const host = await createUnboundTestOwnerHost(extension);
+	await bindTestOwnerHost(host, "tui");
+	return host;
+}
+
+export async function createUnboundTestOwnerHost(
+	extension: ExtensionFactory,
+): Promise<TestOwnerHost> {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-agent-coordination-"));
+	const modelRuntime = await createTestModelRuntime();
+	const model = modelRuntime.getModel(PROVIDER_ID, MODEL_ID);
+	if (!model) throw new Error("Deterministic test model was not registered");
+
+	const services = await createAgentSessionServices({
+		cwd,
+		agentDir: join(cwd, ".pi-agent"),
+		modelRuntime,
+		settingsManager: SettingsManager.inMemory(),
+		resourceLoaderOptions: {
+			noContextFiles: true,
+			noPromptTemplates: true,
+			noSkills: true,
+			noThemes: true,
+			extensionFactories: [{ name: "pi-agent-coordination", hidden: true, factory: extension }],
+			extensionsOverride: (loaded) => ({
+				...loaded,
+				extensions: loaded.extensions.filter((candidate) => candidate.path.startsWith("<inline:")),
+			}),
+		},
+	});
+	const sessionManager = SessionManager.inMemory(cwd);
+	const { session } = await createAgentSessionFromServices({
+		services,
+		sessionManager,
+		sessionStartEvent: { type: "session_start", reason: "startup" },
+		model,
+		thinkingLevel: "off",
+		noTools: "builtin",
+	});
+	const runtime = new AgentSessionRuntime(session, services, async () => {
+		throw new Error("Session replacement is outside this test");
+	});
+	const ui = createTestUi();
+
+	return { cwd, services, session, runtime, ui };
+}
+
+export async function bindTestOwnerHost(
+	host: TestOwnerHost,
+	mode: "tui" | "rpc" | "json" | "print",
+): Promise<void> {
+	if (mode === "tui") {
+		// InteractiveMode installs these callbacks before it binds extensions. Using
+		// the real runtime here preserves that observable startup order without a TTY.
+		host.runtime.setBeforeSessionInvalidate(() => undefined);
+		host.runtime.setRebindSession(async () => undefined);
+	}
+	await host.session.bindExtensions({
+		uiContext: host.ui,
+		mode,
+		onError: (error) => host.ui.notify(error.error, "error"),
+	});
+}
+
+function createTestUi(): TestUi {
+	const agentViews: TestUi["agentViews"] = [];
+	const notifications: TestUi["notifications"] = [];
+	return {
+		agentViews,
+		notifications,
+		async select(title: string, options: string[]) {
+			agentViews.push({ title, options: [...options] });
+			return undefined;
+		},
+		async confirm() {
+			return false;
+		},
+		async input() {
+			return undefined;
+		},
+		notify(message: string, type?: "info" | "warning" | "error") {
+			notifications.push({ message, type });
+		},
+		onTerminalInput() {
+			return () => undefined;
+		},
+		setStatus() {},
+		setWorkingMessage() {},
+		setWorkingVisible() {},
+		setWorkingIndicator() {},
+		setHiddenThinkingLabel() {},
+		setWidget() {},
+		setFooter() {},
+		setHeader() {},
+		setTitle() {},
+		async custom() {
+			throw new Error("Custom TUI is outside this test");
+		},
+		pasteToEditor() {},
+		setEditorText() {},
+		getEditorText() {
+			return "";
+		},
+		async editor() {
+			return undefined;
+		},
+		setEditorComponent() {},
+	} as unknown as TestUi;
+}
+
+async function createTestModelRuntime(): Promise<ModelRuntime> {
+	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, modelsPath: null });
+	modelRuntime.registerProvider(PROVIDER_ID, {
+		name: "Coordination test",
+		baseUrl: PROVIDER_BASE_URL,
+		api: PROVIDER_ID,
+		apiKey: "in-memory-test",
+		models: [
+			{
+				id: MODEL_ID,
+				name: "Deterministic Owner",
+				reasoning: false,
+				input: ["text"],
+				cost: EMPTY_USAGE.cost,
+				contextWindow: 16_384,
+				maxTokens: 256,
+			},
+		],
+		streamSimple: deterministicStream,
+	});
+	return modelRuntime;
+}
+
+function deterministicStream(
+	model: Model<Api>,
+	_context: Context,
+	_options?: SimpleStreamOptions,
+): AssistantMessageEventStream {
+	const stream = createAssistantMessageEventStream();
+	const responseText = "Owner interaction preserved.";
+	const message = createMessage(model, [{ type: "text", text: responseText }]);
+	queueMicrotask(() => {
+		stream.push({ type: "start", partial: createMessage(model, []) });
+		stream.push({
+			type: "text_start",
+			contentIndex: 0,
+			partial: createMessage(model, [{ type: "text", text: "" }]),
+		});
+		stream.push({ type: "text_delta", contentIndex: 0, delta: responseText, partial: message });
+		stream.push({ type: "text_end", contentIndex: 0, content: responseText, partial: message });
+		stream.push({ type: "done", reason: "stop", message });
+	});
+	return stream;
+}
+
+function createMessage(model: Model<Api>, content: AssistantMessage["content"]): AssistantMessage {
+	return {
+		role: "assistant",
+		content,
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage: EMPTY_USAGE,
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
