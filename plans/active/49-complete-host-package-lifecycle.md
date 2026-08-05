@@ -31,7 +31,7 @@ Keep Pi transcripts, native `AgentSession`s, `InteractiveMode`, and the role-bou
 # Validation
 
 - Red-green focused Node test files at each public seam; `npm run typecheck` after each material slice.
-- Real Pi sessions and deterministic faux provider only; PTY checks use `/usr/bin/script` and no network.
+- Real Pi sessions and deterministic faux provider only; PTY checks use the system `script` utility and no network.
 - Two-axis Standards and Spec review against `985e423cff09bcec1adcc0bd318f0feb7cd8a5af`, with issue #49 and the accepted Pi integration-shape decision as Spec sources.
 - Final once: `npm test`, `npm run typecheck`, `npm run build`, `npm pack --dry-run`, `npm audit --omit=dev`, and `git diff --check`; inspect packed contents and source/dist module parity.
 
@@ -55,14 +55,17 @@ Keep Pi transcripts, native `AgentSession`s, `InteractiveMode`, and the role-bou
 - Native differential rendering can retain rows from a longer deselected transcript. One forced full render after Pi reconstructs the replacement session clears the viewport without introducing a second UI authority.
 - `InteractiveMode.init()` initializes the real TUI but does not start Pi's containing editor loop. The narrow PTY fixture invokes the registered native command context and drives selector/Human input through the terminal while retaining real package sessions and shutdown.
 - A child-spawn test selected the newest Workflow session file, which became ambiguous once a concurrent Moderator could start. Selecting the session whose ID came from the spawn receipt makes the assertion identity-bound and deterministic.
+- The first independent Spec review found ungated constructor members, post-shutdown execution admissions, and an incomplete focused conformance command. The first Standards review found one machine-specific path in this plan and duplicated participant lifecycle registration.
+- A malformed live runtime was rejected before Owner bootstrap but initially left the process-global capture patch and its pending waiter installed. Live rejection now restores the native prototype, rejects waiters, and removes the failed bridge state.
 
 # Decisions
 
 - Treat the issue's explicit real-Pi coordinator, extension harness, and PTY language as the pre-agreed test seams required by the TDD workflow.
 - Keep host conformance focused on Pi semantics that structural reflection cannot establish. Reuse existing feature tests as coverage evidence where they already exercise the same public behavior.
 - Use the starting commit as the fixed review point because the user did not supply another comparison and this implementation begins from a clean `main`.
-- Keep `npm test` authoritative and expose the six structural/native host files as `npm run test:conformance` for focused compatibility checks.
+- Keep `npm test` authoritative and expose the structural/native compatibility files as `npm run test:conformance` for focused compatibility checks.
 - During shutdown, discard volatile delivery scheduling before disposing each corresponding host, continue every cleanup step after failure, and flatten failures into one Workflow-level `AggregateError`.
+- Treat every host member that coordination overwrites as a writable structural seam, not merely a present member.
 
 # Outcomes & Retrospective
 

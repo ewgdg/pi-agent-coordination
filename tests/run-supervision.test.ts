@@ -938,7 +938,7 @@ test("/agents selects live sessions, returns to Owner, and restores Owner for sh
 	assert.equal(host.runtime.session.sessionId, host.session.sessionId);
 });
 
-test("shutdown fences Run control and Human Request admission", async () => {
+test("shutdown fences Run, tool, control, and Human Request admission", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-before-admission-fence");
 	await child.session.waitForIdle();
@@ -977,6 +977,18 @@ test("shutdown fences Run control and Human Request admission", async () => {
 			},
 			new AbortController().signal,
 		),
+		/host_shutting_down/,
+	);
+	await assert.rejects(
+		() => harness.ownerView.beginExecution(),
+		/host_shutting_down/,
+	);
+	await assert.rejects(
+		() => harness.ownerView.ensureExecution(),
+		/host_shutting_down/,
+	);
+	assert.throws(
+		() => harness.ownerView.beginToolExecution("tool-after-shutdown", "read"),
 		/host_shutting_down/,
 	);
 

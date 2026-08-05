@@ -9,8 +9,11 @@ import * as hostTypebox from "typebox";
 
 import piAgentCoordination from "../src/index.ts";
 import {
+	assertExtensionApiShape,
 	assertHostModuleShape,
+	assertInteractiveModeInstanceShape,
 	assertPiAiModuleShape,
+	assertRuntimeInstanceShape,
 	assertTuiModuleShape,
 	assertTypeboxModuleShape,
 	IncompatiblePiHostError,
@@ -81,6 +84,335 @@ test("host preflight identifies a malformed private seam by canonical name", () 
 	);
 });
 
+test("host preflight covers every host constructor member used after admission", () => {
+	const malformedSettingsManager = Object.assign(
+		function MalformedSettingsManager() {},
+		{ create: undefined },
+	);
+	assert.throws(
+		() => assertHostModuleShape({
+			...hostPi,
+			SettingsManager: malformedSettingsManager,
+		}),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName === "SettingsManager.create",
+	);
+
+	for (const member of ["get", "set"] as const) {
+		function MalformedProjectTrustStore() {}
+		MalformedProjectTrustStore.prototype = Object.create(
+			hostPi.ProjectTrustStore.prototype,
+			{ [member]: { configurable: true, value: undefined } },
+		);
+		assert.throws(
+			() => assertHostModuleShape({
+				...hostPi,
+				ProjectTrustStore: MalformedProjectTrustStore,
+			}),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError &&
+				error.memberName === `ProjectTrustStore.prototype.${member}`,
+		);
+	}
+
+	assert.throws(
+		() => assertHostModuleShape({
+			...hostPi,
+			CURRENT_SESSION_VERSION: "3",
+		}),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName === "CURRENT_SESSION_VERSION",
+	);
+});
+
+test("module preflight rejects every required host export and prototype seam", () => {
+	const requirements = [
+		["AgentSessionRuntime"],
+		["InteractiveMode"],
+		["SessionManager"],
+		["DefaultResourceLoader"],
+		["ProjectTrustStore"],
+		["SettingsManager"],
+		["createAgentSessionServices"],
+		["createAgentSessionFromServices"],
+		["defineTool"],
+		["hasTrustRequiringProjectResources"],
+		["CURRENT_SESSION_VERSION"],
+		...[
+			"setRebindSession",
+			"setBeforeSessionInvalidate",
+			"dispose",
+		].map((member) => ["AgentSessionRuntime", "prototype", member]),
+		...[
+			"bindCurrentSessionExtensions",
+			"rebindCurrentSession",
+			"getUserInput",
+		].map((member) => ["InteractiveMode", "prototype", member]),
+		...["create", "open", "continueRecent", "inMemory"].map(
+			(member) => ["SessionManager", member],
+		),
+		...[
+			"appendCustomEntry",
+			"appendCustomMessageEntry",
+			"_rewriteFile",
+			"getEntries",
+			"getEntry",
+			"getHeader",
+			"getSessionId",
+			"getSessionFile",
+			"getSessionDir",
+			"isPersisted",
+			"getLeafId",
+			"getCwd",
+			"branch",
+		].map((member) => ["SessionManager", "prototype", member]),
+		...["getExtensions", "getSkills", "reload"].map(
+			(member) => ["DefaultResourceLoader", "prototype", member],
+		),
+		["SettingsManager", "create"],
+		...["get", "set"].map(
+			(member) => ["ProjectTrustStore", "prototype", member],
+		),
+	] as const;
+
+	for (const path of requirements) {
+		const expected = path.join(".");
+		assert.throws(
+			() => assertHostModuleShape(
+				hostModuleWithoutMember(path),
+			),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError &&
+				error.memberName === expected,
+			expected,
+		);
+	}
+});
+
+test("module preflight rejects every required TUI, AI, and schema value", () => {
+	const tuiRequirements = [
+		["Text"],
+		["matchesKey"],
+		["visibleWidth"],
+		["wrapTextWithAnsi"],
+		["Key"],
+		...["backspace", "down", "enter", "escape", "left", "right", "space", "tab", "up", "shift"]
+			.map((member) => ["Key", member]),
+	] as const;
+	for (const path of tuiRequirements) {
+		const expected = `PiTUI.${path.join(".")}`;
+		assert.throws(
+			() => assertTuiModuleShape(withoutMemberAtPath({ ...hostTui }, path)),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError &&
+				error.memberName === expected,
+			expected,
+		);
+	}
+
+	assert.throws(
+		() => assertPiAiModuleShape(withoutMemberAtPath(
+			{ ...hostAi },
+			["createAssistantMessageEventStream"],
+		)),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName === "PiAI.createAssistantMessageEventStream",
+	);
+	for (const path of [
+		["Type"],
+		...["Array", "Boolean", "Integer", "Literal", "Object", "Optional", "String", "Union"]
+			.map((member) => ["Type", member]),
+	]) {
+		const expected = `TypeBox.${path.join(".")}`;
+		assert.throws(
+			() => assertTypeboxModuleShape(withoutMemberAtPath({ ...hostTypebox }, path)),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError &&
+				error.memberName === expected,
+			expected,
+		);
+	}
+});
+
+test("live preflight rejects every required runtime and AgentSession seam", async () => {
+	const host = await createUnboundTestOwnerHost(() => undefined);
+	host.runtime.setRebindSession(async () => undefined);
+	host.runtime.setBeforeSessionInvalidate(() => undefined);
+	const requirements = [
+		[["_session"], "AgentSessionRuntime._session"],
+		[["_services"], "AgentSessionRuntime._services"],
+		[["_diagnostics"], "AgentSessionRuntime._diagnostics"],
+		[["_modelFallbackMessage"], "AgentSessionRuntime._modelFallbackMessage"],
+		[["rebindSession"], "AgentSessionRuntime.rebindSession"],
+		[["beforeSessionInvalidate"], "AgentSessionRuntime.beforeSessionInvalidate"],
+		[["dispose"], "AgentSessionRuntime.dispose"],
+		[["diagnostics"], "AgentSessionRuntime.diagnostics"],
+		[["services"], "AgentSessionRuntime.services"],
+		[["services", "cwd"], "AgentSessionRuntime.services.cwd"],
+		[["services", "agentDir"], "AgentSessionRuntime.services.agentDir"],
+		[["services", "modelRuntime"], "AgentSessionRuntime.services.modelRuntime"],
+		[["services", "modelRuntime", "getModel"], "AgentSessionRuntime.services.modelRuntime.getModel"],
+		[["services", "settingsManager"], "AgentSessionRuntime.services.settingsManager"],
+		...[
+			"applyOverrides",
+			"getDefaultProjectTrust",
+			"getProviderRetrySettings",
+			"getTransport",
+			"isProjectTrusted",
+		].map((member) => [
+			["services", "settingsManager", member],
+			`AgentSessionRuntime.services.settingsManager.${member}`,
+		] as const),
+		[["services", "resourceLoader"], "AgentSessionRuntime.services.resourceLoader"],
+		...["getExtensions", "getSkills", "reload"].map((member) => [
+			["services", "resourceLoader", member],
+			`AgentSessionRuntime.services.resourceLoader.${member}`,
+		] as const),
+		[["session"], "AgentSession"],
+		...[
+			"prompt",
+			"sendUserMessage",
+			"sendCustomMessage",
+			"clearQueue",
+			"subscribe",
+			"bindExtensions",
+			"abort",
+			"waitForIdle",
+			"dispose",
+			"getActiveToolNames",
+			"getToolDefinition",
+		].map((member) => [["session", member], `AgentSession.${member}`] as const),
+		...["model", "thinkingLevel", "isIdle", "sessionId", "_extensionUIContext", "_extensionMode", "_extensionCommandContextActions", "_extensionAbortHandler", "_extensionShutdownHandler", "_extensionErrorListener"]
+			.map((member) => [["session", member], `AgentSession.${member}`] as const),
+		[["session", "_applyExtensionBindings"], "AgentSession._applyExtensionBindings"],
+		[["session", "_runAgentPrompt"], "AgentSession._runAgentPrompt"],
+		[["session", "extensionRunner"], "AgentSession.extensionRunner"],
+		[["session", "sessionManager"], "AgentSession.sessionManager"],
+		[["session", "sessionManager", "flushed"], "AgentSession.sessionManager.flushed"],
+		[["session", "settingsManager"], "AgentSession.settingsManager"],
+		...[
+			"applyOverrides",
+			"getDefaultProjectTrust",
+			"getProviderRetrySettings",
+			"getTransport",
+			"isProjectTrusted",
+		].map((member) => [
+			["session", "settingsManager", member],
+			`AgentSession.settingsManager.${member}`,
+		] as const),
+		[["session", "agent"], "AgentSession.agent"],
+		[["session", "agent", "streamFunction"], "AgentSession.agent.streamFunction"],
+		[["session", "agent", "transport"], "AgentSession.agent.transport"],
+	] as const;
+
+	for (const [path, expected] of requirements) {
+		assert.throws(
+			() => assertRuntimeInstanceShape(withoutMemberAtPath(host.runtime, path)),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError &&
+				error.memberName === expected,
+			expected,
+		);
+	}
+	await host.runtime.dispose();
+});
+
+test("live preflight rejects every required InteractiveMode seam", async () => {
+	const host = await createUnboundTestOwnerHost(() => undefined);
+	const mode = {
+		runtimeHost: host.runtime,
+		ui: { requestRender() {} },
+		bindCurrentSessionExtensions() {},
+		rebindCurrentSession() {},
+		getUserInput() {},
+		setWorkingVisible() {},
+		clearStatusIndicator() {},
+		showError() {},
+	};
+	const requirements = [
+		[["runtimeHost"], "InteractiveMode.runtimeHost"],
+		[["runtimeHost", "session"], "InteractiveMode.runtimeHost.session"],
+		[["ui"], "InteractiveMode.ui"],
+		[["ui", "requestRender"], "InteractiveMode.ui.requestRender"],
+		...["bindCurrentSessionExtensions", "rebindCurrentSession", "getUserInput", "setWorkingVisible", "clearStatusIndicator", "showError"]
+			.map((member) => [[member], `InteractiveMode.${member}`] as const),
+	] as const;
+	for (const [path, expected] of requirements) {
+		assert.throws(
+			() => assertInteractiveModeInstanceShape(withoutMemberAtPath(mode, path)),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError &&
+				error.memberName === expected,
+			expected,
+		);
+	}
+	await host.runtime.dispose();
+});
+
+test("preflight rejects read-only integration targets that coordination mutates", async () => {
+	for (const [path, expected] of [
+		[["AgentSessionRuntime", "prototype", "dispose"], "AgentSessionRuntime.prototype.dispose"],
+		[["InteractiveMode", "prototype", "bindCurrentSessionExtensions"], "InteractiveMode.prototype.bindCurrentSessionExtensions"],
+	] as const) {
+		assert.throws(
+			() => assertHostModuleShape(hostModuleWithReadonlyMember(path)),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError &&
+				error.memberName === expected,
+			expected,
+		);
+	}
+
+	const host = await createUnboundTestOwnerHost(() => undefined);
+	host.runtime.setRebindSession(async () => undefined);
+	host.runtime.setBeforeSessionInvalidate(() => undefined);
+	for (const [path, expected] of [
+		[["_session"], "AgentSessionRuntime._session"],
+		[["_services"], "AgentSessionRuntime._services"],
+		[["_diagnostics"], "AgentSessionRuntime._diagnostics"],
+		[["_modelFallbackMessage"], "AgentSessionRuntime._modelFallbackMessage"],
+		[["dispose"], "AgentSessionRuntime.dispose"],
+		[["session", "bindExtensions"], "AgentSession.bindExtensions"],
+		[["session", "_extensionUIContext"], "AgentSession._extensionUIContext"],
+		[["session", "_extensionMode"], "AgentSession._extensionMode"],
+		[["session", "_extensionCommandContextActions"], "AgentSession._extensionCommandContextActions"],
+		[["session", "_extensionAbortHandler"], "AgentSession._extensionAbortHandler"],
+		[["session", "_extensionShutdownHandler"], "AgentSession._extensionShutdownHandler"],
+		[["session", "_extensionErrorListener"], "AgentSession._extensionErrorListener"],
+		[["session", "agent", "streamFunction"], "AgentSession.agent.streamFunction"],
+		[["session", "agent", "transport"], "AgentSession.agent.transport"],
+	] as const) {
+		assert.throws(
+			() => assertRuntimeInstanceShape(readonlyMemberAtPath(host.runtime, path)),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError &&
+				error.memberName === expected,
+			expected,
+		);
+	}
+	await host.runtime.dispose();
+});
+
+test("extension preflight rejects every required registration seam", () => {
+	const api = {
+		on() {},
+		registerTool() {},
+		registerCommand() {},
+		appendEntry() {},
+	};
+	for (const member of ["on", "registerTool", "registerCommand", "appendEntry"] as const) {
+		assert.throws(
+			() => assertExtensionApiShape(withoutMemberAtPath(api, [member])),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError &&
+				error.memberName === `ExtensionAPI.${member}`,
+		);
+	}
+});
+
 test("host preflight validates every running-host TUI value used by presentation", () => {
 	const fixture = { ...hostTui, wrapTextWithAnsi: undefined };
 
@@ -139,6 +471,9 @@ test("host bridge installation remains idempotent across extension module reload
 
 test("runtime capture rejects a malformed live AgentSession before bootstrap", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	const interactivePrototype = hostPi.InteractiveMode
+		.prototype as unknown as InteractivePrototype;
+	const installedCapture = interactivePrototype.bindCurrentSessionExtensions;
 	const originalSendCustomMessage = host.session.sendCustomMessage;
 	Object.defineProperty(host.session, "sendCustomMessage", {
 		configurable: true,
@@ -160,6 +495,11 @@ test("runtime capture rejects a malformed live AgentSession before bootstrap", a
 					entry.type === "custom" && entry.customType === "agent-coordination.identity",
 			),
 		false,
+	);
+	assert.notEqual(
+		interactivePrototype.bindCurrentSessionExtensions,
+		installedCapture,
+		"failed live admission must restore the native host prototype",
 	);
 	Object.defineProperty(host.session, "sendCustomMessage", {
 		configurable: true,
@@ -228,3 +568,85 @@ test("runtime capture identifies the provider stream adapter seam", async () => 
 	agent.streamFunction = originalStreamFunction;
 	await host.runtime.dispose();
 });
+
+function withoutMemberAtPath<T extends object>(
+	target: T,
+	path: readonly PropertyKey[],
+): T {
+	const [member, ...rest] = path;
+	assert.notEqual(member, undefined);
+	return new Proxy(target, {
+		get(original, key) {
+			if (key !== member) return Reflect.get(original, key, original);
+			if (rest.length === 0) return undefined;
+			const nested = Reflect.get(original, key, original);
+			assert.ok((typeof nested === "object" && nested !== null) || typeof nested === "function");
+			return withoutMemberAtPath(nested as object, rest);
+		},
+		has(original, key) {
+			if (key === member && rest.length === 0) return false;
+			return Reflect.has(original, key);
+		},
+	}) as T;
+}
+
+function hostModuleWithoutMember(path: readonly PropertyKey[]): object {
+	const fixture = { ...hostPi } as Record<PropertyKey, unknown>;
+	if (path.length >= 3 && path[1] === "prototype") {
+		const constructorName = path[0]!;
+		const original = fixture[constructorName] as { prototype: object };
+		function MalformedHostConstructor() {}
+		Object.setPrototypeOf(MalformedHostConstructor, original);
+		MalformedHostConstructor.prototype = withoutMemberAtPath(
+			original.prototype,
+			path.slice(2),
+		);
+		fixture[constructorName] = MalformedHostConstructor;
+		return fixture;
+	}
+	return withoutMemberAtPath(fixture, path);
+}
+
+function hostModuleWithReadonlyMember(path: readonly PropertyKey[]): object {
+	const fixture = { ...hostPi } as Record<PropertyKey, unknown>;
+	if (path.length >= 3 && path[1] === "prototype") {
+		const constructorName = path[0]!;
+		const original = fixture[constructorName] as { prototype: object };
+		function ReadonlyHostConstructor() {}
+		Object.setPrototypeOf(ReadonlyHostConstructor, original);
+		ReadonlyHostConstructor.prototype = readonlyMemberAtPath(
+			original.prototype,
+			path.slice(2),
+		);
+		fixture[constructorName] = ReadonlyHostConstructor;
+		return fixture;
+	}
+	return readonlyMemberAtPath(fixture, path);
+}
+
+function readonlyMemberAtPath<T extends object>(
+	target: T,
+	path: readonly PropertyKey[],
+): T {
+	const [member, ...rest] = path;
+	assert.notEqual(member, undefined);
+	return new Proxy(target, {
+		get(original, key) {
+			const value = Reflect.get(original, key, original);
+			if (key !== member || rest.length === 0) return value;
+			assert.ok((typeof value === "object" && value !== null) || typeof value === "function");
+			return readonlyMemberAtPath(value as object, rest);
+		},
+		getOwnPropertyDescriptor(original, key) {
+			if (key === member && rest.length === 0) {
+				return {
+					configurable: true,
+					enumerable: true,
+					value: Reflect.get(original, key, original),
+					writable: false,
+				};
+			}
+			return Reflect.getOwnPropertyDescriptor(original, key);
+		},
+	}) as T;
+}

@@ -18,21 +18,31 @@ import {
 export function createAgentBoundExtension(
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): ExtensionFactory {
-	return (pi) => {
-		pi.on("session_before_fork", () => ({ cancel: true }));
-		pi.on("session_before_switch", () => ({ cancel: true }));
-		registerOrdinaryAgentSurfaces(pi, resolveView);
-		registerAgentBoundBehavior(pi, resolveView);
-	};
+	return createParticipantBoundExtension(
+		resolveView,
+		registerOrdinaryAgentSurfaces,
+	);
 }
 
 export function createModeratorBoundExtension(
 	resolveView: () => ModeratorAgentCoordinatorView,
 ): ExtensionFactory {
+	return createParticipantBoundExtension(
+		resolveView,
+		registerModeratorAgentSurfaces,
+	);
+}
+
+function createParticipantBoundExtension<
+	View extends OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView,
+>(
+	resolveView: () => View,
+	registerSurfaces: (pi: ExtensionAPI, resolveView: () => View) => void,
+): ExtensionFactory {
 	return (pi) => {
 		pi.on("session_before_fork", () => ({ cancel: true }));
 		pi.on("session_before_switch", () => ({ cancel: true }));
-		registerModeratorAgentSurfaces(pi, resolveView);
+		registerSurfaces(pi, resolveView);
 		registerAgentBoundBehavior(pi, resolveView);
 	};
 }

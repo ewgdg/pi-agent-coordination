@@ -46,7 +46,28 @@ export function assertHostModuleShape(hostValue: unknown): void {
 	] as const) {
 		requireFunction(host, factoryName, factoryName, version);
 	}
-	requireMember(host, "CURRENT_SESSION_VERSION", "CURRENT_SESSION_VERSION", version);
+	if (!Number.isInteger(host.CURRENT_SESSION_VERSION)) {
+		throw new IncompatiblePiHostError("CURRENT_SESSION_VERSION", version);
+	}
+	requireFunction(
+		host.SettingsManager as UnknownRecord,
+		"create",
+		"SettingsManager.create",
+		version,
+	);
+	const projectTrustStorePrototype = requirePrototype(
+		host.ProjectTrustStore,
+		"ProjectTrustStore",
+		version,
+	);
+	for (const member of ["get", "set"] as const) {
+		requireFunction(
+			projectTrustStorePrototype,
+			member,
+			`ProjectTrustStore.prototype.${member}`,
+			version,
+		);
+	}
 
 	const runtimePrototype = requirePrototype(host.AgentSessionRuntime, "AgentSessionRuntime", version);
 	for (const member of ["setRebindSession", "setBeforeSessionInvalidate", "dispose"] as const) {
@@ -57,6 +78,12 @@ export function assertHostModuleShape(hostValue: unknown): void {
 			version,
 		);
 	}
+	requireWritableMember(
+		runtimePrototype,
+		"dispose",
+		"AgentSessionRuntime.prototype.dispose",
+		version,
+	);
 
 	const interactivePrototype = requirePrototype(host.InteractiveMode, "InteractiveMode", version);
 	for (const member of [
@@ -71,6 +98,12 @@ export function assertHostModuleShape(hostValue: unknown): void {
 			version,
 		);
 	}
+	requireWritableMember(
+		interactivePrototype,
+		"bindCurrentSessionExtensions",
+		"InteractiveMode.prototype.bindCurrentSessionExtensions",
+		version,
+	);
 
 	const sessionManager = host.SessionManager as UnknownRecord;
 	for (const member of ["create", "open", "continueRecent", "inMemory"] as const) {
@@ -178,11 +211,12 @@ export function assertRuntimeInstanceShape(
 ): asserts runtimeValue is AgentSessionRuntime {
 	const runtime = requireRecord(runtimeValue, "AgentSessionRuntime", version);
 	for (const member of ["_session", "_services", "_diagnostics", "_modelFallbackMessage"] as const) {
-		requireMember(runtime, member, `AgentSessionRuntime.${member}`, version);
+		requireWritableMember(runtime, member, `AgentSessionRuntime.${member}`, version);
 	}
-	for (const member of ["rebindSession", "beforeSessionInvalidate"] as const) {
+	for (const member of ["rebindSession", "beforeSessionInvalidate", "dispose"] as const) {
 		requireFunction(runtime, member, `AgentSessionRuntime.${member}`, version);
 	}
+	requireWritableMember(runtime, "dispose", "AgentSessionRuntime.dispose", version);
 	if (!Array.isArray(runtime.diagnostics)) {
 		throw new IncompatiblePiHostError("AgentSessionRuntime.diagnostics", version);
 	}
@@ -267,6 +301,7 @@ export function assertAgentSessionShape(
 	] as const) {
 		requireFunction(session, member, `AgentSession.${member}`, version);
 	}
+	requireWritableMember(session, "bindExtensions", "AgentSession.bindExtensions", version);
 	for (const member of [
 		"model",
 		"thinkingLevel",
@@ -280,6 +315,16 @@ export function assertAgentSessionShape(
 		"_extensionErrorListener",
 	] as const) {
 		requireMember(session, member, `AgentSession.${member}`, version);
+	}
+	for (const member of [
+		"_extensionUIContext",
+		"_extensionMode",
+		"_extensionCommandContextActions",
+		"_extensionAbortHandler",
+		"_extensionShutdownHandler",
+		"_extensionErrorListener",
+	] as const) {
+		requireWritableMember(session, member, `AgentSession.${member}`, version);
 	}
 	requireFunction(session, "_applyExtensionBindings", "AgentSession._applyExtensionBindings", version);
 	requireFunction(session, "_runAgentPrompt", "AgentSession._runAgentPrompt", version);
@@ -304,7 +349,13 @@ export function assertAgentSessionShape(
 		"AgentSession.agent.streamFunction",
 		version,
 	);
-	requireMember(agent, "transport", "AgentSession.agent.transport", version);
+	requireWritableMember(
+		agent,
+		"streamFunction",
+		"AgentSession.agent.streamFunction",
+		version,
+	);
+	requireWritableMember(agent, "transport", "AgentSession.agent.transport", version);
 }
 
 function assertSettingsManagerShape(
@@ -352,4 +403,26 @@ function requireFunction(
 	version?: unknown,
 ): void {
 	if (typeof record[member] !== "function") throw new IncompatiblePiHostError(name, version);
+}
+
+function requireWritableMember(
+	record: UnknownRecord,
+	member: PropertyKey,
+	name: string,
+	version?: unknown,
+): void {
+	requireMember(record, member, name, version);
+	let owner: object | null = record;
+	while (owner !== null) {
+		const descriptor = Object.getOwnPropertyDescriptor(owner, member);
+		if (descriptor) {
+			if (
+				("writable" in descriptor && descriptor.writable) ||
+				("set" in descriptor && typeof descriptor.set === "function")
+			) return;
+			throw new IncompatiblePiHostError(name, version);
+		}
+		owner = Object.getPrototypeOf(owner) as object | null;
+	}
+	throw new IncompatiblePiHostError(name, version);
 }

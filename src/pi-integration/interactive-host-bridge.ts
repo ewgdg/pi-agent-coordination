@@ -25,6 +25,7 @@ type HostModule = {
 type RuntimeWaiter = {
 	sessionManager: SessionManager;
 	resolve(runtime: AgentSessionRuntime): void;
+	reject(error: unknown): void;
 };
 
 type BridgeState = {
@@ -57,7 +58,9 @@ export function installInteractiveHostBridge(hostValue: unknown): InteractiveHos
 		captureRuntime(sessionManager) {
 			const runtime = state.runtimesBySessionManager.get(sessionManager)?.deref();
 			if (runtime) return Promise.resolve(runtime);
-			return new Promise((resolve) => state.waiters.push({ sessionManager, resolve }));
+			return new Promise((resolve, reject) =>
+				state.waiters.push({ sessionManager, resolve, reject })
+			);
 		},
 	};
 }
@@ -71,11 +74,29 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 	const originalBindCurrentSessionExtensions =
 		interactivePrototype.bindCurrentSessionExtensions;
 
-	interactivePrototype.bindCurrentSessionExtensions =
-		async function captureValidatedInteractiveRuntime(): Promise<void> {
-			assertInteractiveModeInstanceShape(this, host.VERSION);
-			const runtime = (this as unknown as { runtimeHost: unknown }).runtimeHost;
-			assertRuntimeInstanceShape(runtime, host.VERSION);
+	const captureValidatedInteractiveRuntime =
+		async function captureValidatedInteractiveRuntime(this: unknown): Promise<void> {
+			let runtime: AgentSessionRuntime;
+			try {
+				assertInteractiveModeInstanceShape(this, host.VERSION);
+				const runtimeValue = (this as { runtimeHost: unknown }).runtimeHost;
+				assertRuntimeInstanceShape(runtimeValue, host.VERSION);
+				runtime = runtimeValue;
+			} catch (error) {
+				// A live structural rejection is still startup failure. Restore the
+				// native prototype and reject capture waiters so no patch or pending
+				// bootstrap remains installed after incompatible admission.
+				if (
+					interactivePrototype.bindCurrentSessionExtensions ===
+					captureValidatedInteractiveRuntime
+				) {
+					interactivePrototype.bindCurrentSessionExtensions =
+						originalBindCurrentSessionExtensions;
+				}
+				bridgeStates.delete(host as object);
+				for (const waiter of state.waiters.splice(0)) waiter.reject(error);
+				throw error;
+			}
 			const sessionManager = runtime.session.sessionManager;
 			// TUI binding is Pi's first mode-specific seam. Keep this association weak
 			// so failed startup never turns runtime discovery into host retention.
@@ -95,6 +116,8 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 			);
 			requestFullInteractiveRender(this);
 		};
+	interactivePrototype.bindCurrentSessionExtensions =
+		captureValidatedInteractiveRuntime;
 
 	return state;
 }

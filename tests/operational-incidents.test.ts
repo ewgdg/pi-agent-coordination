@@ -2070,8 +2070,32 @@ test("orderly shutdown closes exhausted Operational Attention", async () => {
 		"Settle with an Answer obligation until Owner Attention is required.",
 	);
 	await waitForCondition(() => harness.owner.operationalAttention().length === 1);
+	const moderator = (await findModerators(harness.host))[0];
+	assert.ok(moderator);
+	let markNativeDisposalStarted!: () => void;
+	const nativeDisposalStarted = new Promise<void>((resolve) => {
+		markNativeDisposalStarted = resolve;
+	});
+	let releaseNativeDisposal!: () => void;
+	const nativeDisposalGate = new Promise<void>((resolve) => {
+		releaseNativeDisposal = resolve;
+	});
+	const shutdown = harness.coordinator.shutdown(async () => {
+		markNativeDisposalStarted();
+		await nativeDisposalGate;
+		await harness.host.runtime.dispose();
+	});
+	await nativeDisposalStarted;
 
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+	await assert.rejects(
+		async () => harness.coordinator.forModerator(moderator.id).moderatorControl(
+			"moderator-control-after-shutdown",
+			{ operation: "resolve", summary: "Too late", rationale: "Host is closing" },
+		),
+		/host_shutting_down/,
+	);
+	releaseNativeDisposal();
+	await shutdown;
 
 	assert.deepEqual(harness.owner.operationalAttention(), []);
 });

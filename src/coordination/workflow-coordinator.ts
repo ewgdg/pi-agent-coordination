@@ -313,12 +313,14 @@ export class WorkflowCoordinator {
 		this.#requireModerator(agentId);
 		return Object.freeze({
 			...this.#agentView(agentId),
-			moderatorControl: (toolCallId, input) =>
-				this.#operationalIncidents.executeModeratorControl(
+			moderatorControl: (toolCallId, input) => {
+				this.#assertAdmissionOpen();
+				return this.#operationalIncidents.executeModeratorControl(
 					agentId,
 					toolCallId,
 					input,
-				),
+				);
+			},
 		});
 	}
 
@@ -361,12 +363,14 @@ export class WorkflowCoordinator {
 			},
 			beginExecution: () => this.#beginExecution(agentId),
 			ensureExecution: () => this.#ensureExecution(agentId),
-			beginToolExecution: (toolCallId, toolName) =>
+			beginToolExecution: (toolCallId, toolName) => {
+				this.#assertAdmissionOpen();
 				this.#operationalIncidents.admitToolExecution(
 					agentId,
 					toolCallId,
 					toolName,
-				),
+				);
+			},
 			reconcileCommittedToolResults: () =>
 				this.#operationalIncidents.reconcileCommittedToolResults(agentId),
 			endExecution: () => this.#releaseExecution(agentId),
@@ -487,16 +491,19 @@ export class WorkflowCoordinator {
 	}
 
 	async #beginExecution(agentId: string): Promise<void> {
+		this.#assertAdmissionOpen();
 		if (this.#executionPermits.has(agentId)) {
 			throw new Error(
 				`invariant_violation: Agent ${agentId} execution already holds Workflow capacity`,
 			);
 		}
 		await this.#ensureExecution(agentId);
+		this.#assertAdmissionOpen();
 		this.#operationalIncidents.beginExecution(agentId);
 	}
 
 	async #ensureExecution(agentId: string): Promise<void> {
+		this.#assertAdmissionOpen();
 		if (this.#executionPermits.has(agentId)) return;
 		const record = this.#requireAgent(agentId);
 		const run = record.host.observe();
@@ -505,7 +512,12 @@ export class WorkflowCoordinator {
 			this.#isModerator(agentId) ? "moderator" : "ordinary",
 			record.host.requireLiveSession().agent.signal,
 		);
-		if (permit) this.#executionPermits.set(agentId, permit);
+		if (!permit) return;
+		if (this.#shuttingDown) {
+			permit.release();
+			this.#assertAdmissionOpen();
+		}
+		this.#executionPermits.set(agentId, permit);
 	}
 
 	#releaseExecution(agentId: string): void {

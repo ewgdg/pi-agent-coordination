@@ -5,9 +5,12 @@ import {
 	fauxAssistantMessage,
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
+
+const MAX_SESSION_DISCOVERY_ATTEMPTS = 1_000;
 
 test("interactive Pi boots one observable Owner while preserving native interaction and disposal", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination);
@@ -145,6 +148,76 @@ test("native Owner replacement closes every retained source Workflow session", a
 	await host.runtime.dispose();
 });
 
+test("orderly shutdown disposes retained child, Moderator, and Owner sessions exactly once", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
+	host.model.setResponses([
+		fauxAssistantMessage("I settled while still owing the Creation Answer."),
+		fauxAssistantMessage("I remain retained as the active Moderator."),
+	]);
+	const spawnInput = { request: "Remain answer-obligated for shutdown proof." };
+	const spawnToolCallId = "spawn-before-complete-shutdown";
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, { id: spawnToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const spawn = host.session.getToolDefinition("agent_spawn");
+	assert.ok(spawn);
+	const spawnResult = await spawn.execute(
+		spawnToolCallId,
+		spawnInput,
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
+	const moderatorAgentId = await waitForModeratorAgentId(host);
+	const disposalCounts = new Map([
+		[childAgentId, 0],
+		[moderatorAgentId, 0],
+		[host.session.sessionId, 0],
+	]);
+	const countDisposal = (session: typeof host.session) => {
+		const nativeDispose = session.dispose.bind(session);
+		session.dispose = () => {
+			disposalCounts.set(
+				session.sessionId,
+				(disposalCounts.get(session.sessionId) ?? 0) + 1,
+			);
+			nativeDispose();
+		};
+	};
+	countDisposal(host.session);
+
+	host.ui.select = async (_title, options) =>
+		options.find((option) => option.includes(childAgentId));
+	await host.session.prompt("/agents");
+	const childSession = host.runtime.session;
+	assert.equal(childSession.sessionId, childAgentId);
+	countDisposal(childSession);
+	host.ui.select = async (_title, options) =>
+		options.find((option) => option.includes(moderatorAgentId));
+	await childSession.prompt("/agents");
+	const moderatorSession = host.runtime.session;
+	assert.equal(moderatorSession.sessionId, moderatorAgentId);
+	countDisposal(moderatorSession);
+
+	await Promise.all([host.runtime.dispose(), host.runtime.dispose()]);
+	assert.equal(host.runtime.session.sessionId, host.session.sessionId);
+	assert.deepEqual(
+		Object.fromEntries(disposalCounts),
+		{
+			[childAgentId]: 1,
+			[moderatorAgentId]: 1,
+			[host.session.sessionId]: 1,
+		},
+	);
+});
+
 test("orderly shutdown disposes child and Owner sessions even when child abort fails", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
 	host.model.setResponses([
@@ -205,3 +278,25 @@ test("orderly shutdown disposes child and Owner sessions even when child abort f
 	assert.equal(childDisposeCalls, 1);
 	assert.equal(ownerDisposeCalls, 1);
 });
+
+async function waitForModeratorAgentId(
+	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
+): Promise<string> {
+	const workflowDirectory = `${host.session.sessionManager.getSessionDir()}/pi-agent-coordination/${Buffer.from(
+		host.session.sessionId,
+		"utf8",
+	).toString("base64url")}`;
+	for (let attempt = 0; attempt < MAX_SESSION_DISCOVERY_ATTEMPTS; attempt += 1) {
+		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
+		const moderator = sessions.find(({ path }) =>
+			SessionManager.open(path).getEntries().some(
+				(entry) =>
+					entry.type === "custom_message" &&
+					entry.customType === "agent-coordination.moderator-input",
+			)
+		);
+		if (moderator) return moderator.id;
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+	throw new Error("Expected retained Moderator session was not created");
+}
