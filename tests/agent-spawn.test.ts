@@ -18,6 +18,7 @@ import {
 	type SpawnBoundaryHooks,
 } from "../src/coordination/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
+import { ProtocolInvariantError } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
 	bindTestOwnerHost,
@@ -322,7 +323,22 @@ test("confirmed post-Identity Run startup failure keeps a visible dormant child"
 	await harness.shutdown();
 });
 
-test("confirmed post-Identity Delivery admission failure keeps the child and Request", async () => {
+test("Run startup invariant failures are not downgraded to availability receipts", async () => {
+	const harness = await createCoordinatorHarness({
+		beforeRunStart: () => {
+			throw new ProtocolInvariantError("started child Run contradicts its protocol binding");
+		},
+	});
+
+	await assert.rejects(
+		() => harness.spawn("spawn-run-start-invariant-violation"),
+		/started child Run contradicts its protocol binding/,
+	);
+
+	await harness.shutdown();
+});
+
+test("confirmed post-Identity Delivery admission failure keeps the child and Request but releases its Run", async () => {
 	const harness = await createCoordinatorHarness({
 		beforeDeliveryAdmission: () => "confirmed_failure",
 	});
@@ -330,8 +346,10 @@ test("confirmed post-Identity Delivery admission failure keeps the child and Req
 
 	assert.equal(receipt.disposition, "created_unscheduled");
 	assert.equal(receipt.failedStage, "delivery_admission");
-	assert.equal(harness.view.children()[0]?.run.phase, "live");
-	assert.deepEqual(harness.view.children()[0]?.run.retentionReasons, ["pending_delivery"]);
+	assert.deepEqual(harness.view.children()[0]?.run, {
+		phase: "dormant",
+		retentionReasons: [],
+	});
 
 	await harness.shutdown();
 });
@@ -397,6 +415,35 @@ test("contradictory child Identity evidence is an invariant violation", async ()
 	await assert.rejects(
 		() => harness.spawn("spawn-contradictory-identity"),
 		/invariant_violation: child transcript contains 2 ordinary Identity entries/,
+	);
+
+	await harness.shutdown();
+});
+
+test("forged Creation Request Delivery evidence is an invariant violation", async () => {
+	const harness = await createCoordinatorHarness({
+		afterIdentityCommit: ({ sessionManager, identity }) => {
+			sessionManager.appendCustomMessageEntry(
+				"agent-coordination.message-delivery",
+				JSON.stringify({
+					messages: [
+						{
+							kind: "request",
+							requestId: "wrong-request",
+							fromAgentId: identity.directSpawnerAgentId,
+							question: "This projection does not match its source.",
+						},
+					],
+				}),
+				true,
+				{ messages: [identity.spawnSource] },
+			);
+		},
+	});
+
+	await assert.rejects(
+		() => harness.spawn("spawn-with-forged-creation-request-delivery"),
+		/Creation Request .* Delivery differs from its source/,
 	);
 
 	await harness.shutdown();

@@ -24,7 +24,16 @@ export function resolveCommittedSpawnSource(options: {
 	sessionManager: SessionManager;
 	toolCallId: string;
 }): { source: ToolCallPointer; input: Record<string, unknown> } {
-	const { agentId, sessionManager, toolCallId } = options;
+	return resolveCommittedToolCall({ ...options, toolName: "agent_spawn" });
+}
+
+export function resolveCommittedToolCall(options: {
+	agentId: string;
+	sessionManager: SessionManager;
+	toolCallId: string;
+	toolName: string;
+}): { source: ToolCallPointer; input: Record<string, unknown> } {
+	const { agentId, sessionManager, toolCallId, toolName } = options;
 	const entries = currentCoordinationScope(sessionManager, agentId);
 	const matches: Array<{ entry: SessionEntry; input: Record<string, unknown> }> = [];
 
@@ -32,9 +41,9 @@ export function resolveCommittedSpawnSource(options: {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 		for (const part of entry.message.content) {
 			if (part.type !== "toolCall" || part.id !== toolCallId) continue;
-			if (part.name !== "agent_spawn") {
+			if (part.name !== toolName) {
 				throw new ProtocolInvariantError(
-					`tool call ${toolCallId} is ${part.name}, not agent_spawn`,
+					`tool call ${toolCallId} is ${part.name}, not ${toolName}`,
 				);
 			}
 			matches.push({ entry, input: part.arguments });
@@ -43,11 +52,11 @@ export function resolveCommittedSpawnSource(options: {
 
 	if (matches.length !== 1) {
 		throw new ProtocolInvariantError(
-			`expected one committed agent_spawn source for ${toolCallId}, found ${matches.length}`,
+			`expected one committed ${toolName} source for ${toolCallId}, found ${matches.length}`,
 		);
 	}
 	const match = matches[0];
-	if (!match) throw new Error("Spawn source narrowing failed");
+	if (!match) throw new Error("Tool call source narrowing failed");
 	return {
 		source: { agentId, entryId: match.entry.id, toolCallId },
 		input: match.input,
@@ -85,7 +94,7 @@ export function sameToolCallPointer(
 	);
 }
 
-function currentCoordinationScope(
+export function currentCoordinationScope(
 	sessionManager: SessionManager,
 	agentId: string,
 ): SessionEntry[] {

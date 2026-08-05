@@ -14,13 +14,17 @@ import {
 	type AgentRecord,
 } from "../coordination/agent-record.ts";
 import { copyExtensionBindings } from "../pi-integration/extension-bindings.ts";
+import { ProtocolInvariantError } from "../protocol/identities.ts";
 import type {
 	OwnerIdentity,
 	RuntimeConfigurationBaseline,
 } from "../protocol/owner-identity.ts";
-import { InProcessOwnerRunHost } from "./in-process-owner-run-host.ts";
 
-export const ORDINARY_COORDINATION_TOOLS = ["agent_observe", "agent_spawn"] as const;
+export const ORDINARY_COORDINATION_TOOLS = [
+	"agent_message",
+	"agent_observe",
+	"agent_spawn",
+] as const;
 
 const BUILT_IN_TOOL_NAMES = new Set(["bash", "edit", "find", "grep", "ls", "read", "write"]);
 const CHILD_EXTENSION_PREFIX = "<inline:pi-agent-coordination-agent:";
@@ -144,12 +148,12 @@ export class DefaultChildSessionFactory {
 		return services;
 	}
 
-	async start(options: {
+	async startSession(options: {
 		sessionManager: SessionManager;
 		services: AgentSessionServices;
 		inherited: InheritedRuntime;
 		parentSession: AgentSession;
-	}): Promise<{ session: AgentSession; host: InProcessOwnerRunHost }> {
+	}): Promise<AgentSession> {
 		const { sessionManager, services, inherited, parentSession } = options;
 		// The model is preflighted before Identity commit, but provider state can still
 		// change before the child Run starts, so startup rechecks it at the live boundary.
@@ -181,19 +185,19 @@ export class DefaultChildSessionFactory {
 				throw new Error(`Child extension startup failed: ${startupErrors[0]}`);
 			}
 			if (
+				!session.getToolDefinition("agent_message") ||
 				!session.getToolDefinition("agent_spawn") ||
 				!session.getToolDefinition("agent_observe")
 			) {
-				throw new Error("Child ordinary coordination surfaces are unavailable");
+				throw new ProtocolInvariantError(
+					"started child Run is missing ordinary coordination surfaces",
+				);
 			}
 		} catch (error) {
 			session.dispose();
 			throw error;
 		}
-		return {
-			session,
-			host: new InProcessOwnerRunHost(session, ["pending_delivery"]),
-		};
+		return session;
 	}
 
 	workflowSessionDirectory(): string {
@@ -211,7 +215,9 @@ export class DefaultChildSessionFactory {
 		const activeTools = new Set(session.getActiveToolNames());
 		for (const required of [...inherited.baseline.tools, ...ORDINARY_COORDINATION_TOOLS]) {
 			if (!activeTools.has(required) || !session.getToolDefinition(required)) {
-				throw new Error(`Child tool is unavailable: ${required}`);
+				throw new ProtocolInvariantError(
+					`started child Run is missing required tool ${required}`,
+				);
 			}
 		}
 	}

@@ -17,7 +17,9 @@ The child receives a fresh durable Pi session and inherits the caller's effectiv
 
 The committed native `agent_spawn` tool call is the Creation Request source. The child Identity append commits the child and Request together. After that append, startup or scheduling failure never removes either fact.
 
-The child starts an in-process Run and receives the Request through fixed Deferred Delivery. A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
+The child starts an in-process Run and receives the Request through the same fixed Deferred lane used by ordinary [Agent messaging](agent-messaging.md). A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
+
+Confirmed Delivery admission failure releases the new child Run to dormant while preserving the committed child and Creation Request. Once Delivery commits, the Run remains retained while the child owes the corresponding Answer.
 
 ## Receipts
 

@@ -14,11 +14,14 @@ import {
 	type AgentSpawnReceipt,
 	type SpawnBoundaryHooks,
 } from "./spawning.ts";
-import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import {
-	InProcessOwnerRunHost,
-} from "../runtime/in-process-owner-run-host.ts";
-import { SerialLane } from "../runtime/serial-lane.ts";
+	DeferredMessageCoordinator,
+	type AgentMessageInput,
+	type AgentMessageReceipt,
+	type MessageBoundaryHooks,
+} from "./deferred-messages.ts";
+import type { OwnerIdentity } from "../protocol/owner-identity.ts";
+import { InProcessAgentHost } from "../runtime/in-process-agent-host.ts";
 import { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
@@ -27,17 +30,24 @@ export type {
 	AgentSpawnReceipt,
 	SpawnBoundaryHooks,
 } from "./spawning.ts";
+export type {
+	AgentMessageInput,
+	AgentMessageReceipt,
+	MessageBoundaryHooks,
+} from "./deferred-messages.ts";
 
 export type OrdinaryAgentCoordinatorView = Readonly<{
 	status(agentId?: string): AgentStatus;
 	children(agentId?: string): readonly AgentStatus[];
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
+	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
 }>;
 
 export class WorkflowCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
+	readonly #messages: DeferredMessageCoordinator;
 	#shutdownPromise: Promise<void> | undefined;
 	#shuttingDown = false;
 
@@ -48,16 +58,14 @@ export class WorkflowCoordinator {
 			entryModulePath: string;
 			childExtensionFactory(agentId: string): ExtensionFactory;
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
+			messageBoundaryHooks?: MessageBoundaryHooks;
 		},
 	) {
 		this.#ownerIdentity = identity;
 		this.#agents.set(identity.agentId, {
 			identity,
-			session: runtime.session,
 			services: runtime.services,
-			lane: new SerialLane(),
-			host: new InProcessOwnerRunHost(runtime),
-			starting: false,
+			host: InProcessAgentHost.bindOwner(runtime),
 			children: [],
 		});
 		const sessionFactory = new DefaultChildSessionFactory({
@@ -66,9 +74,15 @@ export class WorkflowCoordinator {
 			entryModulePath: options.entryModulePath,
 			childExtensionFactory: options.childExtensionFactory,
 		});
+		this.#messages = new DeferredMessageCoordinator({
+			agents: this.#agents,
+			isShuttingDown: () => this.#shuttingDown,
+			boundaryHooks: options.messageBoundaryHooks,
+		});
 		this.#spawner = new DefaultChildSpawner({
 			agents: this.#agents,
 			sessionFactory,
+			messages: this.#messages,
 			boundaryHooks: options.spawnBoundaryHooks,
 			isShuttingDown: () => this.#shuttingDown,
 		});
@@ -80,6 +94,7 @@ export class WorkflowCoordinator {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
+			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
 		});
 	}
 
@@ -131,22 +146,16 @@ export class WorkflowCoordinator {
 		);
 		await Promise.all(
 			children.map((record) =>
-				record.lane.run(async () => {
-					const session = record.session;
-					if (session && record.host) {
-						await record.host?.shutdown(async () => {
-							await session.abort();
-							await session.waitForIdle();
-							session.dispose();
-						});
-					} else {
-						session?.dispose();
-					}
-					await record.deliveryPromise;
+				record.host.lane.run(() => {
+					this.#messages.discardSchedulingInLane(record);
+					return record.host.discardAndEndInLane();
 				}),
 			),
 		);
 		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
-		await owner.host?.shutdown(disposeNativeRuntime);
+		await owner.host.lane.run(() => {
+			this.#messages.discardSchedulingInLane(owner);
+			return owner.host.discardAndEndInLane(async () => disposeNativeRuntime());
+		});
 	}
 }

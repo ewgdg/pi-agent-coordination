@@ -4,21 +4,24 @@ import {
 	requireLiveSession,
 	type AgentRecord,
 } from "./agent-record.ts";
+import { DeferredMessageCoordinator } from "./deferred-messages.ts";
 import { normalizeAgentDescription } from "../protocol/agent-metadata.ts";
 import {
 	commitChildAgentIdentity,
 	type ChildAgentIdentity,
 	validateCommittedChildIdentity,
 } from "../protocol/child-identity.ts";
-import { createCreationRequestDelivery } from "../protocol/creation-request.ts";
 import {
 	deriveMessageIdentity,
+	ProtocolInvariantError,
 	resolveCommittedSpawnSource,
 	sameToolCallPointer,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
-import type { RunRetentionReason } from "../runtime/in-process-owner-run-host.ts";
-import { SerialLane } from "../runtime/serial-lane.ts";
+import {
+	InProcessAgentHost,
+	type RunRetentionReason,
+} from "../runtime/in-process-agent-host.ts";
 import { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
 
 export type AgentSpawnInput = Readonly<{
@@ -67,15 +70,18 @@ export class DefaultChildSpawner {
 	readonly #sessionFactory: DefaultChildSessionFactory;
 	readonly #boundaryHooks: SpawnBoundaryHooks;
 	readonly #isShuttingDown: () => boolean;
+	readonly #messages: DeferredMessageCoordinator;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		sessionFactory: DefaultChildSessionFactory;
+		messages: DeferredMessageCoordinator;
 		boundaryHooks?: SpawnBoundaryHooks;
 		isShuttingDown(): boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#sessionFactory = options.sessionFactory;
+		this.#messages = options.messages;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#isShuttingDown = options.isShuttingDown;
 	}
@@ -150,18 +156,25 @@ export class DefaultChildSpawner {
 		});
 		validateCommittedChildIdentity(sessionManager, identity);
 
+		const childHost = InProcessAgentHost.createChild({
+			sessionManager,
+			startSession: () => this.#sessionFactory.startSession({
+				sessionManager,
+				services,
+				inherited,
+				parentSession,
+			}),
+		});
 		const child: AgentRecord = {
 			identity,
 			services,
-			lane: new SerialLane(),
-			starting: true,
+			host: childHost,
 			children: [],
 		};
 		this.#agents.set(agentId, child);
 		parent.children.push(agentId);
 		this.#addRetentionReason(parent, "awaiting_answer");
 		if (identityConfirmation === "confirmation_lost") {
-			child.starting = false;
 			return { disposition: "indeterminate", agentId, requestId };
 		}
 
@@ -169,20 +182,9 @@ export class DefaultChildSpawner {
 			if (this.#boundaryHooks.beforeRunStart?.() === "confirmed_failure") {
 				throw new Error("Confirmed Run startup failure");
 			}
-			await child.lane.run(async () => {
-				const started = await this.#sessionFactory.start({
-					sessionManager,
-					services,
-					inherited,
-					parentSession,
-				});
-				child.session = started.session;
-				child.host = started.host;
-				child.starting = false;
-			});
-		} catch {
-			child.starting = false;
-			child.session?.dispose();
+			await child.host.lane.run(() => child.host.startInLane(["pending_delivery"]));
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
 			return {
 				disposition: "created_unscheduled",
 				agentId,
@@ -203,26 +205,18 @@ export class DefaultChildSpawner {
 			if (this.#boundaryHooks.beforeDeliveryAdmission?.() === "confirmed_failure") {
 				throw new Error("Confirmed Delivery admission failure");
 			}
-			await child.lane.run(() => {
-				const session = requireLiveSession(child);
-				// A fresh child is settled here, so triggerTurn admits this at its Idle
-				// boundary as a standalone turn. followUp preserves Deferred semantics if
-				// session state changes before Pi processes the admission.
-				const deliveryPromise = session.sendCustomMessage(
-					createCreationRequestDelivery({
-						requestId,
-						fromAgentId: callerAgentId,
-						question: input.request,
-						source,
-					}),
-					{ triggerTurn: true, deliverAs: "followUp" },
-				);
-				child.deliveryPromise = deliveryPromise.then(
-					() => child.host?.setRetentionReasons(["answer_owed"]),
-					() => undefined,
-				);
+			const admission = await this.#messages.admitCreationRequest({
+				recipient: child,
+				requestId,
+				fromAgentId: callerAgentId,
+				question: input.request,
+				source,
 			});
-		} catch {
+			if (admission === "rejected") throw new Error("Confirmed Delivery admission failure");
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			child.host.removeRetentionReason("pending_delivery");
+			await this.#messages.requestRelease(child);
 			return {
 				disposition: "created_unscheduled",
 				agentId,
@@ -253,10 +247,7 @@ export class DefaultChildSpawner {
 	}
 
 	#addRetentionReason(record: AgentRecord, reason: RunRetentionReason): void {
-		const host = record.host;
-		if (!host) return;
-		const current = host.observe().retentionReasons;
-		if (!current.includes(reason)) host.setRetentionReasons([...current, reason]);
+		record.host.addRetentionReason(reason);
 	}
 
 	#requireAgent(agentId: string): AgentRecord {

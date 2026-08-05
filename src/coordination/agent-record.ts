@@ -1,5 +1,4 @@
 import type {
-	AgentSession,
 	AgentSessionServices,
 } from "@earendil-works/pi-coding-agent";
 
@@ -7,21 +6,16 @@ import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import {
 	type AgentRunState,
-	InProcessOwnerRunHost,
-} from "../runtime/in-process-owner-run-host.ts";
-import { SerialLane } from "../runtime/serial-lane.ts";
+	InProcessAgentHost,
+} from "../runtime/in-process-agent-host.ts";
 
 export type OrdinaryAgentIdentity = OwnerIdentity | ChildAgentIdentity;
 
 export type AgentRecord = {
 	identity: OrdinaryAgentIdentity;
-	session?: AgentSession;
 	services: AgentSessionServices;
-	lane: SerialLane;
-	host?: InProcessOwnerRunHost;
-	starting: boolean;
+	host: InProcessAgentHost;
 	children: string[];
-	deliveryPromise?: Promise<void>;
 };
 
 export type AgentStatus = Readonly<{
@@ -35,18 +29,7 @@ export type AgentStatus = Readonly<{
 
 export function statusOf(record: AgentRecord): AgentStatus {
 	const configuration = record.identity.configuration;
-	let run: AgentRunState;
-	if (record.starting) {
-		run = {
-			phase: "starting",
-			attention: "none",
-			retentionReasons: ["pending_delivery"],
-		};
-	} else if (record.host) {
-		run = record.host.observe();
-	} else {
-		run = { phase: "dormant", retentionReasons: [] };
-	}
+	const run: AgentRunState = record.host.observe();
 	return {
 		agentId: record.identity.agentId,
 		workflowId: record.identity.workflowId,
@@ -59,7 +42,6 @@ export function statusOf(record: AgentRecord): AgentStatus {
 	};
 }
 
-export function requireLiveSession(record: AgentRecord): AgentSession {
-	if (!record.session) throw new Error(`Agent Run is unavailable: ${record.identity.agentId}`);
-	return record.session;
+export function requireLiveSession(record: AgentRecord) {
+	return record.host.requireLiveSession();
 }

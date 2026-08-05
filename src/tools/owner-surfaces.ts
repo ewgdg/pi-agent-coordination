@@ -9,6 +9,30 @@ export function registerOrdinaryAgentSurfaces(
 	pi: ExtensionAPI,
 	resolveView: ViewResolver,
 ): void {
+	const messageParameters = Type.Union([
+		Type.Object(
+			{
+				operation: Type.Literal("send"),
+				targetAgentId: Type.String({ minLength: 1 }),
+				content: Type.String({ minLength: 1 }),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
+				operation: Type.Literal("poll"),
+				messageId: Type.String({ minLength: 1 }),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
+				operation: Type.Literal("retry"),
+				messageId: Type.String({ minLength: 1 }),
+			},
+			{ additionalProperties: false },
+		),
+	]);
 	const spawnParameters = Type.Object(
 		{
 			request: Type.String({ minLength: 1 }),
@@ -32,6 +56,21 @@ export function registerOrdinaryAgentSurfaces(
 			{ additionalProperties: false },
 		),
 	]);
+	pi.registerTool({
+		name: "agent_message",
+		label: "Message Agent",
+		description: "Send one immutable Deferred Message to a known Agent in this Workflow.",
+		promptSnippet: "Send, poll, or retry direct Agent communication.",
+		executionMode: "sequential",
+		parameters: messageParameters,
+		async execute(toolCallId, parameters) {
+			const receipt = await resolveView().message(toolCallId, parameters);
+			return {
+				content: [{ type: "text", text: JSON.stringify(receipt) }],
+				details: receipt,
+			};
+		},
+	});
 	pi.registerTool({
 		name: "agent_spawn",
 		label: "Spawn Agent",

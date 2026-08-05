@@ -1,4 +1,10 @@
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
+
 import type { ToolCallPointer } from "./identities.ts";
+import {
+	inspectStandaloneMessageDelivery,
+	type DeliveryInspection,
+} from "./message-delivery.ts";
 
 export const MESSAGE_DELIVERY_CUSTOM_TYPE = "agent-coordination.message-delivery";
 
@@ -22,4 +28,34 @@ export function createCreationRequestDelivery(options: {
 		display: true,
 		details: { messages: [source] },
 	};
+}
+
+export function inspectCreationRequestDelivery(options: {
+	recipientAgentId: string;
+	sessionManager: SessionManager;
+	requestId: string;
+	fromAgentId: string;
+	question: string;
+	source: ToolCallPointer;
+}): DeliveryInspection {
+	const {
+		recipientAgentId,
+		sessionManager,
+		requestId,
+		fromAgentId,
+		question,
+		source,
+	} = options;
+	return inspectStandaloneMessageDelivery({
+		recipientAgentId,
+		sessionManager,
+		source,
+		expectedProjection: {
+			kind: "request",
+			requestId,
+			fromAgentId,
+			question,
+		},
+		subject: `Creation Request ${requestId}`,
+	});
 }

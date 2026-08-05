@@ -1,0 +1,229 @@
+import type {
+	AgentSession,
+	AgentSessionRuntime,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
+
+import { SerialLane } from "./serial-lane.ts";
+
+export type RunRetentionReason =
+	| "owner_host_binding"
+	| "pending_delivery"
+	| "awaiting_answer"
+	| "answer_owed";
+
+export type LiveRunState = Readonly<{
+	phase: "starting" | "live" | "ending";
+	work?: "active" | "settled";
+	attention: "none";
+	retentionReasons: readonly RunRetentionReason[];
+}>;
+
+export type DormantRunState = Readonly<{
+	phase: "dormant";
+	retentionReasons: readonly [];
+}>;
+
+export type AgentRunState = LiveRunState | DormantRunState;
+export type AgentRunHandle = Readonly<{ sequence: number }>;
+
+type BoundRun = {
+	handle: AgentRunHandle;
+	session: AgentSession;
+	unsubscribe: () => void;
+	failed: boolean;
+};
+
+type StartSession = () => Promise<AgentSession>;
+export type AgentRunSettlement = "settled" | "failed";
+type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
+
+export class InProcessAgentHost {
+	readonly lane = new SerialLane();
+	readonly sessionManager: SessionManager;
+	readonly #startSession: StartSession | undefined;
+	readonly #retentionReasons = new Set<RunRetentionReason>();
+	readonly #trackedOperations = new Set<Promise<void>>();
+	#run: BoundRun | undefined;
+	#starting = false;
+	#ending = false;
+	#runSequence = 0;
+	#settledHandler: SettledHandler | undefined;
+
+	private constructor(options: {
+		sessionManager: SessionManager;
+		startSession?: StartSession;
+		initialSession?: AgentSession;
+		initialRetentionReasons?: readonly RunRetentionReason[];
+	}) {
+		this.sessionManager = options.sessionManager;
+		this.#startSession = options.startSession;
+		for (const reason of options.initialRetentionReasons ?? []) {
+			this.#retentionReasons.add(reason);
+		}
+		if (options.initialSession) this.#bindRun(options.initialSession);
+	}
+
+	static bindOwner(runtime: AgentSessionRuntime): InProcessAgentHost {
+		return new InProcessAgentHost({
+			sessionManager: runtime.session.sessionManager,
+			initialSession: runtime.session,
+			initialRetentionReasons: ["owner_host_binding"],
+		});
+	}
+
+	static createChild(options: {
+		sessionManager: SessionManager;
+		startSession: StartSession;
+	}): InProcessAgentHost {
+		return new InProcessAgentHost(options);
+	}
+
+	observe(): AgentRunState {
+		const retentionReasons = [...this.#retentionReasons];
+		if (this.#starting) {
+			return {
+				phase: "starting",
+				attention: "none",
+				retentionReasons,
+			};
+		}
+		const run = this.#run;
+		if (!run) return { phase: "dormant", retentionReasons: [] };
+		return {
+			phase: this.#ending ? "ending" : "live",
+			work: run.session.isIdle ? "settled" : "active",
+			attention: "none",
+			retentionReasons,
+		};
+	}
+
+	setSettledHandler(handler: SettledHandler): void {
+		this.#settledHandler = handler;
+	}
+
+	currentHandle(): AgentRunHandle | undefined {
+		return this.#run?.handle;
+	}
+
+	isCurrent(handle: AgentRunHandle): boolean {
+		return this.#run?.handle === handle;
+	}
+
+	requireLiveSession(): AgentSession {
+		const session = this.#run?.session;
+		if (!session) throw new Error(`Agent Run is unavailable: ${this.sessionManager.getSessionId()}`);
+		return session;
+	}
+
+	async startInLane(
+		initialRetentionReasons: readonly RunRetentionReason[] = [],
+	): Promise<AgentSession> {
+		if (this.#run) return this.#run.session;
+		if (!this.#startSession) {
+			throw new Error(`Agent Run cannot restart: ${this.sessionManager.getSessionId()}`);
+		}
+		this.#starting = true;
+		for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
+		try {
+			const session = await this.#startSession();
+			this.#bindRun(session);
+			return session;
+		} catch (error) {
+			this.#retentionReasons.clear();
+			throw error;
+		} finally {
+			this.#starting = false;
+		}
+	}
+
+	addRetentionReason(reason: RunRetentionReason): void {
+		if (this.#run || this.#starting) this.#retentionReasons.add(reason);
+	}
+
+	removeRetentionReason(reason: RunRetentionReason): void {
+		this.#retentionReasons.delete(reason);
+	}
+
+	hasRetentionReason(reason: RunRetentionReason): boolean {
+		return this.#retentionReasons.has(reason);
+	}
+
+	trackOperation(operation: Promise<unknown>): void {
+		const tracked = operation.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.#trackedOperations.add(tracked);
+		void tracked.finally(() => this.#trackedOperations.delete(tracked));
+	}
+
+	releaseIfEligibleInLane(handle: AgentRunHandle): "released" | "retained" | "stale" {
+		const run = this.#run;
+		if (!run || run.handle !== handle) return "stale";
+		if (this.#starting || this.#ending || !run.session.isIdle) return "retained";
+		if (this.#retentionReasons.size > 0) return "retained";
+		this.#ending = true;
+		try {
+			run.unsubscribe();
+			run.session.dispose();
+			this.#run = undefined;
+			this.#retentionReasons.clear();
+			return "released";
+		} finally {
+			this.#ending = false;
+		}
+	}
+
+	async discardAndEndInLane(
+		disposeRun?: (session: AgentSession) => Promise<void>,
+	): Promise<void> {
+		const run = this.#run;
+		if (!run) {
+			this.#retentionReasons.clear();
+			return;
+		}
+		this.#ending = true;
+		run.unsubscribe();
+		try {
+			if (disposeRun) {
+				await disposeRun(run.session);
+			} else {
+				await run.session.abort();
+				await run.session.waitForIdle();
+				run.session.dispose();
+			}
+			await Promise.all([...this.#trackedOperations]);
+		} finally {
+			this.#run = undefined;
+			this.#retentionReasons.clear();
+			this.#ending = false;
+		}
+	}
+
+	#bindRun(session: AgentSession): void {
+		this.#runSequence += 1;
+		const handle = Object.freeze({ sequence: this.#runSequence });
+		const run: BoundRun = {
+			handle,
+			session,
+			unsubscribe: () => undefined,
+			failed: false,
+		};
+		run.unsubscribe = session.subscribe((event) => {
+			if (event.type === "agent_end") {
+				const assistant = [...event.messages]
+					.reverse()
+					.find((message) => message.role === "assistant");
+				run.failed = assistant?.role === "assistant" &&
+					assistant.stopReason === "error" &&
+					!event.willRetry;
+			}
+			if (event.type === "agent_settled") {
+				this.#settledHandler?.(handle, run.failed ? "failed" : "settled");
+			}
+		});
+		this.#run = run;
+		this.#ending = false;
+	}
+}
