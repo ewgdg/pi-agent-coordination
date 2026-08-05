@@ -8,12 +8,14 @@ import {
 	type AgentRunState,
 	InProcessAgentHost,
 } from "../runtime/in-process-agent-host.ts";
+import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
 
 export type OrdinaryAgentIdentity = OwnerIdentity | ChildAgentIdentity;
 
 export type AgentRecord = {
 	identity: OrdinaryAgentIdentity;
 	services: AgentSessionServices;
+	effectiveConfiguration?: EffectiveAgentRunConfiguration;
 	host: InProcessAgentHost;
 	children: string[];
 };

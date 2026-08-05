@@ -10,8 +10,7 @@ import type {
 	AgentMessageInput,
 	AgentMessageReceipt,
 } from "../coordination/workflow-coordinator.ts";
-
-const MESSAGE_PREVIEW_CODE_POINTS = 72;
+import { boundedToolPreview } from "./bounded-preview.ts";
 
 export function renderAgentMessageCall(
 	args: AgentMessageInput,
@@ -23,7 +22,7 @@ export function renderAgentMessageCall(
 		if (args.deliveryMode === "steer") {
 			text += theme.fg("warning", " · steer");
 		}
-		text += theme.fg("dim", ` · ${preview(args.content)}`);
+		text += theme.fg("dim", ` · ${boundedToolPreview(args.content)}`);
 		return new Text(text, 0, 0);
 	}
 	if (args.operation === "request") {
@@ -31,17 +30,17 @@ export function renderAgentMessageCall(
 		if (args.deliveryMode === "steer") {
 			text += theme.fg("warning", " · steer");
 		}
-		text += theme.fg("dim", ` · ${preview(args.question)}`);
+		text += theme.fg("dim", ` · ${boundedToolPreview(args.question)}`);
 		return new Text(text, 0, 0);
 	}
 	if (args.operation === "answer") {
 		text += theme.fg("accent", "answer");
-		text += theme.fg("dim", ` · ${args.requestId} · ${preview(args.answer)}`);
+		text += theme.fg("dim", ` · ${args.requestId} · ${boundedToolPreview(args.answer)}`);
 		return new Text(text, 0, 0);
 	}
 	if (args.operation === "cancel") {
 		text += theme.fg("accent", "cancel");
-		text += theme.fg("dim", ` · ${args.requestId} · ${preview(args.reason)}`);
+		text += theme.fg("dim", ` · ${args.requestId} · ${boundedToolPreview(args.reason)}`);
 		return new Text(text, 0, 0);
 	}
 	text += theme.fg("accent", args.operation);
@@ -69,7 +68,7 @@ export function renderAgentMessageResult(
 	) {
 		text += theme.fg(
 			"dim",
-			` · ${receipt.answerId} · ${preview(receipt.answer)}`,
+			` · ${receipt.answerId} · ${boundedToolPreview(receipt.answer)}`,
 		);
 	}
 	if ("rejectionReason" in receipt) {
@@ -91,14 +90,6 @@ export function renderAgentMessageResult(
 		}
 	}
 	return new Text(text, 0, 0);
-}
-
-function preview(content: string): string {
-	const normalized = content.replaceAll(/\s+/g, " ").trim();
-	const codePoints = [...normalized];
-	return codePoints.length <= MESSAGE_PREVIEW_CODE_POINTS
-		? normalized
-		: `${codePoints.slice(0, MESSAGE_PREVIEW_CODE_POINTS).join("")}…`;
 }
 
 function dispositionColor(disposition: string): ThemeColor {

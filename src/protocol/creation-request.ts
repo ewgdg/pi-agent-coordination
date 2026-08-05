@@ -8,6 +8,7 @@ import {
 	type ToolCallPointer,
 } from "./identities.ts";
 import type { Message } from "./message.ts";
+import { validateAgentSpawnInput } from "./agent-spawn-input.ts";
 import {
 	inspectStandaloneMessageDelivery,
 	type DeliveryInspection,
@@ -41,17 +42,10 @@ export function resolveCreationRequest(options: {
 		sessionManager: spawnerSessionManager,
 		toolCallId: source.toolCallId,
 	});
-	const keys = Object.keys(input).sort();
-	const expectedKeys = input.description === undefined
-		? ["request"]
-		: ["description", "request"];
-	if (
-		keys.length !== expectedKeys.length ||
-		keys.some((key, index) => key !== expectedKeys[index]) ||
-		typeof input.request !== "string" ||
-		input.request.length === 0 ||
-		(input.description !== undefined && typeof input.description !== "string")
-	) {
+	let spawnInput;
+	try {
+		spawnInput = validateAgentSpawnInput(input);
+	} catch {
 		throw new ProtocolInvariantError(
 			`Creation Request ${requestId} has an invalid Agent Spawn source`,
 		);
@@ -65,7 +59,7 @@ export function resolveCreationRequest(options: {
 		targetAgentId: childIdentity.agentId,
 		deliveryMode: "deferred",
 		source,
-		question: input.request,
+		question: spawnInput.request,
 	};
 }
 

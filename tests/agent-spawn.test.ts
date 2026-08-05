@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -7,13 +8,14 @@ import {
 	fauxAssistantMessage,
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { ProjectTrustStore, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
 import {
 	WorkflowCoordinator,
+	type AgentSpawnInput,
 	type AgentSpawnReceipt,
 	type SpawnBoundaryHooks,
 } from "../src/coordination/workflow-coordinator.ts";
@@ -25,6 +27,8 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
+
+const MAX_CONDITION_POLL_ATTEMPTS = 100;
 
 test("an authenticated ordinary Agent creates a durable isolated child and admits its Creation Request", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
@@ -46,8 +50,11 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	const spawn = host.session.getToolDefinition("agent_spawn");
 	assert.ok(spawn);
 	assert.deepEqual(Object.keys((spawn.parameters as { properties: object }).properties).sort(), [
+		"config",
 		"description",
+		"label",
 		"request",
+		"template",
 	]);
 
 	await host.session.prompt("Delegate this inspection to a fresh child.");
@@ -66,11 +73,30 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	assert.equal(spawnResult.message.isError, false);
 	assert.deepEqual(
 		Object.keys(spawnResult.message.details as Record<string, unknown>).sort(),
-		["agentId", "disposition", "requestId"],
+		["agentId", "disposition", "effectiveConfiguration", "requestId"],
 	);
 	assert.equal(
 		(spawnResult.message.details as { disposition: string }).disposition,
 		"pending",
+	);
+	assert.deepEqual(
+		(spawnResult.message.details as AgentSpawnReceipt & {
+			effectiveConfiguration: unknown;
+		}).effectiveConfiguration,
+		{
+			cwd: host.cwd,
+			model: { provider: "coordination-test", modelId: "deterministic-owner" },
+			thinking: "off",
+			tools: [
+				"agent_message",
+				"agent_control",
+				"agent_observe",
+				"agent_spawn",
+				"ask_user_question",
+			],
+			skills: [],
+			extensions: [],
+		},
 	);
 
 	const observe = host.session.getToolDefinition("agent_observe");
@@ -196,6 +222,263 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	await host.runtime.dispose();
 });
 
+test("a selected Template and immutable overrides resolve against baseline cwd for a real child Run", async () => {
+	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const templateRoot = join(host.cwd, "template-root");
+	const effectiveCwd = join(host.cwd, "subproject");
+	await mkdir(templateRoot, { recursive: true });
+	await mkdir(join(effectiveCwd, ".agents", "agents"), { recursive: true });
+	await writeFile(
+		join(templateRoot, "research.md"),
+		"---\nname: research-agent\nthinking: high\ntools: read\n---\nTemplate context",
+	);
+	await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
+	await writeFile(
+		join(effectiveCwd, ".agents", "agents", "research.md"),
+		"---\nname: research-agent\nthinking: low\n---\nWrong discovery root",
+	);
+
+	let observedSystemPrompt = "";
+	let observedTools: string[] = [];
+	host.model.setResponses([
+		(context) => {
+			observedSystemPrompt = context.systemPrompt ?? "";
+			observedTools = context.tools?.map(({ name }) => name) ?? [];
+			return fauxAssistantMessage("Configured child Run observed.");
+		},
+	]);
+	let coordinator: WorkflowCoordinator;
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		packageRoot: host.cwd,
+		templateRoots: (baselineCwd, projectTrusted) => {
+			assert.equal(baselineCwd, host.cwd);
+			assert.equal(projectTrusted, true);
+			return [{ scope: "trusted-project", path: templateRoot }];
+		},
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+	});
+	const view = coordinator.forAgent(identity.agentId);
+	const spawnInput = {
+		request: "Inspect the configured child Run.",
+		template: "research-agent",
+		description: "  Research specialist  ",
+		config: {
+			cwd: "subproject",
+			projectContext: "Spawn context",
+			projectContextMode: "append" as const,
+		},
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, { id: "spawn-configured-child" }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const receipt = await view.spawn("spawn-configured-child", spawnInput);
+	assert.equal(receipt.disposition, "pending");
+	assert.deepEqual(receipt.effectiveConfiguration, {
+		cwd: effectiveCwd,
+		model: { provider: "coordination-test", modelId: "deterministic-owner" },
+		thinking: "high",
+		tools: [
+			"read",
+			"agent_message",
+			"agent_control",
+			"agent_observe",
+			"agent_spawn",
+			"ask_user_question",
+		],
+		skills: [],
+		extensions: [],
+		projectContext: {
+			mode: "append",
+			body: "Template context\n\nSpawn context",
+		},
+	});
+	assert.deepEqual(
+		view.children().map(({ label, description }) => ({ label, description })),
+		[{ label: "research-agent", description: "Research specialist" }],
+	);
+	await waitForCondition(() => observedSystemPrompt.length > 0);
+	assert.match(observedSystemPrompt, /Native effective-cwd context/);
+	assert.match(observedSystemPrompt, /Template context/);
+	assert.match(observedSystemPrompt, /Spawn context/);
+	assert.doesNotMatch(observedSystemPrompt, /Wrong discovery root/);
+	for (const toolName of receipt.effectiveConfiguration.tools) {
+		assert.ok(observedTools.includes(toolName), `missing model-visible tool ${toolName}`);
+	}
+
+	const workflowDirectory = join(
+		host.session.sessionManager.getSessionDir(),
+		"pi-agent-coordination",
+		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
+	);
+	const childSessionFile = await waitForChildSessionFile(host.cwd, workflowDirectory);
+	const childIdentity = SessionManager.open(childSessionFile)
+		.getEntries()
+		.find((entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity");
+	assert.ok(childIdentity && childIdentity.type === "custom");
+	assert.deepEqual(
+		(childIdentity.data as { configuration: object }).configuration,
+		{
+			label: "research-agent",
+			description: "Research specialist",
+			baseline: {
+				cwd: host.cwd,
+				model: { provider: "coordination-test", modelId: "deterministic-owner" },
+				thinking: "off",
+				tools: [],
+				skills: [],
+				extensions: [],
+			},
+		},
+	);
+
+	const agentId = receipt.agentId;
+	await waitForCondition(() => {
+		const run = view.status(agentId).run;
+		return run.phase === "live" && run.work === "settled";
+	});
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_control",
+				{ operation: "terminate", agentId },
+				{ id: "terminate-configured-child-v1" },
+			),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const firstTermination = await view.control("terminate-configured-child-v1", {
+		operation: "terminate",
+		agentId,
+	});
+	assert.ok("disposition" in firstTermination);
+	assert.equal(firstTermination.disposition, "terminated");
+	await writeFile(
+		join(templateRoot, "research.md"),
+		"---\nname: research-agent\nthinking: low\ntools: read\n---\nTemplate context v2",
+	);
+	let successorSystemPrompt = "";
+	host.model.setResponses([
+		(context) => {
+			successorSystemPrompt = context.systemPrompt ?? "";
+			return fauxAssistantMessage("Successor used the current Template.");
+		},
+	]);
+	const successorMessage = {
+		operation: "send" as const,
+		targetAgentId: agentId,
+		content: "Start a successor Run.",
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", successorMessage, { id: "start-configured-child-v2" }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const successorReceipt = await view.message("start-configured-child-v2", successorMessage);
+	assert.ok("delivery" in successorReceipt);
+	assert.equal(successorReceipt.delivery, "pending");
+	await waitForCondition(() => successorSystemPrompt.length > 0);
+	assert.match(successorSystemPrompt, /Template context v2/);
+	assert.doesNotMatch(successorSystemPrompt, /Template context(?:\n|$)/);
+
+	await waitForCondition(() => {
+		const run = view.status(agentId).run;
+		return run.phase === "dormant" || (run.phase === "live" && run.work === "settled");
+	});
+	if (view.status(agentId).run.phase === "live") {
+		host.session.sessionManager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(
+					"agent_control",
+					{ operation: "terminate", agentId },
+					{ id: "terminate-configured-child-v2" },
+				),
+				{ stopReason: "toolUse" },
+			),
+		);
+		const secondTermination = await view.control("terminate-configured-child-v2", {
+			operation: "terminate",
+			agentId,
+		});
+		assert.ok("disposition" in secondTermination);
+		assert.equal(secondTermination.disposition, "terminated");
+	}
+	await writeFile(
+		join(templateRoot, "research.md"),
+		"---\nname: research-agent\ncwd: invalid-template-field\n---\n",
+	);
+	let staleFallbackInvoked = false;
+	host.model.setResponses([
+		() => {
+			staleFallbackInvoked = true;
+			return fauxAssistantMessage("This stale fallback must not run.");
+		},
+	]);
+	const blockedMessage = {
+		operation: "send" as const,
+		targetAgentId: agentId,
+		content: "Do not start from stale Template content.",
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", blockedMessage, { id: "start-invalid-template" }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const blockedReceipt = await view.message("start-invalid-template", blockedMessage);
+	assert.ok("delivery" in blockedReceipt);
+	assert.equal(blockedReceipt.delivery, "rejected");
+	assert.ok("rejectionReason" in blockedReceipt);
+	assert.equal(blockedReceipt.rejectionReason, "target_unavailable");
+	assert.equal(staleFallbackInvoked, false);
+	assert.equal(view.status(agentId).run.phase, "dormant");
+	host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: "start-invalid-template",
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(blockedReceipt) }],
+		details: blockedReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	await writeFile(
+		join(templateRoot, "research.md"),
+		"---\nname: research-agent\nthinking: low\ntools: read\n---\nRepaired Template context",
+	);
+	let repairedSystemPrompt = "";
+	host.model.setResponses([
+		(context) => {
+			repairedSystemPrompt = context.systemPrompt ?? "";
+			return fauxAssistantMessage("Repaired Template started the Run.");
+		},
+	]);
+	const retryInput = {
+		operation: "retry" as const,
+		messageId: blockedReceipt.messageId,
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", retryInput, { id: "retry-repaired-template" }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const retryReceipt = await view.message("retry-repaired-template", retryInput);
+	assert.ok("disposition" in retryReceipt);
+	assert.equal(retryReceipt.disposition, "pending");
+	await waitForCondition(() => repairedSystemPrompt.length > 0);
+	assert.match(repairedSystemPrompt, /Repaired Template context/);
+
+	await coordinator.shutdown(async () => host.runtime.dispose());
+});
+
 test("invalid default-child metadata fails before Agent Identity", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
 	host.model.setResponses([
@@ -232,6 +515,112 @@ test("invalid default-child metadata fails before Agent Identity", async () => {
 	assert.deepEqual(result.details, { children: [] });
 
 	await host.runtime.dispose();
+});
+
+test("ambiguous selected skills fail before Agent Identity", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const piSkillDirectory = join(host.cwd, ".pi", "skills", "pi-copy");
+	const agentsSkillDirectory = join(host.cwd, ".agents", "skills", "agents-copy");
+	await mkdir(piSkillDirectory, { recursive: true });
+	await mkdir(agentsSkillDirectory, { recursive: true });
+	const skill = [
+		"---",
+		"name: colliding-skill",
+		"description: Deliberate collision fixture",
+		"---",
+		"Exercise the selected resource collision boundary.",
+	].join("\n");
+	await writeFile(join(piSkillDirectory, "SKILL.md"), skill);
+	await writeFile(join(agentsSkillDirectory, "SKILL.md"), skill);
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_spawn",
+				{
+					request: "This request must never acquire a child.",
+					config: { skills: ["colliding-skill"] },
+				},
+				{ id: "spawn-ambiguous-skill" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The child was not created."),
+	]);
+
+	await host.session.prompt("Try an ambiguous child skill selection.");
+	await host.session.waitForIdle();
+
+	assert.deepEqual(findSpawnReceipt(host.session.sessionManager), {
+		disposition: "not_created",
+		failedStage: "identity_commit",
+	});
+
+	await host.runtime.dispose();
+});
+
+test("an untrusted effective cwd cannot contribute selected project resources", async () => {
+	const harness = await createCoordinatorHarness({});
+	const effectiveCwd = join(harness.host.cwd, "untrusted-project");
+	const skillDirectory = join(effectiveCwd, ".agents", "skills", "untrusted-skill");
+	await mkdir(skillDirectory, { recursive: true });
+	await writeFile(
+		join(skillDirectory, "SKILL.md"),
+		[
+			"---",
+			"name: untrusted-skill",
+			"description: Must remain unavailable",
+			"---",
+			"This project resource requires trust.",
+		].join("\n"),
+	);
+	new ProjectTrustStore(harness.host.services.agentDir).set(effectiveCwd, false);
+
+	const receipt = await harness.spawn("spawn-untrusted-project-resource", {
+		request: "This request must never acquire a child.",
+		config: {
+			cwd: "untrusted-project",
+			skills: ["untrusted-skill"],
+		},
+	});
+
+	assert.deepEqual(receipt, {
+		disposition: "not_created",
+		failedStage: "identity_commit",
+	});
+	assert.deepEqual(harness.view.children(), []);
+
+	await harness.shutdown();
+});
+
+test("effective cwd honors Pi's default project-trust policy", async () => {
+	const harness = await createCoordinatorHarness({});
+	harness.host.services.settingsManager.setDefaultProjectTrust("always");
+	const effectiveCwd = join(harness.host.cwd, "default-trusted-project");
+	const skillDirectory = join(effectiveCwd, ".agents", "skills", "trusted-skill");
+	await mkdir(skillDirectory, { recursive: true });
+	await writeFile(
+		join(skillDirectory, "SKILL.md"),
+		[
+			"---",
+			"name: trusted-skill",
+			"description: Available under the global trust policy",
+			"---",
+			"This project resource is trusted by policy.",
+		].join("\n"),
+	);
+
+	const receipt = await harness.spawn("spawn-default-trusted-project", {
+		request: "Use the policy-trusted skill.",
+		config: {
+			cwd: "default-trusted-project",
+			skills: ["trusted-skill"],
+		},
+	});
+
+	assert.equal(receipt.disposition, "pending");
+	assert.deepEqual(receipt.effectiveConfiguration?.skills, ["trusted-skill"]);
+
+	await harness.shutdown();
 });
 
 test("unavailable inherited resources fail before Agent Identity", async () => {
@@ -465,7 +854,7 @@ test("direct children remain in physical Agent Spawn call order", async () => {
 });
 
 async function waitForChildSessionFile(cwd: string, sessionDirectory: string): Promise<string> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		const sessions = await SessionManager.list(cwd, sessionDirectory);
 		if (sessions[0]) return sessions[0].path;
 		await new Promise<void>((resolve) => setImmediate(resolve));
@@ -477,12 +866,20 @@ async function waitForEntry(
 	sessionFile: string,
 	predicate: (entry: ReturnType<SessionManager["getEntries"]>[number]) => boolean,
 ) {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		const entries = SessionManager.open(sessionFile).getEntries();
 		if (entries.some(predicate)) return entries;
 		await new Promise<void>((resolve) => setImmediate(resolve));
 	}
 	throw new Error("Expected child transcript entry did not commit");
+}
+
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
+		if (predicate()) return;
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+	throw new Error("Expected condition did not become true");
 }
 
 function findSpawnReceipt(sessionManager: SessionManager): AgentSpawnReceipt {
@@ -515,19 +912,23 @@ async function createCoordinatorHarness(
 	const view = coordinator.forAgent(identity.agentId);
 
 	return {
+		host,
 		view,
-		async spawn(toolCallId: string): Promise<AgentSpawnReceipt> {
+		async spawn(
+			toolCallId: string,
+			input: AgentSpawnInput = { request: `Creation Request for ${toolCallId}` },
+		): Promise<AgentSpawnReceipt> {
 			host.session.sessionManager.appendMessage(
 				fauxAssistantMessage(
 					fauxToolCall(
 						"agent_spawn",
-						{ request: `Creation Request for ${toolCallId}` },
+						input,
 						{ id: toolCallId },
 					),
 					{ stopReason: "toolUse" },
 				),
 			);
-			return view.spawn(toolCallId, { request: `Creation Request for ${toolCallId}` });
+			return view.spawn(toolCallId, input);
 		},
 		async spawnMany(toolCallIds: string[]) {
 			host.session.sessionManager.appendMessage(

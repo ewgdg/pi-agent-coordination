@@ -4,6 +4,7 @@ import type {
 	MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
+import { dirname, resolve } from "node:path";
 
 import {
 	statusOf,
@@ -42,6 +43,7 @@ import type {
 } from "../protocol/run-control.ts";
 import type { HumanSessionSelection } from "../pi-integration/interactive-session-selection.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
+import type { AgentTemplateRoot } from "../templates/agent-templates.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type {
@@ -98,6 +100,11 @@ export class WorkflowCoordinator {
 		identity: OwnerIdentity,
 		options: {
 			entryModulePath: string;
+			packageRoot?: string;
+			templateRoots?(
+				baselineCwd: string,
+				projectTrusted: boolean,
+			): readonly AgentTemplateRoot[];
 			childExtensionFactory(agentId: string): ExtensionFactory;
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
 			messageBoundaryHooks?: MessageBoundaryHooks;
@@ -119,6 +126,8 @@ export class WorkflowCoordinator {
 			ownerRuntime: runtime,
 			ownerIdentity: identity,
 			entryModulePath: options.entryModulePath,
+			packageRoot: options.packageRoot ?? resolve(dirname(options.entryModulePath), ".."),
+			templateRoots: options.templateRoots,
 			childExtensionFactory: options.childExtensionFactory,
 		});
 		this.#messages = new MessageCoordinator({

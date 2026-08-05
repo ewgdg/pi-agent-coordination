@@ -133,3 +133,80 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 
 	await host.runtime.dispose();
 });
+
+test("native Agent Spawn rendering exposes verified runtime configuration only in resolved receipts", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination);
+	const tool = host.session.getToolDefinition("agent_spawn");
+	assert.ok(tool?.renderCall);
+	assert.ok(tool.renderResult);
+	const args = {
+		request: "Investigate the configured repository.",
+		template: "research-agent",
+		label: "Researcher",
+		description: "Primary-source investigation",
+		config: { cwd: "subproject", thinking: "high" as const },
+	};
+	const renderContext = {
+		args,
+		toolCallId: "render-spawn",
+		invalidate() {},
+		lastComponent: undefined,
+		state: {},
+		cwd: host.cwd,
+		argsComplete: true,
+		isPartial: false,
+		expanded: false,
+		showImages: false,
+		isError: false,
+		executionStarted: true,
+	};
+	const callText = tool.renderCall(args, plainTheme, renderContext).render(160).join("\n");
+	assert.match(callText, /Researcher/);
+	assert.match(callText, /Primary-source investigation/);
+
+	const effectiveConfiguration = {
+		cwd: "/work/subproject",
+		model: { provider: "provider", modelId: "model" },
+		thinking: "high" as const,
+		tools: ["read", "agent_message"],
+		skills: ["research"],
+		extensions: ["/extensions/research.ts"],
+		projectContext: { mode: "append" as const, body: "Configured context" },
+	};
+	const receipt = {
+		disposition: "pending" as const,
+		agentId: "agent-identity-1234567890",
+		requestId: "request-identity",
+		effectiveConfiguration,
+	};
+	const collapsedText = tool.renderResult(
+		{ content: [{ type: "text", text: JSON.stringify(receipt) }], details: receipt },
+		{ expanded: false, isPartial: false },
+		plainTheme,
+		renderContext,
+	).render(160).join("\n");
+	assert.match(collapsedText, /pending/);
+	assert.match(collapsedText, /provider\/model/);
+	assert.match(collapsedText, /high/);
+	assert.equal(collapsedText.includes(effectiveConfiguration.cwd), false);
+
+	const expandedText = tool.renderResult(
+		{ content: [{ type: "text", text: JSON.stringify(receipt) }], details: receipt },
+		{ expanded: true, isPartial: false },
+		plainTheme,
+		renderContext,
+	).render(160).join("\n");
+	assert.match(expandedText, /\/work\/subproject/);
+	assert.match(expandedText, /agent_message/);
+	assert.match(expandedText, /Configured context/);
+
+	const partialText = tool.renderResult(
+		{ content: [{ type: "text", text: "starting" }], details: undefined },
+		{ expanded: false, isPartial: true },
+		plainTheme,
+		renderContext,
+	).render(160).join("\n");
+	assert.equal(partialText.includes("provider/model"), false);
+
+	await host.runtime.dispose();
+});

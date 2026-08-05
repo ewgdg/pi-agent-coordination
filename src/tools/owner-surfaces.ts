@@ -6,6 +6,10 @@ import {
 	renderAgentMessageCall,
 	renderAgentMessageResult,
 } from "./message-renderer.ts";
+import {
+	renderAgentSpawnCall,
+	renderAgentSpawnResult,
+} from "./spawn-renderer.ts";
 
 type ViewResolver = () => OrdinaryAgentCoordinatorView;
 
@@ -76,7 +80,56 @@ export function registerOrdinaryAgentSurfaces(
 	const spawnParameters = Type.Object(
 		{
 			request: Type.String({ minLength: 1 }),
+			template: Type.Optional(
+				Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
+			),
+			label: Type.Optional(Type.String({ minLength: 1 })),
 			description: Type.Optional(Type.String({ minLength: 1 })),
+			config: Type.Optional(
+				Type.Object(
+					{
+						model: Type.Optional(
+							Type.Object(
+								{
+									provider: Type.String({ minLength: 1 }),
+									modelId: Type.String({ minLength: 1 }),
+								},
+								{ additionalProperties: false },
+							),
+						),
+						thinking: Type.Optional(
+							Type.Union([
+								Type.Literal("off"),
+								Type.Literal("minimal"),
+								Type.Literal("low"),
+								Type.Literal("medium"),
+								Type.Literal("high"),
+								Type.Literal("xhigh"),
+								Type.Literal("max"),
+							]),
+						),
+						cwd: Type.Optional(Type.String({ minLength: 1 })),
+						tools: Type.Optional(
+							Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
+						),
+						skills: Type.Optional(
+							Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
+						),
+						extensions: Type.Optional(
+							Type.Union([
+								Type.Literal("inherit"),
+								Type.Literal("none"),
+								Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
+							]),
+						),
+						projectContext: Type.Optional(Type.String()),
+						projectContextMode: Type.Optional(
+							Type.Union([Type.Literal("append"), Type.Literal("replace")]),
+						),
+					},
+					{ additionalProperties: false },
+				),
+			),
 		},
 		{ additionalProperties: false },
 	);
@@ -196,6 +249,8 @@ export function registerOrdinaryAgentSurfaces(
 		promptSnippet: "Create one fresh child Agent and give it isolated initial work.",
 		executionMode: "sequential",
 		parameters: spawnParameters,
+		renderCall: renderAgentSpawnCall,
+		renderResult: renderAgentSpawnResult,
 		async execute(toolCallId, parameters) {
 			const receipt = await resolveView().spawn(toolCallId, parameters);
 			return {

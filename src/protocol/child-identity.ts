@@ -14,7 +14,7 @@ export type ChildAgentIdentity = Readonly<{
 	directSpawnerAgentId: string;
 	spawnSource: ToolCallPointer;
 	configuration: Readonly<{
-		label: "agent";
+		label: string;
 		description?: string;
 		baseline: RuntimeConfigurationBaseline;
 	}>;

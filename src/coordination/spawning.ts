@@ -2,13 +2,18 @@ import {
 	SessionManager,
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import { isDeepStrictEqual } from "node:util";
 
 import {
 	requireLiveSession,
 	type AgentRecord,
 } from "./agent-record.ts";
 import { MessageCoordinator } from "./messages.ts";
-import { normalizeAgentDescription } from "../protocol/agent-metadata.ts";
+import { resolveOrdinaryAgentMetadata } from "../protocol/agent-metadata.ts";
+import {
+	type AgentSpawnInput,
+	validateAgentSpawnInput,
+} from "../protocol/agent-spawn-input.ts";
 import {
 	commitChildAgentIdentity,
 	type ChildAgentIdentity,
@@ -25,24 +30,27 @@ import {
 	InProcessAgentHost,
 	type RunRetentionReason,
 } from "../runtime/in-process-agent-host.ts";
-import { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
+import {
+	DefaultChildSessionFactory,
+	type PreparedAgentRun,
+} from "../runtime/default-child-session-factory.ts";
+import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
 
-export type AgentSpawnInput = Readonly<{
-	request: string;
-	description?: string;
-}>;
+export type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 
 export type AgentSpawnReceipt =
 	| Readonly<{
 		disposition: "pending";
 		agentId: string;
 		requestId: string;
+		effectiveConfiguration: EffectiveAgentRunConfiguration;
 	}>
 	| Readonly<{
 		disposition: "created_unscheduled";
 		agentId: string;
 		requestId: string;
 		failedStage: "run_start" | "delivery_admission";
+		effectiveConfiguration: EffectiveAgentRunConfiguration;
 	}>
 	| Readonly<{
 		disposition: "not_created";
@@ -53,6 +61,7 @@ export type AgentSpawnReceipt =
 		agentId?: string;
 		requestId?: string;
 		lastConfirmedStage?: "identity" | "run_start";
+		effectiveConfiguration?: EffectiveAgentRunConfiguration;
 	}>;
 
 // Tests control only whether a concrete Pi boundary confirms, rejects, or loses
@@ -107,17 +116,21 @@ export class DefaultChildSpawner {
 			sessionManager: parentSession.sessionManager,
 			toolCallId,
 		});
-		const input = validateCommittedSpawnInput(committedInput);
-		if (input.request !== providedInput.request || input.description !== providedInput.description) {
+		const input = validateAgentSpawnInput(committedInput);
+		if (!isDeepStrictEqual(input, providedInput)) {
 			throw new Error("invariant_violation: executed Agent Spawn input differs from its source");
 		}
 		this.#assertUnclaimedSpawnSource(source);
 
-		let inherited: ReturnType<DefaultChildSessionFactory["snapshotInheritedRuntime"]>;
-		let description: string | undefined;
+		let baseline: ReturnType<DefaultChildSessionFactory["snapshotRuntimeBaseline"]>;
+		let metadata: ReturnType<typeof resolveOrdinaryAgentMetadata>;
 		try {
-			description = normalizeAgentDescription(input.description);
-			inherited = this.#sessionFactory.snapshotInheritedRuntime(parent);
+			metadata = resolveOrdinaryAgentMetadata({
+				explicitLabel: input.label,
+				explicitDescription: input.description,
+				templateName: input.template,
+			});
+			baseline = this.#sessionFactory.snapshotRuntimeBaseline(parent);
 		} catch {
 			return { disposition: "not_created", failedStage: "identity_commit" };
 		}
@@ -125,7 +138,7 @@ export class DefaultChildSpawner {
 		let sessionManager: SessionManager;
 		try {
 			sessionManager = SessionManager.create(
-				inherited.baseline.cwd,
+				baseline.cwd,
 				this.#sessionFactory.workflowSessionDirectory(),
 			);
 		} catch {
@@ -133,9 +146,10 @@ export class DefaultChildSpawner {
 		}
 		const agentId = sessionManager.getSessionId();
 		const requestId = deriveMessageIdentity(source);
-		let services: AgentRecord["services"];
+		const blueprint = { baseline, spawnInput: input } as const;
+		let prepared: PreparedAgentRun;
 		try {
-			services = await this.#sessionFactory.createValidatedServices(agentId, inherited);
+			prepared = await this.#sessionFactory.prepareRun(agentId, blueprint);
 		} catch {
 			return { disposition: "not_created", failedStage: "identity_commit" };
 		}
@@ -146,15 +160,19 @@ export class DefaultChildSpawner {
 			directSpawnerAgentId: callerAgentId,
 			spawnSource: source,
 			configuration: {
-				label: "agent",
-				...(description === undefined ? {} : { description }),
-				baseline: inherited.baseline,
+				...metadata,
+				baseline,
 			},
 		};
 		try {
 			commitChildAgentIdentity(sessionManager, identity);
 		} catch {
-			return { disposition: "indeterminate", agentId, requestId };
+			return {
+				disposition: "indeterminate",
+				agentId,
+				requestId,
+				effectiveConfiguration: prepared.configuration,
+			};
 		}
 		const identityConfirmation = this.#boundaryHooks.afterIdentityCommit?.({
 			sessionManager,
@@ -162,18 +180,31 @@ export class DefaultChildSpawner {
 		});
 		validateCommittedChildIdentity(sessionManager, identity);
 
+		let firstPrepared: PreparedAgentRun | undefined = prepared;
+		// The host cannot invoke startSession until startInLane below, after this record
+		// is assigned and registered. Successor starts then refresh its current services.
+		let child!: AgentRecord;
 		const childHost = InProcessAgentHost.createChild({
 			sessionManager,
-			startSession: () => this.#sessionFactory.startSession({
-				sessionManager,
-				services,
-				inherited,
-				parentSession,
-			}),
+			startSession: async () => {
+				const nextPrepared = firstPrepared ?? await this.#sessionFactory.prepareRun(
+					agentId,
+					blueprint,
+				);
+				firstPrepared = undefined;
+				const session = await this.#sessionFactory.startSession({
+					sessionManager,
+					prepared: nextPrepared,
+				});
+				child.services = nextPrepared.services;
+				child.effectiveConfiguration = nextPrepared.configuration;
+				return session;
+			},
 		});
-		const child: AgentRecord = {
+		child = {
 			identity,
-			services,
+			services: prepared.services,
+			effectiveConfiguration: prepared.configuration,
 			host: childHost,
 			children: [],
 		};
@@ -181,7 +212,12 @@ export class DefaultChildSpawner {
 		parent.children.push(agentId);
 		this.#addRetentionReason(parent, "awaiting_answer", requestId);
 		if (identityConfirmation === "confirmation_lost") {
-			return { disposition: "indeterminate", agentId, requestId };
+			return {
+				disposition: "indeterminate",
+				agentId,
+				requestId,
+				effectiveConfiguration: prepared.configuration,
+			};
 		}
 
 		try {
@@ -196,6 +232,7 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				failedStage: "run_start",
+				effectiveConfiguration: prepared.configuration,
 			};
 		}
 		if (
@@ -209,6 +246,7 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				lastConfirmedStage: "identity",
+				effectiveConfiguration: prepared.configuration,
 			};
 		}
 
@@ -233,6 +271,7 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				failedStage: "delivery_admission",
+				effectiveConfiguration: prepared.configuration,
 			};
 		}
 		if (this.#boundaryHooks.afterDeliveryAdmission?.() === "confirmation_lost") {
@@ -241,9 +280,15 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				lastConfirmedStage: "run_start",
+				effectiveConfiguration: prepared.configuration,
 			};
 		}
-		return { disposition: "pending", agentId, requestId };
+		return {
+			disposition: "pending",
+			agentId,
+			requestId,
+			effectiveConfiguration: prepared.configuration,
+		};
 	}
 
 	#assertUnclaimedSpawnSource(source: ToolCallPointer): void {
@@ -270,26 +315,4 @@ export class DefaultChildSpawner {
 		if (!record) throw new Error(`unknown_identity: ${agentId}`);
 		return record;
 	}
-}
-
-function validateCommittedSpawnInput(value: Record<string, unknown>): AgentSpawnInput {
-	const keys = Object.keys(value).sort();
-	const expected = value.description === undefined ? ["request"] : ["description", "request"];
-	if (!sameStringList(keys, expected)) {
-		throw new Error("invalid_input: Agent Spawn input has an invalid shape");
-	}
-	if (typeof value.request !== "string" || value.request.length === 0) {
-		throw new Error("invalid_input: Agent Spawn request must not be empty");
-	}
-	if (value.description !== undefined && typeof value.description !== "string") {
-		throw new Error("invalid_input: Agent Spawn description must be a string");
-	}
-	return {
-		request: value.request,
-		...(value.description === undefined ? {} : { description: value.description }),
-	};
-}
-
-function sameStringList(left: readonly string[], right: readonly string[]): boolean {
-	return left.length === right.length && left.every((value, index) => value === right[index]);
 }

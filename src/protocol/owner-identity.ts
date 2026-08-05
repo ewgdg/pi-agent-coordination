@@ -5,29 +5,17 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { isAbsolute } from "node:path";
 
+import {
+	isRuntimeThinkingLevel,
+	type ModelReference,
+	type RuntimeConfigurationBaseline,
+} from "./runtime-configuration.ts";
+
+export type { ModelReference, RuntimeConfigurationBaseline } from "./runtime-configuration.ts";
+
 export const AGENT_IDENTITY_CUSTOM_TYPE = "agent-coordination.identity";
 const MODERATOR_INPUT_CUSTOM_TYPE = "agent-coordination.moderator-input";
 const OWNER_LABEL = "owner";
-const THINKING_LEVELS = new Set([
-	"off",
-	"minimal",
-	"low",
-	"medium",
-	"high",
-	"xhigh",
-	"max",
-]);
-
-export type ModelReference = Readonly<{ provider: string; modelId: string }>;
-
-export type RuntimeConfigurationBaseline = Readonly<{
-	cwd: string;
-	model: ModelReference;
-	thinking: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-	tools: readonly string[];
-	skills: readonly string[];
-	extensions: readonly string[];
-}>;
 
 export type OwnerIdentity = Readonly<{
 	agentId: string;
@@ -94,7 +82,7 @@ function createOwnerIdentity(runtime: AgentSessionRuntime, entryModulePath: stri
 	if (!model) throw new InvalidOwnerIdentityError("AgentConfiguration.baseline.model is unavailable");
 
 	const thinking = session.thinkingLevel;
-	if (!THINKING_LEVELS.has(thinking)) {
+	if (!isRuntimeThinkingLevel(thinking)) {
 		throw new InvalidOwnerIdentityError("AgentConfiguration.baseline.thinking is invalid");
 	}
 	const resources = runtime.services.resourceLoader;
@@ -117,7 +105,7 @@ function createOwnerIdentity(runtime: AgentSessionRuntime, entryModulePath: stri
 			baseline: {
 				cwd: session.sessionManager.getCwd(),
 				model: { provider: model.provider, modelId: model.id },
-				thinking: thinking as RuntimeConfigurationBaseline["thinking"],
+				thinking,
 				tools: session.getActiveToolNames(),
 				skills,
 				extensions,
@@ -185,7 +173,7 @@ function validateBaseline(value: unknown): RuntimeConfigurationBaseline {
 	if (!isNonEmptyIdentifier(model.provider) || !isNonEmptyIdentifier(model.modelId)) {
 		throw new InvalidOwnerIdentityError("AgentConfiguration.baseline.model is invalid");
 	}
-	if (typeof baseline.thinking !== "string" || !THINKING_LEVELS.has(baseline.thinking)) {
+	if (!isRuntimeThinkingLevel(baseline.thinking)) {
 		throw new InvalidOwnerIdentityError("AgentConfiguration.baseline.thinking is invalid");
 	}
 	const tools = validateStringList(baseline.tools, "AgentConfiguration.baseline.tools");
@@ -197,7 +185,7 @@ function validateBaseline(value: unknown): RuntimeConfigurationBaseline {
 	return {
 		cwd: baseline.cwd,
 		model: { provider: model.provider, modelId: model.modelId },
-		thinking: baseline.thinking as RuntimeConfigurationBaseline["thinking"],
+		thinking: baseline.thinking,
 		tools,
 		skills,
 		extensions,
