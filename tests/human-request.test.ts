@@ -646,6 +646,21 @@ test("Escape settles one matching error result and does not run a later sibling 
 		),
 		false,
 	);
+	const observe = host.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const heldStatus = await observe.execute(
+		"observe-human-escape-hold",
+		{ operation: "status" },
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	assert.equal(
+		(heldStatus.details as {
+			run: { retentionReasons: Array<{ reason: string }> };
+		}).run.retentionReasons.some(({ reason }) => reason === "interruption_hold"),
+		true,
+	);
 
 	await host.runtime.dispose();
 });

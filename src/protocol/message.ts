@@ -58,6 +58,7 @@ type MessageSource = Readonly<{
 export type Message =
 	| (MessageSource & Readonly<{
 		kind: "message";
+		origin: "agent_message" | "agent_control";
 		content: string;
 	}>)
 	| (MessageSource & Readonly<{
@@ -106,7 +107,12 @@ export function resolveCommittedMessage(options: {
 		source,
 	};
 	return committedInput.operation === "send"
-		? { ...common, kind: "message", content: committedInput.content }
+		? {
+			...common,
+			kind: "message",
+			origin: "agent_message",
+			content: committedInput.content,
+		}
 		: {
 			...common,
 			kind: "request",

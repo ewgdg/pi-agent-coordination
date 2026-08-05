@@ -190,7 +190,9 @@ export function assertAgentSessionShape(
 	const session = requireRecord(sessionValue, "AgentSession", version);
 	for (const member of [
 		"prompt",
+		"sendUserMessage",
 		"sendCustomMessage",
+		"clearQueue",
 		"subscribe",
 		"bindExtensions",
 		"abort",

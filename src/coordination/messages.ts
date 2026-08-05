@@ -4,6 +4,7 @@ import { requireLiveSession, type AgentRecord } from "./agent-record.ts";
 import {
 	MessageDeliveryScheduler,
 	type ScheduledMessageDelivery,
+	type ResumeReservationHandler,
 	type ScheduleReleaseEvaluation,
 	type SteerFreezeHandler,
 } from "./message-delivery-scheduler.ts";
@@ -40,6 +41,7 @@ import {
 	inspectCreationRequestDelivery,
 } from "../protocol/creation-request.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
+import type { InterruptionHoldHandle } from "../runtime/in-process-agent-host.ts";
 
 export type { AgentMessageInput } from "../protocol/message.ts";
 export type {
@@ -71,6 +73,7 @@ export type MessageBoundaryHooks = Readonly<{
 		operation: "send" | "retry" | "answer" | "cancel";
 	}>): void | "confirmation_lost";
 	afterSteerFreeze?: SteerFreezeHandler;
+	afterResumeReservation?: ResumeReservationHandler;
 	scheduleReleaseEvaluation?: ScheduleReleaseEvaluation;
 }>;
 
@@ -94,8 +97,13 @@ export class MessageCoordinator {
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
+			afterResumeReservation: this.#boundaryHooks.afterResumeReservation,
 			pendingMessageLimit: options.pendingMessageLimit,
 		});
+	}
+
+	integrate(record: AgentRecord): void {
+		this.#deliveryScheduler.integrate(record);
 	}
 
 	async send(
@@ -212,13 +220,31 @@ export class MessageCoordinator {
 		// Confirmed Run disposal already owns this Agent lane and fences its volatile
 		// scheduling. Re-entering the lane from Pi's awaited turn_end would deadlock
 		// disposal while it waits for the same turn to settle.
-		if (record.host.observe().phase === "ending") return Promise.resolve();
+		if (record.host.observe().phase === "ending" || record.host.isInterrupting()) {
+			return Promise.resolve();
+		}
 		await record.host.lane.run(() => this.#reconcileAnswerDeliveries(record));
 		return this.#deliveryScheduler.reachSafeBoundary(record);
 	}
 
 	discardSchedulingInLane(record: AgentRecord): void {
 		this.#deliveryScheduler.discardInLane(record);
+	}
+
+	prepareInterruptionInLane(record: AgentRecord): void {
+		this.#deliveryScheduler.prepareInterruptionInLane(record);
+	}
+
+	admitResumeInLane(
+		record: AgentRecord,
+		message: Extract<Message, { kind: "message" }>,
+		hold: InterruptionHoldHandle,
+	) {
+		return this.#deliveryScheduler.admitResumeInLane(
+			record,
+			this.#scheduleGeneralMessage(record, message),
+			hold,
+		);
 	}
 
 	execute(

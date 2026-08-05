@@ -13,12 +13,13 @@ After Owner Identity validation, the package binds the ordinary tools through a 
 - `agent_spawn` creates one fresh default child and delivers its initial Creation Request.
 - `agent_message` sends Messages, creates correlated Requests, Answers, retrieves, and cancels.
 - `ask_user_question` blocks the caller's exact Run on one or more structured Questions. Its matching successful native tool result is the sole Human Answer.
-- `agent_observe` returns an authorized Agent's durable identity, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
-- `/agents` presents numbered `DECIDE` attention rows, the current Agent, and its direct children. Selecting a `DECIDE` row opens that exact Human Request without background focus theft.
+- `agent_observe` returns an authorized Agent's durable identity, structural relationship, bounded primary transcript evidence, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
+- `agent_control` interrupts, explicitly resumes, or terminates one authorized exact child Run.
+- `/agents` presents numbered `DECIDE` attention rows and Workflow Agent statuses. Selecting a live Agent switches the native editor and transcript view to that retained session; selecting a `DECIDE` row opens that exact Human Request without background focus theft.
 
 These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer.
 
-See [Human Requests](human-requests.md) for the Question and Answer shapes, interaction keys, commitment boundary, and Run fencing behavior.
+See [Human Requests](human-requests.md) for the Question and Answer shapes, interaction keys, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and `/agents` selection.
 
 ## Activation modes
 
@@ -32,4 +33,4 @@ Pi's version is diagnostic information, not an allowlist. Package builds use a p
 
 ## Shutdown
 
-Orderly Pi shutdown fences new spawn admission, ends retained child Runs, moves the Owner Run to `ending`, and passes Owner disposal through one memoized native runtime path. Repeated or racing shutdown requests therefore dispose the Owner session exactly once. Abrupt process loss records no graceful-end claim.
+Orderly Pi shutdown fences new spawn admission, restores native selection to the Owner, ends retained child Runs, moves the Owner Run to `ending`, and passes Owner disposal through one memoized native runtime path. Repeated or racing shutdown requests therefore dispose the Owner session exactly once. Abrupt process loss records no graceful-end claim.

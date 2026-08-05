@@ -96,6 +96,30 @@ export function registerOrdinaryAgentSurfaces(
 			{ additionalProperties: false },
 		),
 	]);
+	const controlParameters = Type.Union([
+		Type.Object(
+			{
+				operation: Type.Literal("interrupt"),
+				agentId: Type.String({ minLength: 1 }),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
+				operation: Type.Literal("resume"),
+				agentId: Type.String({ minLength: 1 }),
+				content: Type.String({ minLength: 1 }),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
+				operation: Type.Literal("terminate"),
+				agentId: Type.String({ minLength: 1 }),
+			},
+			{ additionalProperties: false },
+		),
+	]);
 	const humanOption = Type.Object(
 		{
 			label: Type.String({ minLength: 1 }),
@@ -204,6 +228,23 @@ export function registerOrdinaryAgentSurfaces(
 			};
 		},
 	});
+	pi.registerTool<typeof controlParameters, unknown>({
+		name: "agent_control",
+		label: "Control Agent Run",
+		description:
+			"Interrupt, explicitly resume, or terminate one authorized exact Agent Run.",
+		promptSnippet:
+			"Supervise an immediate child Run, or any ordinary descendant when acting as Workflow Owner.",
+		executionMode: "sequential",
+		parameters: controlParameters,
+		async execute(toolCallId, parameters) {
+			const receipt = await resolveView().control(toolCallId, parameters);
+			return {
+				content: [{ type: "text", text: JSON.stringify(receipt) }],
+				details: receipt,
+			};
+		},
+	});
 	pi.registerTool({
 		name: "ask_user_question",
 		label: "Ask Human",
@@ -230,8 +271,7 @@ export function registerOrdinaryAgentSurfaces(
 		description: "Show Agents in the current Workflow",
 		handler: async (_args, ctx) => {
 			const view = resolveView();
-			const status = view.status();
-			const children = view.children();
+			const statuses = view.selectionStatuses();
 			const attention = view.humanAttention();
 			const attentionOptions = attention.map(
 				(item, index) =>
@@ -239,15 +279,19 @@ export function registerOrdinaryAgentSurfaces(
 			);
 			const selected = await ctx.ui.select("Agents", [
 				...attentionOptions,
-				formatAgentRow(status),
-				...children.map(formatAgentRow),
+				...statuses.map(formatAgentRow),
 			]);
 			const attentionIndex = selected === undefined
 				? -1
 				: attentionOptions.indexOf(selected);
 			if (attentionIndex >= 0) {
 				await view.focusHumanRequest(attention[attentionIndex]!.requestId);
+				return;
 			}
+			const selectedStatus = statuses.find(
+				(status) => formatAgentRow(status) === selected,
+			);
+			if (selectedStatus) await view.selectForHuman(selectedStatus.agentId);
 		},
 	});
 }

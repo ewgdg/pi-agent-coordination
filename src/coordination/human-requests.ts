@@ -82,6 +82,7 @@ export class HumanRequestCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #presentation: HumanRequestPresentation;
 	readonly #boundaryHooks: HumanRequestBoundaryHooks;
+	readonly #interruptRun: (record: AgentRecord) => void;
 	readonly #pendingByRequestId = new Map<string, PendingHumanRequest>();
 
 	constructor(options: {
@@ -89,11 +90,13 @@ export class HumanRequestCoordinator {
 		ownerIdentity: OwnerIdentity;
 		presentation?: HumanRequestPresentation;
 		boundaryHooks?: HumanRequestBoundaryHooks;
+		interruptRun(record: AgentRecord): void;
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#presentation = options.presentation ?? unavailablePresentation;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
+		this.#interruptRun = options.interruptRun;
 	}
 
 	async ask(
@@ -279,7 +282,7 @@ export class HumanRequestCoordinator {
 		const pending = this.#pendingByRequestId.get(requestId);
 		if (!pending || pending.phase !== "open") return;
 		this.#fence(requestId, INTERRUPTED_MESSAGE);
-		void pending.record.host.requireLiveSession().abort();
+		this.#interruptRun(pending.record);
 	}
 
 	#fenceRun(agentId: string, handle: AgentRunHandle): void {

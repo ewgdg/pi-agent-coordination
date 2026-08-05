@@ -144,10 +144,12 @@ Each recipient admits at most 256 distinct pending Message identities across Def
 
 When capacity is exhausted, the invocation returns `capacity_exhausted`. The canonical author Message remains in the sender transcript and can be retried explicitly after capacity becomes available; there is no hidden overflow or automatic retry.
 
+An exact [Interruption Hold](run-supervision.md) blocks every ordinary Message, Request, Answer, and Cancellation from committing Delivery or invoking the recipient model. Held items remain admitted and consume ordinary capacity. One Supervisory Resume Message uses a separate reserved slot and cannot evict ordinary work.
+
 ## Delivery across dormant Runs
 
 Agent identity outlives any individual Run. When a child has no work and no Run Retention Reason, its current Run is released and the Agent becomes dormant. A Message, Request, Answer, or Cancellation to that Agent starts a successor Run, commits at the first boundary allowed by its authored mode, and releases the successor again when no retention reason remains.
 
-Live scheduling is intentionally disposable. Run failure or Workflow shutdown discards every uncommitted item for that host. Receipts are not rewritten, Messages are not replayed automatically, and backlog is not transferred to a successor Run. Poll and explicit retry are the recovery path.
+Live scheduling is intentionally disposable. Run failure, exact Run termination, or Workflow shutdown discards every uncommitted item for that host. Receipts are not rewritten, Messages are not replayed automatically, and backlog is not transferred to a successor Run. Poll and explicit retry are the recovery path.
 
 Malformed or contradictory transcript evidence is an invariant violation. Unknown Agents, cross-Workflow routes, and poll or retry by anyone other than the original sender are rejected before they can claim Delivery state.

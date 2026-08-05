@@ -43,20 +43,30 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		workflowId: host.session.sessionId,
 		label: "owner",
 		directSpawnerAgentId: null,
-			run: {
-				phase: "live",
-				work: "settled",
-				attention: "none",
-				retentionReasons: [{ reason: "owner_host_binding", count: 1 }],
+		primaryEvidence: {
+			transcriptPath: null,
+			inspectedThrough: {
+				agentId: host.session.sessionId,
+				entryId: ownerIdentity.id,
 			},
-		});
+		},
+		run: {
+			phase: "live",
+			work: "settled",
+			attention: "none",
+			retentionReasons: [
+				{ reason: "owner_host_binding", count: 1 },
+				{ reason: "interactive_selection", count: 1 },
+			],
+		},
+	});
 
 	await host.session.prompt("/agents");
 	assert.deepEqual(host.ui.agentViews, [
 		{
 			title: "Agents",
 			options: [
-				`owner · ${host.session.sessionId} · live/settled · owner host binding`,
+				`owner · ${host.session.sessionId} · live/settled · owner host binding, interactive selection`,
 			],
 		},
 	]);

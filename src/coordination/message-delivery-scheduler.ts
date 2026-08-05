@@ -9,7 +9,9 @@ import type { MessageDeliveryMode } from "../protocol/message.ts";
 import type {
 	AgentRunHandle,
 	AgentRunSettlement,
+	InterruptionHoldHandle,
 } from "../runtime/in-process-agent-host.ts";
+import { sendAndAwaitTranscriptCommit } from "../pi-integration/transcript-commit.ts";
 
 export type ScheduledMessageDelivery = Readonly<{
 	messageId: string;
@@ -32,6 +34,14 @@ export type SteerFreezeHandler = (
 	}>,
 ) => void;
 
+export type ResumeReservationHandler = (
+	context: Readonly<{
+		recipientAgentId: string;
+		messageId: string;
+		release(): Promise<void>;
+	}>,
+) => void | "defer";
+
 export const DEFAULT_PENDING_MESSAGE_LIMIT = 256;
 
 export type MessageDeliveryAdmission =
@@ -49,22 +59,37 @@ type FrozenSteerBatch = Readonly<{
 	messageIds: readonly string[];
 }>;
 
+type ReservedResume = Readonly<{
+	delivery: ScheduledMessageDelivery;
+	hold: InterruptionHoldHandle;
+}>;
+
+type ActiveResume = ReservedResume & {
+	completion: Promise<void>;
+};
+
 export class MessageDeliveryScheduler {
 	readonly #pendingByAgent = new Map<string, Map<string, ScheduledMessageDelivery>>();
 	readonly #activeDeferredByAgent = new Map<string, ActiveDeferredDelivery>();
 	readonly #frozenSteerByAgent = new Map<string, FrozenSteerBatch>();
+	readonly #reservedResumeByAgent = new Map<string, ReservedResume>();
+	readonly #activeResumeByAgent = new Map<string, ActiveResume>();
+	readonly #deferredResumeByAgent = new Set<string>();
 	readonly #integratedAgentIds = new Set<string>();
 	readonly #scheduleReleaseEvaluationHook: ScheduleReleaseEvaluation | undefined;
 	readonly #afterSteerFreeze: SteerFreezeHandler | undefined;
+	readonly #afterResumeReservation: ResumeReservationHandler | undefined;
 	readonly #pendingMessageLimit: number;
 
 	constructor(options: {
 		scheduleReleaseEvaluation?: ScheduleReleaseEvaluation;
 		afterSteerFreeze?: SteerFreezeHandler;
+		afterResumeReservation?: ResumeReservationHandler;
 		pendingMessageLimit?: number;
 	}) {
 		this.#scheduleReleaseEvaluationHook = options.scheduleReleaseEvaluation;
 		this.#afterSteerFreeze = options.afterSteerFreeze;
+		this.#afterResumeReservation = options.afterResumeReservation;
 		this.#pendingMessageLimit =
 			options.pendingMessageLimit ?? DEFAULT_PENDING_MESSAGE_LIMIT;
 		if (
@@ -73,6 +98,10 @@ export class MessageDeliveryScheduler {
 		) {
 			throw new Error("pending Message limit must be a positive safe integer");
 		}
+	}
+
+	integrate(record: AgentRecord): void {
+		this.#ensureSettlementHandler(record);
 	}
 
 	admit(
@@ -107,7 +136,41 @@ export class MessageDeliveryScheduler {
 		}
 		pending.set(delivery.messageId, delivery);
 		this.#addPendingDeliveryReason(record);
-		this.#drainInLane(record);
+		await this.#drainInLane(record);
+		return "pending";
+	}
+
+	async admitResumeInLane(
+		record: AgentRecord,
+		delivery: ScheduledMessageDelivery,
+		hold: InterruptionHoldHandle,
+	): Promise<MessageDeliveryAdmission> {
+		this.#ensureSettlementHandler(record);
+		const agentId = record.identity.agentId;
+		if (
+			this.#reservedResumeByAgent.has(agentId) ||
+			this.#activeResumeByAgent.has(agentId)
+		) return "capacity_exhausted";
+		if (!record.host.isCurrentInterruptionHold(hold)) return "target_unavailable";
+		this.#reservedResumeByAgent.set(agentId, { delivery, hold });
+		this.#addPendingDeliveryReason(record);
+		const release = () => record.host.lane.run(async () => {
+			const current = this.#reservedResumeByAgent.get(agentId);
+			if (current?.delivery.messageId !== delivery.messageId) return;
+			this.#deferredResumeByAgent.delete(agentId);
+			await this.#drainInLane(record);
+		});
+		if (
+			this.#afterResumeReservation?.({
+				recipientAgentId: agentId,
+				messageId: delivery.messageId,
+				release,
+			}) === "defer"
+		) {
+			this.#deferredResumeByAgent.add(agentId);
+			return "pending";
+		}
+		await this.#drainInLane(record);
 		return "pending";
 	}
 
@@ -115,8 +178,13 @@ export class MessageDeliveryScheduler {
 		return record.host.lane.run(() => {
 			if (!record.host.currentHandle()) return;
 			this.#removeProvenDeliveriesInLane(record);
+			if (record.host.blocksOrdinaryDelivery()) return;
 			this.#freezeSteerInLane(record);
 		});
+	}
+
+	prepareInterruptionInLane(record: AgentRecord): void {
+		this.#frozenSteerByAgent.delete(record.identity.agentId);
 	}
 
 	requestRelease(record: AgentRecord): Promise<"released" | "retained" | "stale"> {
@@ -128,6 +196,9 @@ export class MessageDeliveryScheduler {
 	discardInLane(record: AgentRecord): void {
 		this.#activeDeferredByAgent.delete(record.identity.agentId);
 		this.#frozenSteerByAgent.delete(record.identity.agentId);
+		this.#reservedResumeByAgent.delete(record.identity.agentId);
+		this.#activeResumeByAgent.delete(record.identity.agentId);
+		this.#deferredResumeByAgent.delete(record.identity.agentId);
 		this.#pendingByAgent.delete(record.identity.agentId);
 		record.host.removeRetentionReason("pending_delivery");
 	}
@@ -164,6 +235,24 @@ export class MessageDeliveryScheduler {
 		handle: AgentRunHandle,
 		settlement: AgentRunSettlement,
 	): Promise<void> {
+		const activeResume = this.#activeResumeByAgent.get(record.identity.agentId);
+		if (activeResume) {
+			let failed = false;
+			try {
+				await activeResume.completion;
+			} catch {
+				failed = true;
+			}
+			if (!record.host.isCurrent(handle)) return;
+			const proof = activeResume.delivery.inspectProof();
+			this.#activeResumeByAgent.delete(record.identity.agentId);
+			record.host.finishIsolatedResumptionInLane(handle);
+			if (failed || !proof) {
+				this.discardInLane(record);
+				await record.host.discardAndEndInLane();
+				return;
+			}
+		}
 		const active = this.#activeDeferredByAgent.get(record.identity.agentId);
 		if (active) {
 			let failed = false;
@@ -193,7 +282,8 @@ export class MessageDeliveryScheduler {
 			return;
 		}
 
-		this.#drainInLane(record);
+		record.host.finishIsolatedResumptionInLane(handle);
+		await this.#drainInLane(record);
 		if (!this.#hasPendingScheduling(record)) {
 			this.#removePendingDeliveryReason(record);
 			this.#scheduleReleaseEvaluation(record, handle);
@@ -214,8 +304,27 @@ export class MessageDeliveryScheduler {
 		evaluate();
 	}
 
-	#drainInLane(record: AgentRecord): void {
+	async #drainInLane(record: AgentRecord): Promise<void> {
 		this.#removeProvenDeliveriesInLane(record);
+		if (this.#activeResumeByAgent.has(record.identity.agentId)) return;
+		const reservedResume = this.#reservedResumeByAgent.get(record.identity.agentId);
+		if (reservedResume) {
+			if (this.#deferredResumeByAgent.has(record.identity.agentId)) return;
+			if (record.host.isCurrentInterruptionHold(reservedResume.hold)) {
+				if (requireLiveSession(record).isIdle) {
+					await this.#startResumeInLane(record, reservedResume);
+				}
+				return;
+			}
+			this.#reservedResumeByAgent.delete(record.identity.agentId);
+			let pending = this.#pendingByAgent.get(record.identity.agentId);
+			if (!pending) {
+				pending = new Map();
+				this.#pendingByAgent.set(record.identity.agentId, pending);
+			}
+			pending.set(reservedResume.delivery.messageId, reservedResume.delivery);
+		}
+		if (record.host.blocksOrdinaryDelivery()) return;
 		if (
 			this.#activeDeferredByAgent.has(record.identity.agentId) ||
 			this.#hasUnprovenFrozenBatch(record)
@@ -244,6 +353,49 @@ export class MessageDeliveryScheduler {
 			deliveryCommitted: false,
 		});
 		record.host.trackOperation(completion);
+	}
+
+	async #startResumeInLane(record: AgentRecord, reserved: ReservedResume): Promise<void> {
+		if (!record.host.beginIsolatedResumptionInLane(reserved.hold)) return;
+		const session = requireLiveSession(record);
+		try {
+			const committed = await sendAndAwaitTranscriptCommit({
+				session,
+				matchesCandidate: (event) =>
+					event.type === "message_end" && event.message.role === "custom",
+				inspectCommit: () => reserved.delivery.inspectProof() !== undefined,
+				send: () => session.sendCustomMessage(
+					createMessageDelivery([reserved.delivery.deliveryItem]),
+					{ triggerTurn: true },
+				),
+				onDispatched: (completion) => {
+					this.#activeResumeByAgent.set(record.identity.agentId, {
+						...reserved,
+						completion,
+					});
+					record.host.trackOperation(completion);
+				},
+			});
+			if (!committed) {
+				throw new Error("Supervisory Resume Delivery did not commit");
+			}
+			if (!record.host.commitIsolatedResumptionInLane(reserved.hold)) {
+				throw new Error("invariant_violation: committed resume Delivery lost its exact Hold");
+			}
+			this.#reservedResumeByAgent.delete(record.identity.agentId);
+			reserved.delivery.afterCommit?.();
+		} catch (error) {
+			this.#cancelResumeAttemptInLane(record, reserved);
+			throw error;
+		}
+	}
+
+	#cancelResumeAttemptInLane(record: AgentRecord, reserved: ReservedResume): void {
+		record.host.cancelIsolatedResumptionInLane(reserved.hold);
+		this.#activeResumeByAgent.delete(record.identity.agentId);
+		this.#reservedResumeByAgent.delete(record.identity.agentId);
+		this.#deferredResumeByAgent.delete(record.identity.agentId);
+		this.#removePendingDeliveryReason(record);
 	}
 
 	#freezeSteerInLane(record: AgentRecord): void {
@@ -299,6 +451,8 @@ export class MessageDeliveryScheduler {
 
 	#hasPendingScheduling(record: AgentRecord): boolean {
 		return this.#activeDeferredByAgent.has(record.identity.agentId) ||
+			this.#reservedResumeByAgent.has(record.identity.agentId) ||
+			this.#activeResumeByAgent.has(record.identity.agentId) ||
 			this.#hasUnprovenFrozenBatch(record) ||
 			(this.#pendingByAgent.get(record.identity.agentId)?.size ?? 0) > 0;
 	}

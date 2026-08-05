@@ -10,7 +10,9 @@ export type RunRetentionReason =
 	| "owner_host_binding"
 	| "pending_delivery"
 	| "awaiting_answer"
-	| "answer_owed";
+	| "answer_owed"
+	| "interactive_selection"
+	| "interruption_hold";
 
 export type RunRetention = Readonly<{
 	reason: RunRetentionReason;
@@ -33,12 +35,22 @@ export type DormantRunState = Readonly<{
 
 export type AgentRunState = LiveRunState | DormantRunState;
 export type AgentRunHandle = Readonly<{ sequence: number }>;
+export type InterruptionHoldHandle = Readonly<{
+	run: AgentRunHandle;
+	sequence: number;
+}>;
 
 type BoundRun = {
 	handle: AgentRunHandle;
 	session: AgentSession;
 	unsubscribe: () => void;
 	failed: boolean;
+};
+
+type HeldNativeQueue = {
+	handle: AgentRunHandle;
+	steering: string[];
+	followUp: string[];
 };
 
 type StartSession = () => Promise<AgentSession>;
@@ -59,10 +71,17 @@ export class InProcessAgentHost {
 	#run: BoundRun | undefined;
 	#starting = false;
 	#ending = false;
+	#interrupting = false;
 	#runSequence = 0;
+	#holdSequence = 0;
 	#settledHandler: SettledHandler | undefined;
 	#runFenceHandler: RunFenceHandler | undefined;
 	#inputRequired: { handle: AgentRunHandle; requestId: string } | undefined;
+	#interruptionHold: InterruptionHoldHandle | undefined;
+	#isolatedResumption:
+		| Readonly<{ handle: AgentRunHandle; hold: InterruptionHoldHandle }>
+		| undefined;
+	#heldNativeQueue: HeldNativeQueue | undefined;
 
 	private constructor(options: {
 		sessionManager: SessionManager;
@@ -100,6 +119,7 @@ export class InProcessAgentHost {
 				reason,
 				count: requestIds.size,
 			})),
+			...(this.#interruptionHold ? [{ reason: "interruption_hold" as const, count: 1 }] : []),
 		];
 		if (this.#starting) {
 			return {
@@ -134,6 +154,82 @@ export class InProcessAgentHost {
 
 	isCurrent(handle: AgentRunHandle): boolean {
 		return this.#run?.handle === handle;
+	}
+
+	blocksOrdinaryDelivery(): boolean {
+		return this.#interruptionHold !== undefined || this.#isolatedResumption !== undefined;
+	}
+
+	isInterrupting(): boolean {
+		return this.#interrupting;
+	}
+
+	currentInterruptionHold(): InterruptionHoldHandle | undefined {
+		return this.#interruptionHold;
+	}
+
+	isCurrentInterruptionHold(hold: InterruptionHoldHandle): boolean {
+		return this.#interruptionHold === hold && this.#run?.handle === hold.run;
+	}
+
+	beginIsolatedResumptionInLane(hold: InterruptionHoldHandle): boolean {
+		if (!this.isCurrentInterruptionHold(hold) || this.#isolatedResumption) return false;
+		this.#isolatedResumption = { handle: hold.run, hold };
+		return true;
+	}
+
+	commitIsolatedResumptionInLane(hold: InterruptionHoldHandle): boolean {
+		if (
+			!this.isCurrentInterruptionHold(hold) ||
+			this.#isolatedResumption?.hold !== hold
+		) return false;
+		this.#interruptionHold = undefined;
+		return true;
+	}
+
+	cancelIsolatedResumptionInLane(hold: InterruptionHoldHandle): void {
+		if (this.#isolatedResumption?.hold === hold) this.#isolatedResumption = undefined;
+	}
+
+	finishIsolatedResumptionInLane(handle: AgentRunHandle): void {
+		if (this.#isolatedResumption?.handle === handle) this.#isolatedResumption = undefined;
+	}
+
+	async interruptCurrentRunInLane(): Promise<
+		"held" | "already_held" | "not_running"
+	> {
+		const run = this.#run;
+		if (!run || this.#starting || this.#ending || run.failed) return "not_running";
+		if (this.#interruptionHold?.run === run.handle) return "already_held";
+		this.#isolatedResumption = undefined;
+		this.#interrupting = true;
+		try {
+			const cleared = run.session.clearQueue();
+			if (
+				cleared.steering.length > 0 ||
+				cleared.followUp.length > 0 ||
+				this.#heldNativeQueue?.handle === run.handle
+			) {
+				const existing = this.#heldNativeQueue?.handle === run.handle
+					? this.#heldNativeQueue
+					: { handle: run.handle, steering: [], followUp: [] };
+				existing.steering.push(...cleared.steering);
+				existing.followUp.push(...cleared.followUp);
+				this.#heldNativeQueue = existing;
+			}
+			await run.session.abort();
+			if (this.#run !== run || this.#ending || run.failed || !run.session.isIdle) {
+				return "not_running";
+			}
+			this.#holdSequence += 1;
+			this.#interruptionHold = {
+				run: run.handle,
+				sequence: this.#holdSequence,
+			};
+			return "held";
+		} finally {
+			this.#interrupting = false;
+		}
 	}
 
 	beginInputRequired(handle: AgentRunHandle, requestId: string): void {
@@ -245,6 +341,13 @@ export class InProcessAgentHost {
 		return this.#retentionReasons.has(reason);
 	}
 
+	residualRequestCounts(): Readonly<{ incoming: number; outgoing: number }> {
+		return {
+			incoming: this.#requestRelationships.get("answer_owed")?.size ?? 0,
+			outgoing: this.#requestRelationships.get("awaiting_answer")?.size ?? 0,
+		};
+	}
+
 	trackOperation(operation: Promise<unknown>): void {
 		const tracked = operation.then(
 			() => undefined,
@@ -261,7 +364,8 @@ export class InProcessAgentHost {
 		if (
 			this.#retentionReasons.size > 0 ||
 			this.#requestRelationships.size > 0 ||
-			this.#inputRequired !== undefined
+			this.#inputRequired !== undefined ||
+			this.#interruptionHold !== undefined
 		) {
 			return "retained";
 		}
@@ -289,6 +393,7 @@ export class InProcessAgentHost {
 		this.#runFenceHandler?.(run.handle);
 		run.unsubscribe();
 		try {
+			run.session.clearQueue();
 			if (disposeRun) {
 				await disposeRun(run.session);
 			} else {
@@ -308,6 +413,10 @@ export class InProcessAgentHost {
 		this.#retentionReasons.clear();
 		this.#requestRelationships.clear();
 		this.#inputRequired = undefined;
+		this.#interruptionHold = undefined;
+		this.#isolatedResumption = undefined;
+		this.#interrupting = false;
+		this.#heldNativeQueue = undefined;
 	}
 
 	#markRunFailed(run: BoundRun, handle: AgentRunHandle): void {
@@ -338,9 +447,40 @@ export class InProcessAgentHost {
 			if (event.type === "agent_settled") {
 				this.#settledHandler?.(handle, run.failed ? "failed" : "settled");
 			}
+			if (event.type === "agent_end") {
+				this.#restoreHeldNativeQueueAfterIsolatedTurn(run, handle, event);
+			}
 		});
 		this.#run = run;
 		this.#ending = false;
+	}
+
+	#restoreHeldNativeQueueAfterIsolatedTurn(
+		run: BoundRun,
+		handle: AgentRunHandle,
+		event: Extract<Parameters<Parameters<AgentSession["subscribe"]>[0]>[0], {
+			type: "agent_end";
+		}>,
+	): void {
+		const queue = this.#heldNativeQueue;
+		if (
+			this.#isolatedResumption?.handle !== handle ||
+			queue?.handle !== handle
+		) return;
+		const assistant = [...event.messages]
+			.reverse()
+			.find((message) => message.role === "assistant");
+		if (
+			assistant?.role === "assistant" &&
+			(assistant.stopReason === "error" || assistant.stopReason === "aborted")
+		) return;
+		this.#heldNativeQueue = undefined;
+		for (const message of queue.steering) {
+			this.trackOperation(run.session.sendUserMessage(message, { deliverAs: "steer" }));
+		}
+		for (const message of queue.followUp) {
+			this.trackOperation(run.session.sendUserMessage(message, { deliverAs: "followUp" }));
+		}
 	}
 }
 

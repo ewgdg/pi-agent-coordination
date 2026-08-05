@@ -44,6 +44,19 @@ function registerAgentBoundBehavior(
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): void {
 	registerOrdinaryAgentSurfaces(pi, resolveView);
+	pi.on("input", async (event, ctx) => {
+		if (event.source !== "interactive") return { action: "continue" };
+		try {
+			const resumed = await resolveView().resumeFromHuman(event.text, event.images);
+			return resumed ? { action: "handled" } : { action: "continue" };
+		} catch (error) {
+			ctx.ui.notify(
+				`Run resumption failed: ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+			return { action: "handled" };
+		}
+	});
 	// message_end is Pi's final awaited hook before it synchronously publishes the
 	// native result. A Run fence can still turn a submitted candidate into the one
 	// interruption result here; attention remains until later transcript proof.

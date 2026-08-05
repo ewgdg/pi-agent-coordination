@@ -3,6 +3,7 @@ import type {
 	ExtensionFactory,
 	MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import type { ImageContent } from "@earendil-works/pi-ai";
 
 import {
 	statusOf,
@@ -34,6 +35,13 @@ import type {
 	HumanAnswerCandidate,
 	HumanRequestInput,
 } from "../protocol/human-request.ts";
+import { RunSupervisor } from "./run-supervision.ts";
+import type {
+	RunControlInput,
+	RunControlReceipt,
+} from "../protocol/run-control.ts";
+import type { HumanSessionSelection } from "../pi-integration/interactive-session-selection.ts";
+import { SerialLane } from "../runtime/serial-lane.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type {
@@ -52,6 +60,13 @@ export type OrdinaryAgentCoordinatorView = Readonly<{
 	children(agentId?: string): readonly AgentStatus[];
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
 	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
+	control(toolCallId: string, input: RunControlInput): Promise<RunControlReceipt>;
+	resumeFromHuman(
+		text: string,
+		images: readonly ImageContent[] | undefined,
+	): Promise<boolean>;
+	selectionStatuses(): readonly AgentStatus[];
+	selectForHuman(agentId: string): Promise<"selected" | "dormant">;
 	askHuman(
 		toolCallId: string,
 		input: HumanRequestInput,
@@ -72,6 +87,9 @@ export class WorkflowCoordinator {
 	readonly #spawner: DefaultChildSpawner;
 	readonly #messages: MessageCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
+	readonly #runSupervisor: RunSupervisor;
+	readonly #humanSessionSelection: HumanSessionSelection | undefined;
+	readonly #selectionLane = new SerialLane();
 	#shutdownPromise: Promise<void> | undefined;
 	#shuttingDown = false;
 
@@ -86,9 +104,11 @@ export class WorkflowCoordinator {
 			pendingMessageLimit?: number;
 			humanRequestPresentation?: HumanRequestPresentation;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
+			humanSessionSelection?: HumanSessionSelection;
 		},
 	) {
 		this.#ownerIdentity = identity;
+		this.#humanSessionSelection = options.humanSessionSelection;
 		this.#agents.set(identity.agentId, {
 			identity,
 			services: runtime.services,
@@ -107,11 +127,28 @@ export class WorkflowCoordinator {
 			boundaryHooks: options.messageBoundaryHooks,
 			pendingMessageLimit: options.pendingMessageLimit,
 		});
+		this.#messages.integrate(this.#requireAgent(identity.agentId));
+		if (this.#humanSessionSelection) {
+			this.#requireAgent(identity.agentId).host.addRetentionReason(
+				"interactive_selection",
+			);
+		}
 		this.#humanRequests = new HumanRequestCoordinator({
 			agents: this.#agents,
 			ownerIdentity: identity,
 			presentation: options.humanRequestPresentation,
 			boundaryHooks: options.humanRequestBoundaryHooks,
+			interruptRun: (record) => {
+				void record.host.lane.run(async () => {
+					this.#messages.prepareInterruptionInLane(record);
+					await record.host.interruptCurrentRunInLane();
+				});
+			},
+		});
+		this.#runSupervisor = new RunSupervisor({
+			agents: this.#agents,
+			ownerAgentId: identity.agentId,
+			messages: this.#messages,
 		});
 		this.#spawner = new DefaultChildSpawner({
 			agents: this.#agents,
@@ -129,6 +166,13 @@ export class WorkflowCoordinator {
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
+			control: (toolCallId, input) =>
+				this.#runSupervisor.execute(agentId, toolCallId, input),
+			resumeFromHuman: (text, images) =>
+				this.#runSupervisor.resumeFromHuman(agentId, text, images),
+			selectionStatuses: () =>
+				[...this.#agents.values()].map((record) => statusOf(record)),
+			selectForHuman: (targetAgentId) => this.#selectForHuman(targetAgentId),
 			askHuman: (toolCallId, input, signal) =>
 				this.#humanRequests.ask(agentId, toolCallId, input, signal),
 			guardHumanToolResult: (message) =>
@@ -185,6 +229,12 @@ export class WorkflowCoordinator {
 	}
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
+		if (
+			this.#humanSessionSelection &&
+			this.#humanSessionSelection.selectedAgentId() !== this.#ownerIdentity.agentId
+		) {
+			await this.#selectForHuman(this.#ownerIdentity.agentId);
+		}
 		const children = [...this.#agents.values()].filter(
 			(record) => record.identity.agentId !== this.#ownerIdentity.agentId,
 		);
@@ -200,6 +250,42 @@ export class WorkflowCoordinator {
 		await owner.host.lane.run(() => {
 			this.#messages.discardSchedulingInLane(owner);
 			return owner.host.discardAndEndInLane(async () => disposeNativeRuntime());
+		});
+	}
+
+	#selectForHuman(agentId: string): Promise<"selected" | "dormant"> {
+		const selection = this.#humanSessionSelection;
+		if (!selection) return Promise.resolve("dormant");
+		return this.#selectionLane.run(async () => {
+			const target = this.#requireAgent(agentId);
+			const previousAgentId = selection.selectedAgentId();
+			if (previousAgentId === agentId) return "selected";
+			const activated = await target.host.lane.run(async () => {
+				const session = target.host.currentHandle()
+					? target.host.requireLiveSession()
+					: undefined;
+				if (!session) return false;
+				target.host.addRetentionReason("interactive_selection");
+				try {
+					await selection.activate({
+						agentId,
+						session,
+						services: target.services,
+						diagnostics: target.services.diagnostics,
+					});
+					return true;
+				} catch (error) {
+					target.host.removeRetentionReason("interactive_selection");
+					throw error;
+				}
+			});
+			if (!activated) return "dormant";
+			const previous = this.#requireAgent(previousAgentId);
+			await previous.host.lane.run(() => {
+				previous.host.removeRetentionReason("interactive_selection");
+			});
+			await this.#messages.requestRelease(previous);
+			return "selected";
 		});
 	}
 }

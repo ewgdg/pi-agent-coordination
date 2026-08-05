@@ -22,6 +22,7 @@ import type {
 
 export const ORDINARY_COORDINATION_TOOLS = [
 	"agent_message",
+	"agent_control",
 	"agent_observe",
 	"agent_spawn",
 	"ask_user_question",
@@ -187,6 +188,7 @@ export class DefaultChildSessionFactory {
 			}
 			if (
 				!session.getToolDefinition("agent_message") ||
+				!session.getToolDefinition("agent_control") ||
 				!session.getToolDefinition("agent_spawn") ||
 				!session.getToolDefinition("agent_observe") ||
 				!session.getToolDefinition("ask_user_question")

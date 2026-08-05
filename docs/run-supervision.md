@@ -1,0 +1,88 @@
+# Run supervision
+
+Workflow Owners and Direct Spawners can inspect and control authorized ordinary Agent Runs without changing Agent identity or the Workflow tree.
+
+## Authority
+
+The Workflow Owner may observe and control any verified ordinary descendant. A Direct Spawner may observe and control only its immediate children. An Agent may observe itself, but cannot control itself, its parent, a sibling, or the Owner Run. Knowing an Agent identity or exchanging Messages does not grant supervision authority.
+
+`agent_observe` supports one status or direct-child query:
+
+```json
+{
+  "operation": "status",
+  "agentId": "child-agent-id"
+}
+```
+
+```json
+{
+  "operation": "children"
+}
+```
+
+Omitting `agentId` observes the caller. Direct children remain in canonical spawn order.
+
+Each status contains the durable Agent identity and structural relationship, the current semantic Run state, and bounded primary evidence:
+
+- `primaryEvidence.transcriptPath` is the authorized Pi transcript location, or `null` for a non-file-backed session.
+- `primaryEvidence.inspectedThrough` identifies the last physical transcript entry included in the observation.
+- `run.phase` is `starting`, `live`, `ending`, or `dormant`. A live Run also reports `work`, `attention`, and counted `retentionReasons`.
+
+Retention categories are `owner_host_binding`, `pending_delivery`, `awaiting_answer`, `answer_owed`, `interactive_selection`, and `interruption_hold`. Status never exposes Message payloads, prompts, history summaries, Run handles, or raw Pi objects.
+
+## Interrupt an exact Run
+
+```json
+{
+  "operation": "interrupt",
+  "agentId": "child-agent-id"
+}
+```
+
+Interruption resolves the target's exact current Run inside its serialized lane. It fences queued continuation, aborts active generation, waits for semantic settlement, and then establishes one exact `interruption_hold`. An active Human Request settles through its native error tool result before the Hold is reported.
+
+The receipt disposition is:
+
+- `held` when this invocation established the Hold.
+- `already_held` when the exact current Run already has a Hold.
+- `not_running` when no controllable current Run can be held.
+
+While held, ordinary Messages, Requests, Answers, and Cancellations may remain admitted in the bounded recipient scheduler. They still consume ordinary capacity, but cannot commit Delivery, invoke the model, or clear the Hold. Native queued input cleared for safe interruption is retained for the exact Run and restored only after an explicit isolated resumption turn.
+
+## Resume with explicit input
+
+An authorized supervisor resumes through a model-visible Message:
+
+```json
+{
+  "operation": "resume",
+  "agentId": "child-agent-id",
+  "content": "Continue, but verify the transcript watermark before acting."
+}
+```
+
+Each held Agent has one reserved Supervisory Resume slot outside its ordinary Message capacity. The resume Delivery commits alone, clears only the exact Hold to which it was admitted, and receives one isolated model turn before the ordinary coordination backlog can proceed. The receipt returns the source-derived `messageId` and either `delivery: "pending"` or a rejection reason: `not_held`, `resume_slot_occupied`, or `target_unavailable`.
+
+A resume that loses its bound Hold before Delivery becomes an ordinary Steer Message. It remains useful direction, but cannot clear a later Hold.
+
+The human can also use `/agents` to select a live held Agent and submit native editor input. Pi commits that exact user Message before the Hold clears; failed or uncommitted input leaves the Hold intact. The human Message receives the same one-turn isolation before coordination backlog.
+
+A supervisory or human dispatch failure reports an error, clears only the failed resumption attempt, and leaves the exact Hold available for an explicit retry. Failed human input is not passed through as an ordinary Pi prompt.
+
+`/agents` switches the native editor and transcript view among retained live sessions without changing protocol authority. The selected session gains `interactive_selection` retention; leaving it removes that retention. Dormant Agents remain observable but cannot be selected. Orderly shutdown returns selection to the Owner before sessions are disposed.
+
+## Terminate an exact Run
+
+```json
+{
+  "operation": "terminate",
+  "agentId": "child-agent-id"
+}
+```
+
+Termination fences and confirms the end of the target's exact current Run, bypasses every Retention Reason, and discards its uncommitted coordination and native input. The receipt reports `terminated` or `not_running` plus complete live `residualRequests.incoming` and `residualRequests.outgoing` counts.
+
+Termination does not roll back effects, Answer or cancel Requests, notify participants, mutate descendants, remove the Agent, or create Agent lifecycle evidence. Later Message Delivery may start a fresh successor Run for the same Agent identity. Recovery of any discarded Message remains explicit through transcript inspection, poll, or retry.
+
+Interruption Holds, live scheduling, session selection, and exact Run handles are volatile. Pi transcripts remain the authority for durable identity, authored Messages, and committed Delivery.

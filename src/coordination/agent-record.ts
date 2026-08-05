@@ -24,12 +24,25 @@ export type AgentStatus = Readonly<{
 	label: string;
 	description?: string;
 	directSpawnerAgentId: string | null;
+	primaryEvidence: Readonly<{
+		transcriptPath: string | null;
+		inspectedThrough: Readonly<{
+			agentId: string;
+			entryId: string;
+		}>;
+	}>;
 	run: AgentRunState;
 }>;
 
 export function statusOf(record: AgentRecord): AgentStatus {
 	const configuration = record.identity.configuration;
 	const run: AgentRunState = record.host.observe();
+	const transcriptTail = record.host.sessionManager.getEntries().at(-1);
+	if (!transcriptTail) {
+		throw new Error(
+			`invariant_violation: Agent ${record.identity.agentId} has no transcript evidence`,
+		);
+	}
 	return {
 		agentId: record.identity.agentId,
 		workflowId: record.identity.workflowId,
@@ -38,6 +51,13 @@ export function statusOf(record: AgentRecord): AgentStatus {
 			? {}
 			: { description: configuration.description }),
 		directSpawnerAgentId: record.identity.directSpawnerAgentId,
+		primaryEvidence: {
+			transcriptPath: record.host.sessionManager.getSessionFile() ?? null,
+			inspectedThrough: {
+				agentId: record.identity.agentId,
+				entryId: transcriptTail.id,
+			},
+		},
 		run,
 	};
 }
