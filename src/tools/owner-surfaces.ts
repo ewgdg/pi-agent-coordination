@@ -96,6 +96,56 @@ export function registerOrdinaryAgentSurfaces(
 			{ additionalProperties: false },
 		),
 	]);
+	const humanOption = Type.Object(
+		{
+			label: Type.String({ minLength: 1 }),
+			description: Type.Optional(Type.String({ minLength: 1 })),
+		},
+		{ additionalProperties: false },
+	);
+	const humanQuestion = Type.Union([
+		Type.Object(
+			{
+				kind: Type.Literal("select_one"),
+				header: Type.String({ minLength: 1 }),
+				prompt: Type.String({ minLength: 1 }),
+				options: Type.Array(humanOption, {
+					minItems: 1,
+					uniqueItems: true,
+				}),
+				allowOther: Type.Boolean(),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
+				kind: Type.Literal("select_many"),
+				header: Type.String({ minLength: 1 }),
+				prompt: Type.String({ minLength: 1 }),
+				options: Type.Array(humanOption, {
+					minItems: 1,
+					uniqueItems: true,
+				}),
+				allowOther: Type.Boolean(),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
+				kind: Type.Literal("text"),
+				header: Type.String({ minLength: 1 }),
+				prompt: Type.String({ minLength: 1 }),
+				multiline: Type.Boolean(),
+			},
+			{ additionalProperties: false },
+		),
+	]);
+	const humanRequestParameters = Type.Object(
+		{
+			questions: Type.Array(humanQuestion, { minItems: 1 }),
+		},
+		{ additionalProperties: false },
+	);
 	pi.registerTool({
 		name: "agent_message",
 		label: "Message Agent",
@@ -154,6 +204,27 @@ export function registerOrdinaryAgentSurfaces(
 			};
 		},
 	});
+	pi.registerTool({
+		name: "ask_user_question",
+		label: "Ask Human",
+		description:
+			"Ask the human one or more structured Questions and wait for one complete positional Answer.",
+		promptSnippet:
+			"Use for decisions that require human select-one, select-many, or non-empty text input.",
+		executionMode: "sequential",
+		parameters: humanRequestParameters,
+		async execute(toolCallId, parameters, signal) {
+			const answer = await resolveView().askHuman(
+				toolCallId,
+				parameters,
+				signal,
+			);
+			return {
+				content: [{ type: "text", text: JSON.stringify(answer) }],
+				details: answer,
+			};
+		},
+	});
 
 	pi.registerCommand("agents", {
 		description: "Show Agents in the current Workflow",
@@ -161,7 +232,22 @@ export function registerOrdinaryAgentSurfaces(
 			const view = resolveView();
 			const status = view.status();
 			const children = view.children();
-			await ctx.ui.select("Agents", [formatAgentRow(status), ...children.map(formatAgentRow)]);
+			const attention = view.humanAttention();
+			const attentionOptions = attention.map(
+				(item, index) =>
+					`DECIDE ${index + 1} · ${item.agentLabel} · ${item.questionCount} Question${item.questionCount === 1 ? "" : "s"}`,
+			);
+			const selected = await ctx.ui.select("Agents", [
+				...attentionOptions,
+				formatAgentRow(status),
+				...children.map(formatAgentRow),
+			]);
+			const attentionIndex = selected === undefined
+				? -1
+				: attentionOptions.indexOf(selected);
+			if (attentionIndex >= 0) {
+				await view.focusHumanRequest(attention[attentionIndex]!.requestId);
+			}
 		},
 	});
 }

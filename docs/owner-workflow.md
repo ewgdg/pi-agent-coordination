@@ -12,10 +12,13 @@ After Owner Identity validation, the package binds the ordinary tools through a 
 
 - `agent_spawn` creates one fresh default child and delivers its initial Creation Request.
 - `agent_message` sends Messages, creates correlated Requests, Answers, retrieves, and cancels.
+- `ask_user_question` blocks the caller's exact Run on one or more structured Questions. Its matching successful native tool result is the sole Human Answer.
 - `agent_observe` returns an authorized Agent's durable identity, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
-- `/agents` presents the current Agent and its direct children in stable creation order.
+- `/agents` presents numbered `DECIDE` attention rows, the current Agent, and its direct children. Selecting a `DECIDE` row opens that exact Human Request without background focus theft.
 
 These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer.
+
+See [Human Requests](human-requests.md) for the Question and Answer shapes, interaction keys, commitment boundary, and Run fencing behavior.
 
 ## Activation modes
 

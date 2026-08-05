@@ -24,6 +24,7 @@ export const ORDINARY_COORDINATION_TOOLS = [
 	"agent_message",
 	"agent_observe",
 	"agent_spawn",
+	"ask_user_question",
 ] as const;
 
 const BUILT_IN_TOOL_NAMES = new Set(["bash", "edit", "find", "grep", "ls", "read", "write"]);
@@ -187,7 +188,8 @@ export class DefaultChildSessionFactory {
 			if (
 				!session.getToolDefinition("agent_message") ||
 				!session.getToolDefinition("agent_spawn") ||
-				!session.getToolDefinition("agent_observe")
+				!session.getToolDefinition("agent_observe") ||
+				!session.getToolDefinition("ask_user_question")
 			) {
 				throw new ProtocolInvariantError(
 					"started child Run is missing ordinary coordination surfaces",

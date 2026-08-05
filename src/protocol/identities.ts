@@ -64,6 +64,17 @@ export function resolveCommittedToolCall(options: {
 }
 
 export function deriveMessageIdentity(source: ToolCallPointer): string {
+	return deriveProtocolIdentity("message", source);
+}
+
+export function deriveHumanRequestIdentity(source: ToolCallPointer): string {
+	return deriveProtocolIdentity("human_request", source);
+}
+
+function deriveProtocolIdentity(
+	kind: "message" | "human_request",
+	source: ToolCallPointer,
+): string {
 	for (const [name, value] of Object.entries(source)) {
 		if (value.length === 0 || value.includes("\0")) {
 			throw new ProtocolInvariantError(`${name} is not a valid identity constituent`);
@@ -73,7 +84,7 @@ export function deriveMessageIdentity(source: ToolCallPointer): string {
 		.update(
 			[
 				IDENTITY_PREFIX,
-				"message",
+				kind,
 				source.agentId,
 				source.entryId,
 				source.toolCallId,

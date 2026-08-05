@@ -22,7 +22,7 @@ type RequestRelationshipReason = "awaiting_answer" | "answer_owed";
 export type LiveRunState = Readonly<{
 	phase: "starting" | "live" | "ending";
 	work?: "active" | "settled";
-	attention: "none";
+	attention: "none" | "input_required";
 	retentionReasons: readonly RunRetention[];
 }>;
 
@@ -44,6 +44,7 @@ type BoundRun = {
 type StartSession = () => Promise<AgentSession>;
 export type AgentRunSettlement = "settled" | "failed";
 type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
+type RunFenceHandler = (handle: AgentRunHandle) => void;
 
 export class InProcessAgentHost {
 	readonly lane = new SerialLane();
@@ -60,6 +61,8 @@ export class InProcessAgentHost {
 	#ending = false;
 	#runSequence = 0;
 	#settledHandler: SettledHandler | undefined;
+	#runFenceHandler: RunFenceHandler | undefined;
+	#inputRequired: { handle: AgentRunHandle; requestId: string } | undefined;
 
 	private constructor(options: {
 		sessionManager: SessionManager;
@@ -110,7 +113,9 @@ export class InProcessAgentHost {
 		return {
 			phase: this.#ending ? "ending" : "live",
 			work: run.session.isIdle ? "settled" : "active",
-			attention: "none",
+			attention: this.#inputRequired?.handle === run.handle
+				? "input_required"
+				: "none",
 			retentionReasons,
 		};
 	}
@@ -119,12 +124,62 @@ export class InProcessAgentHost {
 		this.#settledHandler = handler;
 	}
 
+	setRunFenceHandler(handler: RunFenceHandler): void {
+		this.#runFenceHandler = handler;
+	}
+
 	currentHandle(): AgentRunHandle | undefined {
 		return this.#run?.handle;
 	}
 
 	isCurrent(handle: AgentRunHandle): boolean {
 		return this.#run?.handle === handle;
+	}
+
+	beginInputRequired(handle: AgentRunHandle, requestId: string): void {
+		const run = this.#run;
+		if (
+			!run ||
+			run.handle !== handle ||
+			this.#starting ||
+			this.#ending ||
+			run.failed
+		) {
+			throw new Error("stale_run: Human Request does not target the current Agent Run");
+		}
+		if (requestId.length === 0) {
+			throw new Error("invariant_violation: Human Request identity must not be empty");
+		}
+		if (this.#inputRequired) {
+			throw new Error("invalid_input: Agent Run already has an unresolved Human Request");
+		}
+		this.#inputRequired = { handle, requestId };
+	}
+
+	acceptsInputRequired(handle: AgentRunHandle, requestId: string): boolean {
+		const run = this.#run;
+		return run?.handle === handle &&
+			!this.#starting &&
+			!this.#ending &&
+			!run.failed &&
+			this.#inputRequired?.handle === handle &&
+			this.#inputRequired.requestId === requestId;
+	}
+
+	failExactRun(handle: AgentRunHandle): void {
+		const run = this.#run;
+		if (!run || run.handle !== handle || this.#ending) return;
+		this.#markRunFailed(run, handle);
+		this.trackOperation(run.session.abort());
+	}
+
+	endInputRequired(handle: AgentRunHandle, requestId: string): void {
+		const inputRequired = this.#inputRequired;
+		if (!inputRequired) return;
+		if (inputRequired.handle !== handle || inputRequired.requestId !== requestId) {
+			throw new Error("invariant_violation: Human Request does not match input-required attention");
+		}
+		this.#inputRequired = undefined;
 	}
 
 	requireLiveSession(): AgentSession {
@@ -147,8 +202,7 @@ export class InProcessAgentHost {
 			this.#bindRun(session);
 			return session;
 		} catch (error) {
-			this.#retentionReasons.clear();
-			this.#requestRelationships.clear();
+			this.#clearRunScopedState();
 			throw error;
 		} finally {
 			this.#starting = false;
@@ -204,7 +258,11 @@ export class InProcessAgentHost {
 		const run = this.#run;
 		if (!run || run.handle !== handle) return "stale";
 		if (this.#starting || this.#ending || !run.session.isIdle) return "retained";
-		if (this.#retentionReasons.size > 0 || this.#requestRelationships.size > 0) {
+		if (
+			this.#retentionReasons.size > 0 ||
+			this.#requestRelationships.size > 0 ||
+			this.#inputRequired !== undefined
+		) {
 			return "retained";
 		}
 		this.#ending = true;
@@ -212,8 +270,7 @@ export class InProcessAgentHost {
 			run.unsubscribe();
 			run.session.dispose();
 			this.#run = undefined;
-			this.#retentionReasons.clear();
-			this.#requestRelationships.clear();
+			this.#clearRunScopedState();
 			return "released";
 		} finally {
 			this.#ending = false;
@@ -225,11 +282,11 @@ export class InProcessAgentHost {
 	): Promise<void> {
 		const run = this.#run;
 		if (!run) {
-			this.#retentionReasons.clear();
-			this.#requestRelationships.clear();
+			this.#clearRunScopedState();
 			return;
 		}
 		this.#ending = true;
+		this.#runFenceHandler?.(run.handle);
 		run.unsubscribe();
 		try {
 			if (disposeRun) {
@@ -242,10 +299,21 @@ export class InProcessAgentHost {
 			await Promise.all([...this.#trackedOperations]);
 		} finally {
 			this.#run = undefined;
-			this.#retentionReasons.clear();
-			this.#requestRelationships.clear();
+			this.#clearRunScopedState();
 			this.#ending = false;
 		}
+	}
+
+	#clearRunScopedState(): void {
+		this.#retentionReasons.clear();
+		this.#requestRelationships.clear();
+		this.#inputRequired = undefined;
+	}
+
+	#markRunFailed(run: BoundRun, handle: AgentRunHandle): void {
+		if (run.failed) return;
+		run.failed = true;
+		this.#runFenceHandler?.(handle);
 	}
 
 	#bindRun(session: AgentSession): void {
@@ -262,9 +330,10 @@ export class InProcessAgentHost {
 				const assistant = [...event.messages]
 					.reverse()
 					.find((message) => message.role === "assistant");
-				run.failed = assistant?.role === "assistant" &&
+				const terminalFailure = assistant?.role === "assistant" &&
 					assistant.stopReason === "error" &&
 					!event.willRetry;
+				if (terminalFailure) this.#markRunFailed(run, handle);
 			}
 			if (event.type === "agent_settled") {
 				this.#settledHandler?.(handle, run.failed ? "failed" : "settled");

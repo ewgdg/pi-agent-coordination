@@ -209,6 +209,10 @@ export class MessageCoordinator {
 	async reachSafeBoundary(agentId: string): Promise<void> {
 		if (this.#isShuttingDown()) return Promise.resolve();
 		const record = this.#requireAgent(agentId);
+		// Confirmed Run disposal already owns this Agent lane and fences its volatile
+		// scheduling. Re-entering the lane from Pi's awaited turn_end would deadlock
+		// disposal while it waits for the same turn to settle.
+		if (record.host.observe().phase === "ending") return Promise.resolve();
 		await record.host.lane.run(() => this.#reconcileAnswerDeliveries(record));
 		return this.#deliveryScheduler.reachSafeBoundary(record);
 	}

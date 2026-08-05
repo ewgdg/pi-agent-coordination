@@ -15,7 +15,14 @@ import {
 	type AgentSessionServices,
 	type ExtensionFactory,
 	type ExtensionUIContext,
+	type KeybindingsManager,
+	type Theme,
 } from "@earendil-works/pi-coding-agent";
+import type {
+	Component,
+	OverlayHandle,
+	TUI,
+} from "@earendil-works/pi-tui";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +49,7 @@ const EMPTY_USAGE = {
 export type TestUi = ExtensionUIContext & {
 	readonly agentViews: Array<{ title: string; options: string[] }>;
 	readonly notifications: Array<{ message: string; type?: "info" | "warning" | "error" }>;
+	readonly customSurfaces: Component[];
 };
 
 export type TestOwnerHost = {
@@ -183,9 +191,55 @@ async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
 function createTestUi(): TestUi {
 	const agentViews: TestUi["agentViews"] = [];
 	const notifications: TestUi["notifications"] = [];
+	const customSurfaces: Component[] = [];
+	let editorText = "";
+	const testTui = { requestRender() {} } as unknown as TUI;
+	const testTheme = {
+		fg: (_color: string, text: string) => text,
+		bg: (_color: string, text: string) => text,
+		bold: (text: string) => text,
+	} as unknown as Theme;
+	const custom: ExtensionUIContext["custom"] = <T>(factory: (
+		tui: TUI,
+		theme: Theme,
+		keybindings: KeybindingsManager,
+		done: (result: T) => void,
+	) => (Component & { dispose?(): void }) | Promise<Component & { dispose?(): void }>, options?: {
+		overlay?: boolean;
+		overlayOptions?: Parameters<TUI["showOverlay"]>[1] | (() => Parameters<TUI["showOverlay"]>[1]);
+		onHandle?: (handle: OverlayHandle) => void;
+	}) => {
+		return new Promise<T>((resolve, reject) => {
+			let component: (Component & { dispose?(): void }) | undefined;
+			let finished = false;
+			const done = (result: T) => {
+				if (finished) return;
+				finished = true;
+				if (component) {
+					const index = customSurfaces.indexOf(component);
+					if (index >= 0) customSurfaces.splice(index, 1);
+					component.dispose?.();
+				}
+				resolve(result);
+			};
+			Promise.resolve(
+				factory(
+					testTui,
+					testTheme,
+					{} as KeybindingsManager,
+					done,
+				),
+			).then((created) => {
+				component = created;
+				customSurfaces.push(created);
+				options?.onHandle?.(createTestOverlayHandle());
+			}, reject);
+		});
+	};
 	return {
 		agentViews,
 		notifications,
+		customSurfaces,
 		async select(title: string, options: string[]) {
 			agentViews.push({ title, options: [...options] });
 			return undefined;
@@ -211,19 +265,47 @@ function createTestUi(): TestUi {
 		setFooter() {},
 		setHeader() {},
 		setTitle() {},
-		async custom() {
-			throw new Error("Custom TUI is outside this test");
-		},
+		custom,
 		pasteToEditor() {},
-		setEditorText() {},
+		setEditorText(text: string) {
+			editorText = text;
+		},
 		getEditorText() {
-			return "";
+			return editorText;
 		},
 		async editor() {
 			return undefined;
 		},
 		setEditorComponent() {},
+		theme: testTheme,
 	} as unknown as TestUi;
+}
+
+function createTestOverlayHandle(): OverlayHandle {
+	let hidden = false;
+	let focused = true;
+	return {
+		hide() {
+			hidden = true;
+			focused = false;
+		},
+		setHidden(value) {
+			hidden = value;
+		},
+		isHidden() {
+			return hidden;
+		},
+		focus() {
+			focused = true;
+			hidden = false;
+		},
+		unfocus() {
+			focused = false;
+		},
+		isFocused() {
+			return focused;
+		},
+	};
 }
 
 async function createTestModelRuntime(): Promise<{

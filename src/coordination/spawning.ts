@@ -1,4 +1,7 @@
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+	SessionManager,
+	type AgentSession,
+} from "@earendil-works/pi-coding-agent";
 
 import {
 	requireLiveSession,
@@ -60,7 +63,10 @@ export type SpawnBoundaryHooks = Readonly<{
 		identity: ChildAgentIdentity;
 	}): void | "confirmation_lost";
 	beforeRunStart?(): void | "confirmed_failure";
-	afterRunStart?(): void | "confirmation_lost";
+	afterRunStart?(context: {
+		session: AgentSession;
+		identity: ChildAgentIdentity;
+	}): void | "confirmation_lost";
 	beforeDeliveryAdmission?(): void | "confirmed_failure";
 	afterDeliveryAdmission?(): void | "confirmation_lost";
 }>;
@@ -192,7 +198,12 @@ export class DefaultChildSpawner {
 				failedStage: "run_start",
 			};
 		}
-		if (this.#boundaryHooks.afterRunStart?.() === "confirmation_lost") {
+		if (
+			this.#boundaryHooks.afterRunStart?.({
+				session: child.host.requireLiveSession(),
+				identity,
+			}) === "confirmation_lost"
+		) {
 			return {
 				disposition: "indeterminate",
 				agentId,

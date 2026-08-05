@@ -1,6 +1,7 @@
 import type {
 	AgentSessionRuntime,
 	ExtensionFactory,
+	MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -23,6 +24,16 @@ import {
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import { InProcessAgentHost } from "../runtime/in-process-agent-host.ts";
 import { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
+import {
+	HumanRequestCoordinator,
+	type HumanAttentionItem,
+	type HumanRequestBoundaryHooks,
+	type HumanRequestPresentation,
+} from "./human-requests.ts";
+import type {
+	HumanAnswerCandidate,
+	HumanRequestInput,
+} from "../protocol/human-request.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type {
@@ -41,6 +52,17 @@ export type OrdinaryAgentCoordinatorView = Readonly<{
 	children(agentId?: string): readonly AgentStatus[];
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
 	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
+	askHuman(
+		toolCallId: string,
+		input: HumanRequestInput,
+		signal: AbortSignal | undefined,
+	): Promise<HumanAnswerCandidate>;
+	guardHumanToolResult(
+		message: MessageEndEvent["message"],
+	): MessageEndEvent["message"] | undefined;
+	reconcileHumanToolResults(): void;
+	humanAttention(): readonly HumanAttentionItem[];
+	focusHumanRequest(requestId: string): Promise<void>;
 	reachSafeBoundary(): Promise<void>;
 }>;
 
@@ -49,6 +71,7 @@ export class WorkflowCoordinator {
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
 	readonly #messages: MessageCoordinator;
+	readonly #humanRequests: HumanRequestCoordinator;
 	#shutdownPromise: Promise<void> | undefined;
 	#shuttingDown = false;
 
@@ -61,6 +84,8 @@ export class WorkflowCoordinator {
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
 			messageBoundaryHooks?: MessageBoundaryHooks;
 			pendingMessageLimit?: number;
+			humanRequestPresentation?: HumanRequestPresentation;
+			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
 		},
 	) {
 		this.#ownerIdentity = identity;
@@ -82,6 +107,12 @@ export class WorkflowCoordinator {
 			boundaryHooks: options.messageBoundaryHooks,
 			pendingMessageLimit: options.pendingMessageLimit,
 		});
+		this.#humanRequests = new HumanRequestCoordinator({
+			agents: this.#agents,
+			ownerIdentity: identity,
+			presentation: options.humanRequestPresentation,
+			boundaryHooks: options.humanRequestBoundaryHooks,
+		});
 		this.#spawner = new DefaultChildSpawner({
 			agents: this.#agents,
 			sessionFactory,
@@ -98,6 +129,15 @@ export class WorkflowCoordinator {
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
+			askHuman: (toolCallId, input, signal) =>
+				this.#humanRequests.ask(agentId, toolCallId, input, signal),
+			guardHumanToolResult: (message) =>
+				this.#humanRequests.guardResultCommit(agentId, message),
+			reconcileHumanToolResults: () =>
+				this.#humanRequests.reconcileCommittedResults(agentId),
+			humanAttention: () => this.#humanRequests.attentionItems(agentId),
+			focusHumanRequest: (requestId) =>
+				this.#humanRequests.focus(agentId, requestId),
 			reachSafeBoundary: () => this.#messages.reachSafeBoundary(agentId),
 		});
 	}

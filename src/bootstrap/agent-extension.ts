@@ -44,7 +44,24 @@ function registerAgentBoundBehavior(
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): void {
 	registerOrdinaryAgentSurfaces(pi, resolveView);
+	// message_end is Pi's final awaited hook before it synchronously publishes the
+	// native result. A Run fence can still turn a submitted candidate into the one
+	// interruption result here; attention remains until later transcript proof.
+	pi.on("message_end", (event) => {
+		const replacement = resolveView().guardHumanToolResult(event.message);
+		if (!replacement) return;
+		return { message: replacement };
+	});
+	// A previous sequential tool result is committed before Pi admits the next
+	// sibling. Reconcile here so input-required attention cannot cross that barrier.
+	pi.on("tool_execution_start", () => resolveView().reconcileHumanToolResults());
 	// Pi awaits turn_end only after the complete issued tool batch and before it
 	// constructs the next model context, making this the Steer freeze boundary.
-	pi.on("turn_end", () => resolveView().reachSafeBoundary());
+	pi.on("turn_end", () => {
+		resolveView().reconcileHumanToolResults();
+		return resolveView().reachSafeBoundary();
+	});
+	// Aborted and failed turns may not reach turn_end. agent_end follows all native
+	// message commits, so it safely reconciles their final Human result as well.
+	pi.on("agent_end", () => resolveView().reconcileHumanToolResults());
 }
