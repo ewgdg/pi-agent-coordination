@@ -140,11 +140,13 @@ If recipient evidence cannot be inspected, retry is rejected without scheduling.
 
 ## Bounded scheduling
 
-Each recipient admits at most 256 distinct pending Message identities across Deferred and Steer. A retry of an already-pending identity consumes no additional capacity. Admitted work is never evicted.
+Each recipient admits at most the current Workflow Policy's `maxPendingDeliveriesPerAgent` distinct pending Message identities across Deferred and Steer; the default is 256. A retry of an already-pending identity consumes no additional capacity. Admitted work is never evicted, including when Owner reload lowers the limit.
 
 When capacity is exhausted, the invocation returns `capacity_exhausted`. The canonical author Message remains in the sender transcript and can be retried explicitly after capacity becomes available; there is no hidden overflow or automatic retry.
 
 An exact [Interruption Hold](run-supervision.md) blocks every ordinary Message, Request, Answer, and Cancellation from committing Delivery or invoking the recipient model. Held items remain admitted and consume ordinary capacity. One Supervisory Resume Message uses a separate reserved slot and cannot evict ordinary work.
+
+See [Workflow Policy](workflow-policy.md) for strict file validation and prospective reload behavior.
 
 ## Delivery across dormant Runs
 

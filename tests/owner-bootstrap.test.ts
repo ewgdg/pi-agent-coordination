@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+	fauxAssistantMessage,
+	fauxToolCall,
+} from "@earendil-works/pi-ai";
 
 import piAgentCoordination from "../src/index.ts";
 import {
@@ -48,6 +54,119 @@ test("resource reload rebinds the hidden Owner Agent extension", async () => {
 		.extensions.filter((extension) => extension.tools.has("agent_spawn"));
 	assert.equal(ordinaryAgentExtensions.length, 1);
 	assert.equal(ordinaryAgentExtensions[0]?.hidden, true);
+	await host.runtime.dispose();
+});
+
+test("an invalid initial Workflow Policy prevents coordination runtime creation", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	const policyPath = join(
+		host.services.agentDir,
+		"config",
+		"pi-agent-coordination.json",
+	);
+	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
+	await writeFile(policyPath, '{"maxConcurrentAgentRuns": 0}', "utf8");
+
+	await bindTestOwnerHost(host, "tui");
+
+	assert.equal(
+		host.session.sessionManager
+			.getEntries()
+			.some(
+				(entry) =>
+					entry.type === "custom" &&
+					entry.customType === "agent-coordination.identity",
+			),
+		false,
+	);
+	assert.equal(host.session.getToolDefinition("agent_spawn"), undefined);
+	assert.deepEqual(host.services.diagnostics, [
+		{
+			type: "error",
+			message:
+				"Workflow Policy maxConcurrentAgentRuns must be a positive safe integer",
+		},
+	]);
+	await host.runtime.dispose();
+});
+
+test("Owner reload publishes one prospective policy or preserves the prior snapshot", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+	const policyDirectory = join(host.services.agentDir, "config");
+	const policyPath = join(policyDirectory, "pi-agent-coordination.json");
+	await mkdir(policyDirectory, { recursive: true });
+	await writeFile(policyPath, '{"maxPendingDeliveriesPerAgent": 1}', "utf8");
+	await bindTestOwnerHost(host, "tui");
+	host.model.setResponses([
+		fauxAssistantMessage("Remain held so Workflow Policy reload can be observed."),
+	]);
+
+	const spawned = await executeOwnerTool(host, "agent_spawn", "spawn-policy-child", {
+		request: "Remain available for prospective delivery-capacity checks.",
+	});
+	const childAgentId = (spawned as { agentId: string }).agentId;
+	await executeOwnerTool(host, "agent_control", "hold-policy-child", {
+		operation: "interrupt",
+		agentId: childAgentId,
+	});
+	const first = await executeOwnerTool(host, "agent_message", "first-policy-message", {
+		operation: "send",
+		targetAgentId: childAgentId,
+		content: "Occupy the initial policy capacity.",
+	});
+	assert.equal((first as { delivery: string }).delivery, "pending");
+	const initiallyRejected = await executeOwnerTool(
+		host,
+		"agent_message",
+		"initially-rejected-policy-message",
+		{
+			operation: "send",
+			targetAgentId: childAgentId,
+			content: "Remain canonical after initial capacity rejection.",
+		},
+	);
+	assert.equal(
+		(initiallyRejected as { rejectionReason: string }).rejectionReason,
+		"capacity_exhausted",
+	);
+
+	const transcriptBeforeReload = structuredClone(host.session.sessionManager.getEntries());
+	await writeFile(policyPath, '{"maxPendingDeliveriesPerAgent": 2}', "utf8");
+	await host.session.reload();
+	assert.deepEqual(host.session.sessionManager.getEntries(), transcriptBeforeReload);
+	const admittedAfterRaise = await executeOwnerTool(
+		host,
+		"agent_message",
+		"admitted-after-policy-raise",
+		{
+			operation: "send",
+			targetAgentId: childAgentId,
+			content: "Use the newly published second slot.",
+		},
+	);
+	assert.equal((admittedAfterRaise as { delivery: string }).delivery, "pending");
+
+	await writeFile(policyPath, '{"maxPendingDeliveriesPerAgent": 0}', "utf8");
+	await host.session.reload();
+	assert.equal(
+		host.services.diagnostics.at(-1)?.message,
+		"Workflow Policy maxPendingDeliveriesPerAgent must be a positive safe integer",
+	);
+	const rejectedAfterInvalidReload = await executeOwnerTool(
+		host,
+		"agent_message",
+		"rejected-after-invalid-policy-reload",
+		{
+			operation: "send",
+			targetAgentId: childAgentId,
+			content: "The preserved two-slot snapshot remains exhausted.",
+		},
+	);
+	assert.equal(
+		(rejectedAfterInvalidReload as { rejectionReason: string }).rejectionReason,
+		"capacity_exhausted",
+	);
+
 	await host.runtime.dispose();
 });
 
@@ -124,4 +243,28 @@ function ownerIdentityFor(host: TestOwnerHost) {
 			},
 		},
 	} as const;
+}
+
+async function executeOwnerTool(
+	host: TestOwnerHost,
+	toolName: "agent_spawn" | "agent_control" | "agent_message",
+	toolCallId: string,
+	input: Record<string, unknown>,
+): Promise<unknown> {
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall(toolName, input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const tool = host.session.getToolDefinition(toolName);
+	assert.ok(tool);
+	const result = await tool.execute(
+		toolCallId,
+		input,
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	return result.details;
 }

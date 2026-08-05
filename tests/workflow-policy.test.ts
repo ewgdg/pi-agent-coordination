@@ -1,0 +1,103 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import {
+	DEFAULT_WORKFLOW_POLICY,
+	WorkflowPolicyStore,
+	parseWorkflowPolicy,
+	readWorkflowPolicy,
+} from "../src/policy/workflow-policy.ts";
+import { createUnboundTestOwnerHost } from "./support/pi-host.ts";
+
+test("strict Workflow Policy parsing fills defaults and freezes one complete snapshot", () => {
+	const defaults = parseWorkflowPolicy("{}");
+	assert.deepEqual(defaults, {
+		maxConcurrentAgentRuns: 8,
+		maxPendingDeliveriesPerAgent: 256,
+		operationReviewIntervalMs: 600_000,
+	});
+	assert.equal(Object.isFrozen(defaults), true);
+
+	const configured = parseWorkflowPolicy(JSON.stringify({
+		maxConcurrentAgentRuns: 3,
+		maxPendingDeliveriesPerAgent: 17,
+		operationReviewIntervalMs: 1_000,
+	}));
+	assert.deepEqual(configured, {
+		maxConcurrentAgentRuns: 3,
+		maxPendingDeliveriesPerAgent: 17,
+		operationReviewIntervalMs: 1_000,
+	});
+	assert.equal(Object.isFrozen(configured), true);
+	assert.equal(Object.isFrozen(DEFAULT_WORKFLOW_POLICY), true);
+});
+
+test("strict Workflow Policy parsing rejects the complete invalid document", () => {
+	const invalidPolicies = [
+		["non-object", "[]"],
+		["unknown field", '{"maxConcurrentAgentRuns": 8, "extra": true}'],
+		["duplicate key", '{"maxConcurrentAgentRuns": 8, "maxConcurrentAgentRuns": 4}'],
+		["comment", '{"maxConcurrentAgentRuns": 8 /* no comments */}'],
+		["trailing comma", '{"maxConcurrentAgentRuns": 8,}'],
+		["wrong type", '{"maxConcurrentAgentRuns": "8"}'],
+		["null concurrency", '{"maxConcurrentAgentRuns": null}'],
+		["null delivery limit", '{"maxPendingDeliveriesPerAgent": null}'],
+		["null review interval", '{"operationReviewIntervalMs": null}'],
+		["zero concurrency", '{"maxConcurrentAgentRuns": 0}'],
+		["fractional concurrency", '{"maxConcurrentAgentRuns": 1.5}'],
+		["unsafe delivery limit", `{"maxPendingDeliveriesPerAgent": ${Number.MAX_SAFE_INTEGER + 1}}`],
+		["short review interval", '{"operationReviewIntervalMs": 999}'],
+		["long review interval", '{"operationReviewIntervalMs": 2147483648}'],
+	] as const;
+
+	for (const [name, source] of invalidPolicies) {
+		assert.throws(() => parseWorkflowPolicy(source), Error, name);
+	}
+});
+
+test("Workflow Policy loads only the exact optional user file", async () => {
+	const host = await createUnboundTestOwnerHost(() => undefined);
+	const expectedPolicyPath = join(
+		host.services.agentDir,
+		"config",
+		"pi-agent-coordination.json",
+	);
+	const missing = await readWorkflowPolicy(host.services.agentDir);
+	assert.equal(missing.ok, true);
+	if (!missing.ok) throw new Error("Expected a missing optional policy to use defaults");
+	assert.deepEqual(missing.snapshot, DEFAULT_WORKFLOW_POLICY);
+
+	await mkdir(join(host.services.agentDir, "config"), { recursive: true });
+	await writeFile(
+		expectedPolicyPath,
+		'{"maxConcurrentAgentRuns": 2, "operationReviewIntervalMs": 1200}',
+		"utf8",
+	);
+	const loaded = await readWorkflowPolicy(host.services.agentDir);
+	assert.equal(loaded.ok, true);
+	if (!loaded.ok) throw new Error("Expected the configured policy to load");
+	assert.deepEqual(loaded.snapshot, {
+		maxConcurrentAgentRuns: 2,
+		maxPendingDeliveriesPerAgent: 256,
+		operationReviewIntervalMs: 1_200,
+	});
+});
+
+test("Workflow Policy reload publication replaces or preserves one whole snapshot", () => {
+	const initial = parseWorkflowPolicy('{"maxConcurrentAgentRuns": 2}');
+	const store = new WorkflowPolicyStore(initial);
+	assert.equal(store.current(), initial);
+
+	const replacement = parseWorkflowPolicy(
+		'{"maxPendingDeliveriesPerAgent": 4, "operationReviewIntervalMs": 1000}',
+	);
+	store.publish(replacement);
+	assert.equal(store.current(), replacement);
+	assert.deepEqual(store.current(), {
+		maxConcurrentAgentRuns: 8,
+		maxPendingDeliveriesPerAgent: 4,
+		operationReviewIntervalMs: 1_000,
+	});
+});

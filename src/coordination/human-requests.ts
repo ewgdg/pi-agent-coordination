@@ -83,6 +83,7 @@ export class HumanRequestCoordinator {
 	readonly #presentation: HumanRequestPresentation;
 	readonly #boundaryHooks: HumanRequestBoundaryHooks;
 	readonly #interruptRun: (record: AgentRecord) => void;
+	readonly #suspendExecution: (record: AgentRecord) => void;
 	readonly #pendingByRequestId = new Map<string, PendingHumanRequest>();
 
 	constructor(options: {
@@ -91,12 +92,14 @@ export class HumanRequestCoordinator {
 		presentation?: HumanRequestPresentation;
 		boundaryHooks?: HumanRequestBoundaryHooks;
 		interruptRun(record: AgentRecord): void;
+		suspendExecution(record: AgentRecord): void;
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#presentation = options.presentation ?? unavailablePresentation;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#interruptRun = options.interruptRun;
+		this.#suspendExecution = options.suspendExecution;
 	}
 
 	async ask(
@@ -144,6 +147,7 @@ export class HumanRequestCoordinator {
 		);
 		try {
 			record.host.beginInputRequired(handle, request.requestId);
+			this.#suspendExecution(record);
 			this.#pendingByRequestId.set(request.requestId, pending);
 			this.#presentation.present(
 				{

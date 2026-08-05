@@ -16,6 +16,10 @@ import { HumanRequestSurface } from "../src/presentation/human-request-surface.t
 import piAgentCoordination from "../src/index.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
+	WorkflowPolicyStore,
+	parseWorkflowPolicy,
+} from "../src/policy/workflow-policy.ts";
+import {
 	bindTestOwnerHost,
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -670,7 +674,11 @@ test("authority follows only Owner descendants and immediate Direct-Spawner edge
 });
 
 test("the one resume reservation remains available when ordinary capacity is exhausted", async () => {
-	const harness = await createRunSupervisionHarness({ pendingMessageLimit: 1 });
+	const harness = await createRunSupervisionHarness({
+		workflowPolicy: new WorkflowPolicyStore(
+			parseWorkflowPolicy('{"maxPendingDeliveriesPerAgent": 1}'),
+		),
+	});
 	const child = await harness.spawnChild("spawn-resume-capacity-child");
 	await child.session.waitForIdle();
 	await harness.control("interrupt-resume-capacity-child", {
@@ -928,7 +936,7 @@ test("/agents selects live sessions, returns to Owner, and restores Owner for sh
 });
 
 async function createRunSupervisionHarness(options?: {
-	pendingMessageLimit?: number;
+	workflowPolicy?: WorkflowPolicyStore;
 	deferFirstResume?: boolean;
 }) {
 	let coordinator: WorkflowCoordinator;
@@ -943,7 +951,7 @@ async function createRunSupervisionHarness(options?: {
 	);
 	coordinator = new WorkflowCoordinator(host.runtime, ownerIdentity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		pendingMessageLimit: options?.pendingMessageLimit,
+		workflowPolicy: options?.workflowPolicy,
 		messageBoundaryHooks: options?.deferFirstResume
 			? {
 				afterResumeReservation({ release }) {

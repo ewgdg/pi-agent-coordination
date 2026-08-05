@@ -17,6 +17,10 @@ import type {
 	MessageBoundaryHooks,
 } from "../src/coordination/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
+import {
+	WorkflowPolicyStore,
+	parseWorkflowPolicy,
+} from "../src/policy/workflow-policy.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
 	bindTestOwnerHost,
@@ -1276,7 +1280,9 @@ test("an authored Steer mode is accepted and retry remains mode-free", async () 
 });
 
 test("recipient capacity counts distinct pending identities without evicting admitted work", async () => {
-	const harness = await createDormantChildHarness({}, { pendingMessageLimit: 1 });
+	const harness = await createDormantChildHarness({}, {
+		workflowPolicy: deliveryPolicy(1),
+	});
 	let releaseActiveWork!: () => void;
 	const activeWorkGate = new Promise<void>((resolve) => {
 		releaseActiveWork = resolve;
@@ -1366,6 +1372,69 @@ test("recipient capacity counts distinct pending identities without evicting adm
 		{ disposition: "pending", messageId: exhausted.receipt.messageId },
 	);
 	await waitForDelivery(harness, exhausted.source);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("a lower delivery limit rejects new identities without evicting admitted Messages", async () => {
+	const workflowPolicy = deliveryPolicy(2);
+	const harness = await createDormantChildHarness({}, { workflowPolicy });
+	let releaseActiveWork!: () => void;
+	const activeWorkGate = new Promise<void>((resolve) => {
+		releaseActiveWork = resolve;
+	});
+	let markActiveWorkStarted!: () => void;
+	const activeWorkStarted = new Promise<void>((resolve) => {
+		markActiveWorkStarted = resolve;
+	});
+	harness.host.model.setResponses([
+		async () => {
+			markActiveWorkStarted();
+			await activeWorkGate;
+			return fauxAssistantMessage("Existing work reached its safe boundary.");
+		},
+		fauxAssistantMessage("Both previously admitted Messages remained available."),
+	]);
+	await authorMessage(
+		harness,
+		"start-work-before-delivery-limit-reduction",
+		"Keep the recipient active while delivery capacity changes.",
+	);
+	await activeWorkStarted;
+	const first = await authorMessage(
+		harness,
+		"first-admitted-before-delivery-limit-reduction",
+		"Retain the first admitted identity.",
+		{ deliveryMode: "steer" },
+	);
+	const second = await authorMessage(
+		harness,
+		"second-admitted-before-delivery-limit-reduction",
+		"Retain the second admitted identity.",
+		{ deliveryMode: "steer" },
+	);
+
+	workflowPolicy.publish(
+		parseWorkflowPolicy('{"maxPendingDeliveriesPerAgent": 1}'),
+	);
+	const rejected = await authorMessage(
+		harness,
+		"rejected-after-delivery-limit-reduction",
+		"Do not evict either previously admitted identity.",
+	);
+	assert.equal(
+		"rejectionReason" in rejected.receipt && rejected.receipt.rejectionReason,
+		"capacity_exhausted",
+	);
+
+	releaseActiveWork();
+	await waitForDelivery(harness, first.source);
+	await waitForDelivery(harness, second.source);
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	assert.equal(
+		hasDelivery(SessionManager.open(childSessionFile).getEntries(), rejected.source),
+		false,
+	);
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
@@ -1771,6 +1840,12 @@ function findSpawnedAgentId(sessionManager: SessionManager): string {
 	return agentId;
 }
 
+function deliveryPolicy(maxPendingDeliveriesPerAgent: number): WorkflowPolicyStore {
+	return new WorkflowPolicyStore(
+		parseWorkflowPolicy(JSON.stringify({ maxPendingDeliveriesPerAgent })),
+	);
+}
+
 async function waitForChildSessionFile(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
 	childId: string,
@@ -1804,7 +1879,7 @@ async function waitForEntry(
 async function createDormantChildHarness(
 	messageBoundaryHooks: MessageBoundaryHooks,
 	options: {
-		pendingMessageLimit?: number;
+		workflowPolicy?: WorkflowPolicyStore;
 		additionalExtensionPaths?: string[];
 	} = {},
 ) {
@@ -1826,7 +1901,7 @@ async function createDormantChildHarness(
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
 		messageBoundaryHooks,
-		pendingMessageLimit: options.pendingMessageLimit,
+		workflowPolicy: options.workflowPolicy,
 	});
 	const view = coordinator.forAgent(identity.agentId);
 	const spawnToolCallId = "spawn-ordering-recipient";

@@ -13,12 +13,17 @@ import { adoptOrValidateOwnerIdentity } from "../protocol/owner-identity.ts";
 import { HumanRequestSurface } from "../presentation/human-request-surface.ts";
 import { bindHumanSessionSelection } from "../pi-integration/interactive-session-selection.ts";
 import {
+	WorkflowPolicyStore,
+	readWorkflowPolicy,
+} from "../policy/workflow-policy.ts";
+import {
 	bindHiddenOwnerAgentExtension,
 	createAgentBoundExtension,
 } from "./agent-extension.ts";
 
 type InitializedWorkflow = {
 	coordinator: WorkflowCoordinator;
+	policy: WorkflowPolicyStore;
 };
 
 const WORKFLOW_REGISTRY_KEY = "__piAgentCoordinationOwnerWorkflows";
@@ -35,13 +40,22 @@ export async function initializeOwnerWorkflow(options: {
 	bridge: InteractiveHostBridge;
 	entryModulePath: string;
 	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
+	event: SessionStartEvent;
 }): Promise<void> {
-	const { pi, ctx, bridge, entryModulePath, bootstrapHandler } = options;
+	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event } = options;
 	const runtime = await bridge.captureRuntime(
 		ctx.sessionManager as AgentSession["sessionManager"],
 	);
 	const existing = initializedWorkflows.get(runtime.session);
 	if (existing) {
+		if (event.reason === "reload") {
+			const reloaded = await readWorkflowPolicy(runtime.services.agentDir);
+			if (reloaded.ok) {
+				existing.policy.publish(reloaded.snapshot);
+			} else {
+				runtime.services.diagnostics.push(reloaded.diagnostic);
+			}
+		}
 		bindHiddenOwnerAgentExtension({
 			pi,
 			runtime,
@@ -51,6 +65,12 @@ export async function initializeOwnerWorkflow(options: {
 		return;
 	}
 
+	const initialPolicy = await readWorkflowPolicy(runtime.services.agentDir);
+	if (!initialPolicy.ok) {
+		runtime.services.diagnostics.push(initialPolicy.diagnostic);
+		throw new Error(initialPolicy.diagnostic.message);
+	}
+	const policy = new WorkflowPolicyStore(initialPolicy.snapshot);
 	const identity = adoptOrValidateOwnerIdentity(runtime, entryModulePath);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(runtime, identity, {
@@ -59,6 +79,7 @@ export async function initializeOwnerWorkflow(options: {
 		humanRequestPresentation: new HumanRequestSurface(ctx.ui),
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		workflowPolicy: policy,
 	});
 	const restoreNativeDispose = bindExactlyOnceShutdown(runtime, coordinator);
 	try {
@@ -68,7 +89,7 @@ export async function initializeOwnerWorkflow(options: {
 			bootstrapHandler,
 			resolveView: () => coordinator.forAgent(identity.agentId),
 		});
-		initializedWorkflows.set(runtime.session, { coordinator });
+		initializedWorkflows.set(runtime.session, { coordinator, policy });
 	} catch (error) {
 		restoreNativeDispose();
 		throw error;

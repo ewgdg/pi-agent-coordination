@@ -12,6 +12,7 @@ import type {
 	InterruptionHoldHandle,
 } from "../runtime/in-process-agent-host.ts";
 import { sendAndAwaitTranscriptCommit } from "../pi-integration/transcript-commit.ts";
+import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 
 export type ScheduledMessageDelivery = Readonly<{
 	messageId: string;
@@ -41,8 +42,6 @@ export type ResumeReservationHandler = (
 		release(): Promise<void>;
 	}>,
 ) => void | "defer";
-
-export const DEFAULT_PENDING_MESSAGE_LIMIT = 256;
 
 export type MessageDeliveryAdmission =
 	| "pending"
@@ -79,25 +78,18 @@ export class MessageDeliveryScheduler {
 	readonly #scheduleReleaseEvaluationHook: ScheduleReleaseEvaluation | undefined;
 	readonly #afterSteerFreeze: SteerFreezeHandler | undefined;
 	readonly #afterResumeReservation: ResumeReservationHandler | undefined;
-	readonly #pendingMessageLimit: number;
+	readonly #workflowPolicy: WorkflowPolicyStore;
 
 	constructor(options: {
 		scheduleReleaseEvaluation?: ScheduleReleaseEvaluation;
 		afterSteerFreeze?: SteerFreezeHandler;
 		afterResumeReservation?: ResumeReservationHandler;
-		pendingMessageLimit?: number;
+		workflowPolicy: WorkflowPolicyStore;
 	}) {
 		this.#scheduleReleaseEvaluationHook = options.scheduleReleaseEvaluation;
 		this.#afterSteerFreeze = options.afterSteerFreeze;
 		this.#afterResumeReservation = options.afterResumeReservation;
-		this.#pendingMessageLimit =
-			options.pendingMessageLimit ?? DEFAULT_PENDING_MESSAGE_LIMIT;
-		if (
-			!Number.isSafeInteger(this.#pendingMessageLimit) ||
-			this.#pendingMessageLimit <= 0
-		) {
-			throw new Error("pending Message limit must be a positive safe integer");
-		}
+		this.#workflowPolicy = options.workflowPolicy;
 	}
 
 	integrate(record: AgentRecord): void {
@@ -122,7 +114,11 @@ export class MessageDeliveryScheduler {
 			this.#pendingByAgent.set(record.identity.agentId, pending);
 		}
 		if (pending.has(delivery.messageId)) return "pending";
-		if (this.#countPendingIdentities(pending) >= this.#pendingMessageLimit) {
+		const policy = this.#workflowPolicy.current();
+		if (
+			this.#countPendingIdentities(pending) >=
+			policy.maxPendingDeliveriesPerAgent
+		) {
 			return "capacity_exhausted";
 		}
 		if (!record.host.currentHandle()) {

@@ -42,6 +42,7 @@ import {
 } from "../protocol/creation-request.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
 import type { InterruptionHoldHandle } from "../runtime/in-process-agent-host.ts";
+import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 
 export type { AgentMessageInput } from "../protocol/message.ts";
 export type {
@@ -88,7 +89,7 @@ export class MessageCoordinator {
 		agents: Map<string, AgentRecord>;
 		isShuttingDown(): boolean;
 		boundaryHooks?: MessageBoundaryHooks;
-		pendingMessageLimit?: number;
+		workflowPolicy: WorkflowPolicyStore;
 	}) {
 		this.#agents = options.agents;
 		this.#isShuttingDown = options.isShuttingDown;
@@ -98,7 +99,7 @@ export class MessageCoordinator {
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
 			afterResumeReservation: this.#boundaryHooks.afterResumeReservation,
-			pendingMessageLimit: options.pendingMessageLimit,
+			workflowPolicy: options.workflowPolicy,
 		});
 	}
 

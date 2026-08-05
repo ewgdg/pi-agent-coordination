@@ -44,6 +44,11 @@ import type {
 import type { HumanSessionSelection } from "../pi-integration/interactive-session-selection.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type { AgentTemplateRoot } from "../templates/agent-templates.ts";
+import { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
+import {
+	WorkflowExecutionScheduler,
+	type WorkflowExecutionPermit,
+} from "./workflow-execution-scheduler.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type {
@@ -81,6 +86,9 @@ export type OrdinaryAgentCoordinatorView = Readonly<{
 	humanAttention(): readonly HumanAttentionItem[];
 	focusHumanRequest(requestId: string): Promise<void>;
 	reachSafeBoundary(): Promise<void>;
+	beginExecution(): Promise<void>;
+	ensureExecution(): Promise<void>;
+	endExecution(): void;
 }>;
 
 export class WorkflowCoordinator {
@@ -92,6 +100,9 @@ export class WorkflowCoordinator {
 	readonly #runSupervisor: RunSupervisor;
 	readonly #humanSessionSelection: HumanSessionSelection | undefined;
 	readonly #selectionLane = new SerialLane();
+	readonly #workflowPolicy: WorkflowPolicyStore;
+	readonly #executionScheduler: WorkflowExecutionScheduler;
+	readonly #executionPermits = new Map<string, WorkflowExecutionPermit>();
 	#shutdownPromise: Promise<void> | undefined;
 	#shuttingDown = false;
 
@@ -108,12 +119,14 @@ export class WorkflowCoordinator {
 			childExtensionFactory(agentId: string): ExtensionFactory;
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
 			messageBoundaryHooks?: MessageBoundaryHooks;
-			pendingMessageLimit?: number;
+			workflowPolicy?: WorkflowPolicyStore;
 			humanRequestPresentation?: HumanRequestPresentation;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
 			humanSessionSelection?: HumanSessionSelection;
 		},
 	) {
+		this.#workflowPolicy = options.workflowPolicy ?? new WorkflowPolicyStore();
+		this.#executionScheduler = new WorkflowExecutionScheduler(this.#workflowPolicy);
 		this.#ownerIdentity = identity;
 		this.#humanSessionSelection = options.humanSessionSelection;
 		this.#agents.set(identity.agentId, {
@@ -134,7 +147,7 @@ export class WorkflowCoordinator {
 			agents: this.#agents,
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
-			pendingMessageLimit: options.pendingMessageLimit,
+			workflowPolicy: this.#workflowPolicy,
 		});
 		this.#messages.integrate(this.#requireAgent(identity.agentId));
 		if (this.#humanSessionSelection) {
@@ -152,6 +165,9 @@ export class WorkflowCoordinator {
 					this.#messages.prepareInterruptionInLane(record);
 					await record.host.interruptCurrentRunInLane();
 				});
+			},
+			suspendExecution: (record) => {
+				this.#releaseExecution(record.identity.agentId);
 			},
 		});
 		this.#runSupervisor = new RunSupervisor({
@@ -192,6 +208,9 @@ export class WorkflowCoordinator {
 			focusHumanRequest: (requestId) =>
 				this.#humanRequests.focus(agentId, requestId),
 			reachSafeBoundary: () => this.#messages.reachSafeBoundary(agentId),
+			beginExecution: () => this.#beginExecution(agentId),
+			ensureExecution: () => this.#ensureExecution(agentId),
+			endExecution: () => this.#releaseExecution(agentId),
 		});
 	}
 
@@ -235,6 +254,34 @@ export class WorkflowCoordinator {
 		const record = this.#agents.get(agentId);
 		if (!record) throw new Error(`unknown_identity: ${agentId}`);
 		return record;
+	}
+
+	async #beginExecution(agentId: string): Promise<void> {
+		if (this.#executionPermits.has(agentId)) {
+			throw new Error(
+				`invariant_violation: Agent ${agentId} execution already holds Workflow capacity`,
+			);
+		}
+		await this.#ensureExecution(agentId);
+	}
+
+	async #ensureExecution(agentId: string): Promise<void> {
+		if (this.#executionPermits.has(agentId)) return;
+		const record = this.#requireAgent(agentId);
+		const run = record.host.observe();
+		if (run.phase !== "live" || run.attention === "input_required") return;
+		const permit = await this.#executionScheduler.admit(
+			"ordinary",
+			record.host.requireLiveSession().agent.signal,
+		);
+		if (permit) this.#executionPermits.set(agentId, permit);
+	}
+
+	#releaseExecution(agentId: string): void {
+		const permit = this.#executionPermits.get(agentId);
+		if (!permit) return;
+		this.#executionPermits.delete(agentId);
+		permit.release();
 	}
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {

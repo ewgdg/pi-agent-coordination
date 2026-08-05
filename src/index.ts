@@ -19,7 +19,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	assertHostModuleShape(hostPi);
 	const bridge = installInteractiveHostBridge(hostPi);
 
-	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (_event, ctx) => {
+	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
 		if (ctx.mode !== "tui" || !ctx.hasUI) return;
 		await initializeOwnerWorkflow({
 			pi,
@@ -27,6 +27,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			bridge,
 			entryModulePath: ENTRY_MODULE_PATH,
 			bootstrapHandler: bootstrapOwner,
+			event,
 		});
 	};
 	pi.on("session_start", bootstrapOwner);
