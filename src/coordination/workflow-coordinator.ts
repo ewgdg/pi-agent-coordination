@@ -61,6 +61,7 @@ import type {
 	ModeratorControlInput,
 	ModeratorControlReceipt,
 } from "../protocol/moderator-control.ts";
+import { isModeratorIdentity } from "../protocol/moderator-input.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type {
@@ -419,9 +420,7 @@ export class WorkflowCoordinator {
 
 	#isModerator(agentId: string): boolean {
 		const identity = this.#agents.get(agentId)?.identity;
-		return identity !== undefined &&
-			identity.agentId !== identity.workflowId &&
-			identity.directSpawnerAgentId === null;
+		return identity !== undefined && isModeratorIdentity(identity);
 	}
 
 	#integrateAgent(record: AgentRecord): void {

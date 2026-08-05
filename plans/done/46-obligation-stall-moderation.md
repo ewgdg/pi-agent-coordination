@@ -52,9 +52,9 @@ Tests will not target the detector, Handling Key store, or session factory as pr
 - [x] Confirmed prerequisite issues are closed and the starting branch is `main` at `5930065`.
 - [x] Confirm the public TDD seams with the user.
 - [x] Complete vertical TDD slices.
-- [ ] Complete focused and full validation.
-- [ ] Complete Standards and Spec review.
-- [ ] Commit the finished implementation.
+- [x] Complete focused and full validation.
+- [x] Complete Standards and Spec review and fix confirmed findings.
+- [x] Commit the finished implementation.
 
 # Surprises & Discoveries
 
@@ -69,7 +69,20 @@ Tests will not target the detector, Handling Key store, or session factory as pr
 - Keep Moderators outside ordinary `children` traversal while including them in workflow-wide Owner/Moderator lookup and live/dormant roster presentation.
 - Persist the first Moderator Input through Pi's verified SessionManager seam before Run construction, then continue the AgentSession from that committed input without appending a second model-visible prompt.
 - Revalidate all ordinary Agents through one incident lane after observable host transitions so downstream progress and clearance races cannot leave stale handling.
+- Associate Resolution with the Moderator owning one active handling, so a later continuous Stall that derives the same Handling Key cannot block or be released by the earlier attempt. Derive its final disposition from durable Request evidence rather than disposable Run retention.
 
 # Outcomes & Retrospective
 
-The implementation now detects continuous Obligation Stalls, follows recursive external progress, creates one atomic standalone Moderator, supplies its fixed role tools and authority, supports ordinary Owner escalation and gated Resolution, releases handling on live clearance, and cold-recovers strict Moderator transcripts without reconstructing handling. Focused incident and cold-recovery integration tests pass; final review and package validation remain.
+The implementation now detects continuous Obligation Stalls, follows recursive external progress, creates one atomic standalone Moderator, supplies its fixed role tools and authority, supports ordinary Owner escalation and gated Resolution, releases handling on live clearance, and cold-recovers strict Moderator transcripts without reconstructing handling.
+
+Independent Standards and Spec review found and fixed same-key attempt continuity, terminated-Run obligation evidence, and duplicated Moderator-role classification. Full validation then passed on August 5, 2026 with 136 tests:
+
+- `npm test`
+- `npm run typecheck`
+- `npm run build`
+- `npm pack --dry-run`
+- `git diff --check`
+
+The package contains every current source module and no stale compiled module. `npm audit` still reports three upstream advisories in transitive dependencies under `@earendil-works/pi-coding-agent` (one moderate and two high); no issue-46-local vulnerability was introduced or fixed here.
+
+One late integration surprise mattered: full-suite tests that intentionally strand unanswered work can now spawn real background Moderators, which consume the shared faux-model queue. The durable fix was to add an implicit Moderator-response path to the shared test host by default and explicitly disable that path in the focused Moderator tests that need to script Moderator turns directly.

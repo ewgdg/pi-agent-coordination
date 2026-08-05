@@ -7,6 +7,7 @@ import {
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
 	createModelVisibleModeratorInput,
+	isModeratorIdentity,
 	MAX_OBLIGATION_STALL_REQUEST_SOURCES,
 	validateCommittedModeratorInput,
 	type ModeratorIdentity,
@@ -130,19 +131,17 @@ export class OperationalIncidentCoordinator {
 		const snapshot = handling?.snapshot ?? attempt;
 		const affected = snapshot ? this.#agents.get(snapshot.agentId) : undefined;
 		const current = affected ? this.#observeObligationStall(affected) : undefined;
-		if (snapshot && current?.key === snapshot.key) {
+		if (handling && current?.key === handling.snapshot.key) {
 			predicates.push("obligation_stall");
 		}
 		if (predicates.length > 0) {
 			return Promise.resolve({ disposition: "blocked", predicates });
 		}
 		if (!attempt) return Promise.resolve({ disposition: "already_cleared" });
-		this.#releaseHandling(attempt.key);
+		if (handling) this.#releaseHandling(handling.snapshot.key);
 		this.#attemptByModeratorAgentId.delete(moderatorAgentId);
 		const originalObligationRemains = affected !== undefined &&
-			attempt.requestIds.some((requestId) =>
-				affected.host.hasRetentionReason("answer_owed", requestId)
-			);
+			this.#messages.hasUnsettledAnswerObligation(affected, attempt.requestIds);
 		return Promise.resolve({
 			disposition: originalObligationRemains ? "resolved" : "already_cleared",
 		});
@@ -306,8 +305,7 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#isModerator(record: AgentRecord): boolean {
-		return record.identity.agentId !== record.identity.workflowId &&
-			record.identity.directSpawnerAgentId === null;
+		return isModeratorIdentity(record.identity);
 	}
 
 	#clearChangedHandling(agentId: string, currentKey: string | undefined): void {

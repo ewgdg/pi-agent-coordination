@@ -13,6 +13,7 @@ import {
 	type RunControlInput,
 	type RunControlReceipt,
 } from "../protocol/run-control.ts";
+import { isModeratorIdentity } from "../protocol/moderator-input.ts";
 
 export class RunSupervisor {
 	readonly #agents: Map<string, AgentRecord>;
@@ -145,9 +146,7 @@ export class RunSupervisor {
 	#requireControllableTarget(callerAgentId: string, targetAgentId: string): AgentRecord {
 		const caller = this.#requireAgent(callerAgentId);
 		const target = this.#requireAgent(targetAgentId);
-		const callerIsModerator =
-			caller.identity.agentId !== caller.identity.workflowId &&
-			caller.identity.directSpawnerAgentId === null;
+		const callerIsModerator = isModeratorIdentity(caller.identity);
 		if (
 			targetAgentId === this.#ownerAgentId ||
 			targetAgentId === callerAgentId ||

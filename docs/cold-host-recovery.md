@@ -20,7 +20,7 @@ Malformed, unreadable, incomplete, foreign, cyclic, duplicate, and source-confli
 
 ## Dormant Agents and `/agents`
 
-Recovered ordinary Agents and Moderators begin dormant. Observation and `/agents` do not create Pi services, start a Run, invoke a model, or append transcript evidence. A later ordinary Message or native interaction starts work through the participant's normal role-bound Run path.
+Recovered ordinary Agents and Moderators begin dormant. Observation and `/agents` do not create Pi services, start a Run, invoke a model, or append transcript evidence. A later ordinary Message starts work through the participant's normal role-bound Run path; native interaction becomes available after that session is live and retained.
 
 `/agents` presents Live rows in creation hierarchy and Dormant rows by Pi session recency. Dormant recency uses the latest user or assistant activity time, then the native session creation time. Direct-child observation remains in canonical spawn-call order regardless of presentation recency.
 

@@ -94,6 +94,9 @@ test("the native Human Request result is the sole positional Answer and sequenti
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+		incidentBoundaryHooks: {
+			beforeModeratorRunStart: () => "confirmed_failure",
+		},
 	});
 	view = coordinator.forAgent(identity.agentId);
 	await bindTestOwnerHost(host, "tui");
@@ -440,6 +443,11 @@ test("two Agents wait independently while Steer follows Answer commit and Deferr
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+		// Human-request tests deliberately block on native answers. Suppress live
+		// Moderator Runs so incidental stall handling cannot consume scripted replies.
+		incidentBoundaryHooks: {
+			beforeModeratorRunStart: () => "confirmed_failure",
+		},
 		spawnBoundaryHooks: {
 			afterRunStart({ identity: childIdentity, session }) {
 				childSessions.set(childIdentity.agentId, session);
@@ -766,6 +774,9 @@ test("a Run fence after submission but before result commitment prevents a Human
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+		incidentBoundaryHooks: {
+			beforeModeratorRunStart: () => "confirmed_failure",
+		},
 	});
 	view = coordinator.forAgent(identity.agentId);
 	await bindTestOwnerHost(host, "tui");
@@ -862,6 +873,9 @@ test("a failed-Run fence closes the UI, rejects late submission, and is not reco
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+		incidentBoundaryHooks: {
+			beforeModeratorRunStart: () => "confirmed_failure",
+		},
 		spawnBoundaryHooks: {
 			afterRunStart({ identity: childIdentity, session }) {
 				childSessions.set(childIdentity.agentId, session);
@@ -985,7 +999,9 @@ test("a failed-Run fence closes the UI, rejects late submission, and is not reco
 });
 
 async function waitForCondition(predicate: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	// Full-suite concurrency can delay the second child's native-input transition
+	// beyond 100 microtask turns even though the behavior is correct.
+	for (let attempt = 0; attempt < 300; attempt += 1) {
 		if (predicate()) return;
 		await new Promise<void>((resolve) => setImmediate(resolve));
 	}

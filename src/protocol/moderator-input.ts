@@ -34,6 +34,17 @@ export type ModeratorIdentity = Readonly<{
 	}>;
 }>;
 
+export function isModeratorIdentity(
+	identity: Readonly<{
+		agentId: string;
+		workflowId: string;
+		directSpawnerAgentId: string | null;
+	}>,
+): identity is ModeratorIdentity {
+	return identity.agentId !== identity.workflowId &&
+		identity.directSpawnerAgentId === null;
+}
+
 export type ObligationStallModeratorInput = Readonly<{
 	trigger: Readonly<{
 		kind: "obligation_stall";

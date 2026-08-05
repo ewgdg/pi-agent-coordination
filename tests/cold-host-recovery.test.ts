@@ -682,7 +682,10 @@ test("recovered authority keeps physical child order while Dormant view uses Pi 
 });
 
 test("a fresh Owner host rediscovers a standalone Moderator without reconstructing handling", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -705,7 +708,9 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
 
-	const reopened = await reopenOwner(host, ownerSessionFile);
+	const reopened = await reopenOwner(host, ownerSessionFile, {
+		implicitModeratorResponses: false,
+	});
 	const observe = reopened.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const statusResult = await observe.execute(
@@ -871,11 +876,15 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 async function reopenOwner(
 	previous: TestOwnerHost,
 	sessionFile: string,
+	options?: {
+		implicitModeratorResponses?: boolean;
+	},
 ): Promise<TestOwnerHost> {
 	const reopened = await createUnboundTestOwnerHost(piAgentCoordination, {
 		cwd: previous.cwd,
 		agentDir: previous.services.agentDir,
 		sessionFile,
+		implicitModeratorResponses: options?.implicitModeratorResponses,
 	});
 	await bindTestOwnerHost(reopened, "tui");
 	return reopened;

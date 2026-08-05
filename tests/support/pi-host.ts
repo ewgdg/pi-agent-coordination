@@ -2,6 +2,10 @@ import {
 	createFauxCore,
 	fauxAssistantMessage,
 	type FauxResponseStep,
+	type Context,
+	type Model,
+	type SimpleStreamOptions,
+	type StreamOptions,
 } from "@earendil-works/pi-ai";
 import {
 	AgentSessionRuntime,
@@ -71,6 +75,7 @@ export type TestOwnerHostOptions = {
 	cwd?: string;
 	agentDir?: string;
 	sessionFile?: string;
+	implicitModeratorResponses?: boolean;
 };
 
 export async function createTestOwnerHost(
@@ -90,7 +95,9 @@ export async function createUnboundTestOwnerHost(
 	const agentDir = options?.agentDir ?? join(cwd, ".pi-agent");
 	const additionalExtensionPaths = options?.additionalExtensionPaths ?? [];
 	const retainedExtensionPaths = new Set(additionalExtensionPaths);
-	const { modelRuntime, faux } = await createTestModelRuntime();
+	const { modelRuntime, faux } = await createTestModelRuntime({
+		implicitModeratorResponses: options?.implicitModeratorResponses ?? true,
+	});
 	const sessionManager = options?.sessionFile
 		? SessionManager.open(options.sessionFile)
 		: options?.persistent
@@ -344,7 +351,9 @@ function createTestOverlayHandle(): OverlayHandle {
 	};
 }
 
-async function createTestModelRuntime(): Promise<{
+async function createTestModelRuntime(options: {
+	implicitModeratorResponses: boolean;
+}): Promise<{
 	modelRuntime: ModelRuntime;
 	faux: { setResponses(responses: FauxResponseStep[]): void };
 }> {
@@ -365,13 +374,57 @@ async function createTestModelRuntime(): Promise<{
 		],
 	});
 	faux.setResponses([fauxAssistantMessage("Owner interaction preserved.")]);
+	const maybeImplicitModeratorResponse = (
+		model: Model<string>,
+		context: Context,
+		streamOptions: StreamOptions | SimpleStreamOptions | undefined,
+	) => {
+		if (
+			!options.implicitModeratorResponses ||
+			!isImplicitModeratorRequest(context)
+		) return undefined;
+		const implicit = createFauxCore({
+			api: PROVIDER_ID,
+			provider: PROVIDER_ID,
+			models: [
+				{
+					id: MODEL_ID,
+					name: "Deterministic Owner",
+					reasoning: false,
+					input: ["text"],
+					cost: EMPTY_USAGE.cost,
+					contextWindow: 16_384,
+					maxTokens: 256,
+				},
+			],
+		});
+		implicit.setResponses([fauxAssistantMessage("I will wait for explicit Moderator work.")]);
+		return implicit.streamSimple(model, context, streamOptions);
+	};
 	modelRuntime.registerProvider(PROVIDER_ID, {
 		name: "Coordination test",
 		baseUrl: PROVIDER_BASE_URL,
 		api: PROVIDER_ID,
 		apiKey: "in-memory-test",
 		models: faux.models,
-		streamSimple: faux.streamSimple,
+		streamSimple: (model, context, streamOptions) =>
+			maybeImplicitModeratorResponse(model, context, streamOptions) ??
+			faux.streamSimple(model, context, streamOptions),
 	});
 	return { modelRuntime, faux };
+}
+
+function isImplicitModeratorRequest(context: Context): boolean {
+	return (
+		context.tools?.some(({ name }) => name === "moderator_control") === true &&
+		context.messages.some((message) =>
+			message.role === "user" &&
+			Array.isArray(message.content) &&
+			message.content.some(
+				(part) =>
+					part.type === "text" &&
+					part.text.includes('"kind":"obligation_stall"'),
+			)
+		)
+	);
 }

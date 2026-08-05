@@ -135,6 +135,16 @@ export class MessageCoordinator {
 		);
 	}
 
+	hasUnsettledAnswerObligation(
+		responder: AgentRecord,
+		requestIds: readonly string[],
+	): boolean {
+		const remaining = new Set(
+			this.#requestEvidence.residualRelationshipsFor(responder).answerOwedRequestIds,
+		);
+		return requestIds.some((requestId) => remaining.has(requestId));
+	}
+
 	async send(
 		callerAgentId: string,
 		toolCallId: string,

@@ -8,7 +8,10 @@ import {
 	fauxAssistantMessage,
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+	SessionManager,
+	type AgentSession,
+} from "@earendil-works/pi-coding-agent";
 
 import {
 	createAgentBoundExtension,
@@ -461,6 +464,11 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+		// Message-ordering tests intentionally strand unanswered work. Keep any
+		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
+		incidentBoundaryHooks: {
+			beforeModeratorRunStart: () => "confirmed_failure",
+		},
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
@@ -941,8 +949,36 @@ test("poll rejects a hidden custom message as Delivery evidence", async () => {
 });
 
 test("only the original sender can poll a Message", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const childSessions = new Map<string, AgentSession>();
+	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	let coordinator: WorkflowCoordinator;
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+		// This test needs a live unanswered child to exercise poll authorization.
+		// Keep any incidental Moderator attempt dormant so it cannot steal replies.
+		incidentBoundaryHooks: {
+			beforeModeratorRunStart: () => "confirmed_failure",
+		},
+		spawnBoundaryHooks: {
+			afterRunStart({ identity: childIdentity, session }) {
+				childSessions.set(childIdentity.agentId, session);
+			},
+		},
+	});
+	const ownerView = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
+		fauxAssistantMessage("I will not impersonate another sender."),
+	]);
+	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_spawn",
@@ -951,13 +987,16 @@ test("only the original sender can poll a Message", async () => {
 			),
 			{ stopReason: "toolUse" },
 		),
-		fauxAssistantMessage("The authorization child exists."),
-		fauxAssistantMessage("I will not impersonate another sender."),
-	]);
-	await host.session.prompt("Create a child for poll authorization.");
-	await host.session.waitForIdle();
-	const childId = findSpawnedAgentId(host.session.sessionManager);
-	const childSessionFile = await waitForChildSessionFile(host, childId);
+	);
+	const spawnReceipt = await ownerView.spawn("spawn-poll-authorization-child", {
+		request: "Receive a Message but do not impersonate its sender.",
+	});
+	assert.ok("agentId" in spawnReceipt && typeof spawnReceipt.agentId === "string");
+	const childId = spawnReceipt.agentId;
+	await waitForCondition(() => childSessions.has(childId));
+	const childSession = childSessions.get(childId);
+	if (!childSession) throw new Error("Authorization child session was not captured");
+	await childSession.waitForIdle();
 	const sendToolCallId = "send-poll-authorization-message";
 	const sendInput = {
 		operation: "send" as const,
@@ -995,33 +1034,21 @@ test("only the original sender can poll a Message", async () => {
 		),
 		fauxAssistantMessage("The poll was correctly rejected."),
 	]);
-	const agentMessage = host.session.getToolDefinition("agent_message");
-	assert.ok(agentMessage);
-	const sendResult = await agentMessage.execute(
-		sendToolCallId,
-		sendInput,
-		undefined,
-		undefined,
-		host.session.extensionRunner.createContext(),
-	);
+	const sendResult = await ownerView.message(sendToolCallId, sendInput);
 	host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: sendToolCallId,
 		toolName: "agent_message",
-		content: sendResult.content,
-		details: sendResult.details,
+		content: [{ type: "text", text: JSON.stringify(sendResult) }],
+		details: sendResult,
 		isError: false,
 		timestamp: Date.now(),
 	});
+	await childSession.waitForIdle();
+	await childSession.prompt("Attempt to poll another sender's Message.");
+	await childSession.waitForIdle();
 
-	const childEntries = await waitForEntry(
-		childSessionFile,
-		(entry) =>
-			entry.type === "message" &&
-			entry.message.role === "toolResult" &&
-			entry.message.toolCallId === "child-polls-owner-message",
-	);
-	const unauthorized = childEntries.find(
+	const unauthorized = childSession.sessionManager.getEntries().find(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -1035,7 +1062,7 @@ test("only the original sender can poll a Message", async () => {
 	assert.equal(unauthorized.message.isError, true);
 	assert.match(JSON.stringify(unauthorized.message.content), /wrong_participant/);
 
-	await host.runtime.dispose();
+	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
 test("Run failure discards uncommitted backlog and a successor receives only newly admitted work", async () => {
@@ -1904,6 +1931,11 @@ async function createDormantChildHarness(
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+		// Message-ordering tests intentionally strand unanswered work. Keep any
+		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
+		incidentBoundaryHooks: {
+			beforeModeratorRunStart: () => "confirmed_failure",
+		},
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},

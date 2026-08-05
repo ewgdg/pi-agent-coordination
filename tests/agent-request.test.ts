@@ -1465,6 +1465,11 @@ async function createDormantChildHarness(
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+		// This suite parks unanswered work to probe Request semantics. Suppress live
+		// Moderator Runs so incidental stall handling does not consume scripted replies.
+		incidentBoundaryHooks: {
+			beforeModeratorRunStart: () => "confirmed_failure",
+		},
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},

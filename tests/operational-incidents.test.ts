@@ -28,7 +28,10 @@ import {
 const MAX_CONDITION_POLL_ATTEMPTS = 1_000;
 
 test("a settled answer-obligated Agent creates one atomic Obligation Stall Moderator", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
 	let moderatorTools: string[] = [];
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -143,7 +146,10 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 });
 
 test("Moderator Resolution is blocked while the Obligation Stall remains", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -192,7 +198,10 @@ test("Moderator Resolution is blocked while the Obligation Stall remains", async
 });
 
 test("a Moderator observes the Workflow and controls only non-Owner Runs", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -299,8 +308,87 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 	await host.runtime.dispose();
 });
 
+test("terminating the affected Run does not erase its durable Answer obligation", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_spawn",
+				{ request: "Leave this Answer obligation unresolved after termination." },
+				{ id: "spawn-terminated-stall-agent" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The termination case is delegated."),
+		fauxAssistantMessage("I settled without answering."),
+		(context) => {
+			const input = context.messages.flatMap((message) => {
+				if (message.role !== "user") return [];
+				return typeof message.content === "string"
+					? [message.content]
+					: message.content.flatMap((part) => part.type === "text" ? [part.text] : []);
+			}).find((content) => content.includes('"kind":"obligation_stall"'));
+			assert.ok(input);
+			const affectedAgentId = (JSON.parse(input) as {
+				trigger: { agentId: string };
+			}).trigger.agentId;
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_control",
+					{ operation: "terminate", agentId: affectedAgentId },
+					{ id: "terminate-stalled-run" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		},
+		fauxAssistantMessage(
+			fauxToolCall(
+				"moderator_control",
+				{
+					operation: "resolve",
+					summary: "The exact stalled Run was terminated.",
+					rationale: "The durable obligation remains for a successor Run.",
+				},
+				{ id: "resolve-after-termination" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The terminated attempt is resolved."),
+	]);
+
+	await host.session.prompt("Create a terminated Obligation Stall.");
+	await host.session.waitForIdle();
+	const moderator = await waitForModerator(host);
+	const termination = await waitForTranscriptEntry(
+		moderator.path,
+		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "terminate-stalled-run",
+	);
+	assert.ok(termination.type === "message" && termination.message.role === "toolResult");
+	assert.deepEqual(termination.message.details, {
+		agentId: moderatorAffectedAgentId(moderator.path),
+		disposition: "terminated",
+		residualRequests: { incoming: 1, outgoing: 0 },
+	});
+	const resolution = await waitForTranscriptEntry(
+		moderator.path,
+		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "resolve-after-termination",
+	);
+	assert.ok(resolution.type === "message" && resolution.message.role === "toolResult");
+	assert.deepEqual(resolution.message.details, { disposition: "resolved" });
+
+	await host.runtime.dispose();
+});
+
 test("a Moderator escalates through an ordinary Owner Request before Resolution", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -410,7 +498,10 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 });
 
 test("external Answer clearance releases Moderator handling", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -536,7 +627,10 @@ test("external Answer clearance releases Moderator handling", async () => {
 });
 
 test("a cleared Stall can recur with the same obligations and receive a fresh Moderator", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -584,6 +678,45 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 	const secondModerator = moderators.find(({ id }) => id !== firstModerator.id);
 	assert.ok(secondModerator);
 	assert.equal(moderatorAffectedAgentId(secondModerator.path), affectedAgentId);
+	await waitForTranscriptEntry(
+		secondModerator.path,
+		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "text" &&
+					part.text === "I am handling the new continuous Stall.",
+			),
+	);
+
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"moderator_control",
+				{
+					operation: "resolve",
+					summary: "The first continuous Stall cleared under an exact Hold.",
+					rationale: "The later recurrence belongs to the fresh Moderator.",
+				},
+				{ id: "resolve-first-continuous-stall" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The first handling attempt is resolved."),
+	]);
+	await sendOwnerMessage(
+		host,
+		firstModerator.id,
+		"Resolve only your original continuous Stall.",
+		"wake-first-moderator-after-recurrence",
+	);
+	const firstResolution = await waitForTranscriptEntry(
+		firstModerator.path,
+		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "resolve-first-continuous-stall",
+	);
+	assert.ok(
+		firstResolution.type === "message" && firstResolution.message.role === "toolResult",
+	);
+	assert.deepEqual(firstResolution.message.details, { disposition: "resolved" });
 
 	await host.runtime.dispose();
 });
@@ -617,6 +750,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 
 	host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		implicitModeratorResponses: false,
 		additionalExtensionPaths: [
 			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
 		],
@@ -810,7 +944,10 @@ async function createIncidentBoundaryHarness(
 		beforeModeratorRunStart?(): void | "confirmed_failure";
 	},
 ) {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(
 		host.runtime,
