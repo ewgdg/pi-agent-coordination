@@ -44,7 +44,7 @@ Keep Pi transcripts, native `AgentSession`s, `InteractiveMode`, and the role-bou
 - [x] Complete transcript and native-interactive behavioral conformance.
 - [x] Complete extension and narrow PTY workflow conformance.
 - [x] Complete shutdown behavior and documentation.
-- [ ] Complete independent review, final validation, plan archival, and semantic commit.
+- [x] Complete independent review, final validation, plan archival, and semantic commit.
 
 # Surprises & Discoveries
 
@@ -69,4 +69,9 @@ Keep Pi transcripts, native `AgentSession`s, `InteractiveMode`, and the role-bou
 
 # Outcomes & Retrospective
 
-To be completed after validation.
+- The package now declares exactly the five host-provided peers it imports, ships no Pi runtime or bundled dependency, loads through Pi's extension module world, and exposes `npm run test:conformance` as the focused executable compatibility gate.
+- Structural admission covers every declared host, runtime, session, interactive-mode, TUI, AI, schema, extension, and writable integration seam. Module rejection installs no patch; live rejection restores the native prototype, rejects pending capture, and appends no partial Owner Identity.
+- Native behavioral conformance proves transcript/result ordering, model-visible Delivery, compaction and branch behavior, sequential Human Questions, retained selection and binding-only refresh, viewport reconstruction, the complete role-tool matrix/renderers, and one coordinated PTY workflow.
+- Shutdown fences lifecycle admission, closes volatile presentation/review state, discards scheduling before host disposal, continues after individual cleanup failures, and disposes selected Moderator, retained child, and Owner sessions exactly once.
+- Initial parallel review found one Standards violation and three Spec gaps. All were fixed; the parallel re-review reported zero Spec findings and no hard Standards violations. The remaining test-adapter smell was not accepted because the minimal adapter must implement Pi's concrete `Terminal` interface to exercise the real TUI renderer.
+- Final validation passed `npm test`, `npm run typecheck`, `npm run build`, `npm pack --dry-run`, `npm audit --omit=dev`, and `git diff --check`. The pack dry-run contained 187 files, the production audit reported zero vulnerabilities, the built entry loaded, and all 59 source modules had exact build parity with no missing or stale module.
