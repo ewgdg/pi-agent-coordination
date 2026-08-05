@@ -371,6 +371,16 @@ export class OperationalIncidentCoordinator {
 		return this.#reconciliationLane.run(() => undefined);
 	}
 
+	shutdown(): void {
+		this.#operationReviews.shutdown();
+		for (const [key, handling] of this.#handlingByKey) {
+			if (handling.exhausted) this.#presentation.dismiss(key);
+		}
+		this.#handlingByKey.clear();
+		this.#attemptByModeratorAgentId.clear();
+		this.#runFailureByKey.clear();
+	}
+
 	async #reconcileWorkflow(): Promise<void> {
 		if (this.#isShuttingDown()) return;
 		const snapshots: OperationalConditionSnapshot[] = [];
@@ -431,6 +441,7 @@ export class OperationalIncidentCoordinator {
 		);
 		const agentId = sessionManager.getSessionId();
 		const prepared = await this.#sessionFactory.prepareModeratorRun(agentId, baseline);
+		if (this.#isShuttingDown()) return;
 		if (!this.#conditionRemains(handling.snapshot)) {
 			this.#handlingByKey.delete(handling.snapshot.key);
 			return;
@@ -450,10 +461,10 @@ export class OperationalIncidentCoordinator {
 				? {}
 				: { previousAttempt: handling.previousAttempt }),
 		};
-		if (
-			this.#boundaryHooks.beforeModeratorBootstrapCommit?.() ===
-			"confirmed_failure"
-		) {
+		const bootstrapBoundary =
+			this.#boundaryHooks.beforeModeratorBootstrapCommit?.();
+		if (this.#isShuttingDown()) return;
+		if (bootstrapBoundary === "confirmed_failure") {
 			throw new Error("Confirmed Moderator bootstrap commit failure");
 		}
 		const modelInput = createModelVisibleModeratorInput(identity, input);
@@ -490,6 +501,7 @@ export class OperationalIncidentCoordinator {
 		}
 		try {
 			await moderator.host.lane.run(async () => {
+				if (this.#isShuttingDown()) return;
 				const session = await moderator.host.startInLane(["moderator_handling"]);
 				moderator.host.trackOperation(continueFromCommittedInput(session));
 			});
@@ -503,6 +515,7 @@ export class OperationalIncidentCoordinator {
 		handling: OperationalIncidentHandling,
 		moderator: AgentRecord,
 	): Promise<void> {
+		if (this.#isShuttingDown()) return;
 		if (handling.moderatorAgentId !== moderator.identity.agentId) return;
 		if (!this.#conditionRemains(handling.snapshot)) {
 			this.#releaseHandling(handling.snapshot.key);

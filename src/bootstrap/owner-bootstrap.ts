@@ -18,6 +18,7 @@ import {
 	readWorkflowPolicy,
 } from "../policy/workflow-policy.ts";
 import {
+	assertOwnerAgentExtensionBindingReady,
 	bindHiddenOwnerAgentExtension,
 	createAgentBoundExtension,
 	createModeratorBoundExtension,
@@ -27,7 +28,7 @@ import { discoverColdWorkflow } from "./cold-host-discovery.ts";
 type InitializedWorkflow = {
 	coordinator: WorkflowCoordinator;
 	policy: WorkflowPolicyStore;
-	prepareOwnerFork(): Promise<void>;
+	prepareOwnerReplacement(): Promise<void>;
 };
 
 const WORKFLOW_REGISTRY_KEY = "__piAgentCoordinationOwnerWorkflows";
@@ -65,10 +66,11 @@ export async function initializeOwnerWorkflow(options: {
 			runtime,
 			bootstrapHandler,
 			resolveView: () => existing.coordinator.forAgent(runtime.session.sessionId),
-			prepareOwnerFork: existing.prepareOwnerFork,
+			prepareOwnerReplacement: existing.prepareOwnerReplacement,
 		});
 		return;
 	}
+	assertOwnerAgentExtensionBindingReady({ runtime, bootstrapHandler });
 
 	const initialPolicy = await readWorkflowPolicy(runtime.services.agentDir);
 	if (!initialPolicy.ok) {
@@ -103,14 +105,14 @@ export async function initializeOwnerWorkflow(options: {
 		recoveredWorkflow,
 	});
 	const restoreNativeDispose = bindExactlyOnceShutdown(runtime, coordinator);
-	let ownerForkPreparation: Promise<void> | undefined;
-	const prepareOwnerFork = () => {
-		if (ownerForkPreparation) return ownerForkPreparation;
+	let ownerReplacementPreparation: Promise<void> | undefined;
+	const prepareOwnerReplacement = () => {
+		if (ownerReplacementPreparation) return ownerReplacementPreparation;
 		// Pi replaces the AgentSession without calling the intercepted runtime
 		// disposer. Restore it before the new Workflow installs its own wrapper.
 		restoreNativeDispose();
-		ownerForkPreparation = coordinator.shutdown(async () => undefined);
-		return ownerForkPreparation;
+		ownerReplacementPreparation = coordinator.shutdown(async () => undefined);
+		return ownerReplacementPreparation;
 	};
 	try {
 		bindHiddenOwnerAgentExtension({
@@ -118,12 +120,12 @@ export async function initializeOwnerWorkflow(options: {
 			runtime,
 			bootstrapHandler,
 			resolveView: () => coordinator.forAgent(identity.agentId),
-			prepareOwnerFork,
+			prepareOwnerReplacement,
 		});
 		initializedWorkflows.set(runtime.session, {
 			coordinator,
 			policy,
-			prepareOwnerFork,
+			prepareOwnerReplacement,
 		});
 	} catch (error) {
 		restoreNativeDispose();

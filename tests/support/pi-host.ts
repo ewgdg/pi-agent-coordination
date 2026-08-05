@@ -76,6 +76,7 @@ export type TestOwnerHostOptions = {
 	agentDir?: string;
 	sessionFile?: string;
 	implicitModeratorResponses?: boolean;
+	settings?: Parameters<typeof SettingsManager.inMemory>[0];
 };
 
 export async function createTestOwnerHost(
@@ -108,7 +109,7 @@ export async function createUnboundTestOwnerHost(
 			cwd: runtimeOptions.cwd,
 			agentDir: runtimeOptions.agentDir,
 			modelRuntime,
-			settingsManager: SettingsManager.inMemory(),
+			settingsManager: SettingsManager.inMemory(options?.settings),
 			resourceLoaderOptions: {
 				noContextFiles: true,
 				noPromptTemplates: true,

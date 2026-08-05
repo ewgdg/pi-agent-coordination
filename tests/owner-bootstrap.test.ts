@@ -143,6 +143,40 @@ test("an invalid initial Workflow Policy prevents coordination runtime creation"
 	await host.runtime.dispose();
 });
 
+test("an ambiguous public Owner extension fails before Identity commitment", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	const extensions = host.services.resourceLoader.getExtensions().extensions;
+	const publicOwnerExtension = extensions.find((extension) =>
+		extension.handlers.get("session_start")?.some(() => true),
+	);
+	assert.ok(publicOwnerExtension);
+	extensions.push(publicOwnerExtension);
+
+	await bindTestOwnerHost(host, "tui");
+
+	assert.equal(
+		host.session.sessionManager
+			.getEntries()
+			.some(
+				(entry) =>
+					entry.type === "custom" &&
+					entry.customType === "agent-coordination.identity",
+			),
+		false,
+	);
+	assert.equal(host.session.getToolDefinition("agent_spawn"), undefined);
+	assert.equal(
+		host.ui.notifications.some(
+			({ message, type }) =>
+				type === "error" &&
+				message.includes("cannot bind the Owner Agent extension"),
+		),
+		true,
+	);
+	extensions.pop();
+	await host.runtime.dispose();
+});
+
 test("Owner reload publishes one prospective policy or preserves the prior snapshot", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
 	const policyDirectory = join(host.services.agentDir, "config");

@@ -173,6 +173,12 @@ export class OperationReviewWatcher {
 		);
 	}
 
+	shutdown(): void {
+		for (const call of this.#calls.values()) this.#cancelInterval(call);
+		this.#calls.clear();
+		this.#attendanceByAgentId.clear();
+	}
+
 	#reconcile(call: ReviewableCall): void {
 		if (!this.#isUnresolved(call.toolCall)) {
 			this.#remove(call);

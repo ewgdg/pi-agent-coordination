@@ -8,6 +8,10 @@ import {
 	assertInteractiveModeInstanceShape,
 	assertRuntimeInstanceShape,
 } from "./host-shape.ts";
+import {
+	hasInstalledExtensionBindings,
+	refreshNativeExtensionBindings,
+} from "./extension-bindings.ts";
 
 type HostModule = {
 	VERSION?: unknown;
@@ -81,8 +85,26 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 				state.waiters.splice(state.waiters.indexOf(waiter), 1);
 				waiter.resolve(runtime);
 			}
-			await originalBindCurrentSessionExtensions.call(this);
+			if (!hasInstalledExtensionBindings(runtime.session)) {
+				await originalBindCurrentSessionExtensions.call(this);
+				requestFullInteractiveRender(this);
+				return;
+			}
+			await refreshNativeExtensionBindings(runtime.session, () =>
+				originalBindCurrentSessionExtensions.call(this),
+			);
+			requestFullInteractiveRender(this);
 		};
 
 	return state;
+}
+
+function requestFullInteractiveRender(interactiveMode: unknown): void {
+	const interactive = interactiveMode as {
+		ui: { requestRender(force?: boolean): void };
+	};
+	// Differential rendering cannot erase rows left by a longer deselected
+	// transcript. A retained-session replacement therefore needs one native full
+	// redraw after Pi reconstructs the selected session's complete presentation.
+	interactive.ui.requestRender(true);
 }

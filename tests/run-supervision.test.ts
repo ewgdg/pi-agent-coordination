@@ -938,6 +938,52 @@ test("/agents selects live sessions, returns to Owner, and restores Owner for sh
 	assert.equal(host.runtime.session.sessionId, host.session.sessionId);
 });
 
+test("shutdown fences Run control and Human Request admission", async () => {
+	const harness = await createRunSupervisionHarness();
+	const child = await harness.spawnChild("spawn-before-admission-fence");
+	await child.session.waitForIdle();
+	let markNativeDisposalStarted!: () => void;
+	const nativeDisposalStarted = new Promise<void>((resolve) => {
+		markNativeDisposalStarted = resolve;
+	});
+	let releaseNativeDisposal!: () => void;
+	const nativeDisposalGate = new Promise<void>((resolve) => {
+		releaseNativeDisposal = resolve;
+	});
+	const shutdown = harness.coordinator.shutdown(async () => {
+		markNativeDisposalStarted();
+		await nativeDisposalGate;
+		await harness.host.runtime.dispose();
+	});
+	await nativeDisposalStarted;
+
+	await assert.rejects(
+		async () => harness.ownerView.control(
+			"control-after-shutdown",
+			{ operation: "interrupt", agentId: child.agentId },
+		),
+		/host_shutting_down/,
+	);
+	await assert.rejects(
+		async () => harness.ownerView.askHuman(
+			"human-after-shutdown",
+			{
+				questions: [{
+					kind: "text",
+					header: "Too late",
+					prompt: "This surface must not open.",
+					multiline: false,
+				}],
+			},
+			new AbortController().signal,
+		),
+		/host_shutting_down/,
+	);
+
+	releaseNativeDisposal();
+	await shutdown;
+});
+
 async function createRunSupervisionHarness(options?: {
 	workflowPolicy?: WorkflowPolicyStore;
 	deferFirstResume?: boolean;
@@ -985,6 +1031,7 @@ async function createRunSupervisionHarness(options?: {
 
 	return {
 		host,
+		coordinator,
 		ownerView,
 		async spawnChild(toolCallId: string) {
 			host.model.setResponses([

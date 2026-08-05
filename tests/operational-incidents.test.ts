@@ -1867,6 +1867,31 @@ test("a pre-commit Moderator bootstrap failure consumes no attempt", async () =>
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
+test("shutdown before Moderator bootstrap prevents a post-snapshot Moderator admission", async () => {
+	let shutdownPromise: Promise<void> | undefined;
+	let harness!: Awaited<ReturnType<typeof createIncidentBoundaryHarness>>;
+	harness = await createIncidentBoundaryHarness({
+		beforeModeratorBootstrapCommit: () => {
+			shutdownPromise ??= harness.coordinator.shutdown(
+				async () => harness.host.runtime.dispose(),
+			);
+		},
+	});
+	harness.host.model.setResponses([
+		fauxAssistantMessage("I settled without answering the Creation Request."),
+	]);
+	await spawnFromView(
+		harness.host.session,
+		harness.owner,
+		"spawn-before-moderator-shutdown",
+		"Settle with an Answer obligation while the host begins shutdown.",
+	);
+	await waitForCondition(() => shutdownPromise !== undefined);
+	await shutdownPromise;
+
+	assert.deepEqual(await findModerators(harness.host), []);
+});
+
 test("a post-commit Moderator startup failure creates one linked replacement", async () => {
 	let startupAttempts = 0;
 	const harness = await createIncidentBoundaryHarness({
@@ -2029,6 +2054,26 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 	);
 	await waitForCondition(() => harness.owner.operationalAttention().length === 0);
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("orderly shutdown closes exhausted Operational Attention", async () => {
+	const harness = await createIncidentBoundaryHarness({
+		beforeModeratorRunStart: () => "confirmed_failure",
+	});
+	harness.host.model.setResponses([
+		fauxAssistantMessage("I settled without answering the Creation Request."),
+	]);
+	await spawnFromView(
+		harness.host.session,
+		harness.owner,
+		"spawn-operational-attention-before-shutdown",
+		"Settle with an Answer obligation until Owner Attention is required.",
+	);
+	await waitForCondition(() => harness.owner.operationalAttention().length === 1);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+
+	assert.deepEqual(harness.owner.operationalAttention(), []);
 });
 
 async function waitForModerator(

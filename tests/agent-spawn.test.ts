@@ -169,7 +169,11 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		"pi-agent-coordination",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
-	const childSessionFile = await waitForChildSessionFile(host.cwd, workflowDirectory);
+	const childSessionFile = await waitForChildSessionFile(
+		host.cwd,
+		workflowDirectory,
+		(spawnResult.message.details as { agentId: string }).agentId,
+	);
 	const childTranscript = SessionManager.open(childSessionFile);
 	const childEntries = await waitForEntry(
 		childSessionFile,
@@ -322,7 +326,11 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 		"pi-agent-coordination",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
-	const childSessionFile = await waitForChildSessionFile(host.cwd, workflowDirectory);
+	const childSessionFile = await waitForChildSessionFile(
+		host.cwd,
+		workflowDirectory,
+		receipt.agentId,
+	);
 	const childIdentity = SessionManager.open(childSessionFile)
 		.getEntries()
 		.find((entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity");
@@ -703,6 +711,40 @@ test("model loss during child preflight fails before Agent Identity", async () =
 	}
 });
 
+test("shutdown during child preparation prevents a post-snapshot Agent admission", async () => {
+	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	let shutdownPromise: Promise<void> | undefined;
+	let coordinator!: WorkflowCoordinator;
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) => {
+			shutdownPromise ??= coordinator.shutdown(async () => host.runtime.dispose());
+			return createAgentBoundExtension(() => coordinator.forAgent(agentId));
+		},
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+	});
+	const view = coordinator.forAgent(identity.agentId);
+	const input = { request: "This Agent must not join a Workflow already shutting down." };
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", input, { id: "spawn-during-shutdown" }),
+			{ stopReason: "toolUse" },
+		),
+	);
+
+	const receipt = await view.spawn("spawn-during-shutdown", input);
+	await shutdownPromise;
+
+	assert.deepEqual(receipt, {
+		disposition: "not_created",
+		failedStage: "identity_commit",
+	});
+	assert.deepEqual(view.children(), []);
+});
+
 test("confirmed post-Identity Run startup failure keeps a visible dormant child", async () => {
 	const harness = await createCoordinatorHarness({
 		beforeRunStart: () => "confirmed_failure",
@@ -717,6 +759,26 @@ test("confirmed post-Identity Run startup failure keeps a visible dormant child"
 	});
 
 	await harness.shutdown();
+});
+
+test("shutdown after Agent Identity keeps the durable child dormant", async () => {
+	let shutdownPromise: Promise<void> | undefined;
+	let harness!: Awaited<ReturnType<typeof createCoordinatorHarness>>;
+	harness = await createCoordinatorHarness({
+		beforeRunStart: () => {
+			shutdownPromise ??= harness.shutdown();
+		},
+	});
+
+	const receipt = await harness.spawn("spawn-identity-before-shutdown");
+	await shutdownPromise;
+
+	assert.equal(receipt.disposition, "created_unscheduled");
+	assert.equal(receipt.failedStage, "run_start");
+	assert.deepEqual(harness.view.children()[0]?.run, {
+		phase: "dormant",
+		retentionReasons: [],
+	});
 });
 
 test("Run startup invariant failures are not downgraded to availability receipts", async () => {
@@ -860,13 +922,18 @@ test("direct children remain in physical Agent Spawn call order", async () => {
 	await harness.shutdown();
 });
 
-async function waitForChildSessionFile(cwd: string, sessionDirectory: string): Promise<string> {
+async function waitForChildSessionFile(
+	cwd: string,
+	sessionDirectory: string,
+	agentId: string,
+): Promise<string> {
 	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		const sessions = await SessionManager.list(cwd, sessionDirectory);
-		if (sessions[0]) return sessions[0].path;
+		const child = sessions.find((session) => session.id === agentId);
+		if (child) return child.path;
 		await new Promise<void>((resolve) => setImmediate(resolve));
 	}
-	throw new Error("Child Pi session file was not created");
+	throw new Error(`Child Pi session ${agentId} was not created`);
 }
 
 async function waitForEntry(

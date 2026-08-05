@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import * as hostAi from "@earendil-works/pi-ai";
 import * as hostPi from "@earendil-works/pi-coding-agent";
+import * as hostTui from "@earendil-works/pi-tui";
+import * as hostTypebox from "typebox";
 
 import piAgentCoordination from "../src/index.ts";
 import {
 	assertHostModuleShape,
+	assertPiAiModuleShape,
+	assertTuiModuleShape,
+	assertTypeboxModuleShape,
 	IncompatiblePiHostError,
 } from "../src/pi-integration/host-shape.ts";
 import { installInteractiveHostBridge } from "../src/pi-integration/interactive-host-bridge.ts";
@@ -14,6 +21,27 @@ import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host
 type InteractivePrototype = {
 	bindCurrentSessionExtensions(): Promise<void>;
 };
+
+test("the package declares exactly the Pi host modules imported by production", async () => {
+	const manifest = JSON.parse(
+		await readFile(new URL("../package.json", import.meta.url), "utf8"),
+	) as {
+		dependencies?: Record<string, string>;
+		peerDependencies?: Record<string, string>;
+	};
+	const expectedHostPeers = {
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		typebox: "*",
+	};
+
+	assert.deepEqual(manifest.peerDependencies, expectedHostPeers);
+	for (const hostModule of Object.keys(expectedHostPeers)) {
+		assert.equal(manifest.dependencies?.[hostModule], undefined);
+	}
+});
 
 test("host preflight identifies a missing export without installing a patch", () => {
 	const fixture = {
@@ -50,6 +78,39 @@ test("host preflight identifies a malformed private seam by canonical name", () 
 		(error: unknown) =>
 			error instanceof IncompatiblePiHostError &&
 			error.memberName === "InteractiveMode.prototype.getUserInput",
+	);
+});
+
+test("host preflight validates every running-host TUI value used by presentation", () => {
+	const fixture = { ...hostTui, wrapTextWithAnsi: undefined };
+
+	assert.throws(
+		() => assertTuiModuleShape(fixture, hostPi.VERSION),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName === "PiTUI.wrapTextWithAnsi" &&
+			error.message.includes(`running Pi ${hostPi.VERSION}`),
+	);
+});
+
+test("host preflight validates running-host AI and schema values", () => {
+	assert.throws(
+		() => assertPiAiModuleShape(
+			{ ...hostAi, createAssistantMessageEventStream: undefined },
+			hostPi.VERSION,
+		),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName === "PiAI.createAssistantMessageEventStream",
+	);
+	assert.throws(
+		() => assertTypeboxModuleShape(
+			{ ...hostTypebox, Type: { ...hostTypebox.Type, Object: undefined } },
+			hostPi.VERSION,
+		),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName === "TypeBox.Type.Object",
 	);
 });
 
@@ -121,6 +182,33 @@ test("runtime capture identifies the coordinated settings override seam", async 
 			error.memberName === "AgentSessionRuntime.services.settingsManager.applyOverrides",
 	);
 	settings.applyOverrides = originalApplyOverrides;
+	await host.runtime.dispose();
+});
+
+test("runtime capture rejects transport incompatibility before Owner bootstrap", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	const settings = host.services.settingsManager as unknown as Record<PropertyKey, unknown>;
+	const originalGetTransport = settings.getTransport;
+	settings.getTransport = undefined;
+	host.runtime.setBeforeSessionInvalidate(() => undefined);
+
+	await assert.rejects(
+		() => bindTestOwnerHost(host, "tui"),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName === "AgentSessionRuntime.services.settingsManager.getTransport",
+	);
+	assert.equal(
+		host.session.sessionManager
+			.getEntries()
+			.some(
+				(entry) =>
+					entry.type === "custom" &&
+					entry.customType === "agent-coordination.identity",
+			),
+		false,
+	);
+	settings.getTransport = originalGetTransport;
 	await host.runtime.dispose();
 });
 

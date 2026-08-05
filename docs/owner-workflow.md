@@ -16,7 +16,7 @@ A successful Owner fork receives a fresh Pi session identity and appends one fre
 
 The new Owner identity also selects a new Workflow transcript directory. The fork therefore begins with no ordinary children or Moderators from the source Workflow. Source identities and Request identities cannot be observed, controlled, polled, retried, Answered, or cancelled from the fork. New children created in the fork belong only to the new Workflow.
 
-Fork replacement ends the source Workflow's transient hosted Runs without changing its transcripts. Reopening the source Owner reconstructs its verified source Workflow normally. A copied child or Moderator transcript prepared outside Pi's cancellable live fork path is not admitted as a Workflow Owner; participant admission still requires a matching bootstrap for its own Pi session identity.
+Owner `/new`, `/resume`, fork, and clone replacement exhaustively end the source Workflow's transient hosted Runs without changing its transcripts. A new or forked Owner starts a fresh Workflow; resuming an existing Owner reconstructs that session's verified Workflow. Reopening the source Owner reconstructs its verified source Workflow normally. A copied child or Moderator transcript prepared outside Pi's cancellable live fork path is not admitted as a Workflow Owner; participant admission still requires a matching bootstrap for its own Pi session identity.
 
 ## Coordination surface
 
@@ -31,6 +31,8 @@ After Owner Identity validation, the package binds the ordinary tools through a 
 
 These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer.
 
+Coordination roles are trusted protocol participants, not a security boundary. Role-scoped tools constrain the intended workflow and keep caller identity out of model-supplied arguments; they do not isolate mutually hostile code or users.
+
 See [Human Requests](human-requests.md) for the Question and Answer shapes, interaction keys, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and `/agents` selection.
 
 ## Activation modes
@@ -39,10 +41,18 @@ Coordination activates only when Pi reports interactive TUI mode with UI support
 
 ## Host compatibility
 
-Compatibility is determined by the running Pi host's integration shape. Before bootstrapping a Workflow, the package verifies the required runtime, interactive-mode, session, transcript, resource, extension, and disposal seams. A missing or malformed seam is reported by its canonical member name.
+Compatibility is determined jointly by the running Pi host's integration shape and native behavioral conformance. Before bootstrapping a Workflow, the package verifies the required runtime, interactive-mode, session, transcript, resource, extension, TUI, schema, and disposal seams from host-provided peer modules. A missing or malformed seam is reported by its canonical member name, and incompatible startup appends no Owner Identity or partial runtime.
+
+The conformance gate then exercises transcript ordering and branches, model-visible Delivery, sequential Human Questions, retained-session rebinding and input, viewport reconstruction, role-bound extensions, and coordinated disposal against the concrete installed Pi graph. Run it with `npm run test:conformance`; `npm test` remains the complete regression gate.
 
 Pi's version is diagnostic information, not an allowlist. Package builds use a pinned Pi development cohort only to make conformance tests reproducible; installed Pi packages are runtime peers supplied by the host.
 
+## Durable and volatile state
+
+Pi transcripts are the durable authority for Agent identity, authored Messages and Requests, committed Deliveries and Answers, and recovery evidence. Agent Templates and Workflow Policy are resolved from current trusted resources; policy reload publishes complete snapshots but does not write them to transcripts.
+
+Delivery scheduling, execution permits, Human Request surfaces and drafts, Operational Attention, exact Run handles, Holds, and native selected-session state are volatile and bounded where their owning feature specifies a limit. They are not replayed as durable work after process loss. Polling, explicit retry, and transcript-based cold recovery are the supported recovery paths.
+
 ## Shutdown
 
-Orderly Pi shutdown fences new spawn admission, restores native selection to the Owner, ends retained child Runs, moves the Owner Run to `ending`, and passes Owner disposal through one memoized native runtime path. Repeated or racing shutdown requests therefore dispose the Owner session exactly once. Abrupt process loss records no graceful-end claim.
+Orderly Pi shutdown fences spawn, Run-control, Human Request, Moderator, and delivery admission; closes pending Human and Operational Attention UI; and clears review timers and volatile scheduling. It restores native selection to the Owner, then exhaustively ends every retained ordinary child and Moderator before ending the Owner through one memoized native runtime path. Cleanup continues after individual failures and reports them together. Every selected or retained session is disposed exactly once, including during Owner `/new`, `/resume`, fork, and clone replacement. Abrupt process loss records no graceful-end claim.

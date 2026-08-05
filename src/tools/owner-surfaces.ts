@@ -5,6 +5,7 @@ import type {
 	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
 } from "../coordination/workflow-coordinator.ts";
+import type { RunControlReceipt } from "../protocol/run-control.ts";
 import {
 	MAX_AUTOMATIC_MODERATOR_ATTEMPTS,
 	type OperationalIncidentAttention,
@@ -13,6 +14,16 @@ import {
 	formatOperationalIncidentHeadline,
 	operationalIncidentRequestEvidence,
 } from "../presentation/operational-incident-surface.ts";
+import {
+	renderAgentControlCall,
+	renderAgentControlResult,
+	renderAgentObserveCall,
+	renderAgentObserveResult,
+	renderHumanRequestCall,
+	renderHumanRequestResult,
+	renderModeratorControlCall,
+	renderModeratorControlResult,
+} from "./coordination-renderers.ts";
 import {
 	renderAgentMessageCall,
 	renderAgentMessageResult,
@@ -303,6 +314,8 @@ function registerAgentSurfaces(
 			: "Observe authorized Agents and their bounded live Run state.",
 		executionMode: "sequential",
 		parameters: observeParameters,
+		renderCall: renderAgentObserveCall,
+		renderResult: renderAgentObserveResult,
 		async execute(_toolCallId, parameters) {
 			if (parameters.operation === "children") {
 				const children = resolveView().children(parameters.agentId);
@@ -319,7 +332,7 @@ function registerAgentSurfaces(
 			};
 		},
 	});
-	pi.registerTool<typeof controlParameters, unknown>({
+	pi.registerTool<typeof controlParameters, RunControlReceipt>({
 		name: "agent_control",
 		label: "Control Agent Run",
 		description:
@@ -329,6 +342,8 @@ function registerAgentSurfaces(
 			: "Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
 		executionMode: "sequential",
 		parameters: controlParameters,
+		renderCall: renderAgentControlCall,
+		renderResult: renderAgentControlResult,
 		async execute(toolCallId, parameters) {
 			const receipt = await resolveView().control(toolCallId, parameters);
 			return {
@@ -346,6 +361,8 @@ function registerAgentSurfaces(
 			"Use for decisions that require human select-one, select-many, or non-empty text input.",
 		executionMode: "sequential",
 		parameters: humanRequestParameters,
+		renderCall: renderHumanRequestCall,
+		renderResult: renderHumanRequestResult,
 		async execute(toolCallId, parameters, signal) {
 			const answer = await resolveView().askHuman(
 				toolCallId,
@@ -414,6 +431,8 @@ function registerAgentSurfaces(
 				"Renew an exact reviewed call deliberately, or record a Resolution and revalidate the original condition.",
 			executionMode: "sequential",
 			parameters: moderatorControlParameters,
+			renderCall: renderModeratorControlCall,
+			renderResult: renderModeratorControlResult,
 			async execute(toolCallId, parameters) {
 				const receipt = await moderatorView().moderatorControl(
 					toolCallId,

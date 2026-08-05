@@ -20,6 +20,7 @@ export function createAgentBoundExtension(
 ): ExtensionFactory {
 	return (pi) => {
 		pi.on("session_before_fork", () => ({ cancel: true }));
+		pi.on("session_before_switch", () => ({ cancel: true }));
 		registerOrdinaryAgentSurfaces(pi, resolveView);
 		registerAgentBoundBehavior(pi, resolveView);
 	};
@@ -30,6 +31,7 @@ export function createModeratorBoundExtension(
 ): ExtensionFactory {
 	return (pi) => {
 		pi.on("session_before_fork", () => ({ cancel: true }));
+		pi.on("session_before_switch", () => ({ cancel: true }));
 		registerModeratorAgentSurfaces(pi, resolveView);
 		registerAgentBoundBehavior(pi, resolveView);
 	};
@@ -40,15 +42,42 @@ export function bindHiddenOwnerAgentExtension(options: {
 	runtime: AgentSessionRuntime;
 	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
 	resolveView: () => OrdinaryAgentCoordinatorView;
-	prepareOwnerFork: () => Promise<void>;
+	prepareOwnerReplacement: () => Promise<void>;
 }): void {
 	const {
 		pi,
 		runtime,
 		bootstrapHandler,
 		resolveView,
-		prepareOwnerFork,
+		prepareOwnerReplacement,
 	} = options;
+	const ownerExtension = requireOwnerAgentExtension(runtime, bootstrapHandler);
+
+	// Pi loads package extensions publicly. Once this session is authenticated as
+	// Owner, the same extension becomes its hidden identity-bound ordinary surface.
+	ownerExtension.hidden = true;
+	registerOrdinaryAgentSurfaces(pi, resolveView);
+	registerAgentBoundBehavior(pi, resolveView);
+	pi.on("session_shutdown", (event) => {
+		if (
+			event.reason === "fork" ||
+			event.reason === "new" ||
+			event.reason === "resume"
+		) return prepareOwnerReplacement();
+	});
+}
+
+export function assertOwnerAgentExtensionBindingReady(options: {
+	runtime: AgentSessionRuntime;
+	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
+}): void {
+	requireOwnerAgentExtension(options.runtime, options.bootstrapHandler);
+}
+
+function requireOwnerAgentExtension(
+	runtime: AgentSessionRuntime,
+	bootstrapHandler: ExtensionHandler<SessionStartEvent>,
+) {
 	const matchingExtensions = runtime.services.resourceLoader
 		.getExtensions()
 		.extensions.filter((extension) =>
@@ -59,15 +88,7 @@ export function bindHiddenOwnerAgentExtension(options: {
 	if (matchingExtensions.length !== 1) {
 		throw new Error("Incompatible Pi host: cannot bind the Owner Agent extension");
 	}
-
-	// Pi loads package extensions publicly. Once this session is authenticated as
-	// Owner, the same extension becomes its hidden identity-bound ordinary surface.
-	matchingExtensions[0]!.hidden = true;
-	registerOrdinaryAgentSurfaces(pi, resolveView);
-	registerAgentBoundBehavior(pi, resolveView);
-	pi.on("session_shutdown", (event) => {
-		if (event.reason === "fork") return prepareOwnerFork();
-	});
+	return matchingExtensions[0]!;
 }
 
 function registerAgentBoundBehavior(

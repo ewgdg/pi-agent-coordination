@@ -327,22 +327,33 @@ export class WorkflowCoordinator {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
-			control: (toolCallId, input) =>
-				this.#runSupervisor.execute(agentId, toolCallId, input),
-			resumeFromHuman: (text, images) =>
-				this.#runSupervisor.resumeFromHuman(agentId, text, images),
+			control: (toolCallId, input) => {
+				this.#assertAdmissionOpen();
+				return this.#runSupervisor.execute(agentId, toolCallId, input);
+			},
+			resumeFromHuman: (text, images) => {
+				this.#assertAdmissionOpen();
+				return this.#runSupervisor.resumeFromHuman(agentId, text, images);
+			},
 			selectionRoster: () => this.#selectionRoster(),
-			selectForHuman: (targetAgentId) => this.#selectForHuman(targetAgentId),
-			askHuman: (toolCallId, input, signal) =>
-				this.#humanRequests.ask(agentId, toolCallId, input, signal),
+			selectForHuman: (targetAgentId) => {
+				this.#assertAdmissionOpen();
+				return this.#selectForHuman(targetAgentId);
+			},
+			askHuman: (toolCallId, input, signal) => {
+				this.#assertAdmissionOpen();
+				return this.#humanRequests.ask(agentId, toolCallId, input, signal);
+			},
 			guardHumanToolResult: (message) =>
 				this.#humanRequests.guardResultCommit(agentId, message),
 			reconcileHumanToolResults: () =>
 				this.#humanRequests.reconcileCommittedResults(agentId),
 			humanAttention: () => this.#humanRequests.attentionItems(agentId),
 			operationalAttention: () => this.#operationalIncidents.attentionItems(agentId),
-			focusHumanRequest: (requestId) =>
-				this.#humanRequests.focus(agentId, requestId),
+			focusHumanRequest: (requestId) => {
+				this.#assertAdmissionOpen();
+				return this.#humanRequests.focus(agentId, requestId);
+			},
 			reachSafeBoundary: async () => {
 				this.#operationalIncidents.reconcileCommittedToolResults(agentId);
 				await this.#messages.reachSafeBoundary(agentId);
@@ -366,6 +377,12 @@ export class WorkflowCoordinator {
 		this.#shuttingDown = true;
 		this.#shutdownPromise ??= this.#shutdown(disposeNativeRuntime);
 		return this.#shutdownPromise;
+	}
+
+	#assertAdmissionOpen(): void {
+		if (this.#shuttingDown) {
+			throw new Error("host_shutting_down: Workflow is shutting down");
+		}
 	}
 
 	#statusFor(callerAgentId: string, targetAgentId = callerAgentId): AgentStatus {
@@ -499,31 +516,58 @@ export class WorkflowCoordinator {
 	}
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
+		const cleanupErrors: unknown[] = [];
+		await collectCleanupFailure(
+			cleanupErrors,
+			() => this.#operationalIncidents.shutdown(),
+		);
 		if (
 			this.#humanSessionSelection &&
 			this.#humanSessionSelection.selectedAgentId() !== this.#ownerIdentity.agentId
 		) {
-			await this.#selectForHuman(this.#ownerIdentity.agentId);
+			await collectCleanupFailure(
+				cleanupErrors,
+				() => this.#selectForHuman(this.#ownerIdentity.agentId),
+			);
 		}
 		const children = [...this.#agents.values()].filter(
 			(record) => record.identity.agentId !== this.#ownerIdentity.agentId,
 		);
-		await Promise.all(
+		collectSettledCleanupFailures(cleanupErrors, await Promise.allSettled(
 			children.map((record) =>
-				record.host.lane.run(() => {
-					this.#messages.discardSchedulingInLane(record);
-					return record.host.discardAndEndInLane("shutdown");
-				}),
+				record.host.lane.run(() => this.#shutdownAgentInLane(record)),
+			),
+		));
+		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
+		await collectCleanupFailure(
+			cleanupErrors,
+			() => owner.host.lane.run(() =>
+				this.#shutdownAgentInLane(owner, disposeNativeRuntime)
 			),
 		);
-		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
-		await owner.host.lane.run(() => {
-			this.#messages.discardSchedulingInLane(owner);
-			return owner.host.discardAndEndInLane(
-				"shutdown",
-				async () => disposeNativeRuntime(),
-			);
-		});
+		if (cleanupErrors.length > 0) {
+			throw new AggregateError(cleanupErrors, "Workflow shutdown failed");
+		}
+	}
+
+	async #shutdownAgentInLane(
+		record: AgentRecord,
+		disposeRun?: () => Promise<void>,
+	): Promise<void> {
+		const cleanupErrors: unknown[] = [];
+		// Discard volatile delivery work before ending the host so no queued work
+		// can outlive the Run whose transcript would receive it.
+		await collectCleanupFailure(
+			cleanupErrors,
+			() => this.#messages.discardSchedulingInLane(record),
+		);
+		await collectCleanupFailure(
+			cleanupErrors,
+			() => record.host.discardAndEndInLane("shutdown", disposeRun),
+		);
+		if (cleanupErrors.length > 0) {
+			throw new AggregateError(cleanupErrors, "Agent shutdown failed");
+		}
 	}
 
 	#selectForHuman(agentId: string): Promise<"selected" | "dormant"> {
@@ -562,4 +606,32 @@ export class WorkflowCoordinator {
 			return "selected";
 		});
 	}
+}
+
+async function collectCleanupFailure(
+	errors: unknown[],
+	cleanup: () => unknown | Promise<unknown>,
+): Promise<void> {
+	try {
+		await cleanup();
+	} catch (error) {
+		appendCleanupFailure(errors, error);
+	}
+}
+
+function collectSettledCleanupFailures(
+	errors: unknown[],
+	results: readonly PromiseSettledResult<unknown>[],
+): void {
+	for (const result of results) {
+		if (result.status === "rejected") appendCleanupFailure(errors, result.reason);
+	}
+}
+
+function appendCleanupFailure(errors: unknown[], error: unknown): void {
+	if (error instanceof AggregateError) {
+		for (const nested of error.errors) appendCleanupFailure(errors, nested);
+		return;
+	}
+	errors.push(error);
 }

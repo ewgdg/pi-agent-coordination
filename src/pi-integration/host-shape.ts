@@ -33,6 +33,8 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"InteractiveMode",
 		"SessionManager",
 		"DefaultResourceLoader",
+		"ProjectTrustStore",
+		"SettingsManager",
 	] as const) {
 		requireFunction(host, constructorName, constructorName, version);
 	}
@@ -40,9 +42,11 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"createAgentSessionServices",
 		"createAgentSessionFromServices",
 		"defineTool",
+		"hasTrustRequiringProjectResources",
 	] as const) {
 		requireFunction(host, factoryName, factoryName, version);
 	}
+	requireMember(host, "CURRENT_SESSION_VERSION", "CURRENT_SESSION_VERSION", version);
 
 	const runtimePrototype = requirePrototype(host.AgentSessionRuntime, "AgentSessionRuntime", version);
 	for (const member of ["setRebindSession", "setBeforeSessionInvalidate", "dispose"] as const) {
@@ -111,6 +115,63 @@ export function assertHostModuleShape(hostValue: unknown): void {
 	}
 }
 
+export function assertTuiModuleShape(tuiValue: unknown, version?: unknown): void {
+	const tui = requireRecord(tuiValue, "PiTUI", version);
+	for (const member of [
+		"Text",
+		"matchesKey",
+		"visibleWidth",
+		"wrapTextWithAnsi",
+	] as const) {
+		requireFunction(tui, member, `PiTUI.${member}`, version);
+	}
+	const key = requireRecord(tui.Key, "PiTUI.Key", version);
+	for (const member of [
+		"backspace",
+		"down",
+		"enter",
+		"escape",
+		"left",
+		"right",
+		"space",
+		"tab",
+		"up",
+	] as const) {
+		requireMember(key, member, `PiTUI.Key.${member}`, version);
+	}
+	requireFunction(key, "shift", "PiTUI.Key.shift", version);
+}
+
+export function assertPiAiModuleShape(aiValue: unknown, version?: unknown): void {
+	const ai = requireRecord(aiValue, "PiAI", version);
+	requireFunction(
+		ai,
+		"createAssistantMessageEventStream",
+		"PiAI.createAssistantMessageEventStream",
+		version,
+	);
+}
+
+export function assertTypeboxModuleShape(
+	typeboxValue: unknown,
+	version?: unknown,
+): void {
+	const typebox = requireRecord(typeboxValue, "TypeBox", version);
+	const type = requireRecord(typebox.Type, "TypeBox.Type", version);
+	for (const member of [
+		"Array",
+		"Boolean",
+		"Integer",
+		"Literal",
+		"Object",
+		"Optional",
+		"String",
+		"Union",
+	] as const) {
+		requireFunction(type, member, `TypeBox.Type.${member}`, version);
+	}
+}
+
 export function assertRuntimeInstanceShape(
 	runtimeValue: unknown,
 	version?: unknown,
@@ -143,15 +204,9 @@ export function assertRuntimeInstanceShape(
 		"AgentSessionRuntime.services.modelRuntime.getModel",
 		version,
 	);
-	const settingsManager = requireRecord(
+	assertSettingsManagerShape(
 		services.settingsManager,
 		"AgentSessionRuntime.services.settingsManager",
-		version,
-	);
-	requireFunction(
-		settingsManager,
-		"applyOverrides",
-		"AgentSessionRuntime.services.settingsManager.applyOverrides",
 		version,
 	);
 	const resourceLoader = requireRecord(
@@ -229,16 +284,17 @@ export function assertAgentSessionShape(
 	requireFunction(session, "_applyExtensionBindings", "AgentSession._applyExtensionBindings", version);
 	requireFunction(session, "_runAgentPrompt", "AgentSession._runAgentPrompt", version);
 	requireRecord(session.extensionRunner, "AgentSession.extensionRunner", version);
-	requireRecord(session.sessionManager, "AgentSession.sessionManager", version);
-	const settingsManager = requireRecord(
-		session.settingsManager,
-		"AgentSession.settingsManager",
+	const sessionManager = requireRecord(
+		session.sessionManager,
+		"AgentSession.sessionManager",
 		version,
 	);
-	requireFunction(
-		settingsManager,
-		"applyOverrides",
-		"AgentSession.settingsManager.applyOverrides",
+	if (typeof sessionManager.flushed !== "boolean") {
+		throw new IncompatiblePiHostError("AgentSession.sessionManager.flushed", version);
+	}
+	assertSettingsManagerShape(
+		session.settingsManager,
+		"AgentSession.settingsManager",
 		version,
 	);
 	const agent = requireRecord(session.agent, "AgentSession.agent", version);
@@ -248,6 +304,24 @@ export function assertAgentSessionShape(
 		"AgentSession.agent.streamFunction",
 		version,
 	);
+	requireMember(agent, "transport", "AgentSession.agent.transport", version);
+}
+
+function assertSettingsManagerShape(
+	value: unknown,
+	name: string,
+	version?: unknown,
+): void {
+	const settingsManager = requireRecord(value, name, version);
+	for (const member of [
+		"applyOverrides",
+		"getDefaultProjectTrust",
+		"getProviderRetrySettings",
+		"getTransport",
+		"isProjectTrusted",
+	] as const) {
+		requireFunction(settingsManager, member, `${name}.${member}`, version);
+	}
 }
 
 function requirePrototype(value: unknown, name: string, version?: unknown): UnknownRecord {

@@ -159,6 +159,9 @@ export class DefaultChildSpawner {
 		} catch {
 			return { disposition: "not_created", failedStage: "identity_commit" };
 		}
+		if (this.#isShuttingDown()) {
+			return { disposition: "not_created", failedStage: "identity_commit" };
+		}
 
 		const identity: ChildAgentIdentity = {
 			agentId,
@@ -210,7 +213,12 @@ export class DefaultChildSpawner {
 			if (this.#boundaryHooks.beforeRunStart?.() === "confirmed_failure") {
 				throw new Error("Confirmed Run startup failure");
 			}
-			await child.host.lane.run(() => child.host.startInLane(["pending_delivery"]));
+			await child.host.lane.run(() => {
+				if (this.#isShuttingDown()) {
+					throw new Error("host_shutting_down: Workflow is shutting down");
+				}
+				return child.host.startInLane(["pending_delivery"]);
+			});
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
 			return {

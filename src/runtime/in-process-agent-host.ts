@@ -468,26 +468,39 @@ export class InProcessAgentHost {
 			this.#clearRunScopedState();
 			return;
 		}
+		const cleanupErrors: unknown[] = [];
+		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
+			try {
+				await cleanup();
+			} catch (error) {
+				cleanupErrors.push(error);
+			}
+		};
 		this.#ending = true;
 		this.#notifyStateChanged();
 		this.#runFenceHandler?.(run.handle);
-		run.unsubscribe();
 		try {
-			run.session.clearQueue();
+			await attemptCleanup(() => run.unsubscribe());
+			await attemptCleanup(() => run.session.clearQueue());
 			if (disposeRun) {
-				await disposeRun(run.session);
+				await attemptCleanup(() => disposeRun(run.session));
 			} else {
-				await run.session.abort();
-				await run.session.waitForIdle();
-				run.session.dispose();
+				await attemptCleanup(() => run.session.abort());
+				await attemptCleanup(() => run.session.waitForIdle());
+				await attemptCleanup(() => run.session.dispose());
 			}
-			await Promise.all([...this.#trackedOperations]);
+			await attemptCleanup(() => Promise.all([...this.#trackedOperations]).then(
+				() => undefined,
+			));
 		} finally {
 			this.#run = undefined;
 			this.#clearRunScopedState();
 			this.#ending = false;
 			this.#notifyStateChanged();
 			this.#notifyEnded(run.handle, cause);
+		}
+		if (cleanupErrors.length > 0) {
+			throw new AggregateError(cleanupErrors, "Agent Run cleanup failed");
 		}
 	}
 

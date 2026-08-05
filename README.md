@@ -13,4 +13,8 @@ pi
 
 Print, JSON, and RPC modes do not activate coordination.
 
+Pi supplies the package's Pi peer modules. Compatibility is defined jointly by a fail-fast structural gate against the running host module world and the native behavioral conformance suite; the Pi version is diagnostic only. Maintainers can run the focused gate with `npm run test:conformance`, while `npm test` remains the complete regression suite.
+
+Coordination is a trust-based protocol, not a security boundary. Owners, Spawners, ordinary Agents, and Moderators are trusted participants acting through role-scoped tools. Pi transcripts are the durable authority for identity, Messages, Requests, Deliveries, and committed results. Scheduling queues, Holds, live Run state, UI attention, and selected-session state are volatile: orderly shutdown closes them, while abrupt process loss can discard them without claiming durable completion.
+
 See [Owner Workflow](docs/owner-workflow.md) for activation and compatibility behavior, [Operational Incident moderation](docs/operational-incident-moderation.md) for trigger detection, bounded handling, Moderator authority, Resolution, and recovery, [Cold host recovery](docs/cold-host-recovery.md) for transcript discovery, quarantine, dormant rosters, and residual Requests, [Workflow Policy](docs/workflow-policy.md) for reloadable execution, delivery, and review limits, [Agent spawning](docs/agent-spawning.md) for child creation and receipt semantics, [Agent messaging](docs/agent-messaging.md) for delivery modes and Agent Requests, [Human Requests](docs/human-requests.md) for structured Questions and native interaction, and [Run supervision](docs/run-supervision.md) for observation, interruption, resumption, termination, and session selection.
