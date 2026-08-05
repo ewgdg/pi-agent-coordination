@@ -11,7 +11,8 @@ On later activation, the package validates the existing current-scope Owner Iden
 After Owner Identity validation, the package binds the ordinary tools through a hidden extension closed over that Agent identity. Caller identity and role configuration are never model-supplied tool arguments.
 
 - `agent_spawn` creates one fresh default child and delivers its initial Creation Request.
-- `agent_observe` returns an authorized Agent's durable identity, current semantic Run state, or direct children.
+- `agent_message` sends Messages, creates correlated Requests, Answers, retrieves, and cancels.
+- `agent_observe` returns an authorized Agent's durable identity, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
 - `/agents` presents the current Agent and its direct children in stable creation order.
 
 These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer.

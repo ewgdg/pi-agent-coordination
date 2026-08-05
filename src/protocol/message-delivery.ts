@@ -28,6 +28,20 @@ export type ModelVisibleMessage =
 		requestId: string;
 		fromAgentId: string;
 		question: string;
+	}>
+	| Readonly<{
+		kind: "answer";
+		answerId: string;
+		requestId: string;
+		fromAgentId: string;
+		answer: string;
+	}>
+	| Readonly<{
+		kind: "request_cancellation";
+		cancellationId: string;
+		requestId: string;
+		fromAgentId: string;
+		reason: string;
 	}>;
 
 export type MessageDeliveryItem = Readonly<{
@@ -230,6 +244,50 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 			requestId: request.requestId,
 			fromAgentId: request.fromAgentId,
 			question: request.question,
+		};
+	}
+	if (value.kind === "answer") {
+		const answer = requireExactRecord(
+			value,
+			["kind", "answerId", "requestId", "fromAgentId", "answer"],
+			"Message Delivery projection",
+		);
+		if (
+			!isProtocolString(answer.answerId) ||
+			!isProtocolString(answer.requestId) ||
+			!isProtocolString(answer.fromAgentId) ||
+			!isProtocolString(answer.answer)
+		) {
+			throw new ProtocolInvariantError("Message Delivery projection is invalid");
+		}
+		return {
+			kind: "answer",
+			answerId: answer.answerId,
+			requestId: answer.requestId,
+			fromAgentId: answer.fromAgentId,
+			answer: answer.answer,
+		};
+	}
+	if (value.kind === "request_cancellation") {
+		const cancellation = requireExactRecord(
+			value,
+			["kind", "cancellationId", "requestId", "fromAgentId", "reason"],
+			"Message Delivery projection",
+		);
+		if (
+			!isProtocolString(cancellation.cancellationId) ||
+			!isProtocolString(cancellation.requestId) ||
+			!isProtocolString(cancellation.fromAgentId) ||
+			!isProtocolString(cancellation.reason)
+		) {
+			throw new ProtocolInvariantError("Message Delivery projection is invalid");
+		}
+		return {
+			kind: "request_cancellation",
+			cancellationId: cancellation.cancellationId,
+			requestId: cancellation.requestId,
+			fromAgentId: cancellation.fromAgentId,
+			reason: cancellation.reason,
 		};
 	}
 	throw new ProtocolInvariantError("Message Delivery projection has an invalid shape");

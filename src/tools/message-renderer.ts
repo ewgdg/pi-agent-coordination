@@ -26,6 +26,24 @@ export function renderAgentMessageCall(
 		text += theme.fg("dim", ` · ${preview(args.content)}`);
 		return new Text(text, 0, 0);
 	}
+	if (args.operation === "request") {
+		text += theme.fg("accent", args.targetAgentId);
+		if (args.deliveryMode === "steer") {
+			text += theme.fg("warning", " · steer");
+		}
+		text += theme.fg("dim", ` · ${preview(args.question)}`);
+		return new Text(text, 0, 0);
+	}
+	if (args.operation === "answer") {
+		text += theme.fg("accent", "answer");
+		text += theme.fg("dim", ` · ${args.requestId} · ${preview(args.answer)}`);
+		return new Text(text, 0, 0);
+	}
+	if (args.operation === "cancel") {
+		text += theme.fg("accent", "cancel");
+		text += theme.fg("dim", ` · ${args.requestId} · ${preview(args.reason)}`);
+		return new Text(text, 0, 0);
+	}
 	text += theme.fg("accent", args.operation);
 	text += theme.fg("dim", ` · ${args.messageId}`);
 	return new Text(text, 0, 0);
@@ -45,6 +63,15 @@ export function renderAgentMessageResult(
 		: receipt.disposition;
 	let text = theme.fg(dispositionColor(disposition), disposition);
 	text += theme.fg("dim", ` · ${receipt.messageId}`);
+	if (
+		"disposition" in receipt &&
+		receipt.disposition === "answer_delivered"
+	) {
+		text += theme.fg(
+			"dim",
+			` · ${receipt.answerId} · ${preview(receipt.answer)}`,
+		);
+	}
 	if ("rejectionReason" in receipt) {
 		text += theme.fg("error", ` · ${receipt.rejectionReason}`);
 	} else if ("reason" in receipt) {
@@ -77,6 +104,11 @@ function preview(content: string): string {
 function dispositionColor(disposition: string): ThemeColor {
 	switch (disposition) {
 		case "delivered":
+		case "answer_delivered":
+		case "answer_already_delivered":
+		case "request_delivered":
+		case "already_answered":
+		case "already_cancelled":
 			return "success";
 		case "rejected":
 			return "error";

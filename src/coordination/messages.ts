@@ -7,15 +7,30 @@ import {
 	type ScheduleReleaseEvaluation,
 	type SteerFreezeHandler,
 } from "./message-delivery-scheduler.ts";
+import type {
+	AgentAnswerReceipt,
+	AgentMessagePollReceipt,
+	AgentMessageReceipt,
+	AgentMessageRetryReceipt,
+	AgentMessageSendReceipt,
+	AgentRequestReceipt,
+	AgentRequestRetryReceipt,
+	RequestCancellationReceipt,
+} from "./message-receipts.ts";
+import { RequestEvidence } from "./request-evidence.ts";
 import {
 	createMessageDeliveryItem,
-	findAuthoredMessage,
+	inspectAnswerDelivery,
 	inspectCanonicalMessage,
 	inspectMessageDelivery,
+	resolveCommittedAnswer,
+	resolveCommittedCancellation,
 	resolveCommittedMessage,
 	resolveCommittedAgentMessageInput,
 	sameAgentMessageInput,
 	type AgentMessageInput,
+	type AnswerInput,
+	type CancellationInput,
 	type Message,
 	type MessagePollInput,
 	type MessageRetryInput,
@@ -27,73 +42,23 @@ import {
 import type { ToolCallPointer } from "../protocol/identities.ts";
 
 export type { AgentMessageInput } from "../protocol/message.ts";
-
-export type AgentMessageSendReceipt =
-	| Readonly<{
-		messageId: string;
-		delivery: "pending";
-	}>
-	| Readonly<{
-		messageId: string;
-		delivery: "indeterminate";
-	}>
-	| Readonly<{
-		messageId: string;
-		delivery: "rejected";
-		rejectionReason:
-			| "target_unavailable"
-			| "host_shutting_down"
-			| "capacity_exhausted";
-	}>;
-
-export type AgentMessagePollReceipt =
-	| Readonly<{
-		disposition: "delivered";
-		messageId: string;
-		deliveryEvidence: Readonly<{ agentId: string; entryId: string }>;
-	}>
-	| Readonly<{
-		disposition: "not_observed";
-		messageId: string;
-		inspectedThrough: Readonly<{ agentId: string; entryId: string }>;
-	}>
-	| Readonly<{
-		disposition: "indeterminate";
-		messageId: string;
-		reason: "inspection_incomplete";
-	}>;
-
-export type AgentMessageRetryReceipt =
-	| Readonly<{
-		disposition: "delivered";
-		messageId: string;
-		deliveryEvidence: Readonly<{ agentId: string; entryId: string }>;
-	}>
-	| Readonly<{
-		disposition: "pending";
-		messageId: string;
-	}>
-	| Readonly<{
-		disposition: "rejected";
-		messageId: string;
-		rejectionReason:
-			| "target_unavailable"
-			| "host_shutting_down"
-			| "evidence_unavailable"
-			| "capacity_exhausted";
-	}>
-	| Readonly<{
-		disposition: "indeterminate";
-		messageId: string;
-		reason: "confirmation_lost" | "inspection_incomplete";
-	}>;
-
-export type AgentMessageReceipt =
-	| AgentMessageSendReceipt
-	| AgentMessagePollReceipt
-	| AgentMessageRetryReceipt;
+export type {
+	AgentAnswerReceipt,
+	AgentMessagePollReceipt,
+	AgentMessageReceipt,
+	AgentMessageRetryReceipt,
+	AgentMessageSendReceipt,
+	AgentRequestReceipt,
+	AgentRequestRetryReceipt,
+	RequestCancellationReceipt,
+} from "./message-receipts.ts";
 
 export type MessageBoundaryHooks = Readonly<{
+	beforeDeliveryAdmission?(context: Readonly<{
+		recipientAgentId: string;
+		messageId: string;
+		operation: "send" | "retry" | "answer" | "cancel";
+	}>): void | "confirmed_failure";
 	beforeRecipientInspection?(context: Readonly<{
 		recipientAgentId: string;
 		messageId: string;
@@ -103,7 +68,7 @@ export type MessageBoundaryHooks = Readonly<{
 	afterDeliveryAdmission?(context: Readonly<{
 		recipientAgentId: string;
 		messageId: string;
-		operation: "send" | "retry";
+		operation: "send" | "retry" | "answer" | "cancel";
 	}>): void | "confirmation_lost";
 	afterSteerFreeze?: SteerFreezeHandler;
 	scheduleReleaseEvaluation?: ScheduleReleaseEvaluation;
@@ -114,6 +79,7 @@ export class MessageCoordinator {
 	readonly #isShuttingDown: () => boolean;
 	readonly #boundaryHooks: MessageBoundaryHooks;
 	readonly #deliveryScheduler: MessageDeliveryScheduler;
+	readonly #requestEvidence: RequestEvidence;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
@@ -124,6 +90,7 @@ export class MessageCoordinator {
 		this.#agents = options.agents;
 		this.#isShuttingDown = options.isShuttingDown;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
+		this.#requestEvidence = new RequestEvidence(this.#agents);
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
@@ -134,8 +101,8 @@ export class MessageCoordinator {
 	async send(
 		callerAgentId: string,
 		toolCallId: string,
-		input: Extract<AgentMessageInput, { operation: "send" }>,
-	): Promise<AgentMessageSendReceipt> {
+		input: Extract<AgentMessageInput, { operation: "send" | "request" }>,
+	): Promise<AgentMessageSendReceipt | AgentRequestReceipt> {
 		const sender = this.#requireAgent(callerAgentId);
 		const senderSession = requireLiveSession(sender);
 		const message = resolveCommittedMessage({
@@ -149,11 +116,30 @@ export class MessageCoordinator {
 		if (recipient.identity.workflowId !== message.workflowId) {
 			throw new Error("wrong_workflow: Message recipient is outside the sender Workflow");
 		}
+		const identity = message.kind === "request"
+			? { messageId: message.messageId, requestId: message.messageId }
+			: { messageId: message.messageId };
 		if (this.#isShuttingDown()) {
 			return {
-				messageId: message.messageId,
+				...identity,
 				delivery: "rejected",
 				rejectionReason: "host_shutting_down",
+			};
+		}
+		if (message.kind === "request") {
+			sender.host.addRetentionReason("awaiting_answer", message.messageId);
+		}
+		if (
+			this.#boundaryHooks.beforeDeliveryAdmission?.({
+				recipientAgentId: recipient.identity.agentId,
+				messageId: message.messageId,
+				operation: "send",
+			}) === "confirmed_failure"
+		) {
+			return {
+				...identity,
+				delivery: "rejected",
+				rejectionReason: "target_unavailable",
 			};
 		}
 		const delivery = this.#scheduleGeneralMessage(recipient, message);
@@ -164,11 +150,11 @@ export class MessageCoordinator {
 				messageId: message.messageId,
 				operation: "send",
 			}) === "confirmation_lost"
-				? { messageId: message.messageId, delivery: "indeterminate" }
-				: { messageId: message.messageId, delivery: "pending" };
+				? { ...identity, delivery: "indeterminate" }
+				: { ...identity, delivery: "pending" };
 		}
 		return {
-			messageId: message.messageId,
+			...identity,
 			delivery: "rejected",
 			rejectionReason: admission,
 		};
@@ -200,7 +186,16 @@ export class MessageCoordinator {
 					question,
 					source,
 				}).deliveryEvidence,
-			afterCommit: () => recipient.host.addRetentionReason("answer_owed"),
+			isSuppressed: () => this.#isCancellationDelivered(requestId, recipient),
+			afterCommit: () => {
+				const request = this.#requestEvidence.requireRequest(requestId);
+				if (
+					this.#requestEvidence.findAnswer(request) === undefined &&
+					!this.#isCancellationDelivered(requestId, recipient)
+				) {
+					recipient.host.addRetentionReason("answer_owed", requestId);
+				}
+			},
 		};
 		return (await this.#deliveryScheduler.admit(recipient, delivery)) === "pending"
 			? "pending"
@@ -211,9 +206,11 @@ export class MessageCoordinator {
 		return this.#deliveryScheduler.requestRelease(record);
 	}
 
-	reachSafeBoundary(agentId: string): Promise<void> {
+	async reachSafeBoundary(agentId: string): Promise<void> {
 		if (this.#isShuttingDown()) return Promise.resolve();
-		return this.#deliveryScheduler.reachSafeBoundary(this.#requireAgent(agentId));
+		const record = this.#requireAgent(agentId);
+		await record.host.lane.run(() => this.#reconcileAnswerDeliveries(record));
+		return this.#deliveryScheduler.reachSafeBoundary(record);
 	}
 
 	discardSchedulingInLane(record: AgentRecord): void {
@@ -234,20 +231,256 @@ export class MessageCoordinator {
 		if (!sameAgentMessageInput(committedInput, providedInput)) {
 			throw new Error("invariant_violation: executed Agent Message input differs from its source");
 		}
-		if (committedInput.operation === "send") {
+		if (committedInput.operation === "send" || committedInput.operation === "request") {
 			return this.send(callerAgentId, toolCallId, committedInput);
+		}
+		if (committedInput.operation === "answer") {
+			return this.#answer(caller, toolCallId, committedInput);
+		}
+		if (committedInput.operation === "cancel") {
+			return this.#cancel(caller, toolCallId, committedInput);
 		}
 		return committedInput.operation === "poll"
 			? this.#poll(caller, committedInput)
 			: this.#retry(caller, committedInput);
 	}
 
+	async #answer(
+		caller: AgentRecord,
+		toolCallId: string,
+		input: AnswerInput,
+	): Promise<AgentAnswerReceipt> {
+		const admitted = await caller.host.lane.run(() => {
+			const request = this.#requestEvidence.requireRequest(input.requestId);
+			if (request.targetAgentId !== caller.identity.agentId) {
+				throw new Error(
+					`wrong_participant: Agent ${caller.identity.agentId} is not the responder for Request ${request.messageId}`,
+				);
+			}
+			const requester = this.#requireAgent(request.fromAgentId);
+			const delivery = inspectMessageDelivery({
+				recipientAgentId: caller.identity.agentId,
+				sessionManager: caller.host.sessionManager,
+				message: request,
+			});
+			const canonical = inspectCanonicalMessage({
+				message: request,
+				authorSessionManager: requester.host.sessionManager,
+				deliveryEvidence: delivery.deliveryEvidence,
+			});
+			if (canonical.state !== "canonical" || !delivery.deliveryEvidence) {
+				throw new Error(
+					`invalid_input: Request ${request.messageId} has not been delivered to its responder`,
+				);
+			}
+			const existing = this.#requestEvidence.findAnswer(request);
+			if (existing) {
+				return { disposition: "existing", request, requester, answer: existing } as const;
+			}
+			const cancellation = this.#requestEvidence.findCancellation(request);
+			if (
+				cancellation &&
+				inspectMessageDelivery({
+					recipientAgentId: caller.identity.agentId,
+					sessionManager: caller.host.sessionManager,
+					message: cancellation,
+				}).deliveryEvidence
+			) {
+				return {
+					disposition: "cancelled",
+					request,
+					requester,
+					cancellation,
+				} as const;
+			}
+			const answer = resolveCommittedAnswer({
+				responderAgentId: caller.identity.agentId,
+				sessionManager: requireLiveSession(caller).sessionManager,
+				toolCallId,
+				providedInput: input,
+				request,
+			});
+			this.#requestEvidence.rememberAdmittedAnswer(answer);
+			caller.host.removeRetentionReason("answer_owed", request.messageId);
+			return { disposition: "admitted", request, requester, answer } as const;
+		});
+		if (admitted.disposition === "existing") {
+			return {
+				messageId: admitted.answer.messageId,
+				requestId: admitted.request.messageId,
+				answerId: admitted.answer.messageId,
+				disposition: "already_answered",
+			};
+		}
+		if (admitted.disposition === "cancelled") {
+			return {
+				messageId: admitted.cancellation.messageId,
+				requestId: admitted.request.messageId,
+				cancellationId: admitted.cancellation.messageId,
+				disposition: "already_cancelled",
+			};
+		}
+		const { answer, request, requester } = admitted;
+		if (this.#isShuttingDown()) {
+			return {
+				messageId: answer.messageId,
+				requestId: request.messageId,
+				delivery: "rejected",
+				rejectionReason: "host_shutting_down",
+			};
+		}
+		if (
+			this.#boundaryHooks.beforeDeliveryAdmission?.({
+				recipientAgentId: requester.identity.agentId,
+				messageId: answer.messageId,
+				operation: "answer",
+			}) === "confirmed_failure"
+		) {
+			return {
+				messageId: answer.messageId,
+				requestId: request.messageId,
+				delivery: "rejected",
+				rejectionReason: "target_unavailable",
+			};
+		}
+		const admission = await this.#deliveryScheduler.admit(
+			requester,
+			this.#scheduleGeneralMessage(requester, answer),
+		);
+		if (admission === "pending") {
+			return this.#boundaryHooks.afterDeliveryAdmission?.({
+				recipientAgentId: requester.identity.agentId,
+				messageId: answer.messageId,
+				operation: "answer",
+			}) === "confirmation_lost"
+				? {
+					messageId: answer.messageId,
+					requestId: request.messageId,
+					delivery: "indeterminate",
+				}
+				: {
+					messageId: answer.messageId,
+					requestId: request.messageId,
+					delivery: "pending",
+				};
+		}
+		return {
+			messageId: answer.messageId,
+			requestId: request.messageId,
+			delivery: "rejected",
+			rejectionReason: admission,
+		};
+	}
+
+	async #cancel(
+		caller: AgentRecord,
+		toolCallId: string,
+		input: CancellationInput,
+	): Promise<RequestCancellationReceipt> {
+		const admitted = await caller.host.lane.run(() => {
+			const request = this.#requestEvidence.requireRequest(input.requestId);
+			if (request.fromAgentId !== caller.identity.agentId) {
+				throw new Error(
+					`wrong_participant: Agent ${caller.identity.agentId} is not the requester for Request ${request.messageId}`,
+				);
+			}
+			const responder = this.#requireAgent(request.targetAgentId);
+			const answer = this.#requestEvidence.findAnswer(request);
+			if (answer) {
+				const delivery = inspectAnswerDelivery({
+					requesterAgentId: caller.identity.agentId,
+					sessionManager: caller.host.sessionManager,
+					answer,
+				});
+				if (delivery.deliveryEvidence) {
+					return { disposition: "answered", request, responder, answer } as const;
+				}
+			}
+			const existing = this.#requestEvidence.findCancellation(request);
+			if (existing) {
+				return { disposition: "existing", request, responder, cancellation: existing } as const;
+			}
+			const cancellation = resolveCommittedCancellation({
+				requesterAgentId: caller.identity.agentId,
+				sessionManager: requireLiveSession(caller).sessionManager,
+				toolCallId,
+				providedInput: input,
+				request,
+			});
+			this.#requestEvidence.rememberAdmittedCancellation(cancellation);
+			caller.host.removeRetentionReason("awaiting_answer", request.messageId);
+			return { disposition: "admitted", request, responder, cancellation } as const;
+		});
+		if (admitted.disposition === "answered") {
+			return {
+				messageId: admitted.answer.messageId,
+				answerId: admitted.answer.messageId,
+				requestId: admitted.request.messageId,
+				disposition: "already_answered",
+			};
+		}
+		if (admitted.disposition === "existing") {
+			return {
+				messageId: admitted.cancellation.messageId,
+				cancellationId: admitted.cancellation.messageId,
+				requestId: admitted.request.messageId,
+				disposition: "already_cancelled",
+			};
+		}
+		const { cancellation, request, responder } = admitted;
+		const identity = {
+			messageId: cancellation.messageId,
+			cancellationId: cancellation.messageId,
+			requestId: request.messageId,
+		};
+		if (this.#isShuttingDown()) {
+			return {
+				...identity,
+				delivery: "rejected",
+				rejectionReason: "host_shutting_down",
+			};
+		}
+		if (
+			this.#boundaryHooks.beforeDeliveryAdmission?.({
+				recipientAgentId: responder.identity.agentId,
+				messageId: cancellation.messageId,
+				operation: "cancel",
+			}) === "confirmed_failure"
+		) {
+			return {
+				...identity,
+				delivery: "rejected",
+				rejectionReason: "target_unavailable",
+			};
+		}
+		const admission = await this.#deliveryScheduler.admit(
+			responder,
+			this.#scheduleGeneralMessage(responder, cancellation),
+		);
+		if (admission === "pending") {
+			return this.#boundaryHooks.afterDeliveryAdmission?.({
+				recipientAgentId: responder.identity.agentId,
+				messageId: cancellation.messageId,
+				operation: "cancel",
+			}) === "confirmation_lost"
+				? { ...identity, delivery: "indeterminate" }
+				: { ...identity, delivery: "pending" };
+		}
+		return { ...identity, delivery: "rejected", rejectionReason: admission };
+	}
+
 	async #retry(
 		caller: AgentRecord,
 		input: MessageRetryInput,
-	): Promise<AgentMessageRetryReceipt> {
+	): Promise<AgentMessageRetryReceipt | AgentRequestRetryReceipt> {
 		const authorSessionManager = requireLiveSession(caller).sessionManager;
-		const message = this.#requireCallerAuthoredMessage(caller, input.messageId);
+		const message = this.#requestEvidence.requireCallerAuthoredMessage(
+			caller,
+			input.messageId,
+		);
+		if (message.kind === "request") {
+			return this.#retryRequest(caller, message);
+		}
 		const recipient = this.#requireAgent(message.targetAgentId);
 		return recipient.host.lane.run(async () => {
 			if (
@@ -323,12 +556,143 @@ export class MessageCoordinator {
 		});
 	}
 
+	async #retryRequest(
+		requester: AgentRecord,
+		request: Extract<Message, { kind: "request" }>,
+	): Promise<AgentMessageRetryReceipt | AgentRequestRetryReceipt> {
+		const responder = this.#requireAgent(request.targetAgentId);
+		if (this.#requestEvidence.findCancellation(request)) {
+			return {
+				disposition: "rejected",
+				messageId: request.messageId,
+				rejectionReason: "policy_rejected",
+			};
+		}
+		return responder.host.lane.run(async () => {
+			if (
+				this.#boundaryHooks.beforeRecipientInspection?.({
+					recipientAgentId: responder.identity.agentId,
+					messageId: request.messageId,
+					operation: "retry",
+					sessionManager: responder.host.sessionManager,
+				}) === "inspection_incomplete"
+			) {
+				return {
+					disposition: "rejected",
+					messageId: request.messageId,
+					rejectionReason: "evidence_unavailable",
+				};
+			}
+			const requestDelivery = inspectMessageDelivery({
+				recipientAgentId: responder.identity.agentId,
+				sessionManager: responder.host.sessionManager,
+				message: request,
+			});
+			const canonicalRequest = inspectCanonicalMessage({
+				message: request,
+				authorSessionManager: requester.host.sessionManager,
+				deliveryEvidence: requestDelivery.deliveryEvidence,
+			});
+			if (canonicalRequest.state === "not_created") {
+				throw new Error(`unknown_identity: Request ${request.messageId} was not created`);
+			}
+			if (canonicalRequest.state === "indeterminate") {
+				return {
+					disposition: "indeterminate",
+					messageId: request.messageId,
+					reason: "inspection_incomplete",
+				};
+			}
+			const answer = this.#requestEvidence.findAnswer(request);
+			if (answer) {
+				const answerDelivery = inspectAnswerDelivery({
+					requesterAgentId: requester.identity.agentId,
+					sessionManager: requester.host.sessionManager,
+					answer,
+				});
+				const canonicalAnswer = inspectCanonicalMessage({
+					message: answer,
+					authorSessionManager: responder.host.sessionManager,
+					deliveryEvidence: answerDelivery.deliveryEvidence,
+				});
+				if (canonicalAnswer.state !== "canonical") {
+					return {
+						disposition: "indeterminate",
+						messageId: request.messageId,
+						reason: "inspection_incomplete",
+					};
+				}
+				return answerDelivery.deliveryEvidence
+					? {
+						disposition: "answer_already_delivered",
+						messageId: request.messageId,
+						requestId: request.messageId,
+						answerId: answer.messageId,
+						deliveryEvidence: answerDelivery.deliveryEvidence,
+					}
+					: {
+						disposition: "answer_delivered",
+						messageId: request.messageId,
+						requestId: request.messageId,
+						answerId: answer.messageId,
+						fromAgentId: answer.fromAgentId,
+						answer: answer.answer,
+						answerSource: answer.source,
+					};
+			}
+			if (requestDelivery.deliveryEvidence) {
+				return {
+					disposition: "request_delivered",
+					messageId: request.messageId,
+					requestId: request.messageId,
+					deliveryEvidence: requestDelivery.deliveryEvidence,
+				};
+			}
+			if (this.#isShuttingDown()) {
+				return {
+					disposition: "rejected",
+					messageId: request.messageId,
+					rejectionReason: "host_shutting_down",
+				};
+			}
+			const admission = await this.#deliveryScheduler.admitInLane(
+				responder,
+				this.#scheduleGeneralMessage(responder, request),
+			);
+			if (admission === "pending") {
+				return this.#boundaryHooks.afterDeliveryAdmission?.({
+					recipientAgentId: responder.identity.agentId,
+					messageId: request.messageId,
+					operation: "retry",
+				}) === "confirmation_lost"
+					? {
+						disposition: "indeterminate",
+						messageId: request.messageId,
+						reason: "confirmation_lost",
+					}
+					: {
+						disposition: "request_pending",
+						messageId: request.messageId,
+						requestId: request.messageId,
+					};
+			}
+			return {
+				disposition: "rejected",
+				messageId: request.messageId,
+				rejectionReason: admission,
+			};
+		});
+	}
+
 	async #poll(
 		caller: AgentRecord,
 		input: MessagePollInput,
 	): Promise<AgentMessagePollReceipt> {
 		const authorSessionManager = requireLiveSession(caller).sessionManager;
-		const message = this.#requireCallerAuthoredMessage(caller, input.messageId);
+		const message = this.#requestEvidence.requireCallerAuthoredMessage(
+			caller,
+			input.messageId,
+		);
 		const recipient = this.#requireAgent(message.targetAgentId);
 		return recipient.host.lane.run(() => {
 			if (
@@ -393,37 +757,67 @@ export class MessageCoordinator {
 					sessionManager: recipient.host.sessionManager,
 					message,
 				}).deliveryEvidence,
+			isSuppressed: message.kind === "request"
+				? () => this.#isCancellationDelivered(message.messageId, recipient)
+				: undefined,
+			afterCommit: message.kind === "request"
+				? () => {
+					if (
+						this.#requestEvidence.findAnswer(message) === undefined &&
+						!this.#isCancellationDelivered(message.messageId, recipient)
+					) {
+						recipient.host.addRetentionReason("answer_owed", message.messageId);
+					}
+				}
+					: message.kind === "answer"
+					? () =>
+						recipient.host.removeRetentionReason(
+							"awaiting_answer",
+							message.requestId,
+						)
+					: message.kind === "request_cancellation"
+						? () =>
+							recipient.host.removeRetentionReason(
+								"answer_owed",
+								message.requestId,
+							)
+						: undefined,
 		};
+	}
+
+	#reconcileAnswerDeliveries(requester: AgentRecord): void {
+		for (const request of this.#requestEvidence.findRequestsAuthoredBy(requester)) {
+			const answer = this.#requestEvidence.findAnswer(request);
+			if (!answer) continue;
+			if (answer.targetAgentId !== requester.identity.agentId) continue;
+			const delivery = inspectAnswerDelivery({
+				requesterAgentId: requester.identity.agentId,
+				sessionManager: requester.host.sessionManager,
+				answer,
+			});
+			if (delivery.deliveryEvidence) {
+				requester.host.removeRetentionReason(
+					"awaiting_answer",
+					answer.requestId,
+				);
+			}
+		}
+	}
+
+	#isCancellationDelivered(requestId: string, responder: AgentRecord): boolean {
+		const request = this.#requestEvidence.requireRequest(requestId);
+		const cancellation = this.#requestEvidence.findCancellation(request);
+		return cancellation !== undefined &&
+			inspectMessageDelivery({
+				recipientAgentId: responder.identity.agentId,
+				sessionManager: responder.host.sessionManager,
+				message: cancellation,
+			}).deliveryEvidence !== undefined;
 	}
 
 	#requireAgent(agentId: string): AgentRecord {
 		const record = this.#agents.get(agentId);
 		if (!record) throw new Error(`unknown_identity: ${agentId}`);
 		return record;
-	}
-
-	#requireCallerAuthoredMessage(caller: AgentRecord, messageId: string): Message {
-		const ownMessage = findAuthoredMessage({
-			fromAgentId: caller.identity.agentId,
-			workflowId: caller.identity.workflowId,
-			sessionManager: caller.host.sessionManager,
-			messageId,
-		});
-		if (ownMessage) return ownMessage;
-		for (const candidateAuthor of this.#agents.values()) {
-			if (candidateAuthor.identity.agentId === caller.identity.agentId) continue;
-			const otherMessage = findAuthoredMessage({
-				fromAgentId: candidateAuthor.identity.agentId,
-				workflowId: candidateAuthor.identity.workflowId,
-				sessionManager: candidateAuthor.host.sessionManager,
-				messageId,
-			});
-			if (otherMessage) {
-				throw new Error(
-					`wrong_participant: Agent ${caller.identity.agentId} did not author Message ${messageId}`,
-				);
-			}
-		}
-		throw new Error(`unknown_identity: Message ${messageId}`);
 	}
 }

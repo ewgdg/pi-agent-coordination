@@ -12,11 +12,18 @@ export type RunRetentionReason =
 	| "awaiting_answer"
 	| "answer_owed";
 
+export type RunRetention = Readonly<{
+	reason: RunRetentionReason;
+	count: number;
+}>;
+
+type RequestRelationshipReason = "awaiting_answer" | "answer_owed";
+
 export type LiveRunState = Readonly<{
 	phase: "starting" | "live" | "ending";
 	work?: "active" | "settled";
 	attention: "none";
-	retentionReasons: readonly RunRetentionReason[];
+	retentionReasons: readonly RunRetention[];
 }>;
 
 export type DormantRunState = Readonly<{
@@ -43,6 +50,10 @@ export class InProcessAgentHost {
 	readonly sessionManager: SessionManager;
 	readonly #startSession: StartSession | undefined;
 	readonly #retentionReasons = new Set<RunRetentionReason>();
+	readonly #requestRelationships = new Map<
+		RequestRelationshipReason,
+		Set<string>
+	>();
 	readonly #trackedOperations = new Set<Promise<void>>();
 	#run: BoundRun | undefined;
 	#starting = false;
@@ -80,7 +91,13 @@ export class InProcessAgentHost {
 	}
 
 	observe(): AgentRunState {
-		const retentionReasons = [...this.#retentionReasons];
+		const retentionReasons = [
+			...[...this.#retentionReasons].map((reason) => ({ reason, count: 1 })),
+			...[...this.#requestRelationships].map(([reason, requestIds]) => ({
+				reason,
+				count: requestIds.size,
+			})),
+		];
 		if (this.#starting) {
 			return {
 				phase: "starting",
@@ -131,21 +148,46 @@ export class InProcessAgentHost {
 			return session;
 		} catch (error) {
 			this.#retentionReasons.clear();
+			this.#requestRelationships.clear();
 			throw error;
 		} finally {
 			this.#starting = false;
 		}
 	}
 
-	addRetentionReason(reason: RunRetentionReason): void {
-		if (this.#run || this.#starting) this.#retentionReasons.add(reason);
+	addRetentionReason(reason: RunRetentionReason, requestId?: string): void {
+		if (!this.#run && !this.#starting) return;
+		if (isRequestRelationshipReason(reason)) {
+			const exactRequestId = requireRequestRelationshipId(reason, requestId);
+			let relationships = this.#requestRelationships.get(reason);
+			if (!relationships) {
+				relationships = new Set();
+				this.#requestRelationships.set(reason, relationships);
+			}
+			relationships.add(exactRequestId);
+			return;
+		}
+		this.#retentionReasons.add(reason);
 	}
 
-	removeRetentionReason(reason: RunRetentionReason): void {
+	removeRetentionReason(reason: RunRetentionReason, requestId?: string): void {
+		if (isRequestRelationshipReason(reason)) {
+			const exactRequestId = requireRequestRelationshipId(reason, requestId);
+			const relationships = this.#requestRelationships.get(reason);
+			relationships?.delete(exactRequestId);
+			if (relationships?.size === 0) this.#requestRelationships.delete(reason);
+			return;
+		}
 		this.#retentionReasons.delete(reason);
 	}
 
-	hasRetentionReason(reason: RunRetentionReason): boolean {
+	hasRetentionReason(reason: RunRetentionReason, requestId?: string): boolean {
+		if (isRequestRelationshipReason(reason)) {
+			const relationships = this.#requestRelationships.get(reason);
+			return requestId === undefined
+				? (relationships?.size ?? 0) > 0
+				: relationships?.has(requestId) ?? false;
+		}
 		return this.#retentionReasons.has(reason);
 	}
 
@@ -162,13 +204,16 @@ export class InProcessAgentHost {
 		const run = this.#run;
 		if (!run || run.handle !== handle) return "stale";
 		if (this.#starting || this.#ending || !run.session.isIdle) return "retained";
-		if (this.#retentionReasons.size > 0) return "retained";
+		if (this.#retentionReasons.size > 0 || this.#requestRelationships.size > 0) {
+			return "retained";
+		}
 		this.#ending = true;
 		try {
 			run.unsubscribe();
 			run.session.dispose();
 			this.#run = undefined;
 			this.#retentionReasons.clear();
+			this.#requestRelationships.clear();
 			return "released";
 		} finally {
 			this.#ending = false;
@@ -181,6 +226,7 @@ export class InProcessAgentHost {
 		const run = this.#run;
 		if (!run) {
 			this.#retentionReasons.clear();
+			this.#requestRelationships.clear();
 			return;
 		}
 		this.#ending = true;
@@ -197,6 +243,7 @@ export class InProcessAgentHost {
 		} finally {
 			this.#run = undefined;
 			this.#retentionReasons.clear();
+			this.#requestRelationships.clear();
 			this.#ending = false;
 		}
 	}
@@ -226,4 +273,20 @@ export class InProcessAgentHost {
 		this.#run = run;
 		this.#ending = false;
 	}
+}
+
+function isRequestRelationshipReason(
+	reason: RunRetentionReason,
+): reason is RequestRelationshipReason {
+	return reason === "awaiting_answer" || reason === "answer_owed";
+}
+
+function requireRequestRelationshipId(
+	reason: RequestRelationshipReason,
+	requestId: string | undefined,
+): string {
+	if (requestId === undefined || requestId.length === 0) {
+		throw new Error(`${reason} requires an exact Request identity`);
+	}
+	return requestId;
 }

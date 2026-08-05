@@ -31,6 +31,10 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		sendSchema?.properties?.deliveryMode?.anyOf?.map(({ const: value }) => value),
 		["deferred", "steer"],
 	);
+	assert.deepEqual(
+		parameters.anyOf?.map((candidate) => candidate.properties?.operation?.const),
+		["send", "request", "answer", "cancel", "poll", "retry"],
+	);
 	const longContent = "Direction ".repeat(20).trim();
 	const args = {
 		operation: "send" as const,
@@ -85,6 +89,47 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		} },
 	).render(160).join("\n");
 	assert.equal(deferredText.includes("deferred"), false);
+
+	const answerText = tool.renderCall(
+		{
+			operation: "answer",
+			requestId: "request-identity",
+			answer: "One canonical Answer.",
+		},
+		plainTheme,
+		{ ...renderContext, args: {
+			operation: "answer",
+			requestId: "request-identity",
+			answer: "One canonical Answer.",
+		} },
+	).render(160).join("\n");
+	assert.match(answerText, /request-identity/);
+	assert.match(answerText, /One canonical Answer/);
+
+	const retrievalText = tool.renderResult(
+		{
+			content: [{ type: "text", text: "retrieved Answer" }],
+			details: {
+				disposition: "answer_delivered",
+				messageId: "request-identity",
+				requestId: "request-identity",
+				answerId: "answer-identity",
+				fromAgentId: "responder-agent",
+				answer: "Recovered immutable Answer.",
+				answerSource: {
+					agentId: "responder-agent",
+					entryId: "answer-entry",
+					toolCallId: "answer-call",
+				},
+			},
+		},
+		{ expanded: false, isPartial: false },
+		plainTheme,
+		renderContext,
+	).render(160).join("\n");
+	assert.match(retrievalText, /answer_delivered/);
+	assert.match(retrievalText, /answer-identity/);
+	assert.match(retrievalText, /Recovered immutable Answer/);
 
 	await host.runtime.dispose();
 });

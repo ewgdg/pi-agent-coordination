@@ -173,7 +173,7 @@ export class DefaultChildSpawner {
 		};
 		this.#agents.set(agentId, child);
 		parent.children.push(agentId);
-		this.#addRetentionReason(parent, "awaiting_answer");
+		this.#addRetentionReason(parent, "awaiting_answer", requestId);
 		if (identityConfirmation === "confirmation_lost") {
 			return { disposition: "indeterminate", agentId, requestId };
 		}
@@ -246,8 +246,12 @@ export class DefaultChildSpawner {
 		}
 	}
 
-	#addRetentionReason(record: AgentRecord, reason: RunRetentionReason): void {
-		record.host.addRetentionReason(reason);
+	#addRetentionReason(
+		record: AgentRecord,
+		reason: RunRetentionReason,
+		requestId?: string,
+	): void {
+		record.host.addRetentionReason(reason, requestId);
 	}
 
 	#requireAgent(agentId: string): AgentRecord {

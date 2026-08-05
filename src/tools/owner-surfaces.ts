@@ -30,6 +30,36 @@ export function registerOrdinaryAgentSurfaces(
 		),
 		Type.Object(
 			{
+				operation: Type.Literal("request"),
+				targetAgentId: Type.String({ minLength: 1 }),
+				question: Type.String({ minLength: 1 }),
+				deliveryMode: Type.Optional(
+					Type.Union([
+						Type.Literal("deferred"),
+						Type.Literal("steer"),
+					]),
+				),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
+				operation: Type.Literal("answer"),
+				requestId: Type.String({ minLength: 1 }),
+				answer: Type.String({ minLength: 1 }),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
+				operation: Type.Literal("cancel"),
+				requestId: Type.String({ minLength: 1 }),
+				reason: Type.String({ minLength: 1 }),
+			},
+			{ additionalProperties: false },
+		),
+		Type.Object(
+			{
 				operation: Type.Literal("poll"),
 				messageId: Type.String({ minLength: 1 }),
 			},
@@ -70,8 +100,8 @@ export function registerOrdinaryAgentSurfaces(
 		name: "agent_message",
 		label: "Message Agent",
 		description:
-			"Send one immutable Deferred or Steer Message to a known Agent in this Workflow.",
-		promptSnippet: "Send, poll, or retry direct Agent communication.",
+			"Send one immutable Message or correlated Request to a known Agent in this Workflow.",
+		promptSnippet: "Send, request, answer, cancel, poll, or retry direct Agent communication.",
 		executionMode: "sequential",
 		parameters: messageParameters,
 		renderCall: renderAgentMessageCall,
@@ -139,7 +169,12 @@ export function registerOrdinaryAgentSurfaces(
 function formatAgentRow(status: ReturnType<OrdinaryAgentCoordinatorView["status"]>): string {
 	const run = status.run;
 	const work = "work" in run && run.work ? `/${run.work}` : "";
-	const binding = run.retentionReasons[0]?.replaceAll("_", " ");
+	const binding = run.retentionReasons.length === 0
+		? undefined
+		: run.retentionReasons.map((retention) => [
+			retention.reason.replaceAll("_", " "),
+			retention.count > 1 ? `×${retention.count}` : undefined,
+		].filter(Boolean).join(" ")).join(", ");
 	return [
 		`${status.label} · ${status.agentId} · ${run.phase}${work}`,
 		binding,

@@ -21,6 +21,8 @@ The child starts an in-process Run and receives the Request through the same fix
 
 Confirmed Delivery admission failure releases the new child Run to dormant while preserving the committed child and Creation Request. Once Delivery commits, the Run remains retained while the child owes the corresponding Answer.
 
+After child Identity commit, the Creation Request uses the ordinary [Request protocol](agent-messaging.md): the Spawner can poll, retry, retrieve its Answer, or cancel; the child Answers through `agent_message`. The Answer fulfills one Request obligation and does not represent child completion or lifecycle state.
+
 ## Receipts
 
 - `pending` — the child and Request exist, the first Run started, and Delivery was admitted.

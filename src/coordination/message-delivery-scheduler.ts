@@ -16,6 +16,7 @@ export type ScheduledMessageDelivery = Readonly<{
 	deliveryMode: MessageDeliveryMode;
 	deliveryItem: MessageDeliveryItem;
 	inspectProof(): EntryPointer | undefined;
+	isSuppressed?(): boolean;
 	afterCommit?(): void;
 }>;
 
@@ -136,7 +137,7 @@ export class MessageDeliveryScheduler {
 	): number {
 		let count = 0;
 		for (const delivery of pending.values()) {
-			if (!delivery.inspectProof()) count += 1;
+			if (!delivery.inspectProof() && !delivery.isSuppressed?.()) count += 1;
 		}
 		return count;
 	}
@@ -271,12 +272,15 @@ export class MessageDeliveryScheduler {
 		if (!pending) return;
 		const active = this.#activeDeferredByAgent.get(record.identity.agentId);
 		for (const [messageId, delivery] of pending) {
-			if (!delivery.inspectProof()) continue;
+			const proof = delivery.inspectProof();
+			const activeDelivery = active?.delivery.messageId === messageId;
+			const suppressed = !proof && !activeDelivery && delivery.isSuppressed?.();
+			if (!proof && !suppressed) continue;
 			pending.delete(messageId);
-			if (active?.delivery.messageId === messageId) {
+			if (activeDelivery) {
 				active.deliveryCommitted = true;
 			}
-			delivery.afterCommit?.();
+			if (proof) delivery.afterCommit?.();
 		}
 		if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);
 		const frozen = this.#frozenSteerByAgent.get(record.identity.agentId);
