@@ -14,7 +14,7 @@ export type OrdinaryAgentIdentity = OwnerIdentity | ChildAgentIdentity;
 
 export type AgentRecord = {
 	identity: OrdinaryAgentIdentity;
-	services: AgentSessionServices;
+	services?: AgentSessionServices;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
 	host: InProcessAgentHost;
 	children: string[];
@@ -35,6 +35,13 @@ export type AgentStatus = Readonly<{
 	}>;
 	run: AgentRunState;
 }>;
+
+export class EvidenceUnavailableError extends Error {
+	constructor(message: string) {
+		super(`evidence_unavailable: ${message}`);
+		this.name = "EvidenceUnavailableError";
+	}
+}
 
 export function statusOf(record: AgentRecord): AgentStatus {
 	const configuration = record.identity.configuration;
@@ -66,4 +73,24 @@ export function statusOf(record: AgentRecord): AgentStatus {
 
 export function requireLiveSession(record: AgentRecord) {
 	return record.host.requireLiveSession();
+}
+
+export function requireLiveServices(record: AgentRecord): AgentSessionServices {
+	if (!record.services || !record.host.currentHandle()) {
+		throw new Error(`Agent Run services are unavailable: ${record.identity.agentId}`);
+	}
+	return record.services;
+}
+
+export function requireAgentRecord(
+	agents: ReadonlyMap<string, AgentRecord>,
+	quarantinedAgentIds: ReadonlySet<string>,
+	agentId: string,
+): AgentRecord {
+	const record = agents.get(agentId);
+	if (record) return record;
+	if (quarantinedAgentIds.has(agentId)) {
+		throw new EvidenceUnavailableError(`Agent ${agentId} could not be verified`);
+	}
+	throw new Error(`unknown_identity: ${agentId}`);
 }

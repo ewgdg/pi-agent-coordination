@@ -1,4 +1,8 @@
-import { requireLiveSession, type AgentRecord } from "./agent-record.ts";
+import {
+	EvidenceUnavailableError,
+	requireLiveSession,
+	type AgentRecord,
+} from "./agent-record.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
 import {
 	createMessageDelivery,
@@ -126,7 +130,10 @@ export class MessageDeliveryScheduler {
 				await record.host.startInLane(["pending_delivery"]);
 			} catch (error) {
 				if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);
-				if (error instanceof ProtocolInvariantError) throw error;
+				if (
+					error instanceof ProtocolInvariantError ||
+					error instanceof EvidenceUnavailableError
+				) throw error;
 				return "target_unavailable";
 			}
 		}

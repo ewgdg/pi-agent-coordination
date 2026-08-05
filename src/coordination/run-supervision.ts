@@ -1,6 +1,10 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
-import { requireLiveSession, type AgentRecord } from "./agent-record.ts";
+import {
+	requireAgentRecord,
+	requireLiveSession,
+	type AgentRecord,
+} from "./agent-record.ts";
 import type { MessageCoordinator } from "./messages.ts";
 import { sendAndAwaitTranscriptCommit } from "../pi-integration/transcript-commit.ts";
 import {
@@ -14,13 +18,16 @@ export class RunSupervisor {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #ownerAgentId: string;
 	readonly #messages: MessageCoordinator;
+	readonly #quarantinedAgentIds: ReadonlySet<string>;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
+		quarantinedAgentIds?: ReadonlySet<string>;
 		ownerAgentId: string;
 		messages: MessageCoordinator;
 	}) {
 		this.#agents = options.agents;
+		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
 		this.#ownerAgentId = options.ownerAgentId;
 		this.#messages = options.messages;
 	}
@@ -152,8 +159,10 @@ export class RunSupervisor {
 	}
 
 	#requireAgent(agentId: string): AgentRecord {
-		const record = this.#agents.get(agentId);
-		if (!record) throw new Error(`unknown_identity: ${agentId}`);
-		return record;
+		return requireAgentRecord(
+			this.#agents,
+			this.#quarantinedAgentIds,
+			agentId,
+		);
 	}
 }

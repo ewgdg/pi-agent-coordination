@@ -105,6 +105,14 @@ export function sameToolCallPointer(
 	);
 }
 
+export function toolCallPointerKey(pointer: ToolCallPointer): string {
+	return JSON.stringify([
+		pointer.agentId,
+		pointer.entryId,
+		pointer.toolCallId,
+	]);
+}
+
 export function currentCoordinationScope(
 	sessionManager: SessionManager,
 	agentId: string,

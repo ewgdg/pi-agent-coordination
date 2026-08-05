@@ -1,6 +1,10 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { requireLiveSession, type AgentRecord } from "./agent-record.ts";
+import {
+	requireAgentRecord,
+	requireLiveSession,
+	type AgentRecord,
+} from "./agent-record.ts";
 import {
 	MessageDeliveryScheduler,
 	type ScheduledMessageDelivery,
@@ -84,17 +88,23 @@ export class MessageCoordinator {
 	readonly #boundaryHooks: MessageBoundaryHooks;
 	readonly #deliveryScheduler: MessageDeliveryScheduler;
 	readonly #requestEvidence: RequestEvidence;
+	readonly #quarantinedAgentIds: ReadonlySet<string>;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
+		quarantinedAgentIds?: ReadonlySet<string>;
 		isShuttingDown(): boolean;
 		boundaryHooks?: MessageBoundaryHooks;
 		workflowPolicy: WorkflowPolicyStore;
 	}) {
 		this.#agents = options.agents;
+		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
 		this.#isShuttingDown = options.isShuttingDown;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
-		this.#requestEvidence = new RequestEvidence(this.#agents);
+		this.#requestEvidence = new RequestEvidence(
+			this.#agents,
+			this.#quarantinedAgentIds,
+		);
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
@@ -104,7 +114,13 @@ export class MessageCoordinator {
 	}
 
 	integrate(record: AgentRecord): void {
+		record.host.setRunStartInitializer(
+			() => this.#requestEvidence.residualRelationshipsFor(record),
+		);
 		this.#deliveryScheduler.integrate(record);
+		if (record.host.currentHandle()) {
+			record.host.initializeBoundRunRelationships();
+		}
 	}
 
 	async send(
@@ -847,8 +863,10 @@ export class MessageCoordinator {
 	}
 
 	#requireAgent(agentId: string): AgentRecord {
-		const record = this.#agents.get(agentId);
-		if (!record) throw new Error(`unknown_identity: ${agentId}`);
-		return record;
+		return requireAgentRecord(
+			this.#agents,
+			this.#quarantinedAgentIds,
+			agentId,
+		);
 	}
 }

@@ -42,7 +42,7 @@ export function findAuthoredAgentMessageSource(options: {
 	sessionManager: SessionManager;
 	messageId: string;
 }): AuthoredAgentMessageSource | undefined {
-	const matches = authoredAgentMessageSources(options).filter(
+	const matches = findAuthoredAgentMessageSources(options).filter(
 		({ source }) => deriveMessageIdentity(source) === options.messageId,
 	);
 	if (matches.length > 1) {
@@ -57,7 +57,7 @@ export function findAuthoredRequestSources(options: {
 	authorAgentId: string;
 	sessionManager: SessionManager;
 }): readonly AuthoredRequestSource[] {
-	return authoredAgentMessageSources(options).filter(
+	return findAuthoredAgentMessageSources(options).filter(
 		(source): source is AuthoredRequestSource => source.input.operation === "request",
 	);
 }
@@ -68,7 +68,7 @@ export function inspectCanonicalRequestResolution(options: {
 	responderSessionManager: SessionManager;
 }): CanonicalRequestResolution {
 	const { request, requesterSessionManager, responderSessionManager } = options;
-	const answers = authoredAgentMessageSources({
+	const answers = findAuthoredAgentMessageSources({
 		authorAgentId: request.targetAgentId,
 		sessionManager: responderSessionManager,
 	})
@@ -97,7 +97,7 @@ export function inspectCanonicalRequestResolution(options: {
 				deliveryEvidence: delivery.deliveryEvidence,
 			}).state === "canonical";
 		});
-	const cancellations = authoredAgentMessageSources({
+	const cancellations = findAuthoredAgentMessageSources({
 		authorAgentId: request.fromAgentId,
 		sessionManager: requesterSessionManager,
 	})
@@ -144,7 +144,7 @@ export function inspectCanonicalRequestResolution(options: {
 	};
 }
 
-function authoredAgentMessageSources(options: {
+export function findAuthoredAgentMessageSources(options: {
 	authorAgentId: string;
 	sessionManager: SessionManager;
 }): AuthoredAgentMessageSource[] {

@@ -46,6 +46,27 @@ export type CanonicalMessageInspection =
 	| Readonly<{ state: "indeterminate"; message: Message }>
 	| Readonly<{ state: "not_created"; message: Message }>;
 
+export type MessageAuthorResultState = CanonicalMessageInspection["state"];
+
+export type AnswerRetrievalEvidence = Readonly<{
+	answerId: string;
+	requestId: string;
+	fromAgentId: string;
+	answer: string;
+	answerSource: ToolCallPointer;
+	deliveryEvidence: EntryPointer;
+}>;
+
+type MessageResultIdentity =
+	| Readonly<{ kind: "message"; messageId: string }>
+	| Readonly<{ kind: "request"; messageId: string }>
+	| Readonly<{ kind: "answer"; messageId: string; requestId: string }>
+	| Readonly<{
+		kind: "request_cancellation";
+		messageId: string;
+		requestId: string;
+	}>;
+
 type MessageSource = Readonly<{
 	messageId: string;
 	workflowId: string;
@@ -224,38 +245,91 @@ export function inspectCanonicalMessage(options: {
 	if (message.kind === "request" && message.origin === "agent_spawn") {
 		return { state: "canonical", message };
 	}
-	const results = currentCoordinationScope(authorSessionManager, message.fromAgentId).filter(
+	return {
+		state: inspectMessageAuthorResult({
+			authorAgentId: message.fromAgentId,
+			sessionManager: authorSessionManager,
+			toolCallId: message.source.toolCallId,
+			identity: message,
+			deliveryEvidence,
+		}),
+		message,
+	};
+}
+
+export function inspectAgentMessageAuthorResult(options: {
+	authorAgentId: string;
+	sessionManager: SessionManager;
+	source: ToolCallPointer;
+	input: Exclude<AgentMessageInput, { operation: "poll" | "retry" }>;
+}): MessageAuthorResultState {
+	const { authorAgentId, sessionManager, source, input } = options;
+	if (source.agentId !== authorAgentId) {
+		throw new ProtocolInvariantError("Agent Message source names another author");
+	}
+	const messageId = deriveMessageIdentity(source);
+	const identity: MessageResultIdentity = input.operation === "send"
+		? { kind: "message", messageId }
+		: input.operation === "request"
+			? { kind: "request", messageId }
+			: input.operation === "answer"
+				? { kind: "answer", messageId, requestId: input.requestId }
+				: {
+					kind: "request_cancellation",
+					messageId,
+					requestId: input.requestId,
+				};
+	return inspectMessageAuthorResult({
+		authorAgentId,
+		sessionManager,
+		toolCallId: source.toolCallId,
+		identity,
+	});
+}
+
+function inspectMessageAuthorResult(options: {
+	authorAgentId: string;
+	sessionManager: SessionManager;
+	toolCallId: string;
+	identity: MessageResultIdentity;
+	deliveryEvidence?: EntryPointer;
+}): MessageAuthorResultState {
+	const { authorAgentId, sessionManager, toolCallId, identity, deliveryEvidence } = options;
+	const results = currentCoordinationScope(sessionManager, authorAgentId).filter(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
 			entry.message.toolName === "agent_message" &&
-			entry.message.toolCallId === message.source.toolCallId,
+			entry.message.toolCallId === toolCallId,
 	);
 	if (results.length > 1) {
-		throw new Error(`invariant_violation: Message ${message.messageId} has multiple author results`);
+		throw new Error(
+			`invariant_violation: Message ${identity.messageId} has multiple author results`,
+		);
 	}
 	const result = results[0];
 	if (result && result.type === "message" && result.message.role === "toolResult") {
 		if (result.message.isError) {
 			if (deliveryEvidence) {
 				throw new Error(
-					`invariant_violation: Message ${message.messageId} has an error result and Delivery`,
+					`invariant_violation: Message ${identity.messageId} has an error result and Delivery`,
 				);
 			}
-			return { state: "not_created", message };
+			return "not_created";
 		}
-		if (isNonAuthoringRequestResult(result.message.details, message)) {
-			return { state: "not_created", message };
+		if (isNonAuthoringRequestResult(result.message.details, identity)) {
+			return "not_created";
 		}
-		validateMessageAuthorResult(result.message.details, message);
-		return { state: "canonical", message };
+		validateMessageAuthorResult(result.message.details, identity);
+		return "canonical";
 	}
-	return deliveryEvidence
-		? { state: "canonical", message }
-		: { state: "indeterminate", message };
+	return deliveryEvidence ? "canonical" : "indeterminate";
 }
 
-function isNonAuthoringRequestResult(value: unknown, message: Message): boolean {
+function isNonAuthoringRequestResult(
+	value: unknown,
+	message: MessageResultIdentity,
+): boolean {
 	if (
 		(message.kind !== "answer" && message.kind !== "request_cancellation") ||
 		!isRecord(value) ||
@@ -285,7 +359,10 @@ function isNonAuthoringRequestResult(value: unknown, message: Message): boolean 
 	return false;
 }
 
-function validateMessageAuthorResult(value: unknown, message: Message): void {
+function validateMessageAuthorResult(
+	value: unknown,
+	message: MessageResultIdentity,
+): void {
 	const { messageId } = message;
 	if (!isRecord(value)) {
 		throw new Error(
@@ -377,7 +454,46 @@ export function inspectAnswerDelivery(options: {
 		sessionManager,
 		message: answer,
 	});
-	const retrievalEntries: string[] = [];
+	const retrievalEntries = inspectAnswerRetrievals({
+		requesterAgentId,
+		sessionManager,
+	}).filter((retrieval) => {
+		if (!sameToolCallPointer(retrieval.answerSource, answer.source)) return false;
+		if (
+			retrieval.requestId !== answer.requestId ||
+			retrieval.answerId !== answer.messageId ||
+			retrieval.fromAgentId !== answer.fromAgentId ||
+			retrieval.answer !== answer.answer
+		) {
+			throw new ProtocolInvariantError(
+				`Answer ${answer.messageId} Retrieval differs from its source`,
+			);
+		}
+		return true;
+	});
+	const matches = [
+		...(customDelivery.deliveryEvidence
+			? [customDelivery.deliveryEvidence.entryId]
+			: []),
+		...retrievalEntries.map(({ deliveryEvidence }) => deliveryEvidence.entryId),
+	];
+	if (matches.length > 1) {
+		throw new ProtocolInvariantError(`Answer ${answer.messageId} has duplicate Deliveries`);
+	}
+	return {
+		...(matches[0]
+			? { deliveryEvidence: { agentId: requesterAgentId, entryId: matches[0] } }
+			: {}),
+		inspectedThrough: customDelivery.inspectedThrough,
+	};
+}
+
+export function inspectAnswerRetrievals(options: {
+	requesterAgentId: string;
+	sessionManager: SessionManager;
+}): readonly AnswerRetrievalEvidence[] {
+	const { requesterAgentId, sessionManager } = options;
+	const retrievals: AnswerRetrievalEvidence[] = [];
 	for (const entry of currentCoordinationScope(sessionManager, requesterAgentId)) {
 		if (
 			entry.type !== "message" ||
@@ -390,16 +506,6 @@ export function inspectAnswerDelivery(options: {
 			continue;
 		}
 		const details = entry.message.details;
-		if (!isRecord(details.answerSource)) continue;
-		const source = details.answerSource;
-		if (
-			typeof source.agentId !== "string" ||
-			typeof source.entryId !== "string" ||
-			typeof source.toolCallId !== "string" ||
-			!sameToolCallPointer(source as ToolCallPointer, answer.source)
-		) {
-			continue;
-		}
 		const expectedKeys = [
 			"answer",
 			"answerId",
@@ -411,33 +517,27 @@ export function inspectAnswerDelivery(options: {
 		];
 		if (
 			!sameStringList(Object.keys(details).sort(), expectedKeys) ||
-			details.messageId !== answer.requestId ||
-			details.requestId !== answer.requestId ||
-			details.answerId !== answer.messageId ||
-			details.fromAgentId !== answer.fromAgentId ||
-			details.answer !== answer.answer
+			!isToolCallPointer(details.answerSource) ||
+			typeof details.answerId !== "string" ||
+			typeof details.requestId !== "string" ||
+			typeof details.fromAgentId !== "string" ||
+			typeof details.answer !== "string" ||
+			details.messageId !== details.requestId ||
+			details.answerId !== deriveMessageIdentity(details.answerSource) ||
+			details.fromAgentId !== details.answerSource.agentId
 		) {
-			throw new ProtocolInvariantError(
-				`Answer ${answer.messageId} Retrieval differs from its source`,
-			);
+			throw new ProtocolInvariantError("Answer Retrieval evidence is invalid");
 		}
-		retrievalEntries.push(entry.id);
+		retrievals.push({
+			answerId: details.answerId,
+			requestId: details.requestId,
+			fromAgentId: details.fromAgentId,
+			answer: details.answer,
+			answerSource: details.answerSource,
+			deliveryEvidence: { agentId: requesterAgentId, entryId: entry.id },
+		});
 	}
-	const matches = [
-		...(customDelivery.deliveryEvidence
-			? [customDelivery.deliveryEvidence.entryId]
-			: []),
-		...retrievalEntries,
-	];
-	if (matches.length > 1) {
-		throw new ProtocolInvariantError(`Answer ${answer.messageId} has duplicate Deliveries`);
-	}
-	return {
-		...(matches[0]
-			? { deliveryEvidence: { agentId: requesterAgentId, entryId: matches[0] } }
-			: {}),
-		inspectedThrough: customDelivery.inspectedThrough,
-	};
+	return retrievals;
 }
 
 export function createMessageDeliveryItem(message: Message): MessageDeliveryItem {
@@ -497,6 +597,16 @@ function messageSubject(message: Message): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isToolCallPointer(value: unknown): value is ToolCallPointer {
+	return isRecord(value) &&
+		typeof value.agentId === "string" &&
+		value.agentId.length > 0 &&
+		typeof value.entryId === "string" &&
+		value.entryId.length > 0 &&
+		typeof value.toolCallId === "string" &&
+		value.toolCallId.length > 0;
 }
 
 function sameStringList(left: readonly string[], right: readonly string[]): boolean {

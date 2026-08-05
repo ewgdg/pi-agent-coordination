@@ -57,6 +57,11 @@ type StartSession = () => Promise<AgentSession>;
 export type AgentRunSettlement = "settled" | "failed";
 type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
 type RunFenceHandler = (handle: AgentRunHandle) => void;
+export type ResidualRequestRelationships = Readonly<{
+	awaitingAnswerRequestIds: readonly string[];
+	answerOwedRequestIds: readonly string[];
+}>;
+type RunStartInitializer = () => ResidualRequestRelationships;
 
 export class InProcessAgentHost {
 	readonly lane = new SerialLane();
@@ -76,6 +81,7 @@ export class InProcessAgentHost {
 	#holdSequence = 0;
 	#settledHandler: SettledHandler | undefined;
 	#runFenceHandler: RunFenceHandler | undefined;
+	#runStartInitializer: RunStartInitializer | undefined;
 	#inputRequired: { handle: AgentRunHandle; requestId: string } | undefined;
 	#interruptionHold: InterruptionHoldHandle | undefined;
 	#isolatedResumption:
@@ -146,6 +152,17 @@ export class InProcessAgentHost {
 
 	setRunFenceHandler(handler: RunFenceHandler): void {
 		this.#runFenceHandler = handler;
+	}
+
+	setRunStartInitializer(initializer: RunStartInitializer): void {
+		this.#runStartInitializer = initializer;
+	}
+
+	initializeBoundRunRelationships(): void {
+		if (!this.#run || this.#starting || this.#ending) {
+			throw new Error("invariant_violation: Request relationships require a bound Agent Run");
+		}
+		this.#initializeRequestRelationships();
 	}
 
 	currentHandle(): AgentRunHandle | undefined {
@@ -294,6 +311,7 @@ export class InProcessAgentHost {
 		this.#starting = true;
 		for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
 		try {
+			this.#initializeRequestRelationships();
 			const session = await this.#startSession();
 			this.#bindRun(session);
 			return session;
@@ -302,6 +320,18 @@ export class InProcessAgentHost {
 			throw error;
 		} finally {
 			this.#starting = false;
+		}
+	}
+
+	#initializeRequestRelationships(): void {
+		this.#requestRelationships.clear();
+		const relationships = this.#runStartInitializer?.();
+		if (!relationships) return;
+		for (const requestId of relationships.awaitingAnswerRequestIds) {
+			this.addRetentionReason("awaiting_answer", requestId);
+		}
+		for (const requestId of relationships.answerOwedRequestIds) {
+			this.addRetentionReason("answer_owed", requestId);
 		}
 	}
 

@@ -81,6 +81,7 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"getSessionId",
 		"getSessionFile",
 		"getSessionDir",
+		"isPersisted",
 		"getLeafId",
 		"getCwd",
 		"branch",

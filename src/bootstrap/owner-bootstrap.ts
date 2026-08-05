@@ -20,6 +20,7 @@ import {
 	bindHiddenOwnerAgentExtension,
 	createAgentBoundExtension,
 } from "./agent-extension.ts";
+import { discoverColdWorkflow } from "./cold-host-discovery.ts";
 
 type InitializedWorkflow = {
 	coordinator: WorkflowCoordinator;
@@ -72,6 +73,16 @@ export async function initializeOwnerWorkflow(options: {
 	}
 	const policy = new WorkflowPolicyStore(initialPolicy.snapshot);
 	const identity = adoptOrValidateOwnerIdentity(runtime, entryModulePath);
+	const recoveredWorkflow = await discoverColdWorkflow({
+		ownerIdentity: identity,
+		ownerSessionManager: runtime.session.sessionManager,
+	});
+	if (recoveredWorkflow.quarantinedCandidateCount > 0) {
+		ctx.ui.notify(
+			`${recoveredWorkflow.quarantinedCandidateCount} Agent transcript candidate${recoveredWorkflow.quarantinedCandidateCount === 1 ? " was" : "s were"} quarantined; independently verified Agents remain available.`,
+			"warning",
+		);
+	}
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(runtime, identity, {
 		entryModulePath,
@@ -80,6 +91,7 @@ export async function initializeOwnerWorkflow(options: {
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		workflowPolicy: policy,
+		recoveredWorkflow,
 	});
 	const restoreNativeDispose = bindExactlyOnceShutdown(runtime, coordinator);
 	try {

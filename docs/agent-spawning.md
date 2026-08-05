@@ -79,3 +79,5 @@ After child Identity commit, the Creation Request uses the ordinary [Request pro
 Confirmed and partial receipts include the effective runtime configuration only after it has resolved and passed resource validation. Collapsed native rendering shows the disposition, Agent identity, model, and thinking level. Expanded rendering shows the complete structured receipt and effective configuration.
 
 Repeating `agent_spawn` creates a sibling. Direct children appear to their Spawner in canonical spawn-call order. Observation is passive and returns bounded identity and live Run state without exposing a Pi session or Run handle.
+
+Ordinary child transcripts share the Owner-derived Workflow directory regardless of effective Run cwd. A fresh host validates that directory to recover verified dormant Agents and authority; see [Cold host recovery](cold-host-recovery.md).

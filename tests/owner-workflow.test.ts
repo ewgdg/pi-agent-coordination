@@ -66,7 +66,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		{
 			title: "Agents",
 			options: [
-				`owner · ${host.session.sessionId} · live/settled · owner host binding, interactive selection`,
+				`Live · owner · ${host.session.sessionId} · live/settled · owner host binding, interactive selection`,
 			],
 		},
 	]);

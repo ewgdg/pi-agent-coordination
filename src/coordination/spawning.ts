@@ -23,7 +23,7 @@ import {
 	deriveMessageIdentity,
 	ProtocolInvariantError,
 	resolveCommittedSpawnSource,
-	sameToolCallPointer,
+	toolCallPointerKey,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
 import {
@@ -86,15 +86,18 @@ export class DefaultChildSpawner {
 	readonly #boundaryHooks: SpawnBoundaryHooks;
 	readonly #isShuttingDown: () => boolean;
 	readonly #messages: MessageCoordinator;
+	readonly #agentIdBySpawnSource: Map<string, string>;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
+		agentIdBySpawnSource?: Map<string, string>;
 		sessionFactory: DefaultChildSessionFactory;
 		messages: MessageCoordinator;
 		boundaryHooks?: SpawnBoundaryHooks;
 		isShuttingDown(): boolean;
 	}) {
 		this.#agents = options.agents;
+		this.#agentIdBySpawnSource = options.agentIdBySpawnSource ?? new Map();
 		this.#sessionFactory = options.sessionFactory;
 		this.#messages = options.messages;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
@@ -180,36 +183,16 @@ export class DefaultChildSpawner {
 		});
 		validateCommittedChildIdentity(sessionManager, identity);
 
-		let firstPrepared: PreparedAgentRun | undefined = prepared;
-		// The host cannot invoke startSession until startInLane below, after this record
-		// is assigned and registered. Successor starts then refresh its current services.
-		let child!: AgentRecord;
-		const childHost = InProcessAgentHost.createChild({
-			sessionManager,
-			startSession: async () => {
-				const nextPrepared = firstPrepared ?? await this.#sessionFactory.prepareRun(
-					agentId,
-					blueprint,
-				);
-				firstPrepared = undefined;
-				const session = await this.#sessionFactory.startSession({
-					sessionManager,
-					prepared: nextPrepared,
-				});
-				child.services = nextPrepared.services;
-				child.effectiveConfiguration = nextPrepared.configuration;
-				return session;
-			},
-		});
-		child = {
+		const child = this.#sessionFactory.createAgentRecord({
 			identity,
-			services: prepared.services,
-			effectiveConfiguration: prepared.configuration,
-			host: childHost,
-			children: [],
-		};
+			sessionManager,
+			blueprint,
+			firstPrepared: prepared,
+		});
 		this.#agents.set(agentId, child);
+		this.#agentIdBySpawnSource.set(toolCallPointerKey(source), agentId);
 		parent.children.push(agentId);
+		this.#messages.integrate(child);
 		this.#addRetentionReason(parent, "awaiting_answer", requestId);
 		if (identityConfirmation === "confirmation_lost") {
 			return {
@@ -292,13 +275,8 @@ export class DefaultChildSpawner {
 	}
 
 	#assertUnclaimedSpawnSource(source: ToolCallPointer): void {
-		for (const record of this.#agents.values()) {
-			if (
-				"spawnSource" in record.identity &&
-				sameToolCallPointer(record.identity.spawnSource, source)
-			) {
-				throw new Error("invariant_violation: Agent Spawn source already has a child");
-			}
+		if (this.#agentIdBySpawnSource.has(toolCallPointerKey(source))) {
+			throw new Error("invariant_violation: Agent Spawn source already has a child");
 		}
 	}
 

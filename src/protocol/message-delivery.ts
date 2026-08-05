@@ -4,6 +4,7 @@ import type { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import {
 	currentCoordinationScope,
+	deriveMessageIdentity,
 	ProtocolInvariantError,
 	sameToolCallPointer,
 	type ToolCallPointer,
@@ -61,6 +62,12 @@ export type DeliveryInspection = Readonly<{
 	inspectedThrough: EntryPointer;
 }>;
 
+export type DeliveredMessageEvidence = Readonly<{
+	source: ToolCallPointer;
+	projection: ModelVisibleMessage;
+	deliveryEvidence: EntryPointer;
+}>;
+
 export function createMessageDelivery(
 	items: readonly MessageDeliveryItem[],
 ): ModelVisibleMessageDelivery {
@@ -91,18 +98,80 @@ export function inspectStandaloneMessageDelivery(options: {
 		expectedProjection,
 		subject,
 	} = options;
+	const { deliveries, inspectedThrough } = readMessageDeliveries({
+		recipientAgentId,
+		sessionManager,
+	});
+	const matches: string[] = [];
+	for (const delivery of deliveries) {
+		if (!sameToolCallPointer(delivery.source, expectedSource)) continue;
+		if (!isDeepStrictEqual(delivery.projection, expectedProjection)) {
+			throw new ProtocolInvariantError(`${subject} Delivery differs from its source`);
+		}
+		matches.push(delivery.deliveryEvidence.entryId);
+	}
+	if (matches.length > 1) {
+		throw new ProtocolInvariantError(`${subject} has duplicate Deliveries`);
+	}
+	return {
+		...(matches[0]
+			? { deliveryEvidence: { agentId: recipientAgentId, entryId: matches[0] } }
+			: {}),
+		inspectedThrough,
+	};
+}
+
+export function inspectMessageDeliveries(options: {
+	recipientAgentId: string;
+	sessionManager: SessionManager;
+}): readonly DeliveredMessageEvidence[] {
+	const { deliveries } = readMessageDeliveries(options);
+	for (let index = 0; index < deliveries.length; index += 1) {
+		if (
+			deliveries.slice(index + 1).some((candidate) =>
+				sameToolCallPointer(deliveries[index]!.source, candidate.source))
+		) {
+			throw new ProtocolInvariantError(
+				`Message ${projectionIdentity(deliveries[index]!.projection)} has duplicate Deliveries`,
+			);
+		}
+	}
+	return deliveries;
+}
+
+export function validateDeliveredMessageEvidence(
+	delivery: DeliveredMessageEvidence,
+): void {
+	if (
+		delivery.projection.fromAgentId !== delivery.source.agentId ||
+		projectionIdentity(delivery.projection) !== deriveMessageIdentity(delivery.source)
+	) {
+		throw new ProtocolInvariantError(
+			"Message Delivery projection identity differs from its source",
+		);
+	}
+}
+
+function readMessageDeliveries(options: {
+	recipientAgentId: string;
+	sessionManager: SessionManager;
+}): Readonly<{
+	deliveries: readonly DeliveredMessageEvidence[];
+	inspectedThrough: EntryPointer;
+}> {
+	const { recipientAgentId, sessionManager } = options;
 	const entries = sessionManager.getEntries();
 	const tail = entries.at(-1);
 	if (!tail) {
 		throw new ProtocolInvariantError(`Agent ${recipientAgentId} has no transcript entries`);
 	}
-	const matches: string[] = [];
+	const deliveries: DeliveredMessageEvidence[] = [];
 	for (const entry of currentCoordinationScope(sessionManager, recipientAgentId)) {
 		if (entry.type !== "custom" && entry.type !== "custom_message") continue;
 		if (!entry.customType.startsWith("agent-coordination.")) continue;
 		if (
 			entry.type !== "custom_message" ||
-			entry.customType !== "agent-coordination.message-delivery"
+			entry.customType !== MESSAGE_DELIVERY_CUSTOM_TYPE
 		) {
 			throw new ProtocolInvariantError(
 				`unexpected current-scope coordination entry ${entry.customType}`,
@@ -112,23 +181,18 @@ export function inspectStandaloneMessageDelivery(options: {
 			throw new ProtocolInvariantError("Message Delivery must be model-visible");
 		}
 		const { sources, projections } = parseMessageDelivery(entry.details, entry.content);
-		const sourceIndex = sources.findIndex((source) =>
-			sameToolCallPointer(source, expectedSource));
-		if (sourceIndex < 0) continue;
-		if (
-			!isDeepStrictEqual(projections[sourceIndex], expectedProjection)
-		) {
-			throw new ProtocolInvariantError(`${subject} Delivery differs from its source`);
+		for (let index = 0; index < sources.length; index += 1) {
+			const source = sources[index]!;
+			const projection = projections[index]!;
+			deliveries.push({
+				source,
+				projection,
+				deliveryEvidence: { agentId: recipientAgentId, entryId: entry.id },
+			});
 		}
-		matches.push(entry.id);
-	}
-	if (matches.length > 1) {
-		throw new ProtocolInvariantError(`${subject} has duplicate Deliveries`);
 	}
 	return {
-		...(matches[0]
-			? { deliveryEvidence: { agentId: recipientAgentId, entryId: matches[0] } }
-			: {}),
+		deliveries,
 		inspectedThrough: { agentId: recipientAgentId, entryId: tail.id },
 	};
 }
@@ -291,6 +355,19 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 		};
 	}
 	throw new ProtocolInvariantError("Message Delivery projection has an invalid shape");
+}
+
+function projectionIdentity(projection: ModelVisibleMessage): string {
+	switch (projection.kind) {
+		case "message":
+			return projection.messageId;
+		case "request":
+			return projection.requestId;
+		case "answer":
+			return projection.answerId;
+		case "request_cancellation":
+			return projection.cancellationId;
+	}
 }
 
 function requireExactRecord(

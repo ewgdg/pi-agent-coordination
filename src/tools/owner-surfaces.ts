@@ -326,7 +326,17 @@ export function registerOrdinaryAgentSurfaces(
 		description: "Show Agents in the current Workflow",
 		handler: async (_args, ctx) => {
 			const view = resolveView();
-			const statuses = view.selectionStatuses();
+			const roster = view.selectionRoster();
+			const statusRows = [
+				...roster.live.map((status) => ({
+					status,
+					option: `Live · ${formatAgentRow(status)}`,
+				})),
+				...roster.dormant.map((status) => ({
+					status,
+					option: `Dormant · ${formatAgentRow(status)}`,
+				})),
+			];
 			const attention = view.humanAttention();
 			const attentionOptions = attention.map(
 				(item, index) =>
@@ -334,7 +344,7 @@ export function registerOrdinaryAgentSurfaces(
 			);
 			const selected = await ctx.ui.select("Agents", [
 				...attentionOptions,
-				...statuses.map(formatAgentRow),
+				...statusRows.map(({ option }) => option),
 			]);
 			const attentionIndex = selected === undefined
 				? -1
@@ -343,9 +353,7 @@ export function registerOrdinaryAgentSurfaces(
 				await view.focusHumanRequest(attention[attentionIndex]!.requestId);
 				return;
 			}
-			const selectedStatus = statuses.find(
-				(status) => formatAgentRow(status) === selected,
-			);
+			const selectedStatus = statusRows.find(({ option }) => option === selected)?.status;
 			if (selectedStatus) await view.selectForHuman(selectedStatus.agentId);
 		},
 	});

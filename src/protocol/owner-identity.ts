@@ -1,14 +1,13 @@
 import type {
 	AgentSessionRuntime,
-	SessionEntry,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { isAbsolute } from "node:path";
 
 import {
 	isRuntimeThinkingLevel,
 	type ModelReference,
 	type RuntimeConfigurationBaseline,
+	validateRuntimeConfigurationBaseline,
 } from "./runtime-configuration.ts";
 
 export type { ModelReference, RuntimeConfigurationBaseline } from "./runtime-configuration.ts";
@@ -65,9 +64,7 @@ export function adoptOrValidateOwnerIdentity(
 	if (matchingIdentityEntries.length === 1) {
 		const entry = matchingIdentityEntries[0];
 		if (entry.type !== "custom") throw new Error("Identity entry narrowing failed");
-		const identity = validateOwnerIdentity(entry.data, sessionId, sessionManager);
-		validateCurrentScope(entries, entry);
-		return identity;
+		return validateOwnerIdentity(entry.data, sessionId, sessionManager);
 	}
 
 	const identity = createOwnerIdentity(runtime, entryModulePath);
@@ -144,7 +141,14 @@ function validateOwnerIdentity(
 	if (configuration.label !== OWNER_LABEL) {
 		throw new InvalidOwnerIdentityError('Owner label must be "owner"');
 	}
-	const baseline = validateBaseline(configuration.baseline);
+	let baseline: RuntimeConfigurationBaseline;
+	try {
+		baseline = validateRuntimeConfigurationBaseline(configuration.baseline);
+	} catch (error) {
+		throw new InvalidOwnerIdentityError(
+			error instanceof Error ? error.message : "AgentConfiguration.baseline is invalid",
+		);
+	}
 	if (baseline.cwd !== sessionManager.getCwd()) {
 		throw new InvalidOwnerIdentityError("Owner baseline cwd does not match the Pi session cwd");
 	}
@@ -155,65 +159,6 @@ function validateOwnerIdentity(
 		directSpawnerAgentId: null,
 		configuration: { label: OWNER_LABEL, baseline },
 	};
-}
-
-function validateBaseline(value: unknown): RuntimeConfigurationBaseline {
-	const baseline = requireExactRecord(value, [
-		"cwd",
-		"model",
-		"thinking",
-		"tools",
-		"skills",
-		"extensions",
-	]);
-	if (typeof baseline.cwd !== "string" || !isAbsolute(baseline.cwd)) {
-		throw new InvalidOwnerIdentityError("AgentConfiguration.baseline.cwd is invalid");
-	}
-	const model = requireExactRecord(baseline.model, ["provider", "modelId"]);
-	if (!isNonEmptyIdentifier(model.provider) || !isNonEmptyIdentifier(model.modelId)) {
-		throw new InvalidOwnerIdentityError("AgentConfiguration.baseline.model is invalid");
-	}
-	if (!isRuntimeThinkingLevel(baseline.thinking)) {
-		throw new InvalidOwnerIdentityError("AgentConfiguration.baseline.thinking is invalid");
-	}
-	const tools = validateStringList(baseline.tools, "AgentConfiguration.baseline.tools");
-	const skills = validateStringList(baseline.skills, "AgentConfiguration.baseline.skills");
-	const extensions = validateStringList(
-		baseline.extensions,
-		"AgentConfiguration.baseline.extensions",
-	);
-	return {
-		cwd: baseline.cwd,
-		model: { provider: model.provider, modelId: model.modelId },
-		thinking: baseline.thinking,
-		tools,
-		skills,
-		extensions,
-	};
-}
-
-function validateCurrentScope(entries: SessionEntry[], identityEntry: SessionEntry): void {
-	const cutoff = entries.indexOf(identityEntry);
-	for (const entry of entries.slice(cutoff + 1)) {
-		if (
-			(entry.type === "custom" || entry.type === "custom_message") &&
-			entry.customType.startsWith("agent-coordination.")
-		) {
-			throw new InvalidOwnerIdentityError(
-				`unexpected current-scope coordination entry ${entry.customType}`,
-			);
-		}
-	}
-}
-
-function validateStringList(value: unknown, name: string): readonly string[] {
-	if (!Array.isArray(value) || !value.every(isNonEmptyIdentifier)) {
-		throw new InvalidOwnerIdentityError(`${name} is invalid`);
-	}
-	if (new Set(value).size !== value.length) {
-		throw new InvalidOwnerIdentityError(`${name} contains duplicates`);
-	}
-	return [...value];
 }
 
 function requireExactRecord(value: unknown, expectedKeys: readonly string[]): Record<string, unknown> {
@@ -231,8 +176,4 @@ function requireExactRecord(value: unknown, expectedKeys: readonly string[]): Re
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyIdentifier(value: unknown): value is string {
-	return typeof value === "string" && value.length > 0 && !value.includes("\0");
 }

@@ -42,6 +42,59 @@ test("an existing exact Owner Identity is validated without duplication", async 
 	await host.runtime.dispose();
 });
 
+test("a resumed Owner admits coordination evidence after its Identity cutoff", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	host.model.setResponses([
+		fauxAssistantMessage("The self-addressed Message is available after restart."),
+	]);
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{
+					operation: "send",
+					targetAgentId: host.session.sessionId,
+					content: "Persist legitimate current-scope coordination evidence.",
+				},
+				{ id: "owner-self-message-before-reopen" },
+			),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const message = host.session.getToolDefinition("agent_message");
+	assert.ok(message);
+	await message.execute(
+		"owner-self-message-before-reopen",
+		{
+			operation: "send",
+			targetAgentId: host.session.sessionId,
+			content: "Persist legitimate current-scope coordination evidence.",
+		},
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	await host.session.waitForIdle();
+	const sessionFile = host.session.sessionManager.getSessionFile();
+	assert.ok(sessionFile);
+	await host.runtime.dispose();
+
+	const reopened = await createUnboundTestOwnerHost(piAgentCoordination, {
+		cwd: host.cwd,
+		agentDir: host.services.agentDir,
+		sessionFile,
+	});
+	await bindTestOwnerHost(reopened, "tui");
+
+	assert.ok(reopened.session.getToolDefinition("agent_observe"));
+	assert.equal(
+		reopened.ui.notifications.some(({ type }) => type === "error"),
+		false,
+	);
+	await reopened.runtime.dispose();
+});
+
 test("resource reload rebinds the hidden Owner Agent extension", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination);
 	await bindTestOwnerHost(host, "tui");

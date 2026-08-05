@@ -15,6 +15,7 @@ import { join } from "node:path";
 
 import {
 	requireLiveSession,
+	requireLiveServices,
 	type AgentRecord,
 } from "../coordination/agent-record.ts";
 import { copyExtensionBindings } from "../pi-integration/extension-bindings.ts";
@@ -29,12 +30,15 @@ import {
 	resolveAgentRunConfiguration,
 	type EffectiveAgentRunConfiguration,
 } from "../templates/agent-configuration.ts";
+import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
+import { InProcessAgentHost } from "./in-process-agent-host.ts";
 import { discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
 import {
 	selectAgentTemplateForRun,
 	type AgentTemplate,
 	type AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
+import { workflowSessionDirectory } from "./workflow-session-directory.ts";
 
 export const ORDINARY_COORDINATION_TOOLS = [
 	"agent_message",
@@ -47,7 +51,6 @@ export const ORDINARY_COORDINATION_TOOLS = [
 const BUILT_IN_TOOL_NAMES = new Set(["bash", "edit", "find", "grep", "ls", "read", "write"]);
 const CHILD_EXTENSION_PREFIX = "<inline:pi-agent-coordination-agent:";
 const INLINE_PUBLIC_EXTENSION_PATH = "<inline:pi-agent-coordination>";
-const WORKFLOW_SESSION_DIRECTORY = "pi-agent-coordination";
 
 export type ChildRunBlueprint = Readonly<{
 	baseline: RuntimeConfigurationBaseline;
@@ -86,19 +89,20 @@ export class DefaultChildSessionFactory {
 
 	snapshotRuntimeBaseline(parent: AgentRecord): RuntimeConfigurationBaseline {
 		const parentSession = requireLiveSession(parent);
+		const parentServices = requireLiveServices(parent);
 		const model = parentSession.model;
 		if (!model) throw new Error("Parent model is unavailable");
-		if (!parent.services.modelRuntime.getModel(model.provider, model.id)) {
+		if (!parentServices.modelRuntime.getModel(model.provider, model.id)) {
 			throw new Error("Inherited model is unavailable");
 		}
-		const skills = parent.services.resourceLoader.getSkills().skills;
-		const extensions = parent.services.resourceLoader
+		const skills = parentServices.resourceLoader.getSkills().skills;
+		const extensions = parentServices.resourceLoader
 			.getExtensions()
 			.extensions.filter((extension) => !this.#isCoordinationExtension(extension.path, extension.resolvedPath));
 		const baseline = {
 			// SessionManager cwd is the durable transcript header cwd. Services cwd is
 			// the current Run's effective cwd and is what descendants must inherit.
-			cwd: parent.services.cwd,
+			cwd: parentServices.cwd,
 			model: { provider: model.provider, modelId: model.id },
 			thinking: parentSession.thinkingLevel,
 			tools: parentSession
@@ -114,9 +118,46 @@ export class DefaultChildSessionFactory {
 		} satisfies RuntimeConfigurationBaseline;
 		this.#projectTrustByCwd.set(
 			baseline.cwd,
-			parent.services.settingsManager.isProjectTrusted(),
+			parentServices.settingsManager.isProjectTrusted(),
 		);
 		return baseline;
+	}
+
+	createAgentRecord(options: {
+		identity: ChildAgentIdentity;
+		sessionManager: SessionManager;
+		blueprint: ChildRunBlueprint;
+		firstPrepared?: PreparedAgentRun;
+	}): AgentRecord {
+		const { identity, sessionManager, blueprint } = options;
+		let firstPrepared = options.firstPrepared;
+		let child!: AgentRecord;
+		const host = InProcessAgentHost.createChild({
+			sessionManager,
+			startSession: async () => {
+				const prepared = firstPrepared ?? await this.prepareRun(
+					identity.agentId,
+					blueprint,
+				);
+				firstPrepared = undefined;
+				const session = await this.startSession({ sessionManager, prepared });
+				child.services = prepared.services;
+				child.effectiveConfiguration = prepared.configuration;
+				return session;
+			},
+		});
+		child = {
+			identity,
+			...(options.firstPrepared === undefined
+				? {}
+				: {
+					services: options.firstPrepared.services,
+					effectiveConfiguration: options.firstPrepared.configuration,
+				}),
+			host,
+			children: [],
+		};
+		return child;
 	}
 
 	async prepareRun(agentId: string, blueprint: ChildRunBlueprint): Promise<PreparedAgentRun> {
@@ -280,14 +321,10 @@ export class DefaultChildSessionFactory {
 	}
 
 	workflowSessionDirectory(): string {
-		const ownerSessionDirectory = this.#ownerRuntime.session.sessionManager.getSessionDir();
-		if (ownerSessionDirectory.length === 0) {
-			throw new Error("Owner has no durable Pi session directory");
-		}
-		const encodedWorkflowId = Buffer.from(this.#ownerIdentity.workflowId, "utf8").toString(
-			"base64url",
+		return workflowSessionDirectory(
+			this.#ownerRuntime.session.sessionManager.getSessionDir(),
+			this.#ownerIdentity.workflowId,
 		);
-		return join(ownerSessionDirectory, WORKFLOW_SESSION_DIRECTORY, encodedWorkflowId);
 	}
 
 	async #resolveSelectedTemplate(blueprint: ChildRunBlueprint): Promise<AgentTemplate | undefined> {

@@ -50,6 +50,7 @@ export type TestUi = ExtensionUIContext & {
 	readonly agentViews: Array<{ title: string; options: string[] }>;
 	readonly notifications: Array<{ message: string; type?: "info" | "warning" | "error" }>;
 	readonly customSurfaces: Component[];
+	selectionResponses: string[];
 };
 
 export type TestOwnerHost = {
@@ -66,6 +67,9 @@ export type TestOwnerHost = {
 export type TestOwnerHostOptions = {
 	persistent?: boolean;
 	additionalExtensionPaths?: string[];
+	cwd?: string;
+	agentDir?: string;
+	sessionFile?: string;
 };
 
 export async function createTestOwnerHost(
@@ -81,7 +85,7 @@ export async function createUnboundTestOwnerHost(
 	extension: ExtensionFactory,
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
-	const cwd = await mkdtemp(join(tmpdir(), "pi-agent-coordination-"));
+	const cwd = options?.cwd ?? await mkdtemp(join(tmpdir(), "pi-agent-coordination-"));
 	const additionalExtensionPaths = options?.additionalExtensionPaths ?? [];
 	const retainedExtensionPaths = new Set(additionalExtensionPaths);
 	const { modelRuntime, faux } = await createTestModelRuntime();
@@ -90,7 +94,7 @@ export async function createUnboundTestOwnerHost(
 
 	const services = await createAgentSessionServices({
 		cwd,
-		agentDir: join(cwd, ".pi-agent"),
+		agentDir: options?.agentDir ?? join(cwd, ".pi-agent"),
 		modelRuntime,
 		settingsManager: SettingsManager.inMemory(),
 		resourceLoaderOptions: {
@@ -116,9 +120,11 @@ export async function createUnboundTestOwnerHost(
 			}),
 		},
 	});
-	const sessionManager = options?.persistent
-		? SessionManager.create(cwd, join(cwd, "sessions"))
-		: SessionManager.inMemory(cwd);
+	const sessionManager = options?.sessionFile
+		? SessionManager.open(options.sessionFile)
+		: options?.persistent
+			? SessionManager.create(cwd, join(cwd, "sessions"))
+			: SessionManager.inMemory(cwd);
 	const { session } = await createAgentSessionFromServices({
 		services,
 		sessionManager,
@@ -192,6 +198,7 @@ function createTestUi(): TestUi {
 	const agentViews: TestUi["agentViews"] = [];
 	const notifications: TestUi["notifications"] = [];
 	const customSurfaces: Component[] = [];
+	const selectionResponses: string[] = [];
 	let editorText = "";
 	const testTui = { requestRender() {} } as unknown as TUI;
 	const testTheme = {
@@ -240,9 +247,10 @@ function createTestUi(): TestUi {
 		agentViews,
 		notifications,
 		customSurfaces,
+		selectionResponses,
 		async select(title: string, options: string[]) {
 			agentViews.push({ title, options: [...options] });
-			return undefined;
+			return selectionResponses.shift();
 		},
 		async confirm() {
 			return false;

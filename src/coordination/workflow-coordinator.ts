@@ -7,6 +7,8 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { dirname, resolve } from "node:path";
 
 import {
+	requireAgentRecord,
+	requireLiveServices,
 	statusOf,
 	type AgentRecord,
 	type AgentStatus,
@@ -49,6 +51,8 @@ import {
 	WorkflowExecutionScheduler,
 	type WorkflowExecutionPermit,
 } from "./workflow-execution-scheduler.ts";
+import type { ColdWorkflowRecovery } from "../bootstrap/cold-host-discovery.ts";
+import { piSessionRecency } from "../pi-integration/session-recency.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type {
@@ -72,7 +76,10 @@ export type OrdinaryAgentCoordinatorView = Readonly<{
 		text: string,
 		images: readonly ImageContent[] | undefined,
 	): Promise<boolean>;
-	selectionStatuses(): readonly AgentStatus[];
+	selectionRoster(): Readonly<{
+		live: readonly AgentStatus[];
+		dormant: readonly AgentStatus[];
+	}>;
 	selectForHuman(agentId: string): Promise<"selected" | "dormant">;
 	askHuman(
 		toolCallId: string,
@@ -103,6 +110,8 @@ export class WorkflowCoordinator {
 	readonly #workflowPolicy: WorkflowPolicyStore;
 	readonly #executionScheduler: WorkflowExecutionScheduler;
 	readonly #executionPermits = new Map<string, WorkflowExecutionPermit>();
+	readonly #quarantinedAgentIds: ReadonlySet<string>;
+	readonly #agentIdBySpawnSource: Map<string, string>;
 	#shutdownPromise: Promise<void> | undefined;
 	#shuttingDown = false;
 
@@ -120,11 +129,16 @@ export class WorkflowCoordinator {
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
 			messageBoundaryHooks?: MessageBoundaryHooks;
 			workflowPolicy?: WorkflowPolicyStore;
+			recoveredWorkflow?: ColdWorkflowRecovery;
 			humanRequestPresentation?: HumanRequestPresentation;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
 			humanSessionSelection?: HumanSessionSelection;
 		},
 	) {
+		this.#quarantinedAgentIds = options.recoveredWorkflow?.quarantinedAgentIds ?? new Set();
+		this.#agentIdBySpawnSource = new Map(
+			options.recoveredWorkflow?.agentIdBySpawnSource ?? [],
+		);
 		this.#workflowPolicy = options.workflowPolicy ?? new WorkflowPolicyStore();
 		this.#executionScheduler = new WorkflowExecutionScheduler(this.#workflowPolicy);
 		this.#ownerIdentity = identity;
@@ -143,13 +157,41 @@ export class WorkflowCoordinator {
 			templateRoots: options.templateRoots,
 			childExtensionFactory: options.childExtensionFactory,
 		});
+		for (const recovered of options.recoveredWorkflow?.agents ?? []) {
+			if (
+				options.recoveredWorkflow?.transcriptPathByAgentId.get(
+					recovered.identity.agentId,
+				) !== recovered.sessionManager.getSessionFile()
+			) {
+				throw new Error(
+					`invariant_violation: recovered Agent ${recovered.identity.agentId} has inconsistent transcript location`,
+				);
+			}
+			const record = sessionFactory.createAgentRecord({
+				identity: recovered.identity,
+				sessionManager: recovered.sessionManager,
+				blueprint: {
+					baseline: recovered.identity.configuration.baseline,
+					spawnInput: recovered.spawnInput,
+				},
+			});
+			this.#agents.set(recovered.identity.agentId, record);
+			const parent = this.#agents.get(recovered.identity.directSpawnerAgentId);
+			if (!parent) {
+				throw new Error(
+					`invariant_violation: recovered Agent ${recovered.identity.agentId} has no verified Direct Spawner`,
+				);
+			}
+			parent.children.push(recovered.identity.agentId);
+		}
 		this.#messages = new MessageCoordinator({
 			agents: this.#agents,
+			quarantinedAgentIds: this.#quarantinedAgentIds,
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
 			workflowPolicy: this.#workflowPolicy,
 		});
-		this.#messages.integrate(this.#requireAgent(identity.agentId));
+		for (const record of this.#agents.values()) this.#messages.integrate(record);
 		if (this.#humanSessionSelection) {
 			this.#requireAgent(identity.agentId).host.addRetentionReason(
 				"interactive_selection",
@@ -172,11 +214,13 @@ export class WorkflowCoordinator {
 		});
 		this.#runSupervisor = new RunSupervisor({
 			agents: this.#agents,
+			quarantinedAgentIds: this.#quarantinedAgentIds,
 			ownerAgentId: identity.agentId,
 			messages: this.#messages,
 		});
 		this.#spawner = new DefaultChildSpawner({
 			agents: this.#agents,
+			agentIdBySpawnSource: this.#agentIdBySpawnSource,
 			sessionFactory,
 			messages: this.#messages,
 			boundaryHooks: options.spawnBoundaryHooks,
@@ -195,8 +239,7 @@ export class WorkflowCoordinator {
 				this.#runSupervisor.execute(agentId, toolCallId, input),
 			resumeFromHuman: (text, images) =>
 				this.#runSupervisor.resumeFromHuman(agentId, text, images),
-			selectionStatuses: () =>
-				[...this.#agents.values()].map((record) => statusOf(record)),
+			selectionRoster: () => this.#selectionRoster(),
 			selectForHuman: (targetAgentId) => this.#selectForHuman(targetAgentId),
 			askHuman: (toolCallId, input, signal) =>
 				this.#humanRequests.ask(agentId, toolCallId, input, signal),
@@ -250,10 +293,52 @@ export class WorkflowCoordinator {
 		return target;
 	}
 
+	#selectionRoster(): Readonly<{
+		live: readonly AgentStatus[];
+		dormant: readonly AgentStatus[];
+	}> {
+		const authorityOrder: AgentRecord[] = [];
+		const appendAuthoritySubtree = (agentId: string) => {
+			const record = this.#requireAgent(agentId);
+			authorityOrder.push(record);
+			for (const childId of record.children) appendAuthoritySubtree(childId);
+		};
+		appendAuthoritySubtree(this.#ownerIdentity.agentId);
+		const live: AgentStatus[] = [];
+		const dormant: Array<{ status: AgentStatus; recency: number; order: number }> = [];
+		for (const [order, record] of authorityOrder.entries()) {
+			const status = statusOf(record);
+			if (status.run.phase !== "dormant") {
+				live.push(status);
+				continue;
+			}
+			const header = record.host.sessionManager.getHeader();
+			if (!header) {
+				throw new Error(
+					`invariant_violation: Agent ${record.identity.agentId} has no Pi session header`,
+				);
+			}
+			dormant.push({
+				status,
+				recency: piSessionRecency(header, record.host.sessionManager.getEntries()),
+				order,
+			});
+		}
+		dormant.sort(
+			(left, right) => right.recency - left.recency || left.order - right.order,
+		);
+		return {
+			live,
+			dormant: dormant.map(({ status }) => status),
+		};
+	}
+
 	#requireAgent(agentId: string): AgentRecord {
-		const record = this.#agents.get(agentId);
-		if (!record) throw new Error(`unknown_identity: ${agentId}`);
-		return record;
+		return requireAgentRecord(
+			this.#agents,
+			this.#quarantinedAgentIds,
+			agentId,
+		);
 	}
 
 	async #beginExecution(agentId: string): Promise<void> {
@@ -321,13 +406,14 @@ export class WorkflowCoordinator {
 					? target.host.requireLiveSession()
 					: undefined;
 				if (!session) return false;
+				const services = requireLiveServices(target);
 				target.host.addRetentionReason("interactive_selection");
 				try {
 					await selection.activate({
 						agentId,
 						session,
-						services: target.services,
-						diagnostics: target.services.diagnostics,
+						services,
+						diagnostics: services.diagnostics,
 					});
 					return true;
 				} catch (error) {
