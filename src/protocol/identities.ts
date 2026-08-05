@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 
 import type { SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { AGENT_IDENTITY_CUSTOM_TYPE } from "./owner-identity.ts";
+import {
+	AGENT_IDENTITY_CUSTOM_TYPE,
+	MODERATOR_INPUT_CUSTOM_TYPE,
+} from "./custom-entry-types.ts";
 
 const IDENTITY_PREFIX = "agent-coordination";
 
@@ -120,10 +123,14 @@ export function currentCoordinationScope(
 	const entries = sessionManager.getEntries();
 	const bootstrapIndex = entries.findIndex(
 		(entry) =>
-			entry.type === "custom" &&
-			entry.customType === AGENT_IDENTITY_CUSTOM_TYPE &&
-			isRecord(entry.data) &&
-			entry.data.agentId === agentId,
+			(entry.type === "custom" &&
+				entry.customType === AGENT_IDENTITY_CUSTOM_TYPE &&
+				isRecord(entry.data) &&
+				entry.data.agentId === agentId) ||
+			(entry.type === "custom_message" &&
+				entry.customType === MODERATOR_INPUT_CUSTOM_TYPE &&
+				isRecord(entry.details) &&
+				entry.details.agentId === agentId),
 	);
 	if (bootstrapIndex < 0) {
 		throw new ProtocolInvariantError(`Agent ${agentId} has no current Identity`);

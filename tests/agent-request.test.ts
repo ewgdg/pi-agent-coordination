@@ -8,7 +8,10 @@ import {
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
+import {
+	createAgentBoundExtension,
+	createModeratorBoundExtension,
+} from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import type { MessageBoundaryHooks } from "../src/coordination/workflow-coordinator.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
@@ -1460,6 +1463,8 @@ async function createDormantChildHarness(
 		entryModulePath: "<inline:pi-agent-coordination>",
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},

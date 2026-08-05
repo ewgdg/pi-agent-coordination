@@ -1,10 +1,10 @@
 # Run supervision
 
-Workflow Owners and Direct Spawners can inspect and control authorized ordinary Agent Runs without changing Agent identity or the Workflow tree.
+Workflow Owners, Direct Spawners, and Moderators can inspect and control authorized Agent Runs without changing Agent identity or the Workflow tree.
 
 ## Authority
 
-The Workflow Owner may observe and control any verified ordinary descendant. A Direct Spawner may observe and control only its immediate children. An Agent may observe itself, but cannot control itself, its parent, a sibling, or the Owner Run. Knowing an Agent identity or exchanging Messages does not grant supervision authority.
+The Workflow Owner may observe and control any verified non-Owner Agent. A Direct Spawner may observe and control only its immediate children. A Moderator may observe any known Workflow Agent and control any current non-Owner Run. An Agent may observe itself, but cannot control itself; a Moderator also cannot control the Owner Run. Knowing an Agent identity or exchanging Messages does not grant supervision authority.
 
 `agent_observe` supports one status or direct-child query:
 
@@ -29,7 +29,7 @@ Each status contains the durable Agent identity and structural relationship, the
 - `primaryEvidence.inspectedThrough` identifies the last physical transcript entry included in the observation.
 - `run.phase` is `starting`, `live`, `ending`, or `dormant`. A live Run also reports `work`, `attention`, and counted `retentionReasons`.
 
-Retention categories are `owner_host_binding`, `pending_delivery`, `awaiting_answer`, `answer_owed`, `interactive_selection`, and `interruption_hold`. Status never exposes Message payloads, prompts, history summaries, Run handles, or raw Pi objects.
+Retention categories are `owner_host_binding`, `pending_delivery`, `awaiting_answer`, `answer_owed`, `interactive_selection`, `interruption_hold`, and `moderator_handling`. Status never exposes Message payloads, prompts, history summaries, Run handles, or raw Pi objects.
 
 ## Interrupt an exact Run
 

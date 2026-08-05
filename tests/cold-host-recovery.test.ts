@@ -667,8 +667,204 @@ test("recovered authority keeps physical child order while Dormant view uses Pi 
 	await reopened.session.prompt("/agents");
 	const options = reopened.ui.agentViews.at(-1)?.options ?? [];
 	assert.match(options[0] ?? "", /^Live · owner · /);
-	assert.match(options[1] ?? "", new RegExp(`^Dormant · recent-second · ${second.agentId}`));
-	assert.match(options[2] ?? "", new RegExp(`^Dormant · physical-first · ${first.agentId}`));
+	const ordinaryChildren = options.filter(
+		(option) => option.includes("recent-second") || option.includes("physical-first"),
+	);
+	assert.match(
+		ordinaryChildren[0] ?? "",
+		new RegExp(`^Dormant · recent-second · ${second.agentId}`),
+	);
+	assert.match(
+		ordinaryChildren[1] ?? "",
+		new RegExp(`^Dormant · physical-first · ${first.agentId}`),
+	);
+	await reopened.runtime.dispose();
+});
+
+test("a fresh Owner host rediscovers a standalone Moderator without reconstructing handling", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_spawn",
+				{ request: "Settle while still owing this Creation Request." },
+				{ id: "spawn-cold-moderator-trigger" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The cold-recovery trigger is delegated."),
+		fauxAssistantMessage("I settled without an Answer."),
+		fauxAssistantMessage("I recorded initial Moderator evidence."),
+	]);
+	await host.session.prompt("Create a Moderator that can be recovered after host loss.");
+	await host.session.waitForIdle();
+	const directory = workflowSessionDirectory(host);
+	const moderator = await waitForModeratorSession(directory);
+	const ownerSessionFile = host.session.sessionManager.getSessionFile();
+	assert.ok(ownerSessionFile);
+	await host.runtime.dispose();
+
+	const reopened = await reopenOwner(host, ownerSessionFile);
+	const observe = reopened.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const statusResult = await observe.execute(
+		"observe-recovered-moderator",
+		{ operation: "status", agentId: moderator.agentId },
+		undefined,
+		undefined,
+		reopened.session.extensionRunner.createContext(),
+	);
+	const status = statusResult.details as {
+		agentId: string;
+		label: string;
+		directSpawnerAgentId: string | null;
+		run: { phase: string; retentionReasons: Array<{ reason: string }> };
+	};
+	assert.deepEqual(
+		{
+			agentId: status.agentId,
+			label: status.label,
+			directSpawnerAgentId: status.directSpawnerAgentId,
+			phase: status.run.phase,
+			retentionReasons: status.run.retentionReasons,
+		},
+		{
+			agentId: moderator.agentId,
+			label: "moderator",
+			directSpawnerAgentId: null,
+			phase: "dormant",
+			retentionReasons: [],
+		},
+	);
+	const children = await observe.execute(
+		"observe-children-with-standalone-moderator",
+		{ operation: "children" },
+		undefined,
+		undefined,
+		reopened.session.extensionRunner.createContext(),
+	);
+	assert.equal(
+		(children.details as { children: Array<{ agentId: string }> }).children.some(
+			({ agentId }) => agentId === moderator.agentId,
+		),
+		false,
+	);
+	await reopened.session.prompt("/agents");
+	assert.equal(
+		reopened.ui.agentViews.at(-1)?.options.some(
+			(option) => option.includes(`moderator · ${moderator.agentId} · dormant`),
+		),
+		true,
+	);
+
+	let recoveredTools: string[] = [];
+	reopened.model.setResponses([
+		(context) => {
+			recoveredTools = context.tools?.map(({ name }) => name).sort() ?? [];
+			return fauxAssistantMessage("The recovered Moderator received routing.");
+		},
+	]);
+	await executeTool(
+		reopened,
+		"agent_message",
+		"route-to-recovered-moderator",
+		{
+			operation: "send",
+			targetAgentId: moderator.agentId,
+			content: "Inspect post-mortem evidence without reconstructing handling.",
+		},
+	);
+	await waitForTranscriptEntry(
+		moderator.path,
+		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "text" &&
+					part.text === "The recovered Moderator received routing.",
+			),
+	);
+	assert.deepEqual(recoveredTools, [
+		"agent_control",
+		"agent_message",
+		"agent_observe",
+		"ask_user_question",
+		"moderator_control",
+	]);
+	await reopened.runtime.dispose();
+});
+
+test("cold discovery quarantines malformed Moderator bootstrap evidence", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage("Persist the Owner before malformed candidate discovery."),
+	);
+	const ownerIdentity = host.session.sessionManager.getEntries().find(
+		(entry) => entry.type === "custom" &&
+			entry.customType === "agent-coordination.identity",
+	);
+	assert.ok(ownerIdentity?.type === "custom");
+	const baseline = (ownerIdentity.data as {
+		configuration: { baseline: Record<string, unknown> };
+	}).configuration.baseline;
+	const candidateDirectory = workflowSessionDirectory(host);
+	await mkdir(candidateDirectory, { recursive: true });
+	const malformed = SessionManager.create(host.cwd, candidateDirectory);
+	const malformedAgentId = malformed.getSessionId();
+	malformed.appendCustomMessageEntry(
+		"agent-coordination.moderator-input",
+		JSON.stringify({
+			trigger: {
+				kind: "obligation_stall",
+				agentId: host.session.sessionId,
+				obligations: { total: 0, sources: [] },
+			},
+			inspectedThrough: [
+				{ agentId: host.session.sessionId, entryId: ownerIdentity.id },
+			],
+		}),
+		true,
+		{
+			agentId: malformedAgentId,
+			workflowId: host.session.sessionId,
+			configuration: {
+				label: "moderator",
+				description: "obligation stall",
+				baseline,
+			},
+		},
+	);
+	malformed.appendMessage(fauxAssistantMessage("Flush malformed Moderator evidence."));
+	const malformedPath = malformed.getSessionFile();
+	assert.ok(malformedPath);
+	assert.equal(dirname(malformedPath), candidateDirectory);
+	await waitForSessionFile(candidateDirectory, malformedAgentId);
+	const ownerSessionFile = host.session.sessionManager.getSessionFile();
+	assert.ok(ownerSessionFile);
+	await host.runtime.dispose();
+	await waitForSessionFile(candidateDirectory, malformedAgentId);
+
+	const reopened = await reopenOwner(host, ownerSessionFile);
+	const observe = reopened.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	await assert.rejects(
+		observe.execute(
+			"observe-malformed-moderator",
+			{ operation: "status", agentId: malformedAgentId },
+			undefined,
+			undefined,
+			reopened.session.extensionRunner.createContext(),
+		),
+		/evidence_unavailable/,
+	);
+	assert.equal(
+		reopened.ui.notifications.some(
+			({ message, type }) => type === "warning" &&
+				message.includes("1 Agent transcript candidate was quarantined"),
+		),
+		true,
+		JSON.stringify(reopened.ui.notifications),
+	);
 	await reopened.runtime.dispose();
 });
 
@@ -683,6 +879,26 @@ async function reopenOwner(
 	});
 	await bindTestOwnerHost(reopened, "tui");
 	return reopened;
+}
+
+async function waitForModeratorSession(
+	directory: string,
+): Promise<{ agentId: string; path: string }> {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		for (const filename of await readdir(directory)) {
+			if (!filename.endsWith(".jsonl")) continue;
+			const path = join(directory, filename);
+			const sessionManager = SessionManager.open(path);
+			if (
+				sessionManager.getEntries().some(
+					(entry) => entry.type === "custom_message" &&
+						entry.customType === "agent-coordination.moderator-input",
+				)
+			) return { agentId: sessionManager.getSessionId(), path };
+		}
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+	throw new Error("Expected persisted Moderator session");
 }
 
 async function executeTool(

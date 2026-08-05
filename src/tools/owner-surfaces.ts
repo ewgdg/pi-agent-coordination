@@ -1,7 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { OrdinaryAgentCoordinatorView } from "../coordination/workflow-coordinator.ts";
+import type {
+	ModeratorAgentCoordinatorView,
+	OrdinaryAgentCoordinatorView,
+} from "../coordination/workflow-coordinator.ts";
 import {
 	renderAgentMessageCall,
 	renderAgentMessageResult,
@@ -11,11 +14,29 @@ import {
 	renderAgentSpawnResult,
 } from "./spawn-renderer.ts";
 
-type ViewResolver = () => OrdinaryAgentCoordinatorView;
+type AgentCoordinatorView =
+	| OrdinaryAgentCoordinatorView
+	| ModeratorAgentCoordinatorView;
+type ViewResolver = () => AgentCoordinatorView;
 
 export function registerOrdinaryAgentSurfaces(
 	pi: ExtensionAPI,
+	resolveView: () => OrdinaryAgentCoordinatorView,
+): void {
+	registerAgentSurfaces(pi, resolveView, { spawn: true, moderatorControl: false });
+}
+
+export function registerModeratorAgentSurfaces(
+	pi: ExtensionAPI,
+	resolveView: () => ModeratorAgentCoordinatorView,
+): void {
+	registerAgentSurfaces(pi, resolveView, { spawn: false, moderatorControl: true });
+}
+
+function registerAgentSurfaces(
+	pi: ExtensionAPI,
 	resolveView: ViewResolver,
+	role: Readonly<{ spawn: boolean; moderatorControl: boolean }>,
 ): void {
 	const messageParameters = Type.Union([
 		Type.Object(
@@ -241,30 +262,37 @@ export function registerOrdinaryAgentSurfaces(
 			};
 		},
 	});
-	pi.registerTool({
-		name: "agent_spawn",
-		label: "Spawn Agent",
-		description:
-			"Create one fresh durable child Agent with inherited runtime configuration and deliver its initial Creation Request.",
-		promptSnippet: "Create one fresh child Agent and give it isolated initial work.",
-		executionMode: "sequential",
-		parameters: spawnParameters,
-		renderCall: renderAgentSpawnCall,
-		renderResult: renderAgentSpawnResult,
-		async execute(toolCallId, parameters) {
-			const receipt = await resolveView().spawn(toolCallId, parameters);
-			return {
-				content: [{ type: "text", text: JSON.stringify(receipt) }],
-				details: receipt,
-			};
-		},
-	});
+	if (role.spawn) {
+		const ordinaryView = resolveView as () => OrdinaryAgentCoordinatorView;
+		pi.registerTool({
+			name: "agent_spawn",
+			label: "Spawn Agent",
+			description:
+				"Create one fresh durable child Agent with inherited runtime configuration and deliver its initial Creation Request.",
+			promptSnippet: "Create one fresh child Agent and give it isolated initial work.",
+			executionMode: "sequential",
+			parameters: spawnParameters,
+			renderCall: renderAgentSpawnCall,
+			renderResult: renderAgentSpawnResult,
+			async execute(toolCallId, parameters) {
+				const receipt = await ordinaryView().spawn(toolCallId, parameters);
+				return {
+					content: [{ type: "text", text: JSON.stringify(receipt) }],
+					details: receipt,
+				};
+			},
+		});
+	}
 
 	pi.registerTool<typeof observeParameters, unknown>({
 		name: "agent_observe",
 		label: "Observe Agent",
-		description: "Passively observe an authorized Agent or its direct children.",
-		promptSnippet: "Observe authorized Agents and their bounded live Run state.",
+		description: role.moderatorControl
+			? "Passively observe any known Agent in this Workflow or enumerate ordinary children."
+			: "Passively observe an authorized Agent or its direct children.",
+		promptSnippet: role.moderatorControl
+			? "Pull bounded status for Workflow Agents relevant to diagnosis."
+			: "Observe authorized Agents and their bounded live Run state.",
 		executionMode: "sequential",
 		parameters: observeParameters,
 		async execute(_toolCallId, parameters) {
@@ -288,8 +316,9 @@ export function registerOrdinaryAgentSurfaces(
 		label: "Control Agent Run",
 		description:
 			"Interrupt, explicitly resume, or terminate one authorized exact Agent Run.",
-		promptSnippet:
-			"Supervise an immediate child Run, or any ordinary descendant when acting as Workflow Owner.",
+		promptSnippet: role.moderatorControl
+			? "Supervise any current non-Owner Run needed to restore safe progress."
+			: "Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
 		executionMode: "sequential",
 		parameters: controlParameters,
 		async execute(toolCallId, parameters) {
@@ -321,6 +350,56 @@ export function registerOrdinaryAgentSurfaces(
 			};
 		},
 	});
+
+	if (role.moderatorControl) {
+		const moderatorView = resolveView as () => ModeratorAgentCoordinatorView;
+		const evidencePointer = Type.Union([
+			Type.Object(
+				{
+					agentId: Type.String({ minLength: 1 }),
+					entryId: Type.String({ minLength: 1 }),
+				},
+				{ additionalProperties: false },
+			),
+			Type.Object(
+				{
+					agentId: Type.String({ minLength: 1 }),
+					entryId: Type.String({ minLength: 1 }),
+					toolCallId: Type.String({ minLength: 1 }),
+				},
+				{ additionalProperties: false },
+			),
+		]);
+		const moderatorControlParameters = Type.Object(
+			{
+				operation: Type.Literal("resolve"),
+				summary: Type.String({ minLength: 1 }),
+				rationale: Type.String({ minLength: 1 }),
+				evidencePointers: Type.Optional(Type.Array(evidencePointer)),
+			},
+			{ additionalProperties: false },
+		);
+		pi.registerTool({
+			name: "moderator_control",
+			label: "Resolve Moderation",
+			description:
+				"Resolve operational handling only after every mechanically checkable predicate clears.",
+			promptSnippet:
+				"Record the handling summary and rationale, then revalidate the original condition.",
+			executionMode: "sequential",
+			parameters: moderatorControlParameters,
+			async execute(toolCallId, parameters) {
+				const receipt = await moderatorView().moderatorControl(
+					toolCallId,
+					parameters,
+				);
+				return {
+					content: [{ type: "text", text: JSON.stringify(receipt) }],
+					details: receipt,
+				};
+			},
+		});
+	}
 
 	pi.registerCommand("agents", {
 		description: "Show Agents in the current Workflow",

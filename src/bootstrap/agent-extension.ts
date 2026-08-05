@@ -6,14 +6,31 @@ import type {
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import type { OrdinaryAgentCoordinatorView } from "../coordination/workflow-coordinator.ts";
-import { registerOrdinaryAgentSurfaces } from "../tools/owner-surfaces.ts";
+import type {
+	ModeratorAgentCoordinatorView,
+	OrdinaryAgentCoordinatorView,
+} from "../coordination/workflow-coordinator.ts";
+import {
+	registerModeratorAgentSurfaces,
+	registerOrdinaryAgentSurfaces,
+} from "../tools/owner-surfaces.ts";
 
 export function createAgentBoundExtension(
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): ExtensionFactory {
 	return (pi) => {
 		pi.on("session_before_fork", () => ({ cancel: true }));
+		registerOrdinaryAgentSurfaces(pi, resolveView);
+		registerAgentBoundBehavior(pi, resolveView);
+	};
+}
+
+export function createModeratorBoundExtension(
+	resolveView: () => ModeratorAgentCoordinatorView,
+): ExtensionFactory {
+	return (pi) => {
+		pi.on("session_before_fork", () => ({ cancel: true }));
+		registerModeratorAgentSurfaces(pi, resolveView);
 		registerAgentBoundBehavior(pi, resolveView);
 	};
 }
@@ -46,6 +63,7 @@ export function bindHiddenOwnerAgentExtension(options: {
 	// Pi loads package extensions publicly. Once this session is authenticated as
 	// Owner, the same extension becomes its hidden identity-bound ordinary surface.
 	matchingExtensions[0]!.hidden = true;
+	registerOrdinaryAgentSurfaces(pi, resolveView);
 	registerAgentBoundBehavior(pi, resolveView);
 	pi.on("session_shutdown", (event) => {
 		if (event.reason === "fork") return prepareOwnerFork();
@@ -54,9 +72,8 @@ export function bindHiddenOwnerAgentExtension(options: {
 
 function registerAgentBoundBehavior(
 	pi: ExtensionAPI,
-	resolveView: () => OrdinaryAgentCoordinatorView,
+	resolveView: () => OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView,
 ): void {
-	registerOrdinaryAgentSurfaces(pi, resolveView);
 	// agent_start is the one awaited Pi boundary shared by native prompts,
 	// custom Delivery turns, queued continuations, and automatic retries.
 	pi.on("agent_start", () => resolveView().beginExecution());

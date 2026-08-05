@@ -10,7 +10,10 @@ import {
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
+import {
+	createAgentBoundExtension,
+	createModeratorBoundExtension,
+} from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import type {
 	AgentMessageReceipt,
@@ -456,6 +459,8 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 		entryModulePath: "<inline:pi-agent-coordination>",
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
@@ -1897,6 +1902,8 @@ async function createDormantChildHarness(
 		entryModulePath: "<inline:pi-agent-coordination>",
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},

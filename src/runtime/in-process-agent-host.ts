@@ -12,7 +12,8 @@ export type RunRetentionReason =
 	| "awaiting_answer"
 	| "answer_owed"
 	| "interactive_selection"
-	| "interruption_hold";
+	| "interruption_hold"
+	| "moderator_handling";
 
 export type RunRetention = Readonly<{
 	reason: RunRetentionReason;
@@ -56,6 +57,7 @@ type HeldNativeQueue = {
 type StartSession = () => Promise<AgentSession>;
 export type AgentRunSettlement = "settled" | "failed";
 type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
+type StateChangeHandler = () => void;
 type RunFenceHandler = (handle: AgentRunHandle) => void;
 export type ResidualRequestRelationships = Readonly<{
 	awaitingAnswerRequestIds: readonly string[];
@@ -79,7 +81,8 @@ export class InProcessAgentHost {
 	#interrupting = false;
 	#runSequence = 0;
 	#holdSequence = 0;
-	#settledHandler: SettledHandler | undefined;
+	readonly #settledHandlers = new Set<SettledHandler>();
+	readonly #stateChangeHandlers = new Set<StateChangeHandler>();
 	#runFenceHandler: RunFenceHandler | undefined;
 	#runStartInitializer: RunStartInitializer | undefined;
 	#inputRequired: { handle: AgentRunHandle; requestId: string } | undefined;
@@ -146,8 +149,14 @@ export class InProcessAgentHost {
 		};
 	}
 
-	setSettledHandler(handler: SettledHandler): void {
-		this.#settledHandler = handler;
+	addSettledHandler(handler: SettledHandler): () => void {
+		this.#settledHandlers.add(handler);
+		return () => this.#settledHandlers.delete(handler);
+	}
+
+	addStateChangeHandler(handler: StateChangeHandler): () => void {
+		this.#stateChangeHandlers.add(handler);
+		return () => this.#stateChangeHandlers.delete(handler);
 	}
 
 	setRunFenceHandler(handler: RunFenceHandler): void {
@@ -201,6 +210,7 @@ export class InProcessAgentHost {
 			this.#isolatedResumption?.hold !== hold
 		) return false;
 		this.#interruptionHold = undefined;
+		this.#notifyStateChanged();
 		return true;
 	}
 
@@ -243,6 +253,7 @@ export class InProcessAgentHost {
 				run: run.handle,
 				sequence: this.#holdSequence,
 			};
+			this.#notifyStateChanged();
 			return "held";
 		} finally {
 			this.#interrupting = false;
@@ -267,6 +278,7 @@ export class InProcessAgentHost {
 			throw new Error("invalid_input: Agent Run already has an unresolved Human Request");
 		}
 		this.#inputRequired = { handle, requestId };
+		this.#notifyStateChanged();
 	}
 
 	acceptsInputRequired(handle: AgentRunHandle, requestId: string): boolean {
@@ -293,6 +305,7 @@ export class InProcessAgentHost {
 			throw new Error("invariant_violation: Human Request does not match input-required attention");
 		}
 		this.#inputRequired = undefined;
+		this.#notifyStateChanged();
 	}
 
 	requireLiveSession(): AgentSession {
@@ -310,6 +323,7 @@ export class InProcessAgentHost {
 		}
 		this.#starting = true;
 		for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
+		this.#notifyStateChanged();
 		try {
 			this.#initializeRequestRelationships();
 			const session = await this.#startSession();
@@ -320,6 +334,7 @@ export class InProcessAgentHost {
 			throw error;
 		} finally {
 			this.#starting = false;
+			this.#notifyStateChanged();
 		}
 	}
 
@@ -344,21 +359,26 @@ export class InProcessAgentHost {
 				relationships = new Set();
 				this.#requestRelationships.set(reason, relationships);
 			}
+			if (relationships.has(exactRequestId)) return;
 			relationships.add(exactRequestId);
+			this.#notifyStateChanged();
 			return;
 		}
+		if (this.#retentionReasons.has(reason)) return;
 		this.#retentionReasons.add(reason);
+		this.#notifyStateChanged();
 	}
 
 	removeRetentionReason(reason: RunRetentionReason, requestId?: string): void {
 		if (isRequestRelationshipReason(reason)) {
 			const exactRequestId = requireRequestRelationshipId(reason, requestId);
 			const relationships = this.#requestRelationships.get(reason);
-			relationships?.delete(exactRequestId);
+			if (!relationships?.delete(exactRequestId)) return;
 			if (relationships?.size === 0) this.#requestRelationships.delete(reason);
+			this.#notifyStateChanged();
 			return;
 		}
-		this.#retentionReasons.delete(reason);
+		if (this.#retentionReasons.delete(reason)) this.#notifyStateChanged();
 	}
 
 	hasRetentionReason(reason: RunRetentionReason, requestId?: string): boolean {
@@ -368,7 +388,16 @@ export class InProcessAgentHost {
 				? (relationships?.size ?? 0) > 0
 				: relationships?.has(requestId) ?? false;
 		}
+		if (reason === "interruption_hold") {
+			return this.#interruptionHold !== undefined;
+		}
 		return this.#retentionReasons.has(reason);
+	}
+
+	requestRelationshipIds(
+		reason: RequestRelationshipReason,
+	): readonly string[] {
+		return [...(this.#requestRelationships.get(reason) ?? [])];
 	}
 
 	residualRequestCounts(): Readonly<{ incoming: number; outgoing: number }> {
@@ -400,11 +429,13 @@ export class InProcessAgentHost {
 			return "retained";
 		}
 		this.#ending = true;
+		this.#notifyStateChanged();
 		try {
 			run.unsubscribe();
 			run.session.dispose();
 			this.#run = undefined;
 			this.#clearRunScopedState();
+			this.#notifyStateChanged();
 			return "released";
 		} finally {
 			this.#ending = false;
@@ -420,6 +451,7 @@ export class InProcessAgentHost {
 			return;
 		}
 		this.#ending = true;
+		this.#notifyStateChanged();
 		this.#runFenceHandler?.(run.handle);
 		run.unsubscribe();
 		try {
@@ -436,6 +468,7 @@ export class InProcessAgentHost {
 			this.#run = undefined;
 			this.#clearRunScopedState();
 			this.#ending = false;
+			this.#notifyStateChanged();
 		}
 	}
 
@@ -453,6 +486,7 @@ export class InProcessAgentHost {
 		if (run.failed) return;
 		run.failed = true;
 		this.#runFenceHandler?.(handle);
+		this.#notifyStateChanged();
 	}
 
 	#bindRun(session: AgentSession): void {
@@ -465,6 +499,7 @@ export class InProcessAgentHost {
 			failed: false,
 		};
 		run.unsubscribe = session.subscribe((event) => {
+			if (event.type === "agent_start") this.#notifyStateChanged();
 			if (event.type === "agent_end") {
 				const assistant = [...event.messages]
 					.reverse()
@@ -475,7 +510,9 @@ export class InProcessAgentHost {
 				if (terminalFailure) this.#markRunFailed(run, handle);
 			}
 			if (event.type === "agent_settled") {
-				this.#settledHandler?.(handle, run.failed ? "failed" : "settled");
+				for (const handler of this.#settledHandlers) {
+					handler(handle, run.failed ? "failed" : "settled");
+				}
 			}
 			if (event.type === "agent_end") {
 				this.#restoreHeldNativeQueueAfterIsolatedTurn(run, handle, event);
@@ -483,6 +520,11 @@ export class InProcessAgentHost {
 		});
 		this.#run = run;
 		this.#ending = false;
+		this.#notifyStateChanged();
+	}
+
+	#notifyStateChanged(): void {
+		for (const handler of this.#stateChangeHandlers) handler();
 	}
 
 	#restoreHeldNativeQueueAfterIsolatedTurn(

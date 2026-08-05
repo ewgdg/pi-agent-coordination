@@ -86,6 +86,7 @@ export class DefaultChildSpawner {
 	readonly #boundaryHooks: SpawnBoundaryHooks;
 	readonly #isShuttingDown: () => boolean;
 	readonly #messages: MessageCoordinator;
+	readonly #integrateAgent: (record: AgentRecord) => void;
 	readonly #agentIdBySpawnSource: Map<string, string>;
 
 	constructor(options: {
@@ -93,6 +94,7 @@ export class DefaultChildSpawner {
 		agentIdBySpawnSource?: Map<string, string>;
 		sessionFactory: DefaultChildSessionFactory;
 		messages: MessageCoordinator;
+		integrateAgent(record: AgentRecord): void;
 		boundaryHooks?: SpawnBoundaryHooks;
 		isShuttingDown(): boolean;
 	}) {
@@ -100,6 +102,7 @@ export class DefaultChildSpawner {
 		this.#agentIdBySpawnSource = options.agentIdBySpawnSource ?? new Map();
 		this.#sessionFactory = options.sessionFactory;
 		this.#messages = options.messages;
+		this.#integrateAgent = options.integrateAgent;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#isShuttingDown = options.isShuttingDown;
 	}
@@ -192,7 +195,7 @@ export class DefaultChildSpawner {
 		this.#agents.set(agentId, child);
 		this.#agentIdBySpawnSource.set(toolCallPointerKey(source), agentId);
 		parent.children.push(agentId);
-		this.#messages.integrate(child);
+		this.#integrateAgent(child);
 		this.#addRetentionReason(parent, "awaiting_answer", requestId);
 		if (identityConfirmation === "confirmation_lost") {
 			return {

@@ -75,6 +75,8 @@ export function assertHostModuleShape(hostValue: unknown): void {
 	const sessionManagerPrototype = requirePrototype(host.SessionManager, "SessionManager", version);
 	for (const member of [
 		"appendCustomEntry",
+		"appendCustomMessageEntry",
+		"_rewriteFile",
 		"getEntries",
 		"getEntry",
 		"getHeader",
@@ -219,6 +221,7 @@ export function assertAgentSessionShape(
 		requireMember(session, member, `AgentSession.${member}`, version);
 	}
 	requireFunction(session, "_applyExtensionBindings", "AgentSession._applyExtensionBindings", version);
+	requireFunction(session, "_runAgentPrompt", "AgentSession._runAgentPrompt", version);
 	requireRecord(session.extensionRunner, "AgentSession.extensionRunner", version);
 	requireRecord(session.sessionManager, "AgentSession.sessionManager", version);
 }

@@ -53,6 +53,14 @@ import {
 } from "./workflow-execution-scheduler.ts";
 import type { ColdWorkflowRecovery } from "../bootstrap/cold-host-discovery.ts";
 import { piSessionRecency } from "../pi-integration/session-recency.ts";
+import {
+	OperationalIncidentCoordinator,
+	type OperationalIncidentBoundaryHooks,
+} from "./operational-incidents.ts";
+import type {
+	ModeratorControlInput,
+	ModeratorControlReceipt,
+} from "../protocol/moderator-control.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type {
@@ -66,10 +74,9 @@ export type {
 	MessageBoundaryHooks,
 } from "./messages.ts";
 
-export type OrdinaryAgentCoordinatorView = Readonly<{
+type AgentCoordinatorView = Readonly<{
 	status(agentId?: string): AgentStatus;
 	children(agentId?: string): readonly AgentStatus[];
-	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
 	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
 	control(toolCallId: string, input: RunControlInput): Promise<RunControlReceipt>;
 	resumeFromHuman(
@@ -98,6 +105,17 @@ export type OrdinaryAgentCoordinatorView = Readonly<{
 	endExecution(): void;
 }>;
 
+export type OrdinaryAgentCoordinatorView = AgentCoordinatorView & Readonly<{
+	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
+}>;
+
+export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
+	moderatorControl(
+		toolCallId: string,
+		input: ModeratorControlInput,
+	): Promise<ModeratorControlReceipt>;
+}>;
+
 export class WorkflowCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #agents = new Map<string, AgentRecord>();
@@ -105,6 +123,7 @@ export class WorkflowCoordinator {
 	readonly #messages: MessageCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
 	readonly #runSupervisor: RunSupervisor;
+	readonly #operationalIncidents: OperationalIncidentCoordinator;
 	readonly #humanSessionSelection: HumanSessionSelection | undefined;
 	readonly #selectionLane = new SerialLane();
 	readonly #workflowPolicy: WorkflowPolicyStore;
@@ -126,8 +145,10 @@ export class WorkflowCoordinator {
 				projectTrusted: boolean,
 			): readonly AgentTemplateRoot[];
 			childExtensionFactory(agentId: string): ExtensionFactory;
+			moderatorExtensionFactory(agentId: string): ExtensionFactory;
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
 			messageBoundaryHooks?: MessageBoundaryHooks;
+			incidentBoundaryHooks?: OperationalIncidentBoundaryHooks;
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
 			humanRequestPresentation?: HumanRequestPresentation;
@@ -156,6 +177,7 @@ export class WorkflowCoordinator {
 			packageRoot: options.packageRoot ?? resolve(dirname(options.entryModulePath), ".."),
 			templateRoots: options.templateRoots,
 			childExtensionFactory: options.childExtensionFactory,
+			moderatorExtensionFactory: options.moderatorExtensionFactory,
 		});
 		for (const recovered of options.recoveredWorkflow?.agents ?? []) {
 			if (
@@ -167,15 +189,21 @@ export class WorkflowCoordinator {
 					`invariant_violation: recovered Agent ${recovered.identity.agentId} has inconsistent transcript location`,
 				);
 			}
-			const record = sessionFactory.createAgentRecord({
-				identity: recovered.identity,
-				sessionManager: recovered.sessionManager,
-				blueprint: {
-					baseline: recovered.identity.configuration.baseline,
-					spawnInput: recovered.spawnInput,
-				},
-			});
+			const record = recovered.role === "moderator"
+				? sessionFactory.createModeratorRecord({
+					identity: recovered.identity,
+					sessionManager: recovered.sessionManager,
+				})
+				: sessionFactory.createAgentRecord({
+					identity: recovered.identity,
+					sessionManager: recovered.sessionManager,
+					blueprint: {
+						baseline: recovered.identity.configuration.baseline,
+						spawnInput: recovered.spawnInput,
+					},
+				});
 			this.#agents.set(recovered.identity.agentId, record);
+			if (recovered.role === "moderator") continue;
 			const parent = this.#agents.get(recovered.identity.directSpawnerAgentId);
 			if (!parent) {
 				throw new Error(
@@ -191,7 +219,6 @@ export class WorkflowCoordinator {
 			boundaryHooks: options.messageBoundaryHooks,
 			workflowPolicy: this.#workflowPolicy,
 		});
-		for (const record of this.#agents.values()) this.#messages.integrate(record);
 		if (this.#humanSessionSelection) {
 			this.#requireAgent(identity.agentId).host.addRetentionReason(
 				"interactive_selection",
@@ -218,11 +245,28 @@ export class WorkflowCoordinator {
 			ownerAgentId: identity.agentId,
 			messages: this.#messages,
 		});
+		this.#operationalIncidents = new OperationalIncidentCoordinator({
+			agents: this.#agents,
+			ownerIdentity: identity,
+			sessionFactory,
+			messages: this.#messages,
+			integrateAgent: (record) => this.#integrateAgent(record),
+			isShuttingDown: () => this.#shuttingDown,
+			reportError: (error) => {
+				runtime.services.diagnostics.push({
+					type: "error",
+					message: error instanceof Error ? error.message : String(error),
+				});
+			},
+			boundaryHooks: options.incidentBoundaryHooks,
+		});
+		for (const record of this.#agents.values()) this.#integrateAgent(record);
 		this.#spawner = new DefaultChildSpawner({
 			agents: this.#agents,
 			agentIdBySpawnSource: this.#agentIdBySpawnSource,
 			sessionFactory,
 			messages: this.#messages,
+			integrateAgent: (record) => this.#integrateAgent(record),
 			boundaryHooks: options.spawnBoundaryHooks,
 			isShuttingDown: () => this.#shuttingDown,
 		});
@@ -231,9 +275,28 @@ export class WorkflowCoordinator {
 	forAgent(agentId: string): OrdinaryAgentCoordinatorView {
 		this.#requireAgent(agentId);
 		return Object.freeze({
+			...this.#agentView(agentId),
+			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
+		});
+	}
+
+	forModerator(agentId: string): ModeratorAgentCoordinatorView {
+		this.#requireModerator(agentId);
+		return Object.freeze({
+			...this.#agentView(agentId),
+			moderatorControl: (toolCallId, input) =>
+				this.#operationalIncidents.executeModeratorControl(
+					agentId,
+					toolCallId,
+					input,
+				),
+		});
+	}
+
+	#agentView(agentId: string): AgentCoordinatorView {
+		return {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
-			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
 			control: (toolCallId, input) =>
 				this.#runSupervisor.execute(agentId, toolCallId, input),
@@ -254,7 +317,7 @@ export class WorkflowCoordinator {
 			beginExecution: () => this.#beginExecution(agentId),
 			ensureExecution: () => this.#ensureExecution(agentId),
 			endExecution: () => this.#releaseExecution(agentId),
-		});
+		};
 	}
 
 	shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
@@ -270,7 +333,8 @@ export class WorkflowCoordinator {
 	#childrenFor(callerAgentId: string, targetAgentId = callerAgentId): readonly AgentStatus[] {
 		if (
 			targetAgentId !== callerAgentId &&
-			callerAgentId !== this.#ownerIdentity.agentId
+			callerAgentId !== this.#ownerIdentity.agentId &&
+			!this.#isModerator(callerAgentId)
 		) {
 			throw new Error(
 				`unauthorized: Agent ${callerAgentId} cannot enumerate children of ${targetAgentId}`,
@@ -286,6 +350,7 @@ export class WorkflowCoordinator {
 		if (
 			targetAgentId !== callerAgentId &&
 			callerAgentId !== this.#ownerIdentity.agentId &&
+			!this.#isModerator(callerAgentId) &&
 			target.identity.directSpawnerAgentId !== caller.identity.agentId
 		) {
 			throw new Error(`unauthorized: Agent ${callerAgentId} cannot observe ${targetAgentId}`);
@@ -304,6 +369,9 @@ export class WorkflowCoordinator {
 			for (const childId of record.children) appendAuthoritySubtree(childId);
 		};
 		appendAuthoritySubtree(this.#ownerIdentity.agentId);
+		for (const record of this.#agents.values()) {
+			if (!authorityOrder.includes(record)) authorityOrder.push(record);
+		}
 		const live: AgentStatus[] = [];
 		const dormant: Array<{ status: AgentStatus; recency: number; order: number }> = [];
 		for (const [order, record] of authorityOrder.entries()) {
@@ -341,6 +409,26 @@ export class WorkflowCoordinator {
 		);
 	}
 
+	#requireModerator(agentId: string): AgentRecord {
+		const record = this.#requireAgent(agentId);
+		if (!this.#isModerator(agentId)) {
+			throw new Error(`unauthorized: Agent ${agentId} is not a Moderator`);
+		}
+		return record;
+	}
+
+	#isModerator(agentId: string): boolean {
+		const identity = this.#agents.get(agentId)?.identity;
+		return identity !== undefined &&
+			identity.agentId !== identity.workflowId &&
+			identity.directSpawnerAgentId === null;
+	}
+
+	#integrateAgent(record: AgentRecord): void {
+		this.#messages.integrate(record);
+		this.#operationalIncidents.integrate(record);
+	}
+
 	async #beginExecution(agentId: string): Promise<void> {
 		if (this.#executionPermits.has(agentId)) {
 			throw new Error(
@@ -356,7 +444,7 @@ export class WorkflowCoordinator {
 		const run = record.host.observe();
 		if (run.phase !== "live" || run.attention === "input_required") return;
 		const permit = await this.#executionScheduler.admit(
-			"ordinary",
+			this.#isModerator(agentId) ? "moderator" : "ordinary",
 			record.host.requireLiveSession().agent.signal,
 		);
 		if (permit) this.#executionPermits.set(agentId, permit);

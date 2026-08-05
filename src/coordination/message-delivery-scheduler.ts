@@ -218,7 +218,7 @@ export class MessageDeliveryScheduler {
 
 	#ensureSettlementHandler(record: AgentRecord): void {
 		if (this.#integratedAgentIds.has(record.identity.agentId)) return;
-		record.host.setSettledHandler((handle, settlement) => {
+		record.host.addSettledHandler((handle, settlement) => {
 			void record.host.lane.run(() => this.#settledInLane(record, handle, settlement));
 		});
 		this.#integratedAgentIds.add(record.identity.agentId);

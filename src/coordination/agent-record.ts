@@ -4,16 +4,17 @@ import type {
 
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
+import type { ModeratorIdentity } from "../protocol/moderator-input.ts";
 import {
 	type AgentRunState,
 	InProcessAgentHost,
 } from "../runtime/in-process-agent-host.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
 
-export type OrdinaryAgentIdentity = OwnerIdentity | ChildAgentIdentity;
+export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdentity;
 
 export type AgentRecord = {
-	identity: OrdinaryAgentIdentity;
+	identity: AgentIdentity;
 	services?: AgentSessionServices;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
 	host: InProcessAgentHost;

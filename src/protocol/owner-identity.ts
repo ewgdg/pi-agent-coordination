@@ -9,11 +9,14 @@ import {
 	type RuntimeConfigurationBaseline,
 	validateRuntimeConfigurationBaseline,
 } from "./runtime-configuration.ts";
+import {
+	AGENT_IDENTITY_CUSTOM_TYPE,
+	MODERATOR_INPUT_CUSTOM_TYPE,
+} from "./custom-entry-types.ts";
 
 export type { ModelReference, RuntimeConfigurationBaseline } from "./runtime-configuration.ts";
 
-export const AGENT_IDENTITY_CUSTOM_TYPE = "agent-coordination.identity";
-const MODERATOR_INPUT_CUSTOM_TYPE = "agent-coordination.moderator-input";
+export { AGENT_IDENTITY_CUSTOM_TYPE } from "./custom-entry-types.ts";
 const OWNER_LABEL = "owner";
 
 export type OwnerIdentity = Readonly<{

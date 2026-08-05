@@ -7,7 +7,10 @@ import {
 } from "@earendil-works/pi-ai";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
-import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
+import {
+	createAgentBoundExtension,
+	createModeratorBoundExtension,
+} from "../src/bootstrap/agent-extension.ts";
 import {
 	WorkflowCoordinator,
 	type AgentMessageInput,
@@ -965,6 +968,8 @@ async function createRunSupervisionHarness(options?: {
 		humanRequestPresentation: new HumanRequestSurface(host.ui),
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			afterRunStart({ identity, session }) {
 				childSessions.set(identity.agentId, session);

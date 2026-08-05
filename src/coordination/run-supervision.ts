@@ -145,10 +145,14 @@ export class RunSupervisor {
 	#requireControllableTarget(callerAgentId: string, targetAgentId: string): AgentRecord {
 		const caller = this.#requireAgent(callerAgentId);
 		const target = this.#requireAgent(targetAgentId);
+		const callerIsModerator =
+			caller.identity.agentId !== caller.identity.workflowId &&
+			caller.identity.directSpawnerAgentId === null;
 		if (
 			targetAgentId === this.#ownerAgentId ||
 			targetAgentId === callerAgentId ||
 			(callerAgentId !== this.#ownerAgentId &&
+				!callerIsModerator &&
 				target.identity.directSpawnerAgentId !== caller.identity.agentId)
 		) {
 			throw new Error(

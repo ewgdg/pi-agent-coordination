@@ -11,7 +11,10 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 import { WorkflowExecutionScheduler } from "../src/coordination/workflow-execution-scheduler.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
-import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
+import {
+	createAgentBoundExtension,
+	createModeratorBoundExtension,
+} from "../src/bootstrap/agent-extension.ts";
 import type {
 	HumanRequestPresentation,
 	PresentedHumanRequest,
@@ -197,6 +200,8 @@ test("real ordinary child Runs share fair execution capacity before generation a
 		workflowPolicy: policy,
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			afterRunStart({ session }) {
 				childSessions.push(session);
@@ -299,6 +304,8 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 		humanRequestPresentation: presentation,
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			afterRunStart({ session }) {
 				childSessions.push(session);

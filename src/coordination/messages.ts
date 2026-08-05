@@ -123,6 +123,18 @@ export class MessageCoordinator {
 		}
 	}
 
+	requestSources(requestIds: readonly string[]): readonly ToolCallPointer[] {
+		return requestIds.map(
+			(requestId) => this.#requestEvidence.requireRequest(requestId).source,
+		);
+	}
+
+	requestTargetAgentIds(requestIds: readonly string[]): readonly string[] {
+		return requestIds.map(
+			(requestId) => this.#requestEvidence.requireRequest(requestId).targetAgentId,
+		);
+	}
+
 	async send(
 		callerAgentId: string,
 		toolCallId: string,

@@ -11,7 +11,10 @@ import {
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 
-import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
+import {
+	createAgentBoundExtension,
+	createModeratorBoundExtension,
+} from "../src/bootstrap/agent-extension.ts";
 import {
 	WorkflowCoordinator,
 } from "../src/coordination/workflow-coordinator.ts";
@@ -89,6 +92,8 @@ test("the native Human Request result is the sole positional Answer and sequenti
 		humanRequestPresentation: new HumanRequestSurface(host.ui),
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	view = coordinator.forAgent(identity.agentId);
 	await bindTestOwnerHost(host, "tui");
@@ -433,6 +438,8 @@ test("two Agents wait independently while Steer follows Answer commit and Deferr
 		humanRequestPresentation: new HumanRequestSurface(host.ui),
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			afterRunStart({ identity: childIdentity, session }) {
 				childSessions.set(childIdentity.agentId, session);
@@ -757,6 +764,8 @@ test("a Run fence after submission but before result commitment prevents a Human
 		},
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	view = coordinator.forAgent(identity.agentId);
 	await bindTestOwnerHost(host, "tui");
@@ -851,6 +860,8 @@ test("a failed-Run fence closes the UI, rejects late submission, and is not reco
 		},
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			afterRunStart({ identity: childIdentity, session }) {
 				childSessions.set(childIdentity.agentId, session);

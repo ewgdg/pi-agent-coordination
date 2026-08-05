@@ -19,6 +19,7 @@ import {
 import {
 	bindHiddenOwnerAgentExtension,
 	createAgentBoundExtension,
+	createModeratorBoundExtension,
 } from "./agent-extension.ts";
 import { discoverColdWorkflow } from "./cold-host-discovery.ts";
 
@@ -94,6 +95,8 @@ export async function initializeOwnerWorkflow(options: {
 		humanRequestPresentation: new HumanRequestSurface(ctx.ui),
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		workflowPolicy: policy,
 		recoveredWorkflow,
 	});

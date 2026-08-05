@@ -12,7 +12,10 @@ import { ProjectTrustStore, SessionManager } from "@earendil-works/pi-coding-age
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
+import {
+	createAgentBoundExtension,
+	createModeratorBoundExtension,
+} from "../src/bootstrap/agent-extension.ts";
 import {
 	WorkflowCoordinator,
 	type AgentSpawnInput,
@@ -260,6 +263,8 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 		},
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	const view = coordinator.forAgent(identity.agentId);
 	const spawnInput = {
@@ -668,6 +673,8 @@ test("model loss during child preflight fails before Agent Identity", async () =
 			modelAvailable = false;
 			return createAgentBoundExtension(() => coordinator.forAgent(agentId));
 		},
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	const view = coordinator.forAgent(identity.agentId);
 	host.session.sessionManager.appendMessage(
@@ -907,6 +914,8 @@ async function createCoordinatorHarness(
 		entryModulePath: "<inline:pi-agent-coordination>",
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: hooks,
 	});
 	const view = coordinator.forAgent(identity.agentId);

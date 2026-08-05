@@ -18,6 +18,11 @@ import {
 	type ChildAgentIdentity,
 } from "../protocol/child-identity.ts";
 import {
+	MODERATOR_INPUT_CUSTOM_TYPE,
+	validateColdModeratorInput,
+	type ModeratorIdentity,
+} from "../protocol/moderator-input.ts";
+import {
 	resolveCommittedSpawnSource,
 	sameToolCallPointer,
 	toolCallPointerKey,
@@ -26,27 +31,47 @@ import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import { workflowSessionDirectory } from "../runtime/workflow-session-directory.ts";
 
 export type RecoveredOrdinaryAgent = Readonly<{
+	role: "ordinary";
 	identity: ChildAgentIdentity;
 	sessionManager: SessionManager;
 	spawnInput: AgentSpawnInput;
 }>;
 
+export type RecoveredModeratorAgent = Readonly<{
+	role: "moderator";
+	identity: ModeratorIdentity;
+	sessionManager: SessionManager;
+}>;
+
+export type RecoveredAgent = RecoveredOrdinaryAgent | RecoveredModeratorAgent;
+
 export type ColdWorkflowRecovery = Readonly<{
-	agents: readonly RecoveredOrdinaryAgent[];
+	agents: readonly RecoveredAgent[];
 	transcriptPathByAgentId: ReadonlyMap<string, string>;
 	agentIdBySpawnSource: ReadonlyMap<string, string>;
 	quarantinedAgentIds: ReadonlySet<string>;
 	quarantinedCandidateCount: number;
 }>;
 
-type Candidate = {
+type CandidateBase = {
 	path: string;
-	identity: ChildAgentIdentity;
 	sessionManager: SessionManager;
-	spawnInput?: AgentSpawnInput;
-	spawnOrder?: Readonly<{ entry: number; part: number }>;
 	invalid: boolean;
 };
+
+type OrdinaryCandidate = CandidateBase & {
+	role: "ordinary";
+	identity: ChildAgentIdentity;
+	spawnInput?: AgentSpawnInput;
+	spawnOrder?: Readonly<{ entry: number; part: number }>;
+};
+
+type ModeratorCandidate = CandidateBase & {
+	role: "moderator";
+	identity: ModeratorIdentity;
+};
+
+type Candidate = OrdinaryCandidate | ModeratorCandidate;
 
 class CandidateError extends Error {
 	readonly agentId: string | undefined;
@@ -100,8 +125,9 @@ export async function discoverColdWorkflow(options: {
 		quarantinedAgentIds.add(agentId);
 		for (const claim of claims) claim.invalid = true;
 	}
+	const ordinaryCandidates = candidates.filter(isOrdinaryCandidate);
 	const candidatesBySource = groupBy(
-		candidates,
+		ordinaryCandidates,
 		({ identity }) => toolCallPointerKey(identity.spawnSource),
 	);
 	for (const claims of candidatesBySource.values()) {
@@ -112,15 +138,19 @@ export async function discoverColdWorkflow(options: {
 		}
 	}
 
-	const uniqueByAgentId = new Map<string, Candidate>();
+	const uniqueByAgentId = new Map<string, OrdinaryCandidate>();
 	for (const [agentId, claims] of candidatesByAgentId) {
-		if (claims.length === 1) uniqueByAgentId.set(agentId, claims[0]!);
+		const claim = claims[0];
+		if (claims.length === 1 && claim?.role === "ordinary") {
+			uniqueByAgentId.set(agentId, claim);
+		}
 	}
 	for (const candidate of candidates) {
 		if (candidate.identity.workflowId !== ownerIdentity.workflowId) {
 			candidate.invalid = true;
 			quarantinedAgentIds.add(candidate.identity.agentId);
 		}
+		if (candidate.role === "moderator") continue;
 		const parent = candidate.identity.directSpawnerAgentId === ownerIdentity.agentId
 			? ownerSessionManager
 			: uniqueByAgentId.get(candidate.identity.directSpawnerAgentId)?.sessionManager;
@@ -161,9 +191,9 @@ export async function discoverColdWorkflow(options: {
 		}
 	}
 
-	const reachesOwner = new Map<Candidate, boolean>();
-	const visiting = new Set<Candidate>();
-	const verifyPath = (candidate: Candidate): boolean => {
+	const reachesOwner = new Map<OrdinaryCandidate, boolean>();
+	const visiting = new Set<OrdinaryCandidate>();
+	const verifyPath = (candidate: OrdinaryCandidate): boolean => {
 		const known = reachesOwner.get(candidate);
 		if (known !== undefined) return known;
 		if (candidate.invalid) {
@@ -190,10 +220,10 @@ export async function discoverColdWorkflow(options: {
 		reachesOwner.set(candidate, valid);
 		return valid;
 	};
-	for (const candidate of candidates) verifyPath(candidate);
+	for (const candidate of ordinaryCandidates) verifyPath(candidate);
 
-	const verifiedChildren = new Map<string, Candidate[]>();
-	for (const candidate of candidates) {
+	const verifiedChildren = new Map<string, OrdinaryCandidate[]>();
+	for (const candidate of ordinaryCandidates) {
 		if (candidate.invalid || !candidate.spawnInput || !candidate.spawnOrder) continue;
 		const children = verifiedChildren.get(candidate.identity.directSpawnerAgentId) ?? [];
 		children.push(candidate);
@@ -202,7 +232,7 @@ export async function discoverColdWorkflow(options: {
 	for (const children of verifiedChildren.values()) {
 		children.sort(compareSpawnOrder);
 	}
-	const ordered: Candidate[] = [];
+	const ordered: OrdinaryCandidate[] = [];
 	const appendDescendants = (parentAgentId: string) => {
 		for (const child of verifiedChildren.get(parentAgentId) ?? []) {
 			ordered.push(child);
@@ -210,6 +240,10 @@ export async function discoverColdWorkflow(options: {
 		}
 	};
 	appendDescendants(ownerIdentity.agentId);
+	const moderators = candidates
+		.filter(isModeratorCandidate)
+		.filter(({ invalid }) => !invalid)
+		.sort((left, right) => left.path.localeCompare(right.path));
 
 	const transcriptPathByAgentId = new Map<string, string>();
 	const agentIdBySpawnSource = new Map<string, string>();
@@ -220,12 +254,23 @@ export async function discoverColdWorkflow(options: {
 			candidate.identity.agentId,
 		);
 	}
+	for (const candidate of moderators) {
+		transcriptPathByAgentId.set(candidate.identity.agentId, candidate.path);
+	}
 	return {
-		agents: ordered.map((candidate) => ({
-			identity: candidate.identity,
-			sessionManager: candidate.sessionManager,
-			spawnInput: candidate.spawnInput!,
-		})),
+		agents: [
+			...ordered.map((candidate) => ({
+				role: "ordinary" as const,
+				identity: candidate.identity,
+				sessionManager: candidate.sessionManager,
+				spawnInput: candidate.spawnInput!,
+			})),
+			...moderators.map((candidate) => ({
+				role: "moderator" as const,
+				identity: candidate.identity,
+				sessionManager: candidate.sessionManager,
+			})),
+		],
 		transcriptPathByAgentId,
 		agentIdBySpawnSource,
 		quarantinedAgentIds,
@@ -279,13 +324,36 @@ async function readCandidate(path: string): Promise<Candidate> {
 		);
 	}
 	const entries = entryValues as SessionEntry[];
-	let identity: ChildAgentIdentity;
+	let candidateIdentity: Readonly<{
+		role: "ordinary";
+		identity: ChildAgentIdentity;
+	}> | Readonly<{
+		role: "moderator";
+		identity: ModeratorIdentity;
+	}>;
 	try {
-		identity = validateColdChildIdentity({
-			sessionId: header.id,
-			sessionCwd: header.cwd,
-			entries,
-		});
+		if (
+			entries.some((entry) => entry.type === "custom_message" &&
+				entry.customType === MODERATOR_INPUT_CUSTOM_TYPE)
+		) {
+			candidateIdentity = {
+				role: "moderator",
+				identity: validateColdModeratorInput({
+					sessionId: header.id,
+					sessionCwd: header.cwd,
+					entries,
+				}).identity,
+			};
+		} else {
+			candidateIdentity = {
+				role: "ordinary",
+				identity: validateColdChildIdentity({
+					sessionId: header.id,
+					sessionCwd: header.cwd,
+					entries,
+				}),
+			};
+		}
 	} catch (error) {
 		throw new CandidateError(
 			error instanceof Error ? error.message : "candidate Identity is invalid",
@@ -306,7 +374,7 @@ async function readCandidate(path: string): Promise<Candidate> {
 	}
 	return {
 		path,
-		identity,
+		...candidateIdentity,
 		sessionManager,
 		invalid: false,
 	};
@@ -378,9 +446,17 @@ function physicalSpawnOrder(
 	return { entry, part };
 }
 
-function compareSpawnOrder(left: Candidate, right: Candidate): number {
+function compareSpawnOrder(left: OrdinaryCandidate, right: OrdinaryCandidate): number {
 	return left.spawnOrder!.entry - right.spawnOrder!.entry ||
 		left.spawnOrder!.part - right.spawnOrder!.part;
+}
+
+function isOrdinaryCandidate(candidate: Candidate): candidate is OrdinaryCandidate {
+	return candidate.role === "ordinary";
+}
+
+function isModeratorCandidate(candidate: Candidate): candidate is ModeratorCandidate {
+	return candidate.role === "moderator";
 }
 
 function groupBy<T>(
