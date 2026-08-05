@@ -12,7 +12,7 @@ The Owner is validated before discovery. A cold admission enumerates the Workflo
 
 A candidate must be one complete, current-version, LF-terminated UTF-8 Pi JSONL transcript. For an ordinary child, its native session header, bootstrap Identity, Agent ID, baseline cwd, Workflow, Direct Spawner, and exact canonical `agent_spawn` pointer must agree. The spawn call must validate under the current input contract, its display metadata must match the committed input, and no other candidate may claim the same Agent ID or spawn source.
 
-A Moderator candidate instead requires one strict model-visible Moderator Input as its first transcript entry, no ordinary Identity, fixed metadata, a matching session and Workflow relationship, a valid baseline cwd, bounded Obligation Stall Request sources, and the affected Agent watermark. It remains standalone and has no Direct Spawner.
+A Moderator candidate instead requires one strict model-visible Moderator Input as its first transcript entry, no ordinary Identity, fixed trigger-specific metadata, a matching session and Workflow relationship, a valid baseline cwd, bounded Request sources, normalized affected-Agent watermarks, and any valid previous-attempt pointer. It remains standalone and has no Direct Spawner.
 
 Following Direct Spawner edges must reach the active Owner without a cycle. Direct children use the physical order of their canonical spawn calls, including multiple calls in one assistant entry; timestamps, filenames, scan order, and Agent IDs do not affect structural order.
 
@@ -35,4 +35,4 @@ Creation Requests use the same predicates after verified child Identity makes th
 
 Quarantining a peer does not erase relationships that the verified Agent's own transcript proves. Those local Retention Reasons return, while an operation that needs the quarantined peer's source transcript fails with `evidence_unavailable`.
 
-Cold bootstrap reconstructs no delivery queue, Delivery Invocation, pending scheduling, previous Run, Run sequence, model turn, Operational Incident, Handling Key, or automatic Message replay. Uncommitted work remains lost. Transcript proof, polling, and explicit same-identity retry remain the recovery mechanisms.
+Cold bootstrap reconstructs no delivery queue, Delivery Invocation, pending scheduling, previous Run, Run sequence, model turn, Operational Incident, Handling Key, Moderator attempt chain, exhausted Operational Attention, or automatic Message replay. Uncommitted work remains lost. Transcript proof, polling, and explicit same-identity retry remain the recovery mechanisms.

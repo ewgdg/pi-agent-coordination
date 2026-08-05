@@ -47,6 +47,7 @@ import {
 import type { ToolCallPointer } from "../protocol/identities.ts";
 import type { InterruptionHoldHandle } from "../runtime/in-process-agent-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
+import type { UnresolvedAgentRequest } from "./dependency-deadlock.ts";
 
 export type { AgentMessageInput } from "../protocol/message.ts";
 export type {
@@ -135,13 +136,27 @@ export class MessageCoordinator {
 		);
 	}
 
+	requestRelationships(requestIds: readonly string[]): readonly UnresolvedAgentRequest[] {
+		return requestIds.map((requestId) => {
+			const request = this.#requestEvidence.requireRequest(requestId);
+			return {
+				requestId,
+				fromAgentId: request.fromAgentId,
+				targetAgentId: request.targetAgentId,
+			};
+		});
+	}
+
+	answerObligationRequestIds(responder: AgentRecord): readonly string[] {
+		return this.#requestEvidence.residualRelationshipsFor(responder)
+			.answerOwedRequestIds;
+	}
+
 	hasUnsettledAnswerObligation(
 		responder: AgentRecord,
 		requestIds: readonly string[],
 	): boolean {
-		const remaining = new Set(
-			this.#requestEvidence.residualRelationshipsFor(responder).answerOwedRequestIds,
-		);
+		const remaining = new Set(this.answerObligationRequestIds(responder));
 		return requestIds.some((requestId) => remaining.has(requestId));
 	}
 

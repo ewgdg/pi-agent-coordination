@@ -166,7 +166,7 @@ export class HumanRequestCoordinator {
 				requestId: request.requestId,
 				fenceExactRun: () => record.host.lane.run(() => {
 					if (!record.host.isCurrent(handle)) return;
-					return record.host.discardAndEndInLane();
+					return record.host.discardAndEndInLane("failure");
 				}),
 			});
 		} catch (error) {
@@ -302,7 +302,7 @@ export class HumanRequestCoordinator {
 		// exact-handle cleanup so it cannot re-enter that disposal or touch a successor.
 		void record.host.lane.run(() => {
 			if (!record.host.isCurrent(handle)) return;
-			return record.host.discardAndEndInLane();
+			return record.host.discardAndEndInLane("failure");
 		});
 	}
 

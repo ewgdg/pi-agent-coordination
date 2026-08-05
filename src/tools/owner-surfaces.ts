@@ -6,6 +6,14 @@ import type {
 	OrdinaryAgentCoordinatorView,
 } from "../coordination/workflow-coordinator.ts";
 import {
+	MAX_AUTOMATIC_MODERATOR_ATTEMPTS,
+	type OperationalIncidentAttention,
+} from "../coordination/operational-incidents.ts";
+import {
+	formatOperationalIncidentHeadline,
+	operationalIncidentRequestEvidence,
+} from "../presentation/operational-incident-surface.ts";
+import {
 	renderAgentMessageCall,
 	renderAgentMessageResult,
 } from "./message-renderer.ts";
@@ -421,8 +429,13 @@ function registerAgentSurfaces(
 				(item, index) =>
 					`DECIDE ${index + 1} · ${item.agentLabel} · ${item.questionCount} Question${item.questionCount === 1 ? "" : "s"}`,
 			);
+				const operationalAttention = view.operationalAttention();
+				const operationalOptions = operationalAttention.map(
+					(item, index) => formatOperationalIncidentOption(item, index),
+				);
 			const selected = await ctx.ui.select("Agents", [
 				...attentionOptions,
+				...operationalOptions,
 				...statusRows.map(({ option }) => option),
 			]);
 			const attentionIndex = selected === undefined
@@ -432,10 +445,29 @@ function registerAgentSurfaces(
 				await view.focusHumanRequest(attention[attentionIndex]!.requestId);
 				return;
 			}
+			if (selected !== undefined && operationalOptions.includes(selected)) return;
 			const selectedStatus = statusRows.find(({ option }) => option === selected)?.status;
 			if (selectedStatus) await view.selectForHuman(selectedStatus.agentId);
 		},
 	});
+}
+
+export function formatOperationalIncidentOption(
+	attention: OperationalIncidentAttention,
+	index: number,
+): string {
+	const requests = operationalIncidentRequestEvidence(attention);
+	return [
+		`ATTENTION ${index + 1}`,
+		formatOperationalIncidentHeadline(attention),
+		`Requests ${requests.total}`,
+		...requests.sources.map(
+			(pointer) => `Request ${pointer.agentId}/${pointer.entryId}/${pointer.toolCallId}`,
+		),
+		...attention.diagnostics.slice(0, MAX_AUTOMATIC_MODERATOR_ATTEMPTS).map(
+			(pointer) => `Diagnostic ${pointer.agentId}/${pointer.entryId}`,
+		),
+	].join(" · ");
 }
 
 function formatAgentRow(status: ReturnType<OrdinaryAgentCoordinatorView["status"]>): string {

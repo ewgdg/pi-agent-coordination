@@ -58,7 +58,7 @@ export class RunSupervisor {
 					};
 				}
 				this.#messages.discardSchedulingInLane(target);
-				await target.host.discardAndEndInLane();
+				await target.host.discardAndEndInLane("termination");
 				return {
 					agentId: target.identity.agentId,
 					disposition: "terminated",

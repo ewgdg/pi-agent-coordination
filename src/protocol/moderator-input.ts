@@ -16,7 +16,7 @@ import {
 
 export { MODERATOR_INPUT_CUSTOM_TYPE } from "./custom-entry-types.ts";
 
-export const MAX_OBLIGATION_STALL_REQUEST_SOURCES = 16;
+export const MAX_MODERATOR_REQUEST_SOURCES = 16;
 
 export type EntryPointer = Readonly<{
 	agentId: string;
@@ -45,16 +45,33 @@ export function isModeratorIdentity(
 		identity.directSpawnerAgentId === null;
 }
 
-export type ObligationStallModeratorInput = Readonly<{
-	trigger: Readonly<{
+export type ModeratorRequestSet = Readonly<{
+	total: number;
+	sources: readonly ToolCallPointer[];
+}>;
+
+export type ModeratorTrigger =
+	| Readonly<{
 		kind: "obligation_stall";
 		agentId: string;
-		obligations: Readonly<{
-			total: number;
-			sources: readonly ToolCallPointer[];
-		}>;
+		obligations: ModeratorRequestSet;
+	}>
+	| Readonly<{
+		kind: "run_failure";
+		agentId: string;
+		runSequence: number;
+		obligations: ModeratorRequestSet;
+	}>
+	| Readonly<{
+		kind: "dependency_deadlock";
+		agentIds: readonly string[];
+		requests: ModeratorRequestSet;
 	}>;
+
+export type ModeratorInput = Readonly<{
+	trigger: ModeratorTrigger;
 	inspectedThrough: readonly EntryPointer[];
+	previousAttempt?: EntryPointer;
 }>;
 
 export type ModelVisibleModeratorInput = Readonly<{
@@ -70,7 +87,7 @@ export type ModelVisibleModeratorInput = Readonly<{
 
 export function createModelVisibleModeratorInput(
 	identity: ModeratorIdentity,
-	input: ObligationStallModeratorInput,
+	input: ModeratorInput,
 ): ModelVisibleModeratorInput {
 	return {
 		customType: MODERATOR_INPUT_CUSTOM_TYPE,
@@ -87,7 +104,7 @@ export function createModelVisibleModeratorInput(
 export function validateCommittedModeratorInput(options: {
 	sessionManager: SessionManager;
 	identity: ModeratorIdentity;
-	input: ObligationStallModeratorInput;
+	input: ModeratorInput;
 }): void {
 	const { sessionManager, identity, input } = options;
 	if (sessionManager.getSessionId() !== identity.agentId) {
@@ -148,7 +165,7 @@ export function validateColdModeratorInput(options: {
 	entries: readonly SessionEntry[];
 }): Readonly<{
 	identity: ModeratorIdentity;
-	input: ObligationStallModeratorInput;
+	input: ModeratorInput;
 }> {
 	const ordinaryIdentities = options.entries.filter(
 		(entry) => entry.type === "custom" &&
@@ -183,7 +200,7 @@ export function validateColdModeratorInput(options: {
 	} catch {
 		throw new ProtocolInvariantError("Moderator Input content is not valid JSON");
 	}
-	const input = validateObligationStallInput(inputValue);
+	const input = validateModeratorInput(inputValue);
 	const details = requireExactRecord(entry.details, [
 		"agentId",
 		"workflowId",
@@ -232,24 +249,111 @@ export function validateColdModeratorInput(options: {
 	};
 }
 
-function validateObligationStallInput(value: unknown): ObligationStallModeratorInput {
-	const input = requireExactRecord(value, ["trigger", "inspectedThrough"]);
-	const trigger = requireExactRecord(input.trigger, [
-		"kind",
-		"agentId",
-		"obligations",
-	]);
-	if (trigger.kind !== "obligation_stall" || !isIdentifier(trigger.agentId)) {
+function validateModeratorInput(value: unknown): ModeratorInput {
+	const input = requireRecord(value);
+	requireExactKeys(input, input.previousAttempt === undefined
+		? ["trigger", "inspectedThrough"]
+		: ["trigger", "inspectedThrough", "previousAttempt"]);
+	const triggerValue = requireRecord(input.trigger);
+	let trigger: ModeratorTrigger;
+	let affectedAgentIds: readonly string[];
+	if (triggerValue.kind === "obligation_stall") {
+		requireExactKeys(triggerValue, ["kind", "agentId", "obligations"]);
+		if (!isIdentifier(triggerValue.agentId)) {
+			throw new ProtocolInvariantError("Moderator Input trigger is invalid");
+		}
+		affectedAgentIds = [triggerValue.agentId];
+		trigger = {
+			kind: "obligation_stall",
+			agentId: triggerValue.agentId,
+			obligations: validateRequestSet(triggerValue.obligations),
+		};
+	} else if (triggerValue.kind === "run_failure") {
+		requireExactKeys(triggerValue, [
+			"kind",
+			"agentId",
+			"runSequence",
+			"obligations",
+		]);
+		if (
+			!isIdentifier(triggerValue.agentId) ||
+			!Number.isSafeInteger(triggerValue.runSequence) ||
+			(triggerValue.runSequence as number) < 1
+		) {
+			throw new ProtocolInvariantError("Moderator Input Run is invalid");
+		}
+		affectedAgentIds = [triggerValue.agentId];
+		trigger = {
+			kind: "run_failure",
+			agentId: triggerValue.agentId,
+			runSequence: triggerValue.runSequence as number,
+			obligations: validateRequestSet(triggerValue.obligations),
+		};
+	} else if (triggerValue.kind === "dependency_deadlock") {
+		requireExactKeys(triggerValue, ["kind", "agentIds", "requests"]);
+		if (
+			!Array.isArray(triggerValue.agentIds) ||
+			triggerValue.agentIds.length === 0 ||
+			!triggerValue.agentIds.every(isIdentifier)
+		) {
+			throw new ProtocolInvariantError("Moderator Input affected Agents are invalid");
+		}
+		affectedAgentIds = [...triggerValue.agentIds] as string[];
+		if (
+			new Set(affectedAgentIds).size !== affectedAgentIds.length ||
+			affectedAgentIds.some(
+				(agentId, index) => index > 0 && affectedAgentIds[index - 1]!.localeCompare(agentId) >= 0,
+			)
+		) {
+			throw new ProtocolInvariantError("Moderator Input affected Agents are not normalized");
+		}
+		trigger = {
+			kind: "dependency_deadlock",
+			agentIds: affectedAgentIds,
+			requests: validateRequestSet(triggerValue.requests),
+		};
+	} else {
 		throw new ProtocolInvariantError("Moderator Input trigger is invalid");
 	}
-	const affectedAgentId = trigger.agentId;
-	const obligations = requireExactRecord(trigger.obligations, ["total", "sources"]);
+	if (
+		!Array.isArray(input.inspectedThrough) ||
+		input.inspectedThrough.length !== affectedAgentIds.length
+	) {
+		throw new ProtocolInvariantError("Moderator Input inspection watermarks are invalid");
+	}
+	const inspectedThrough = input.inspectedThrough.map((value, index) => {
+		const pointer = validateEntryPointer(value);
+		if (pointer.agentId !== affectedAgentIds[index]) {
+			throw new ProtocolInvariantError("Moderator Input inspection watermark is invalid");
+		}
+		return pointer;
+	});
+	const previousAttempt = input.previousAttempt === undefined
+		? undefined
+		: validateEntryPointer(input.previousAttempt);
+	return {
+		trigger,
+		inspectedThrough,
+		...(previousAttempt === undefined ? {} : { previousAttempt }),
+	};
+}
+
+function validateEntryPointer(value: unknown): EntryPointer {
+	const pointer = requireExactRecord(value, ["agentId", "entryId"]);
+	if (!isIdentifier(pointer.agentId) || !isIdentifier(pointer.entryId)) {
+		throw new ProtocolInvariantError("Moderator Input entry pointer is invalid");
+	}
+	return { agentId: pointer.agentId, entryId: pointer.entryId };
+}
+
+function validateRequestSet(value: unknown): ModeratorRequestSet {
+	const obligations = requireExactRecord(value, ["total", "sources"]);
 	if (
 		!Number.isSafeInteger(obligations.total) ||
 		(obligations.total as number) < 1 ||
 		!Array.isArray(obligations.sources) ||
 		obligations.sources.length < 1 ||
-		obligations.sources.length > MAX_OBLIGATION_STALL_REQUEST_SOURCES ||
+		obligations.sources.length > MAX_MODERATOR_REQUEST_SOURCES ||
 		obligations.sources.length > (obligations.total as number)
 	) {
 		throw new ProtocolInvariantError("Moderator Input obligations are invalid");
@@ -258,29 +362,9 @@ function validateObligationStallInput(value: unknown): ObligationStallModeratorI
 	if (new Set(sources.map(pointerKey)).size !== sources.length) {
 		throw new ProtocolInvariantError("Moderator Input Request sources contain duplicates");
 	}
-	if (!Array.isArray(input.inspectedThrough) || input.inspectedThrough.length !== 1) {
-		throw new ProtocolInvariantError("Moderator Input inspection watermarks are invalid");
-	}
-	const inspectedThrough = input.inspectedThrough.map((value) => {
-		const pointer = requireExactRecord(value, ["agentId", "entryId"]);
-		if (
-			pointer.agentId !== affectedAgentId ||
-			!isIdentifier(pointer.entryId)
-		) {
-			throw new ProtocolInvariantError("Moderator Input inspection watermark is invalid");
-		}
-		return { agentId: affectedAgentId, entryId: pointer.entryId };
-	});
 	return {
-		trigger: {
-			kind: "obligation_stall",
-			agentId: affectedAgentId,
-			obligations: {
-				total: obligations.total as number,
-				sources,
-			},
-		},
-		inspectedThrough,
+		total: obligations.total as number,
+		sources,
 	};
 }
 
@@ -308,10 +392,22 @@ function requireExactRecord(
 	value: unknown,
 	expectedKeys: readonly string[],
 ): Record<string, unknown> {
+	const record = requireRecord(value);
+	requireExactKeys(record, expectedKeys);
+	return record;
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) {
 		throw new ProtocolInvariantError("Moderator Input value must be an object");
 	}
-	const record = value as Record<string, unknown>;
+	return value as Record<string, unknown>;
+}
+
+function requireExactKeys(
+	record: Record<string, unknown>,
+	expectedKeys: readonly string[],
+): void {
 	const actual = Object.keys(record).sort();
 	const expected = [...expectedKeys].sort();
 	if (
@@ -320,7 +416,6 @@ function requireExactRecord(
 	) {
 		throw new ProtocolInvariantError("Moderator Input value has an invalid shape");
 	}
-	return record;
 }
 
 function isIdentifier(value: unknown): value is string {

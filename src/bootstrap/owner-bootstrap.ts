@@ -11,6 +11,7 @@ import { WorkflowCoordinator } from "../coordination/workflow-coordinator.ts";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { adoptOrValidateOwnerIdentity } from "../protocol/owner-identity.ts";
 import { HumanRequestSurface } from "../presentation/human-request-surface.ts";
+import { OperationalIncidentSurface } from "../presentation/operational-incident-surface.ts";
 import { bindHumanSessionSelection } from "../pi-integration/interactive-session-selection.ts";
 import {
 	WorkflowPolicyStore,
@@ -93,6 +94,7 @@ export async function initializeOwnerWorkflow(options: {
 		entryModulePath,
 		humanSessionSelection: bindHumanSessionSelection(runtime, identity.agentId),
 		humanRequestPresentation: new HumanRequestSurface(ctx.ui),
+		operationalIncidentPresentation: new OperationalIncidentSurface(ctx.ui),
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>

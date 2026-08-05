@@ -14,7 +14,9 @@ export type ModeratorControlInput = Readonly<{
 export type ModeratorResolutionBlocker =
 	| "incoming_requests"
 	| "outgoing_requests"
-	| "obligation_stall";
+	| "obligation_stall"
+	| "run_failure"
+	| "dependency_deadlock";
 
 export type ModeratorControlReceipt =
 	| Readonly<{ disposition: "resolved" }>

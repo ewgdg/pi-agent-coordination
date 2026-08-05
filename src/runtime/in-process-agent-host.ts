@@ -57,6 +57,8 @@ type HeldNativeQueue = {
 type StartSession = () => Promise<AgentSession>;
 export type AgentRunSettlement = "settled" | "failed";
 type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
+export type AgentRunEndCause = "clean" | "failure" | "termination" | "shutdown";
+type EndedHandler = (handle: AgentRunHandle, cause: AgentRunEndCause) => void;
 type StateChangeHandler = () => void;
 type RunFenceHandler = (handle: AgentRunHandle) => void;
 export type ResidualRequestRelationships = Readonly<{
@@ -82,6 +84,7 @@ export class InProcessAgentHost {
 	#runSequence = 0;
 	#holdSequence = 0;
 	readonly #settledHandlers = new Set<SettledHandler>();
+	readonly #endedHandlers = new Set<EndedHandler>();
 	readonly #stateChangeHandlers = new Set<StateChangeHandler>();
 	#runFenceHandler: RunFenceHandler | undefined;
 	#runStartInitializer: RunStartInitializer | undefined;
@@ -154,6 +157,11 @@ export class InProcessAgentHost {
 		return () => this.#settledHandlers.delete(handler);
 	}
 
+	addEndedHandler(handler: EndedHandler): () => void {
+		this.#endedHandlers.add(handler);
+		return () => this.#endedHandlers.delete(handler);
+	}
+
 	addStateChangeHandler(handler: StateChangeHandler): () => void {
 		this.#stateChangeHandlers.add(handler);
 		return () => this.#stateChangeHandlers.delete(handler);
@@ -176,6 +184,14 @@ export class InProcessAgentHost {
 
 	currentHandle(): AgentRunHandle | undefined {
 		return this.#run?.handle;
+	}
+
+	latestStartedRunSequence(): number {
+		return this.#runSequence;
+	}
+
+	currentRunFailed(): boolean {
+		return this.#run?.failed ?? false;
 	}
 
 	isCurrent(handle: AgentRunHandle): boolean {
@@ -436,6 +452,7 @@ export class InProcessAgentHost {
 			this.#run = undefined;
 			this.#clearRunScopedState();
 			this.#notifyStateChanged();
+			this.#notifyEnded(run.handle, "clean");
 			return "released";
 		} finally {
 			this.#ending = false;
@@ -443,6 +460,7 @@ export class InProcessAgentHost {
 	}
 
 	async discardAndEndInLane(
+		cause: Exclude<AgentRunEndCause, "clean">,
 		disposeRun?: (session: AgentSession) => Promise<void>,
 	): Promise<void> {
 		const run = this.#run;
@@ -469,6 +487,7 @@ export class InProcessAgentHost {
 			this.#clearRunScopedState();
 			this.#ending = false;
 			this.#notifyStateChanged();
+			this.#notifyEnded(run.handle, cause);
 		}
 	}
 
@@ -525,6 +544,10 @@ export class InProcessAgentHost {
 
 	#notifyStateChanged(): void {
 		for (const handler of this.#stateChangeHandlers) handler();
+	}
+
+	#notifyEnded(handle: AgentRunHandle, cause: AgentRunEndCause): void {
+		for (const handler of this.#endedHandlers) handler(handle, cause);
 	}
 
 	#restoreHeldNativeQueueAfterIsolatedTurn(

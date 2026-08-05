@@ -252,7 +252,7 @@ export class MessageDeliveryScheduler {
 			record.host.finishIsolatedResumptionInLane(handle);
 			if (failed || !proof) {
 				this.discardInLane(record);
-				await record.host.discardAndEndInLane();
+				await record.host.discardAndEndInLane("failure");
 				return;
 			}
 		}
@@ -273,7 +273,7 @@ export class MessageDeliveryScheduler {
 			if (proof && !active.deliveryCommitted) active.delivery.afterCommit?.();
 			if (failed || !proof) {
 				this.discardInLane(record);
-				await record.host.discardAndEndInLane();
+				await record.host.discardAndEndInLane("failure");
 				return;
 			}
 		}
@@ -281,7 +281,7 @@ export class MessageDeliveryScheduler {
 		this.#removeProvenDeliveriesInLane(record);
 		if (settlement === "failed" || this.#hasUnprovenFrozenBatch(record)) {
 			this.discardInLane(record);
-			await record.host.discardAndEndInLane();
+			await record.host.discardAndEndInLane("failure");
 			return;
 		}
 

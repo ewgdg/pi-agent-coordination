@@ -56,6 +56,8 @@ import { piSessionRecency } from "../pi-integration/session-recency.ts";
 import {
 	OperationalIncidentCoordinator,
 	type OperationalIncidentBoundaryHooks,
+	type OperationalIncidentAttention,
+	type OperationalIncidentPresentation,
 } from "./operational-incidents.ts";
 import type {
 	ModeratorControlInput,
@@ -99,6 +101,7 @@ type AgentCoordinatorView = Readonly<{
 	): MessageEndEvent["message"] | undefined;
 	reconcileHumanToolResults(): void;
 	humanAttention(): readonly HumanAttentionItem[];
+	operationalAttention(): readonly OperationalIncidentAttention[];
 	focusHumanRequest(requestId: string): Promise<void>;
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(): Promise<void>;
@@ -150,6 +153,7 @@ export class WorkflowCoordinator {
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
 			messageBoundaryHooks?: MessageBoundaryHooks;
 			incidentBoundaryHooks?: OperationalIncidentBoundaryHooks;
+			operationalIncidentPresentation?: OperationalIncidentPresentation;
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
 			humanRequestPresentation?: HumanRequestPresentation;
@@ -260,6 +264,7 @@ export class WorkflowCoordinator {
 				});
 			},
 			boundaryHooks: options.incidentBoundaryHooks,
+			presentation: options.operationalIncidentPresentation,
 		});
 		for (const record of this.#agents.values()) this.#integrateAgent(record);
 		this.#spawner = new DefaultChildSpawner({
@@ -312,9 +317,13 @@ export class WorkflowCoordinator {
 			reconcileHumanToolResults: () =>
 				this.#humanRequests.reconcileCommittedResults(agentId),
 			humanAttention: () => this.#humanRequests.attentionItems(agentId),
+			operationalAttention: () => this.#operationalIncidents.attentionItems(agentId),
 			focusHumanRequest: (requestId) =>
 				this.#humanRequests.focus(agentId, requestId),
-			reachSafeBoundary: () => this.#messages.reachSafeBoundary(agentId),
+			reachSafeBoundary: async () => {
+				await this.#messages.reachSafeBoundary(agentId);
+				await this.#operationalIncidents.reachSafeBoundary();
+			},
 			beginExecution: () => this.#beginExecution(agentId),
 			ensureExecution: () => this.#ensureExecution(agentId),
 			endExecution: () => this.#releaseExecution(agentId),
@@ -470,14 +479,17 @@ export class WorkflowCoordinator {
 			children.map((record) =>
 				record.host.lane.run(() => {
 					this.#messages.discardSchedulingInLane(record);
-					return record.host.discardAndEndInLane();
+					return record.host.discardAndEndInLane("shutdown");
 				}),
 			),
 		);
 		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
 		await owner.host.lane.run(() => {
 			this.#messages.discardSchedulingInLane(owner);
-			return owner.host.discardAndEndInLane(async () => disposeNativeRuntime());
+			return owner.host.discardAndEndInLane(
+				"shutdown",
+				async () => disposeNativeRuntime(),
+			);
 		});
 	}
 

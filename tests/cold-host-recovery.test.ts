@@ -798,6 +798,79 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 	await reopened.runtime.dispose();
 });
 
+test("host loss removes exhausted Operational Attention and attempt handling", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
+	await bindTestOwnerHost(host, "tui");
+	const terminalModeratorFailure = fauxAssistantMessage(
+		"This Moderator attempt fails terminally.",
+		{
+			stopReason: "error",
+			errorMessage: "deterministic exhausted Moderator failure",
+		},
+	);
+	host.model.setResponses([
+		fauxAssistantMessage("I settled without answering the Creation Request."),
+		...Array.from(
+			{
+				length:
+					2 * (host.services.settingsManager.getRetrySettings().maxRetries + 2),
+			},
+			() => terminalModeratorFailure,
+		),
+	]);
+	const affected = await executeTool(
+		host,
+		"agent_spawn",
+		"spawn-exhausted-attention-before-reopen",
+		{ request: "Settle while still owing this Creation Request." },
+	) as { agentId: string };
+	const directory = workflowSessionDirectory(host);
+	await waitForCondition(async () => {
+		const sessions = await SessionManager.list(host.cwd, directory);
+		const failedModerators = sessions.filter(({ path }) => {
+			const entries = SessionManager.open(path).getEntries();
+			const tail = entries.at(-1);
+			return entries[0]?.type === "custom_message" &&
+				entries[0].customType === "agent-coordination.moderator-input" &&
+				tail?.type === "message" &&
+				tail.message.role === "assistant" &&
+				tail.message.stopReason === "error";
+		});
+		return failedModerators.length === 2;
+	});
+	await host.session.prompt("/agents");
+	assert.equal(
+		host.ui.agentViews.at(-1)?.options.some(
+			(option) => {
+				const diagnosticPointers = option.match(/ · Diagnostic /g) ?? [];
+				return option.startsWith("ATTENTION 1 · Obligation Stall") &&
+					option.includes(affected.agentId) &&
+					option.includes(" · Requests 1 · Request ") &&
+					diagnosticPointers.length === 2;
+			},
+		),
+		true,
+	);
+
+	const ownerSessionFile = host.session.sessionManager.getSessionFile();
+	assert.ok(ownerSessionFile);
+	await host.runtime.dispose();
+	const reopened = await reopenOwner(host, ownerSessionFile, {
+		implicitModeratorResponses: false,
+	});
+	await reopened.session.prompt("/agents");
+	assert.equal(
+		reopened.ui.agentViews.at(-1)?.options.some(
+			(option) => option.startsWith("ATTENTION "),
+		),
+		false,
+	);
+	await reopened.runtime.dispose();
+});
+
 test("cold discovery quarantines malformed Moderator bootstrap evidence", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");

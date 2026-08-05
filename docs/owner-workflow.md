@@ -27,7 +27,7 @@ After Owner Identity validation, the package binds the ordinary tools through a 
 - `ask_user_question` blocks the caller's exact Run on one or more structured Questions. Its matching successful native tool result is the sole Human Answer.
 - `agent_observe` returns an authorized Agent's durable identity, structural relationship, bounded primary transcript evidence, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
 - `agent_control` interrupts, explicitly resumes, or terminates one authorized exact child Run.
-- `/agents` presents numbered `DECIDE` attention rows and Workflow Agent statuses. Selecting a live Agent switches the native editor and transcript view to that retained session; selecting a `DECIDE` row opens that exact Human Request without background focus theft.
+- `/agents` presents numbered `DECIDE` Human Request rows, passive Owner-only `ATTENTION` rows for exhausted Operational Incident handling, and Workflow Agent statuses. Selecting a live Agent switches the native editor and transcript view to that retained session; selecting a `DECIDE` row opens that exact Human Request without background focus theft.
 
 These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer.
 
