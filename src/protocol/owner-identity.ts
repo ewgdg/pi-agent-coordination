@@ -36,6 +36,7 @@ export class InvalidOwnerIdentityError extends Error {
 export function adoptOrValidateOwnerIdentity(
 	runtime: AgentSessionRuntime,
 	entryModulePath: string,
+	options?: { allowCopiedCoordinationContext?: boolean },
 ): OwnerIdentity {
 	const sessionManager = runtime.session.sessionManager;
 	const sessionId = sessionManager.getSessionId();
@@ -65,6 +66,20 @@ export function adoptOrValidateOwnerIdentity(
 		const entry = matchingIdentityEntries[0];
 		if (entry.type !== "custom") throw new Error("Identity entry narrowing failed");
 		return validateOwnerIdentity(entry.data, sessionId, sessionManager);
+	}
+	if (
+		!options?.allowCopiedCoordinationContext &&
+		entries.some(
+			(entry) =>
+				(entry.type === "custom" &&
+					entry.customType === AGENT_IDENTITY_CUSTOM_TYPE) ||
+				(entry.type === "custom_message" &&
+					entry.customType === MODERATOR_INPUT_CUSTOM_TYPE),
+		)
+	) {
+		throw new InvalidOwnerIdentityError(
+			"copied coordination bootstrap does not match the current Pi session",
+		);
 	}
 
 	const identity = createOwnerIdentity(runtime, entryModulePath);

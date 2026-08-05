@@ -25,6 +25,7 @@ import { discoverColdWorkflow } from "./cold-host-discovery.ts";
 type InitializedWorkflow = {
 	coordinator: WorkflowCoordinator;
 	policy: WorkflowPolicyStore;
+	prepareOwnerFork(): Promise<void>;
 };
 
 const WORKFLOW_REGISTRY_KEY = "__piAgentCoordinationOwnerWorkflows";
@@ -62,6 +63,7 @@ export async function initializeOwnerWorkflow(options: {
 			runtime,
 			bootstrapHandler,
 			resolveView: () => existing.coordinator.forAgent(runtime.session.sessionId),
+			prepareOwnerFork: existing.prepareOwnerFork,
 		});
 		return;
 	}
@@ -72,7 +74,9 @@ export async function initializeOwnerWorkflow(options: {
 		throw new Error(initialPolicy.diagnostic.message);
 	}
 	const policy = new WorkflowPolicyStore(initialPolicy.snapshot);
-	const identity = adoptOrValidateOwnerIdentity(runtime, entryModulePath);
+	const identity = adoptOrValidateOwnerIdentity(runtime, entryModulePath, {
+		allowCopiedCoordinationContext: event.reason === "fork",
+	});
 	const recoveredWorkflow = await discoverColdWorkflow({
 		ownerIdentity: identity,
 		ownerSessionManager: runtime.session.sessionManager,
@@ -94,14 +98,28 @@ export async function initializeOwnerWorkflow(options: {
 		recoveredWorkflow,
 	});
 	const restoreNativeDispose = bindExactlyOnceShutdown(runtime, coordinator);
+	let ownerForkPreparation: Promise<void> | undefined;
+	const prepareOwnerFork = () => {
+		if (ownerForkPreparation) return ownerForkPreparation;
+		// Pi replaces the AgentSession without calling the intercepted runtime
+		// disposer. Restore it before the new Workflow installs its own wrapper.
+		restoreNativeDispose();
+		ownerForkPreparation = coordinator.shutdown(async () => undefined);
+		return ownerForkPreparation;
+	};
 	try {
 		bindHiddenOwnerAgentExtension({
 			pi,
 			runtime,
 			bootstrapHandler,
 			resolveView: () => coordinator.forAgent(identity.agentId),
+			prepareOwnerFork,
 		});
-		initializedWorkflows.set(runtime.session, { coordinator, policy });
+		initializedWorkflows.set(runtime.session, {
+			coordinator,
+			policy,
+			prepareOwnerFork,
+		});
 	} catch (error) {
 		restoreNativeDispose();
 		throw error;

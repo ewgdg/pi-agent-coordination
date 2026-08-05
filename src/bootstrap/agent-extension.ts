@@ -12,7 +12,10 @@ import { registerOrdinaryAgentSurfaces } from "../tools/owner-surfaces.ts";
 export function createAgentBoundExtension(
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): ExtensionFactory {
-	return (pi) => registerAgentBoundBehavior(pi, resolveView);
+	return (pi) => {
+		pi.on("session_before_fork", () => ({ cancel: true }));
+		registerAgentBoundBehavior(pi, resolveView);
+	};
 }
 
 export function bindHiddenOwnerAgentExtension(options: {
@@ -20,8 +23,15 @@ export function bindHiddenOwnerAgentExtension(options: {
 	runtime: AgentSessionRuntime;
 	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
 	resolveView: () => OrdinaryAgentCoordinatorView;
+	prepareOwnerFork: () => Promise<void>;
 }): void {
-	const { pi, runtime, bootstrapHandler, resolveView } = options;
+	const {
+		pi,
+		runtime,
+		bootstrapHandler,
+		resolveView,
+		prepareOwnerFork,
+	} = options;
 	const matchingExtensions = runtime.services.resourceLoader
 		.getExtensions()
 		.extensions.filter((extension) =>
@@ -37,6 +47,9 @@ export function bindHiddenOwnerAgentExtension(options: {
 	// Owner, the same extension becomes its hidden identity-bound ordinary surface.
 	matchingExtensions[0]!.hidden = true;
 	registerAgentBoundBehavior(pi, resolveView);
+	pi.on("session_shutdown", (event) => {
+		if (event.reason === "fork") return prepareOwnerFork();
+	});
 }
 
 function registerAgentBoundBehavior(

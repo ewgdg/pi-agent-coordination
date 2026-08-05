@@ -11,6 +11,7 @@ import {
 	SettingsManager,
 	createAgentSessionFromServices,
 	createAgentSessionServices,
+	type CreateAgentSessionRuntimeFactory,
 	type AgentSession,
 	type AgentSessionServices,
 	type ExtensionFactory,
@@ -86,59 +87,83 @@ export async function createUnboundTestOwnerHost(
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
 	const cwd = options?.cwd ?? await mkdtemp(join(tmpdir(), "pi-agent-coordination-"));
+	const agentDir = options?.agentDir ?? join(cwd, ".pi-agent");
 	const additionalExtensionPaths = options?.additionalExtensionPaths ?? [];
 	const retainedExtensionPaths = new Set(additionalExtensionPaths);
 	const { modelRuntime, faux } = await createTestModelRuntime();
-	const model = modelRuntime.getModel(PROVIDER_ID, MODEL_ID);
-	if (!model) throw new Error("Deterministic test model was not registered");
-
-	const services = await createAgentSessionServices({
-		cwd,
-		agentDir: options?.agentDir ?? join(cwd, ".pi-agent"),
-		modelRuntime,
-		settingsManager: SettingsManager.inMemory(),
-		resourceLoaderOptions: {
-			noContextFiles: true,
-			noPromptTemplates: true,
-			noSkills: true,
-			noThemes: true,
-			additionalExtensionPaths,
-			extensionFactories: [
-				{
-					name: "pi-agent-coordination",
-					hidden: false,
-					factory: extension,
-				},
-			],
-			extensionsOverride: (loaded) => ({
-				...loaded,
-				extensions: loaded.extensions.filter(
-					(candidate) =>
-						candidate.path.startsWith("<inline:") ||
-						retainedExtensionPaths.has(candidate.resolvedPath),
-				),
-			}),
-		},
-	});
 	const sessionManager = options?.sessionFile
 		? SessionManager.open(options.sessionFile)
 		: options?.persistent
 			? SessionManager.create(cwd, join(cwd, "sessions"))
 			: SessionManager.inMemory(cwd);
-	const { session } = await createAgentSessionFromServices({
-		services,
+	const createRuntime: CreateAgentSessionRuntimeFactory = async (runtimeOptions) => {
+		const services = await createAgentSessionServices({
+			cwd: runtimeOptions.cwd,
+			agentDir: runtimeOptions.agentDir,
+			modelRuntime,
+			settingsManager: SettingsManager.inMemory(),
+			resourceLoaderOptions: {
+				noContextFiles: true,
+				noPromptTemplates: true,
+				noSkills: true,
+				noThemes: true,
+				additionalExtensionPaths,
+				extensionFactories: [
+					{
+						name: "pi-agent-coordination",
+						hidden: false,
+						factory: extension,
+					},
+				],
+				extensionsOverride: (loaded) => ({
+					...loaded,
+					extensions: loaded.extensions.filter(
+						(candidate) =>
+							candidate.path.startsWith("<inline:") ||
+							retainedExtensionPaths.has(candidate.resolvedPath),
+					),
+				}),
+			},
+		});
+		const model = modelRuntime.getModel(PROVIDER_ID, MODEL_ID);
+		if (!model) throw new Error("Deterministic test model was not registered");
+		const created = await createAgentSessionFromServices({
+			services,
+			sessionManager: runtimeOptions.sessionManager,
+			sessionStartEvent: runtimeOptions.sessionStartEvent,
+			model,
+			thinkingLevel: "off",
+			noTools: "builtin",
+		});
+		return {
+			...created,
+			services,
+			diagnostics: [...services.diagnostics],
+		};
+	};
+	const initial = await createRuntime({
+		cwd,
+		agentDir,
 		sessionManager,
 		sessionStartEvent: { type: "session_start", reason: "startup" },
-		model,
-		thinkingLevel: "off",
-		noTools: "builtin",
 	});
-	const runtime = new AgentSessionRuntime(session, services, async () => {
-		throw new Error("Session replacement is outside this test");
-	});
+	const runtime = new AgentSessionRuntime(
+		initial.session,
+		initial.services,
+		createRuntime,
+		initial.diagnostics,
+		initial.modelFallbackMessage,
+	);
 	const ui = createTestUi();
 
-	return { cwd, services, session, runtime, ui, model: faux };
+	return {
+		cwd,
+		services: initial.services,
+		session: initial.session,
+		runtime,
+		ui,
+		model: faux,
+	};
 }
 
 export async function bindTestOwnerHost(
@@ -189,9 +214,12 @@ async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
 			host.ui.notify(error, "error");
 		},
 	}) as InteractiveBindingHarness;
-	const { bindCurrentSessionExtensions } =
-		InteractiveMode.prototype as unknown as InteractiveBindingPrototype;
-	await bindCurrentSessionExtensions.call(interactiveMode);
+	const bindCurrentSessionExtensions = () => {
+		const binding = InteractiveMode.prototype as unknown as InteractiveBindingPrototype;
+		return binding.bindCurrentSessionExtensions.call(interactiveMode);
+	};
+	host.runtime.setRebindSession(bindCurrentSessionExtensions);
+	await bindCurrentSessionExtensions();
 }
 
 function createTestUi(): TestUi {

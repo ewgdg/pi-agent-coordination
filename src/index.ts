@@ -18,6 +18,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	assertExtensionApiShape(pi);
 	assertHostModuleShape(hostPi);
 	const bridge = installInteractiveHostBridge(hostPi);
+	let currentWorkflowOwnerAdmitted = false;
 
 	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
 		if (ctx.mode !== "tui" || !ctx.hasUI) return;
@@ -29,8 +30,13 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			bootstrapHandler: bootstrapOwner,
 			event,
 		});
+		currentWorkflowOwnerAdmitted = true;
 	};
 	pi.on("session_start", bootstrapOwner);
+	pi.on("session_before_fork", (_event, ctx) => {
+		if (ctx.mode !== "tui" || !ctx.hasUI) return;
+		return currentWorkflowOwnerAdmitted ? undefined : { cancel: true };
+	});
 };
 
 export default piAgentCoordination;
