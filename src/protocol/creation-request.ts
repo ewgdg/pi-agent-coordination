@@ -4,29 +4,19 @@ import type { ToolCallPointer } from "./identities.ts";
 import {
 	inspectStandaloneMessageDelivery,
 	type DeliveryInspection,
+	type MessageDeliveryItem,
 } from "./message-delivery.ts";
 
-export const MESSAGE_DELIVERY_CUSTOM_TYPE = "agent-coordination.message-delivery";
-
-export function createCreationRequestDelivery(options: {
+export function createCreationRequestDeliveryItem(options: {
 	requestId: string;
 	fromAgentId: string;
 	question: string;
 	source: ToolCallPointer;
-}): {
-	customType: typeof MESSAGE_DELIVERY_CUSTOM_TYPE;
-	content: string;
-	display: true;
-	details: { messages: readonly [ToolCallPointer] };
-} {
+}): MessageDeliveryItem {
 	const { requestId, fromAgentId, question, source } = options;
 	return {
-		customType: MESSAGE_DELIVERY_CUSTOM_TYPE,
-		content: JSON.stringify({
-			messages: [{ kind: "request", requestId, fromAgentId, question }],
-		}),
-		display: true,
-		details: { messages: [source] },
+		source,
+		projection: { kind: "request", requestId, fromAgentId, question },
 	};
 }
 

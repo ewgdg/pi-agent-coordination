@@ -55,8 +55,9 @@ export type TestOwnerHost = {
 	};
 };
 
-type TestOwnerHostOptions = {
+export type TestOwnerHostOptions = {
 	persistent?: boolean;
+	additionalExtensionPaths?: string[];
 };
 
 export async function createTestOwnerHost(
@@ -73,6 +74,8 @@ export async function createUnboundTestOwnerHost(
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-agent-coordination-"));
+	const additionalExtensionPaths = options?.additionalExtensionPaths ?? [];
+	const retainedExtensionPaths = new Set(additionalExtensionPaths);
 	const { modelRuntime, faux } = await createTestModelRuntime();
 	const model = modelRuntime.getModel(PROVIDER_ID, MODEL_ID);
 	if (!model) throw new Error("Deterministic test model was not registered");
@@ -87,6 +90,7 @@ export async function createUnboundTestOwnerHost(
 			noPromptTemplates: true,
 			noSkills: true,
 			noThemes: true,
+			additionalExtensionPaths,
 			extensionFactories: [
 				{
 					name: "pi-agent-coordination",
@@ -96,7 +100,11 @@ export async function createUnboundTestOwnerHost(
 			],
 			extensionsOverride: (loaded) => ({
 				...loaded,
-				extensions: loaded.extensions.filter((candidate) => candidate.path.startsWith("<inline:")),
+				extensions: loaded.extensions.filter(
+					(candidate) =>
+						candidate.path.startsWith("<inline:") ||
+						retainedExtensionPaths.has(candidate.resolvedPath),
+				),
 			}),
 		},
 	});

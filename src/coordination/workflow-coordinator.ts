@@ -15,11 +15,11 @@ import {
 	type SpawnBoundaryHooks,
 } from "./spawning.ts";
 import {
-	DeferredMessageCoordinator,
+	MessageCoordinator,
 	type AgentMessageInput,
 	type AgentMessageReceipt,
 	type MessageBoundaryHooks,
-} from "./deferred-messages.ts";
+} from "./messages.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import { InProcessAgentHost } from "../runtime/in-process-agent-host.ts";
 import { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
@@ -34,20 +34,21 @@ export type {
 	AgentMessageInput,
 	AgentMessageReceipt,
 	MessageBoundaryHooks,
-} from "./deferred-messages.ts";
+} from "./messages.ts";
 
 export type OrdinaryAgentCoordinatorView = Readonly<{
 	status(agentId?: string): AgentStatus;
 	children(agentId?: string): readonly AgentStatus[];
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
 	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
+	reachSafeBoundary(): Promise<void>;
 }>;
 
 export class WorkflowCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
-	readonly #messages: DeferredMessageCoordinator;
+	readonly #messages: MessageCoordinator;
 	#shutdownPromise: Promise<void> | undefined;
 	#shuttingDown = false;
 
@@ -59,6 +60,7 @@ export class WorkflowCoordinator {
 			childExtensionFactory(agentId: string): ExtensionFactory;
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
 			messageBoundaryHooks?: MessageBoundaryHooks;
+			pendingMessageLimit?: number;
 		},
 	) {
 		this.#ownerIdentity = identity;
@@ -74,10 +76,11 @@ export class WorkflowCoordinator {
 			entryModulePath: options.entryModulePath,
 			childExtensionFactory: options.childExtensionFactory,
 		});
-		this.#messages = new DeferredMessageCoordinator({
+		this.#messages = new MessageCoordinator({
 			agents: this.#agents,
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
+			pendingMessageLimit: options.pendingMessageLimit,
 		});
 		this.#spawner = new DefaultChildSpawner({
 			agents: this.#agents,
@@ -95,6 +98,7 @@ export class WorkflowCoordinator {
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
+			reachSafeBoundary: () => this.#messages.reachSafeBoundary(agentId),
 		});
 	}
 

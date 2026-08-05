@@ -12,7 +12,7 @@ import { registerOrdinaryAgentSurfaces } from "../tools/owner-surfaces.ts";
 export function createAgentBoundExtension(
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): ExtensionFactory {
-	return (pi) => registerOrdinaryAgentSurfaces(pi, resolveView);
+	return (pi) => registerAgentBoundBehavior(pi, resolveView);
 }
 
 export function bindHiddenOwnerAgentExtension(options: {
@@ -36,5 +36,15 @@ export function bindHiddenOwnerAgentExtension(options: {
 	// Pi loads package extensions publicly. Once this session is authenticated as
 	// Owner, the same extension becomes its hidden identity-bound ordinary surface.
 	matchingExtensions[0]!.hidden = true;
+	registerAgentBoundBehavior(pi, resolveView);
+}
+
+function registerAgentBoundBehavior(
+	pi: ExtensionAPI,
+	resolveView: () => OrdinaryAgentCoordinatorView,
+): void {
 	registerOrdinaryAgentSurfaces(pi, resolveView);
+	// Pi awaits turn_end only after the complete issued tool batch and before it
+	// constructs the next model context, making this the Steer freeze boundary.
+	pi.on("turn_end", () => resolveView().reachSafeBoundary());
 }

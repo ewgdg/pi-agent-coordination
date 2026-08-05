@@ -2,30 +2,31 @@ import type { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { requireLiveSession, type AgentRecord } from "./agent-record.ts";
 import {
-	DeferredDeliveryScheduler,
-	type ScheduledDeferredDelivery,
+	MessageDeliveryScheduler,
+	type ScheduledMessageDelivery,
 	type ScheduleReleaseEvaluation,
-} from "./deferred-delivery-scheduler.ts";
+	type SteerFreezeHandler,
+} from "./message-delivery-scheduler.ts";
 import {
-	createDeferredMessageDelivery,
-	findAuthoredDeferredMessage,
+	createMessageDeliveryItem,
+	findAuthoredMessage,
 	inspectCanonicalMessage,
-	inspectDeferredMessageDelivery,
-	resolveCommittedDeferredMessage,
+	inspectMessageDelivery,
+	resolveCommittedMessage,
 	resolveCommittedAgentMessageInput,
 	sameAgentMessageInput,
 	type AgentMessageInput,
-	type DeferredMessage,
-	type DeferredMessagePollInput,
-	type DeferredMessageRetryInput,
-} from "../protocol/deferred-message.ts";
+	type Message,
+	type MessagePollInput,
+	type MessageRetryInput,
+} from "../protocol/message.ts";
 import {
-	createCreationRequestDelivery,
+	createCreationRequestDeliveryItem,
 	inspectCreationRequestDelivery,
 } from "../protocol/creation-request.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
 
-export type { AgentMessageInput } from "../protocol/deferred-message.ts";
+export type { AgentMessageInput } from "../protocol/message.ts";
 
 export type AgentMessageSendReceipt =
 	| Readonly<{
@@ -39,7 +40,10 @@ export type AgentMessageSendReceipt =
 	| Readonly<{
 		messageId: string;
 		delivery: "rejected";
-		rejectionReason: "target_unavailable" | "host_shutting_down";
+		rejectionReason:
+			| "target_unavailable"
+			| "host_shutting_down"
+			| "capacity_exhausted";
 	}>;
 
 export type AgentMessagePollReceipt =
@@ -75,7 +79,8 @@ export type AgentMessageRetryReceipt =
 		rejectionReason:
 			| "target_unavailable"
 			| "host_shutting_down"
-			| "evidence_unavailable";
+			| "evidence_unavailable"
+			| "capacity_exhausted";
 	}>
 	| Readonly<{
 		disposition: "indeterminate";
@@ -100,25 +105,29 @@ export type MessageBoundaryHooks = Readonly<{
 		messageId: string;
 		operation: "send" | "retry";
 	}>): void | "confirmation_lost";
+	afterSteerFreeze?: SteerFreezeHandler;
 	scheduleReleaseEvaluation?: ScheduleReleaseEvaluation;
 }>;
 
-export class DeferredMessageCoordinator {
+export class MessageCoordinator {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #isShuttingDown: () => boolean;
 	readonly #boundaryHooks: MessageBoundaryHooks;
-	readonly #deliveryScheduler: DeferredDeliveryScheduler;
+	readonly #deliveryScheduler: MessageDeliveryScheduler;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		isShuttingDown(): boolean;
 		boundaryHooks?: MessageBoundaryHooks;
+		pendingMessageLimit?: number;
 	}) {
 		this.#agents = options.agents;
 		this.#isShuttingDown = options.isShuttingDown;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
-		this.#deliveryScheduler = new DeferredDeliveryScheduler({
+		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
+			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
+			pendingMessageLimit: options.pendingMessageLimit,
 		});
 	}
 
@@ -129,7 +138,7 @@ export class DeferredMessageCoordinator {
 	): Promise<AgentMessageSendReceipt> {
 		const sender = this.#requireAgent(callerAgentId);
 		const senderSession = requireLiveSession(sender);
-		const message = resolveCommittedDeferredMessage({
+		const message = resolveCommittedMessage({
 			fromAgentId: callerAgentId,
 			workflowId: sender.identity.workflowId,
 			sessionManager: senderSession.sessionManager,
@@ -161,7 +170,7 @@ export class DeferredMessageCoordinator {
 		return {
 			messageId: message.messageId,
 			delivery: "rejected",
-			rejectionReason: "target_unavailable",
+			rejectionReason: admission,
 		};
 	}
 
@@ -173,9 +182,10 @@ export class DeferredMessageCoordinator {
 		source: ToolCallPointer;
 	}): Promise<"pending" | "rejected"> {
 		const { recipient, requestId, fromAgentId, question, source } = options;
-		const delivery: ScheduledDeferredDelivery = {
+		const delivery: ScheduledMessageDelivery = {
 			messageId: requestId,
-			customMessage: createCreationRequestDelivery({
+			deliveryMode: "deferred",
+			deliveryItem: createCreationRequestDeliveryItem({
 				requestId,
 				fromAgentId,
 				question,
@@ -192,11 +202,18 @@ export class DeferredMessageCoordinator {
 				}).deliveryEvidence,
 			afterCommit: () => recipient.host.addRetentionReason("answer_owed"),
 		};
-		return this.#deliveryScheduler.admit(recipient, delivery);
+		return (await this.#deliveryScheduler.admit(recipient, delivery)) === "pending"
+			? "pending"
+			: "rejected";
 	}
 
 	requestRelease(record: AgentRecord): Promise<"released" | "retained" | "stale"> {
 		return this.#deliveryScheduler.requestRelease(record);
+	}
+
+	reachSafeBoundary(agentId: string): Promise<void> {
+		if (this.#isShuttingDown()) return Promise.resolve();
+		return this.#deliveryScheduler.reachSafeBoundary(this.#requireAgent(agentId));
 	}
 
 	discardSchedulingInLane(record: AgentRecord): void {
@@ -227,7 +244,7 @@ export class DeferredMessageCoordinator {
 
 	async #retry(
 		caller: AgentRecord,
-		input: DeferredMessageRetryInput,
+		input: MessageRetryInput,
 	): Promise<AgentMessageRetryReceipt> {
 		const authorSessionManager = requireLiveSession(caller).sessionManager;
 		const message = this.#requireCallerAuthoredMessage(caller, input.messageId);
@@ -247,7 +264,7 @@ export class DeferredMessageCoordinator {
 					rejectionReason: "evidence_unavailable",
 				};
 			}
-			const delivery = inspectDeferredMessageDelivery({
+			const delivery = inspectMessageDelivery({
 				recipientAgentId: recipient.identity.agentId,
 				sessionManager: recipient.host.sessionManager,
 				message,
@@ -301,14 +318,14 @@ export class DeferredMessageCoordinator {
 			return {
 				disposition: "rejected",
 				messageId: message.messageId,
-				rejectionReason: "target_unavailable",
+				rejectionReason: admission,
 			};
 		});
 	}
 
 	async #poll(
 		caller: AgentRecord,
-		input: DeferredMessagePollInput,
+		input: MessagePollInput,
 	): Promise<AgentMessagePollReceipt> {
 		const authorSessionManager = requireLiveSession(caller).sessionManager;
 		const message = this.#requireCallerAuthoredMessage(caller, input.messageId);
@@ -328,7 +345,7 @@ export class DeferredMessageCoordinator {
 					reason: "inspection_incomplete",
 				};
 			}
-			const delivery = inspectDeferredMessageDelivery({
+			const delivery = inspectMessageDelivery({
 				recipientAgentId: recipient.identity.agentId,
 				sessionManager: recipient.host.sessionManager,
 				message,
@@ -364,13 +381,14 @@ export class DeferredMessageCoordinator {
 
 	#scheduleGeneralMessage(
 		recipient: AgentRecord,
-		message: DeferredMessage,
-	): ScheduledDeferredDelivery {
+		message: Message,
+	): ScheduledMessageDelivery {
 		return {
 			messageId: message.messageId,
-			customMessage: createDeferredMessageDelivery(message),
+			deliveryMode: message.deliveryMode,
+			deliveryItem: createMessageDeliveryItem(message),
 			inspectProof: () =>
-				inspectDeferredMessageDelivery({
+				inspectMessageDelivery({
 					recipientAgentId: recipient.identity.agentId,
 					sessionManager: recipient.host.sessionManager,
 					message,
@@ -384,8 +402,8 @@ export class DeferredMessageCoordinator {
 		return record;
 	}
 
-	#requireCallerAuthoredMessage(caller: AgentRecord, messageId: string): DeferredMessage {
-		const ownMessage = findAuthoredDeferredMessage({
+	#requireCallerAuthoredMessage(caller: AgentRecord, messageId: string): Message {
+		const ownMessage = findAuthoredMessage({
 			fromAgentId: caller.identity.agentId,
 			workflowId: caller.identity.workflowId,
 			sessionManager: caller.host.sessionManager,
@@ -394,7 +412,7 @@ export class DeferredMessageCoordinator {
 		if (ownMessage) return ownMessage;
 		for (const candidateAuthor of this.#agents.values()) {
 			if (candidateAuthor.identity.agentId === caller.identity.agentId) continue;
-			const otherMessage = findAuthoredDeferredMessage({
+			const otherMessage = findAuthoredMessage({
 				fromAgentId: candidateAuthor.identity.agentId,
 				workflowId: candidateAuthor.identity.workflowId,
 				sessionManager: candidateAuthor.host.sessionManager,

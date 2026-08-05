@@ -4,7 +4,7 @@ import {
 	requireLiveSession,
 	type AgentRecord,
 } from "./agent-record.ts";
-import { DeferredMessageCoordinator } from "./deferred-messages.ts";
+import { MessageCoordinator } from "./messages.ts";
 import { normalizeAgentDescription } from "../protocol/agent-metadata.ts";
 import {
 	commitChildAgentIdentity,
@@ -70,12 +70,12 @@ export class DefaultChildSpawner {
 	readonly #sessionFactory: DefaultChildSessionFactory;
 	readonly #boundaryHooks: SpawnBoundaryHooks;
 	readonly #isShuttingDown: () => boolean;
-	readonly #messages: DeferredMessageCoordinator;
+	readonly #messages: MessageCoordinator;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		sessionFactory: DefaultChildSessionFactory;
-		messages: DeferredMessageCoordinator;
+		messages: MessageCoordinator;
 		boundaryHooks?: SpawnBoundaryHooks;
 		isShuttingDown(): boolean;
 	}) {

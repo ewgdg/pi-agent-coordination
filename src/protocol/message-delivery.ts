@@ -14,6 +14,8 @@ export type EntryPointer = Readonly<{
 	entryId: string;
 }>;
 
+export const MESSAGE_DELIVERY_CUSTOM_TYPE = "agent-coordination.message-delivery";
+
 export type ModelVisibleMessage =
 	| Readonly<{
 		kind: "message";
@@ -28,10 +30,38 @@ export type ModelVisibleMessage =
 		question: string;
 	}>;
 
+export type MessageDeliveryItem = Readonly<{
+	source: ToolCallPointer;
+	projection: ModelVisibleMessage;
+}>;
+
+export type ModelVisibleMessageDelivery = Readonly<{
+	customType: typeof MESSAGE_DELIVERY_CUSTOM_TYPE;
+	content: string;
+	display: true;
+	details: Readonly<{ messages: readonly ToolCallPointer[] }>;
+}>;
+
 export type DeliveryInspection = Readonly<{
 	deliveryEvidence?: EntryPointer;
 	inspectedThrough: EntryPointer;
 }>;
+
+export function createMessageDelivery(
+	items: readonly MessageDeliveryItem[],
+): ModelVisibleMessageDelivery {
+	if (items.length === 0) {
+		throw new ProtocolInvariantError("Message Delivery must not be empty");
+	}
+	return {
+		customType: MESSAGE_DELIVERY_CUSTOM_TYPE,
+		content: JSON.stringify({
+			messages: items.map(({ projection }) => projection),
+		}),
+		display: true,
+		details: { messages: items.map(({ source }) => source) },
+	};
+}
 
 export function inspectStandaloneMessageDelivery(options: {
 	recipientAgentId: string;
@@ -72,9 +102,7 @@ export function inspectStandaloneMessageDelivery(options: {
 			sameToolCallPointer(source, expectedSource));
 		if (sourceIndex < 0) continue;
 		if (
-			sources.length !== 1 ||
-			sourceIndex !== 0 ||
-			!isDeepStrictEqual(projections[0], expectedProjection)
+			!isDeepStrictEqual(projections[sourceIndex], expectedProjection)
 		) {
 			throw new ProtocolInvariantError(`${subject} Delivery differs from its source`);
 		}
@@ -113,7 +141,7 @@ function parseDeliverySources(value: unknown): ToolCallPointer[] {
 	if (!Array.isArray(record.messages) || record.messages.length === 0) {
 		throw new ProtocolInvariantError("Message Delivery sources must not be empty");
 	}
-	return record.messages.map((source) => {
+	const sources = record.messages.map((source) => {
 		const pointer = requireExactRecord(
 			source,
 			["agentId", "entryId", "toolCallId"],
@@ -132,6 +160,15 @@ function parseDeliverySources(value: unknown): ToolCallPointer[] {
 			toolCallId: pointer.toolCallId,
 		};
 	});
+	for (let index = 0; index < sources.length; index += 1) {
+		if (
+			sources.slice(index + 1).some((candidate) =>
+				sameToolCallPointer(sources[index]!, candidate))
+		) {
+			throw new ProtocolInvariantError("Message Delivery repeats a source");
+		}
+	}
+	return sources;
 }
 
 function parseDeliveryContent(value: unknown): ModelVisibleMessage[] {

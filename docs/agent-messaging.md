@@ -1,6 +1,11 @@
 # Agent messaging
 
-Every authenticated ordinary Agent can send an immutable free-form Message to a known Agent in the same Workflow. Messages use fixed Deferred Delivery: they enter the recipient only after its current work settles.
+Every authenticated ordinary Agent can send an immutable free-form Message to a known Agent in the same Workflow. Each Message fixes either Deferred or Steer Delivery at authoring.
+
+- Deferred waits until the recipient's current work settles and receives its own model turn.
+- Steer waits for the current generation and its complete issued tool batch, then redirects the next model turn without aborting work or rolling back effects.
+
+Omitting `deliveryMode` selects Deferred.
 
 ## Send a Message
 
@@ -16,12 +21,25 @@ Call `agent_message` with the recipient and content:
 
 The committed tool call fixes the Message identity, sender, recipient, Workflow, and content. These values cannot be supplied again or changed by retry.
 
+Use Steer only when the next model turn needs exceptional direction:
+
+```json
+{
+  "operation": "send",
+  "targetAgentId": "recipient-agent-id",
+  "content": "Re-evaluate the fix against the newly discovered invariant.",
+  "deliveryMode": "steer"
+}
+```
+
+At a safe boundary, all Steer Messages already pending for that recipient are frozen in admission order, deduplicated against transcript proof, and committed as one model-visible batch. A Message admitted after that freeze waits for the next safe boundary. Steer takes precedence over Deferred when both are pending.
+
 The initial receipt reports live scheduling only:
 
 | Delivery | Meaning | Next action |
 | --- | --- | --- |
 | `pending` | The volatile recipient lane admitted the Message. Delivery may still fail later. | Poll when proof matters. |
-| `rejected` | This invocation was not admitted and cannot later deliver. | Correct the reported availability problem or retry later. |
+| `rejected` | This invocation was not admitted and cannot later deliver. The reason distinguishes target availability, shutdown, and capacity exhaustion. | Correct the reported problem or retry later. |
 | `indeterminate` | Admission may have happened, but confirmation was lost. | Poll before deciding whether to retry. |
 
 ## Check Delivery
@@ -45,7 +63,7 @@ Delivery proves that the Message became available to recipient session context. 
 
 ## Retry an undelivered Message
 
-Retry uses the original immutable Message and its fixed Deferred mode:
+Retry uses the original immutable Message and its authored delivery mode:
 
 ```json
 {
@@ -56,13 +74,21 @@ Retry uses the original immutable Message and its fixed Deferred mode:
 
 A retry returns existing Delivery proof when present. Otherwise it coalesces with the same Message already pending in the recipient lane or admits one new volatile item after authoritative absence. At most one recipient transcript Delivery can prove a Message.
 
+Retry does not accept `deliveryMode`; it cannot turn Deferred into Steer or Steer into Deferred.
+
 If retry admission may have happened but its confirmation is lost, retry returns `indeterminate`; poll before deciding whether to retry again.
 
 If recipient evidence cannot be inspected, retry is rejected without scheduling. This prevents a new delivery from being admitted while the coordinator cannot establish whether proof already exists.
 
+## Bounded scheduling
+
+Each recipient admits at most 256 distinct pending Message identities across Deferred and Steer. A retry of an already-pending identity consumes no additional capacity. Admitted work is never evicted.
+
+When capacity is exhausted, the invocation returns `capacity_exhausted`. The canonical author Message remains in the sender transcript and can be retried explicitly after capacity becomes available; there is no hidden overflow or automatic retry.
+
 ## Delivery across dormant Runs
 
-Agent identity outlives any individual Run. When a child has no work and no Run Retention Reason, its current Run is released and the Agent becomes dormant. A Deferred Message to that Agent starts a successor Run, delivers after the Run reaches its settled boundary, and releases the successor again when no retention reason remains.
+Agent identity outlives any individual Run. When a child has no work and no Run Retention Reason, its current Run is released and the Agent becomes dormant. A Message to that Agent starts a successor Run, commits at the first boundary allowed by its authored mode, and releases the successor again when no retention reason remains.
 
 Live scheduling is intentionally disposable. Run failure or Workflow shutdown discards every uncommitted item for that host. Receipts are not rewritten, Messages are not replayed automatically, and backlog is not transferred to a successor Run. Poll and explicit retry are the recovery path.
 

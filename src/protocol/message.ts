@@ -13,52 +13,57 @@ import {
 	inspectStandaloneMessageDelivery,
 	type DeliveryInspection,
 	type EntryPointer,
+	type MessageDeliveryItem,
 } from "./message-delivery.ts";
 
 export type { DeliveryInspection, EntryPointer } from "./message-delivery.ts";
 
-export type DeferredMessageSendInput = Readonly<{
+export type MessageDeliveryMode = "deferred" | "steer";
+
+export type MessageSendInput = Readonly<{
 	operation: "send";
 	targetAgentId: string;
 	content: string;
+	deliveryMode?: MessageDeliveryMode;
 }>;
 
-export type DeferredMessagePollInput = Readonly<{
+export type MessagePollInput = Readonly<{
 	operation: "poll";
 	messageId: string;
 }>;
 
-export type DeferredMessageRetryInput = Readonly<{
+export type MessageRetryInput = Readonly<{
 	operation: "retry";
 	messageId: string;
 }>;
 
 export type AgentMessageInput =
-	| DeferredMessageSendInput
-	| DeferredMessagePollInput
-	| DeferredMessageRetryInput;
+	| MessageSendInput
+	| MessagePollInput
+	| MessageRetryInput;
 
 export type CanonicalMessageInspection =
-	| Readonly<{ state: "canonical"; message: DeferredMessage }>
-	| Readonly<{ state: "indeterminate"; message: DeferredMessage }>
-	| Readonly<{ state: "not_created"; message: DeferredMessage }>;
+	| Readonly<{ state: "canonical"; message: Message }>
+	| Readonly<{ state: "indeterminate"; message: Message }>
+	| Readonly<{ state: "not_created"; message: Message }>;
 
-export type DeferredMessage = Readonly<{
+export type Message = Readonly<{
 	messageId: string;
 	workflowId: string;
 	fromAgentId: string;
 	targetAgentId: string;
 	content: string;
+	deliveryMode: MessageDeliveryMode;
 	source: ToolCallPointer;
 }>;
 
-export function resolveCommittedDeferredMessage(options: {
+export function resolveCommittedMessage(options: {
 	fromAgentId: string;
 	workflowId: string;
 	sessionManager: SessionManager;
 	toolCallId: string;
-	providedInput: DeferredMessageSendInput;
-}): DeferredMessage {
+	providedInput: MessageSendInput;
+}): Message {
 	const { fromAgentId, workflowId, sessionManager, toolCallId, providedInput } = options;
 	const { source, input } = resolveCommittedToolCall({
 		agentId: fromAgentId,
@@ -66,7 +71,7 @@ export function resolveCommittedDeferredMessage(options: {
 		toolCallId,
 		toolName: "agent_message",
 	});
-	const committedInput = validateDeferredMessageSendInput(input);
+	const committedInput = validateMessageSendInput(input);
 	if (!sameAgentMessageInput(committedInput, providedInput)) {
 		throw new Error("invariant_violation: executed Agent Message input differs from its source");
 	}
@@ -76,6 +81,7 @@ export function resolveCommittedDeferredMessage(options: {
 		fromAgentId,
 		targetAgentId: committedInput.targetAgentId,
 		content: committedInput.content,
+		deliveryMode: committedInput.deliveryMode ?? "deferred",
 		source,
 	};
 }
@@ -100,7 +106,9 @@ export function sameAgentMessageInput(
 		case "send":
 			return right.operation === "send" &&
 				left.targetAgentId === right.targetAgentId &&
-				left.content === right.content;
+				left.content === right.content &&
+				(left.deliveryMode ?? "deferred") ===
+					(right.deliveryMode ?? "deferred");
 		case "poll":
 			return right.operation === "poll" && left.messageId === right.messageId;
 		case "retry":
@@ -108,14 +116,14 @@ export function sameAgentMessageInput(
 	}
 }
 
-export function findAuthoredDeferredMessage(options: {
+export function findAuthoredMessage(options: {
 	fromAgentId: string;
 	workflowId: string;
 	sessionManager: SessionManager;
 	messageId: string;
-}): DeferredMessage | undefined {
+}): Message | undefined {
 	const { fromAgentId, workflowId, sessionManager, messageId } = options;
-	const matches: DeferredMessage[] = [];
+	const matches: Message[] = [];
 	for (const entry of currentCoordinationScope(sessionManager, fromAgentId)) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 		for (const part of entry.message.content) {
@@ -141,6 +149,7 @@ export function findAuthoredDeferredMessage(options: {
 				fromAgentId,
 				targetAgentId: input.targetAgentId,
 				content: input.content,
+				deliveryMode: input.deliveryMode ?? "deferred",
 				source,
 			});
 		}
@@ -152,7 +161,7 @@ export function findAuthoredDeferredMessage(options: {
 }
 
 export function inspectCanonicalMessage(options: {
-	message: DeferredMessage;
+	message: Message;
 	authorSessionManager: SessionManager;
 	deliveryEvidence?: EntryPointer;
 }): CanonicalMessageInspection {
@@ -177,7 +186,7 @@ export function inspectCanonicalMessage(options: {
 			}
 			return { state: "not_created", message };
 		}
-		validateDeferredMessageAuthorResult(result.message.details, message.messageId);
+		validateMessageAuthorResult(result.message.details, message.messageId);
 		return { state: "canonical", message };
 	}
 	return deliveryEvidence
@@ -185,7 +194,7 @@ export function inspectCanonicalMessage(options: {
 		: { state: "indeterminate", message };
 }
 
-function validateDeferredMessageAuthorResult(value: unknown, messageId: string): void {
+function validateMessageAuthorResult(value: unknown, messageId: string): void {
 	if (!isRecord(value)) {
 		throw new Error(
 			`invariant_violation: Message ${messageId} author result has an invalid shape`,
@@ -202,7 +211,8 @@ function validateDeferredMessageAuthorResult(value: unknown, messageId: string):
 		if (
 			!sameStringList(keys, ["delivery", "messageId", "rejectionReason"]) ||
 			(value.rejectionReason !== "target_unavailable" &&
-				value.rejectionReason !== "host_shutting_down")
+				value.rejectionReason !== "host_shutting_down" &&
+				value.rejectionReason !== "capacity_exhausted")
 		) {
 			throw new Error(
 				`invariant_violation: Message ${messageId} author result has an invalid shape`,
@@ -220,10 +230,10 @@ function validateDeferredMessageAuthorResult(value: unknown, messageId: string):
 	}
 }
 
-export function inspectDeferredMessageDelivery(options: {
+export function inspectMessageDelivery(options: {
 	recipientAgentId: string;
 	sessionManager: SessionManager;
-	message: DeferredMessage;
+	message: Message;
 }): DeliveryInspection {
 	const { recipientAgentId, sessionManager, message } = options;
 	return inspectStandaloneMessageDelivery({
@@ -236,38 +246,30 @@ export function inspectDeferredMessageDelivery(options: {
 			fromAgentId: message.fromAgentId,
 			content: message.content,
 		},
-		subject: `Deferred Message ${message.messageId}`,
+		subject: `Message ${message.messageId}`,
 	});
 }
 
-export function createDeferredMessageDelivery(message: DeferredMessage): {
-	customType: "agent-coordination.message-delivery";
-	content: string;
-	display: true;
-	details: { messages: readonly [ToolCallPointer] };
-} {
+export function createMessageDeliveryItem(message: Message): MessageDeliveryItem {
 	return {
-		customType: "agent-coordination.message-delivery",
-		content: JSON.stringify({
-			messages: [
-				{
-					kind: "message",
-					messageId: message.messageId,
-					fromAgentId: message.fromAgentId,
-					content: message.content,
-				},
-			],
-		}),
-		display: true,
-		details: { messages: [message.source] },
+		source: message.source,
+		projection: {
+			kind: "message",
+			messageId: message.messageId,
+			fromAgentId: message.fromAgentId,
+			content: message.content,
+		},
 	};
 }
 
-function validateDeferredMessageSendInput(
+function validateMessageSendInput(
 	value: Record<string, unknown>,
-): DeferredMessageSendInput {
+): MessageSendInput {
 	const keys = Object.keys(value).sort();
-	if (!sameStringList(keys, ["content", "operation", "targetAgentId"])) {
+	const expectedKeys = value.deliveryMode === undefined
+		? ["content", "operation", "targetAgentId"]
+		: ["content", "deliveryMode", "operation", "targetAgentId"];
+	if (!sameStringList(keys, expectedKeys)) {
 		throw new Error("invalid_input: Agent Message send input has an invalid shape");
 	}
 	if (value.operation !== "send") {
@@ -279,15 +281,25 @@ function validateDeferredMessageSendInput(
 	if (typeof value.content !== "string" || value.content.length === 0) {
 		throw new Error("invalid_input: Agent Message content must not be empty");
 	}
+	if (
+		value.deliveryMode !== undefined &&
+		value.deliveryMode !== "deferred" &&
+		value.deliveryMode !== "steer"
+	) {
+		throw new Error("invalid_input: Agent Message deliveryMode is unavailable");
+	}
 	return {
 		operation: "send",
 		targetAgentId: value.targetAgentId,
 		content: value.content,
+		...(value.deliveryMode === undefined
+			? {}
+			: { deliveryMode: value.deliveryMode }),
 	};
 }
 
 function validateAgentMessageInput(value: Record<string, unknown>): AgentMessageInput {
-	if (value.operation === "send") return validateDeferredMessageSendInput(value);
+	if (value.operation === "send") return validateMessageSendInput(value);
 	const keys = Object.keys(value).sort();
 	if (!sameStringList(keys, ["messageId", "operation"])) {
 		throw new Error("invalid_input: Agent Message poll input has an invalid shape");

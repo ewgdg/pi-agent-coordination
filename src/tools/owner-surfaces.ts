@@ -2,6 +2,10 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import type { OrdinaryAgentCoordinatorView } from "../coordination/workflow-coordinator.ts";
+import {
+	renderAgentMessageCall,
+	renderAgentMessageResult,
+} from "./message-renderer.ts";
 
 type ViewResolver = () => OrdinaryAgentCoordinatorView;
 
@@ -15,6 +19,12 @@ export function registerOrdinaryAgentSurfaces(
 				operation: Type.Literal("send"),
 				targetAgentId: Type.String({ minLength: 1 }),
 				content: Type.String({ minLength: 1 }),
+				deliveryMode: Type.Optional(
+					Type.Union([
+						Type.Literal("deferred"),
+						Type.Literal("steer"),
+					]),
+				),
 			},
 			{ additionalProperties: false },
 		),
@@ -59,10 +69,13 @@ export function registerOrdinaryAgentSurfaces(
 	pi.registerTool({
 		name: "agent_message",
 		label: "Message Agent",
-		description: "Send one immutable Deferred Message to a known Agent in this Workflow.",
+		description:
+			"Send one immutable Deferred or Steer Message to a known Agent in this Workflow.",
 		promptSnippet: "Send, poll, or retry direct Agent communication.",
 		executionMode: "sequential",
 		parameters: messageParameters,
+		renderCall: renderAgentMessageCall,
+		renderResult: renderAgentMessageResult,
 		async execute(toolCallId, parameters) {
 			const receipt = await resolveView().message(toolCallId, parameters);
 			return {

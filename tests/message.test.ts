@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
 	fauxAssistantMessage,
@@ -11,7 +12,10 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { createAgentBoundExtension } from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
-import type { MessageBoundaryHooks } from "../src/coordination/workflow-coordinator.ts";
+import type {
+	AgentMessageReceipt,
+	MessageBoundaryHooks,
+} from "../src/coordination/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -1171,6 +1175,7 @@ test("send reports indeterminate when admission confirmation is lost without can
 		harness,
 		"send-with-lost-admission-confirmation",
 		"Deliver even though admission confirmation is lost.",
+		{ deliveryMode: "steer" },
 	);
 
 	assert.deepEqual(sent.receipt, {
@@ -1213,6 +1218,7 @@ test("retry reports indeterminate when admission confirmation is lost without ca
 		harness,
 		"send-before-retry-confirmation-loss",
 		"Deliver after the active Message settles.",
+		{ deliveryMode: "steer" },
 	);
 	const retryToolCallId = "retry-with-lost-admission-confirmation";
 	const retryInput = {
@@ -1234,6 +1240,518 @@ test("retry reports indeterminate when admission confirmation is lost without ca
 	});
 	releaseActiveDelivery();
 	await waitForDelivery(harness, retried.source);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("an authored Steer mode is accepted and retry remains mode-free", async () => {
+	const harness = await createDormantChildHarness({});
+	harness.host.model.setResponses([
+		fauxAssistantMessage("The explicit Steer Message reached this dormant Agent."),
+	]);
+	const sent = await authorMessage(
+		harness,
+		"author-explicit-steer-message",
+		"Redirect the next model turn at its safe boundary.",
+		{ deliveryMode: "steer" },
+	);
+	assert.equal("delivery" in sent.receipt && sent.receipt.delivery, "pending");
+	await waitForDelivery(harness, sent.source);
+
+	const retryToolCallId = "retry-explicit-steer-message";
+	const retryInput = {
+		operation: "retry" as const,
+		messageId: sent.receipt.messageId,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", retryInput, { id: retryToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const retry = await harness.view.message(retryToolCallId, retryInput);
+	assert.equal("disposition" in retry && retry.disposition, "delivered");
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("recipient capacity counts distinct pending identities without evicting admitted work", async () => {
+	const harness = await createDormantChildHarness({}, { pendingMessageLimit: 1 });
+	let releaseActiveWork!: () => void;
+	const activeWorkGate = new Promise<void>((resolve) => {
+		releaseActiveWork = resolve;
+	});
+	let markActiveWorkStarted!: () => void;
+	const activeWorkStarted = new Promise<void>((resolve) => {
+		markActiveWorkStarted = resolve;
+	});
+	harness.host.model.setResponses([
+		async () => {
+			markActiveWorkStarted();
+			await activeWorkGate;
+			return fauxAssistantMessage("The recipient finished its existing work.");
+		},
+		fauxAssistantMessage("The admitted pending Message arrived first."),
+		fauxAssistantMessage("The explicitly retried Message arrived later."),
+	]);
+	await authorMessage(
+		harness,
+		"start-active-work-before-capacity",
+		"Start work so later Deferred Messages remain pending.",
+	);
+	await activeWorkStarted;
+
+	const admitted = await authorMessage(
+		harness,
+		"admit-at-recipient-capacity",
+		"Keep this admitted identity without eviction.",
+		{ deliveryMode: "steer" },
+	);
+	const exhausted = await authorMessage(
+		harness,
+		"reject-over-recipient-capacity",
+		"Preserve this canonical Message for explicit retry.",
+	);
+	assert.equal("delivery" in admitted.receipt && admitted.receipt.delivery, "pending");
+	assert.deepEqual(exhausted.receipt, {
+		messageId: exhausted.receipt.messageId,
+		delivery: "rejected",
+		rejectionReason: "capacity_exhausted",
+	});
+
+	const coalescedRetryId = "retry-admitted-identity-at-capacity";
+	const coalescedRetryInput = {
+		operation: "retry" as const,
+		messageId: admitted.receipt.messageId,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", coalescedRetryInput, {
+				id: coalescedRetryId,
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	assert.deepEqual(
+		await harness.view.message(coalescedRetryId, coalescedRetryInput),
+		{ disposition: "pending", messageId: admitted.receipt.messageId },
+	);
+
+	releaseActiveWork();
+	await waitForDelivery(harness, admitted.source);
+	const exhaustedSessionFile = await waitForChildSessionFile(
+		harness.host,
+		harness.childId,
+	);
+	assert.equal(
+		hasDelivery(SessionManager.open(exhaustedSessionFile).getEntries(), exhausted.source),
+		false,
+	);
+
+	const retryExhaustedId = "retry-after-recipient-capacity-frees";
+	const retryExhaustedInput = {
+		operation: "retry" as const,
+		messageId: exhausted.receipt.messageId,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", retryExhaustedInput, {
+				id: retryExhaustedId,
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	assert.deepEqual(
+		await harness.view.message(retryExhaustedId, retryExhaustedInput),
+		{ disposition: "pending", messageId: exhausted.receipt.messageId },
+	);
+	await waitForDelivery(harness, exhausted.source);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("Steer freezes an ordered batch after active generation and before the next model turn", async () => {
+	const harness = await createDormantChildHarness({});
+	let releaseGeneration!: () => void;
+	const generationGate = new Promise<void>((resolve) => {
+		releaseGeneration = resolve;
+	});
+	let markGenerationStarted!: () => void;
+	const generationStarted = new Promise<void>((resolve) => {
+		markGenerationStarted = resolve;
+	});
+	let markContinuationObserved!: () => void;
+	const continuationObserved = new Promise<void>((resolve) => {
+		markContinuationObserved = resolve;
+	});
+	let continuationError: unknown;
+	harness.host.model.setResponses([
+		async () => {
+			markGenerationStarted();
+			await generationGate;
+			return fauxAssistantMessage("The original generation reached its safe boundary.");
+		},
+		(context) => {
+			try {
+				assert.deepEqual(findLatestModelDelivery(context.messages), [
+						{
+							kind: "message",
+							messageId: first.receipt.messageId,
+							fromAgentId: harness.host.session.sessionId,
+							content: "Apply the first redirect.",
+						},
+						{
+							kind: "message",
+							messageId: second.receipt.messageId,
+							fromAgentId: harness.host.session.sessionId,
+							content: "Then apply the second redirect.",
+						},
+				]);
+			} catch (error) {
+				continuationError = error;
+			} finally {
+				markContinuationObserved();
+			}
+			return fauxAssistantMessage("Both Steer directions were visible together.");
+		},
+	]);
+	await authorMessage(
+		harness,
+		"start-generation-before-steer",
+		"Begin one active generation.",
+	);
+	await generationStarted;
+
+	const first = await authorMessage(
+		harness,
+		"admit-first-steer",
+		"Apply the first redirect.",
+		{ deliveryMode: "steer" },
+	);
+	const second = await authorMessage(
+		harness,
+		"admit-second-steer",
+		"Then apply the second redirect.",
+		{ deliveryMode: "steer" },
+	);
+	releaseGeneration();
+
+	await waitForDelivery(harness, first.source);
+	await waitForDelivery(harness, second.source);
+	await continuationObserved;
+	if (continuationError) throw continuationError;
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	const deliveries = SessionManager.open(childSessionFile)
+		.getEntries()
+		.filter(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.message-delivery" &&
+				(deliveryContainsSource(entry.details, first.source) ||
+					deliveryContainsSource(entry.details, second.source)),
+		);
+	assert.equal(deliveries.length, 1);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("a Steer Message admitted after freeze waits for the following safe boundary", async () => {
+	let admitAfterFreeze: (() => void) | undefined;
+	const harness = await createDormantChildHarness({
+		afterSteerFreeze: () => admitAfterFreeze?.(),
+	});
+	const lateToolCallId = "admit-steer-after-freeze";
+	const lateInput = {
+		operation: "send" as const,
+		targetAgentId: harness.childId,
+		content: "Wait for the following safe boundary.",
+		deliveryMode: "steer" as const,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", lateInput, { id: lateToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const lateSourceEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(lateSourceEntry);
+	const lateSource = {
+		agentId: harness.host.session.sessionId,
+		entryId: lateSourceEntry.id,
+		toolCallId: lateToolCallId,
+	};
+	let lateAdmission: Promise<AgentMessageReceipt> | undefined;
+	admitAfterFreeze = () => {
+		admitAfterFreeze = undefined;
+		lateAdmission = harness.view.message(lateToolCallId, lateInput);
+	};
+
+	let releaseFirstGeneration!: () => void;
+	const firstGenerationGate = new Promise<void>((resolve) => {
+		releaseFirstGeneration = resolve;
+	});
+	let markFirstGenerationStarted!: () => void;
+	const firstGenerationStarted = new Promise<void>((resolve) => {
+		markFirstGenerationStarted = resolve;
+	});
+	let releaseSecondGeneration!: () => void;
+	const secondGenerationGate = new Promise<void>((resolve) => {
+		releaseSecondGeneration = resolve;
+	});
+	let markSecondGenerationStarted!: () => void;
+	const secondGenerationStarted = new Promise<void>((resolve) => {
+		markSecondGenerationStarted = resolve;
+	});
+	let secondGenerationError: unknown;
+	harness.host.model.setResponses([
+		async () => {
+			markFirstGenerationStarted();
+			await firstGenerationGate;
+			return fauxAssistantMessage("The first generation reached its boundary.");
+		},
+		async (context) => {
+			markSecondGenerationStarted();
+			try {
+				assert.deepEqual(findLatestModelDelivery(context.messages), [
+					{
+						kind: "message",
+						messageId: first.receipt.messageId,
+						fromAgentId: harness.host.session.sessionId,
+						content: "Enter the first frozen batch.",
+					},
+				]);
+			} catch (error) {
+				secondGenerationError = error;
+			}
+			await secondGenerationGate;
+			return fauxAssistantMessage("The first Steer batch completed.");
+		},
+		(context) => {
+			assert.deepEqual(findLatestModelDelivery(context.messages), [
+				{
+					kind: "message",
+					messageId: lateReceipt?.messageId,
+					fromAgentId: harness.host.session.sessionId,
+					content: "Wait for the following safe boundary.",
+				},
+			]);
+			return fauxAssistantMessage("The post-freeze Steer arrived later.");
+		},
+	]);
+	await authorMessage(
+		harness,
+		"start-generation-before-freeze-race",
+		"Begin the generation that establishes the first freeze.",
+	);
+	await firstGenerationStarted;
+	const first = await authorMessage(
+		harness,
+		"admit-steer-before-freeze",
+		"Enter the first frozen batch.",
+		{ deliveryMode: "steer" },
+	);
+	releaseFirstGeneration();
+	await waitForCondition(() => lateAdmission !== undefined);
+	const lateReceipt = await lateAdmission;
+	assert.ok(lateReceipt);
+	assert.deepEqual(lateReceipt, {
+		messageId: lateReceipt.messageId,
+		delivery: "pending",
+	});
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: lateToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(lateReceipt) }],
+		details: lateReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	await secondGenerationStarted;
+	if (secondGenerationError) throw secondGenerationError;
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	let entries = SessionManager.open(childSessionFile).getEntries();
+	assert.equal(hasDelivery(entries, first.source), true);
+	assert.equal(hasDelivery(entries, lateSource), false);
+
+	releaseSecondGeneration();
+	await waitForDelivery(harness, lateSource);
+	entries = SessionManager.open(childSessionFile).getEntries();
+	assert.equal(hasDelivery(entries, lateSource), true);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("Steer waits for an already-issued parallel tool batch even when tools finish in reverse", async (t) => {
+	let releaseSlowTool!: () => void;
+	const slowToolGate = new Promise<void>((resolve) => {
+		releaseSlowTool = resolve;
+	});
+	let releaseFastTool!: () => void;
+	const fastToolGate = new Promise<void>((resolve) => {
+		releaseFastTool = resolve;
+	});
+	let markSlowToolStarted!: () => void;
+	const slowToolStarted = new Promise<void>((resolve) => {
+		markSlowToolStarted = resolve;
+	});
+	let markFastToolStarted!: () => void;
+	const fastToolStarted = new Promise<void>((resolve) => {
+		markFastToolStarted = resolve;
+	});
+	const toolRegistryKey = Symbol.for("pi-agent-coordination.test.reverse-tools");
+	const testGlobals = globalThis as typeof globalThis & Record<PropertyKey, unknown>;
+	testGlobals[toolRegistryKey] = {
+		async slow() {
+			markSlowToolStarted();
+			await slowToolGate;
+		},
+		async fast() {
+			markFastToolStarted();
+			await fastToolGate;
+		},
+	};
+	t.after(() => {
+		delete testGlobals[toolRegistryKey];
+	});
+	const harness = await createDormantChildHarness({}, {
+		additionalExtensionPaths: [
+			fileURLToPath(new URL("./support/reverse-boundary-tools.ts", import.meta.url)),
+		],
+	});
+	let markContinuationObserved!: () => void;
+	const continuationObserved = new Promise<void>((resolve) => {
+		markContinuationObserved = resolve;
+	});
+	let continuationError: unknown;
+	harness.host.model.setResponses([
+		fauxAssistantMessage(
+			[
+				fauxToolCall("slow_boundary_tool", {}, { id: "slow-tool-call" }),
+				fauxToolCall("fast_boundary_tool", {}, { id: "fast-tool-call" }),
+			],
+			{ stopReason: "toolUse" },
+		),
+		(context) => {
+			const messages = context.messages as unknown as Array<{
+				role: string;
+				toolCallId?: string;
+			}>;
+			try {
+				assert.deepEqual(
+					messages
+						.filter(({ role }) => role === "toolResult")
+						.slice(-2)
+						.map(({ toolCallId }) => toolCallId),
+					["slow-tool-call", "fast-tool-call"],
+				);
+				assert.deepEqual(findLatestModelDelivery(context.messages), [
+					{
+						kind: "message",
+						messageId: steer.receipt.messageId,
+						fromAgentId: harness.host.session.sessionId,
+						content: "Apply this only after both issued tools finish.",
+					},
+				]);
+			} catch (error) {
+				continuationError = error;
+			} finally {
+				markContinuationObserved();
+			}
+			return fauxAssistantMessage("Steer arrived only after both tool results.");
+		},
+	]);
+	await authorMessage(
+		harness,
+		"start-parallel-tools-before-steer",
+		"Run both boundary tools.",
+	);
+	await Promise.all([slowToolStarted, fastToolStarted]);
+	const steer = await authorMessage(
+		harness,
+		"steer-during-reverse-tool-completion",
+		"Apply this only after both issued tools finish.",
+		{ deliveryMode: "steer" },
+	);
+
+	releaseFastTool();
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	assert.equal(
+		hasDelivery(SessionManager.open(childSessionFile).getEntries(), steer.source),
+		false,
+	);
+	releaseSlowTool();
+	await waitForDelivery(harness, steer.source);
+	await continuationObserved;
+	if (continuationError) throw continuationError;
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("Steer takes the next model turn before an earlier Deferred Message", async () => {
+	const harness = await createDormantChildHarness({});
+	let releaseActiveGeneration!: () => void;
+	const activeGenerationGate = new Promise<void>((resolve) => {
+		releaseActiveGeneration = resolve;
+	});
+	let markActiveGenerationStarted!: () => void;
+	const activeGenerationStarted = new Promise<void>((resolve) => {
+		markActiveGenerationStarted = resolve;
+	});
+	const observedDeliveryIds: string[] = [];
+	let markBothContinuationsObserved!: () => void;
+	const bothContinuationsObserved = new Promise<void>((resolve) => {
+		markBothContinuationsObserved = resolve;
+	});
+	harness.host.model.setResponses([
+		async () => {
+			markActiveGenerationStarted();
+			await activeGenerationGate;
+			return fauxAssistantMessage("The active generation reached its boundary.");
+		},
+		(context) => {
+			const delivery = findLatestModelDelivery(context.messages) as Array<{
+				messageId: string;
+			}>;
+			observedDeliveryIds.push(...delivery.map(({ messageId }) => messageId));
+			return fauxAssistantMessage("The Steer direction ran first.");
+		},
+		(context) => {
+			const delivery = findLatestModelDelivery(context.messages) as Array<{
+				messageId: string;
+			}>;
+			observedDeliveryIds.push(...delivery.map(({ messageId }) => messageId));
+			markBothContinuationsObserved();
+			return fauxAssistantMessage("The Deferred Message ran afterward.");
+		},
+	]);
+	await authorMessage(
+		harness,
+		"start-generation-before-priority",
+		"Begin active work before both delivery modes arrive.",
+	);
+	await activeGenerationStarted;
+	const deferred = await authorMessage(
+		harness,
+		"admit-deferred-before-steer",
+		"Wait until the Steer direction completes.",
+	);
+	const steer = await authorMessage(
+		harness,
+		"admit-steer-after-deferred",
+		"Take the next safe model turn.",
+		{ deliveryMode: "steer" },
+	);
+	releaseActiveGeneration();
+
+	await waitForDelivery(harness, steer.source);
+	await waitForDelivery(harness, deferred.source);
+	await bothContinuationsObserved;
+	assert.deepEqual(observedDeliveryIds, [
+		steer.receipt.messageId,
+		deferred.receipt.messageId,
+	]);
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
@@ -1283,8 +1801,17 @@ async function waitForEntry(
 	throw new Error("Expected child transcript entry did not commit");
 }
 
-async function createDormantChildHarness(messageBoundaryHooks: MessageBoundaryHooks) {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+async function createDormantChildHarness(
+	messageBoundaryHooks: MessageBoundaryHooks,
+	options: {
+		pendingMessageLimit?: number;
+		additionalExtensionPaths?: string[];
+	} = {},
+) {
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		additionalExtensionPaths: options.additionalExtensionPaths,
+	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(
 		host.runtime,
@@ -1299,6 +1826,7 @@ async function createDormantChildHarness(messageBoundaryHooks: MessageBoundaryHo
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
 		messageBoundaryHooks,
+		pendingMessageLimit: options.pendingMessageLimit,
 	});
 	const view = coordinator.forAgent(identity.agentId);
 	const spawnToolCallId = "spawn-ordering-recipient";
@@ -1330,12 +1858,18 @@ async function authorMessage(
 	harness: Awaited<ReturnType<typeof createDormantChildHarness>>,
 	toolCallId: string,
 	content: string,
-	options: { appendResult?: boolean } = {},
+	options: {
+		appendResult?: boolean;
+		deliveryMode?: "deferred" | "steer";
+	} = {},
 ) {
 	const input = {
 		operation: "send" as const,
 		targetAgentId: harness.childId,
 		content,
+		...(options.deliveryMode === undefined
+			? {}
+			: { deliveryMode: options.deliveryMode }),
 	};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -1378,7 +1912,7 @@ async function waitForDelivery(
 		(entry) =>
 			entry.type === "custom_message" &&
 			entry.customType === "agent-coordination.message-delivery" &&
-			JSON.stringify(entry.details) === JSON.stringify({ messages: [source] }),
+			deliveryContainsSource(entry.details, source),
 	);
 }
 
@@ -1398,6 +1932,52 @@ function hasDelivery(
 		(entry) =>
 			entry.type === "custom_message" &&
 			entry.customType === "agent-coordination.message-delivery" &&
-			JSON.stringify(entry.details) === JSON.stringify({ messages: [source] }),
+			deliveryContainsSource(entry.details, source),
 	);
+}
+
+function deliveryContainsSource(
+	details: unknown,
+	source: { agentId: string; entryId: string; toolCallId: string },
+): boolean {
+	if (typeof details !== "object" || details === null || !("messages" in details)) {
+		return false;
+	}
+	const messages = (details as { messages?: unknown }).messages;
+	return Array.isArray(messages) &&
+		messages.some((candidate) => JSON.stringify(candidate) === JSON.stringify(source));
+}
+
+function findLatestModelDelivery(messages: readonly unknown[]): unknown[] {
+	for (const message of [...messages as Array<{
+		role?: string;
+		content?: unknown;
+	}>].reverse()) {
+		if (message.role !== "user" || !Array.isArray(message.content)) continue;
+		const text = message.content.find(
+			(part): part is { type: "text"; text: string } =>
+				typeof part === "object" &&
+				part !== null &&
+				"type" in part &&
+				part.type === "text" &&
+				"text" in part &&
+				typeof part.text === "string",
+		);
+		if (!text) continue;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(text.text);
+		} catch {
+			continue;
+		}
+		if (
+			typeof parsed === "object" &&
+			parsed !== null &&
+			"messages" in parsed &&
+			Array.isArray(parsed.messages)
+		) {
+			return parsed.messages;
+		}
+	}
+	assert.fail(`No model-visible Message Delivery in ${JSON.stringify(messages.slice(-6))}`);
 }
