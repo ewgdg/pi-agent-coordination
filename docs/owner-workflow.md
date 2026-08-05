@@ -1,4 +1,4 @@
-# Owner-only Workflow
+# Owner Workflow
 
 Loading `pi-agent-coordination` in an interactive Pi TUI establishes the current Pi session as the Workflow Owner. No separate start command is required.
 
@@ -8,8 +8,11 @@ On later activation, the package validates the existing current-scope Owner Iden
 
 ## Coordination surface
 
-- `agent_observe` returns the Owner's durable identity and current semantic Run state.
-- `/agents` presents the Owner identity, live/ending phase, active/settled work state, and Owner host-binding retention.
+After Owner Identity validation, the package binds the ordinary tools through a hidden extension closed over that Agent identity. Caller identity and role configuration are never model-supplied tool arguments.
+
+- `agent_spawn` creates one fresh default child and delivers its initial Creation Request.
+- `agent_observe` returns an authorized Agent's durable identity, current semantic Run state, or direct children.
+- `/agents` presents the current Agent and its direct children in stable creation order.
 
 These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer.
 
@@ -25,4 +28,4 @@ Pi's version is diagnostic information, not an allowlist. Package builds use a p
 
 ## Shutdown
 
-Orderly Pi shutdown moves the Owner Run to `ending` immediately and passes disposal through one memoized native runtime path. Repeated or racing shutdown requests therefore dispose the Owner session exactly once. Abrupt process loss records no graceful-end claim.
+Orderly Pi shutdown fences new spawn admission, ends retained child Runs, moves the Owner Run to `ending`, and passes Owner disposal through one memoized native runtime path. Repeated or racing shutdown requests therefore dispose the Owner session exactly once. Abrupt process loss records no graceful-end claim.

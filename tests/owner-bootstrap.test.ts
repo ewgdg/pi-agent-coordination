@@ -27,6 +27,26 @@ test("an existing exact Owner Identity is validated without duplication", async 
 		1,
 	);
 	assert.ok(host.session.getToolDefinition("agent_observe"));
+	const ordinaryAgentExtensions = host.services.resourceLoader
+		.getExtensions()
+		.extensions.filter((extension) => extension.tools.has("agent_spawn"));
+	assert.equal(ordinaryAgentExtensions.length, 1);
+	assert.equal(ordinaryAgentExtensions[0]?.hidden, true);
+	await host.runtime.dispose();
+});
+
+test("resource reload rebinds the hidden Owner Agent extension", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	await bindTestOwnerHost(host, "tui");
+
+	await host.session.reload();
+
+	assert.ok(host.session.getToolDefinition("agent_spawn"));
+	const ordinaryAgentExtensions = host.services.resourceLoader
+		.getExtensions()
+		.extensions.filter((extension) => extension.tools.has("agent_spawn"));
+	assert.equal(ordinaryAgentExtensions.length, 1);
+	assert.equal(ordinaryAgentExtensions[0]?.hidden, true);
 	await host.runtime.dispose();
 });
 

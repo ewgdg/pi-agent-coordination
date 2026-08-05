@@ -80,6 +80,7 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"getHeader",
 		"getSessionId",
 		"getSessionFile",
+		"getSessionDir",
 		"getLeafId",
 		"getCwd",
 		"branch",
@@ -125,6 +126,25 @@ export function assertRuntimeInstanceShape(
 	if (typeof services.cwd !== "string" || services.cwd.length === 0) {
 		throw new IncompatiblePiHostError("AgentSessionRuntime.services.cwd", version);
 	}
+	if (typeof services.agentDir !== "string" || services.agentDir.length === 0) {
+		throw new IncompatiblePiHostError("AgentSessionRuntime.services.agentDir", version);
+	}
+	const modelRuntime = requireRecord(
+		services.modelRuntime,
+		"AgentSessionRuntime.services.modelRuntime",
+		version,
+	);
+	requireFunction(
+		modelRuntime,
+		"getModel",
+		"AgentSessionRuntime.services.modelRuntime.getModel",
+		version,
+	);
+	requireRecord(
+		services.settingsManager,
+		"AgentSessionRuntime.services.settingsManager",
+		version,
+	);
 	const resourceLoader = requireRecord(
 		services.resourceLoader,
 		"AgentSessionRuntime.services.resourceLoader",
@@ -182,6 +202,10 @@ export function assertAgentSessionShape(
 		requireFunction(session, member, `AgentSession.${member}`, version);
 	}
 	for (const member of [
+		"model",
+		"thinkingLevel",
+		"isIdle",
+		"sessionId",
 		"_extensionUIContext",
 		"_extensionMode",
 		"_extensionCommandContextActions",

@@ -1,24 +1,71 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import type { OwnerCoordinatorView } from "../coordination/workflow-coordinator.ts";
+import type { OrdinaryAgentCoordinatorView } from "../coordination/workflow-coordinator.ts";
 
-export function registerOwnerSurfaces(pi: ExtensionAPI, view: OwnerCoordinatorView): void {
-	pi.registerTool({
-		name: "agent_observe",
-		label: "Observe Agent",
-		description: "Observe the authenticated Workflow Owner's durable identity and live Run state.",
-		promptSnippet: "Observe this Workflow Owner's live Run state.",
-		executionMode: "sequential",
-		parameters: Type.Object(
+type ViewResolver = () => OrdinaryAgentCoordinatorView;
+
+export function registerOrdinaryAgentSurfaces(
+	pi: ExtensionAPI,
+	resolveView: ViewResolver,
+): void {
+	const spawnParameters = Type.Object(
+		{
+			request: Type.String({ minLength: 1 }),
+			description: Type.Optional(Type.String({ minLength: 1 })),
+		},
+		{ additionalProperties: false },
+	);
+	const observeParameters = Type.Union([
+		Type.Object(
 			{
 				operation: Type.Literal("status"),
 				agentId: Type.Optional(Type.String({ minLength: 1 })),
 			},
 			{ additionalProperties: false },
 		),
+		Type.Object(
+			{
+				operation: Type.Literal("children"),
+				agentId: Type.Optional(Type.String({ minLength: 1 })),
+			},
+			{ additionalProperties: false },
+		),
+	]);
+	pi.registerTool({
+		name: "agent_spawn",
+		label: "Spawn Agent",
+		description:
+			"Create one fresh durable child Agent with inherited runtime configuration and deliver its initial Creation Request.",
+		promptSnippet: "Create one fresh child Agent and give it isolated initial work.",
+		executionMode: "sequential",
+		parameters: spawnParameters,
+		async execute(toolCallId, parameters) {
+			const receipt = await resolveView().spawn(toolCallId, parameters);
+			return {
+				content: [{ type: "text", text: JSON.stringify(receipt) }],
+				details: receipt,
+			};
+		},
+	});
+
+	pi.registerTool<typeof observeParameters, unknown>({
+		name: "agent_observe",
+		label: "Observe Agent",
+		description: "Passively observe an authorized Agent or its direct children.",
+		promptSnippet: "Observe authorized Agents and their bounded live Run state.",
+		executionMode: "sequential",
+		parameters: observeParameters,
 		async execute(_toolCallId, parameters) {
-			const status = view.status(parameters.agentId);
+			if (parameters.operation === "children") {
+				const children = resolveView().children(parameters.agentId);
+				const details = { children };
+				return {
+					content: [{ type: "text", text: JSON.stringify(details) }],
+					details,
+				};
+			}
+			const status = resolveView().status(parameters.agentId);
 			return {
 				content: [{ type: "text", text: JSON.stringify(status) }],
 				details: status,
@@ -29,11 +76,20 @@ export function registerOwnerSurfaces(pi: ExtensionAPI, view: OwnerCoordinatorVi
 	pi.registerCommand("agents", {
 		description: "Show Agents in the current Workflow",
 		handler: async (_args, ctx) => {
+			const view = resolveView();
 			const status = view.status();
-			const binding = status.run.retentionReasons[0].replaceAll("_", " ");
-			await ctx.ui.select("Agents", [
-				`${status.label} · ${status.agentId} · ${status.run.phase}/${status.run.work} · ${binding}`,
-			]);
+			const children = view.children();
+			await ctx.ui.select("Agents", [formatAgentRow(status), ...children.map(formatAgentRow)]);
 		},
 	});
+}
+
+function formatAgentRow(status: ReturnType<OrdinaryAgentCoordinatorView["status"]>): string {
+	const run = status.run;
+	const work = "work" in run && run.work ? `/${run.work}` : "";
+	const binding = run.retentionReasons[0]?.replaceAll("_", " ");
+	return [
+		`${status.label} · ${status.agentId} · ${run.phase}${work}`,
+		binding,
+	].filter(Boolean).join(" · ");
 }

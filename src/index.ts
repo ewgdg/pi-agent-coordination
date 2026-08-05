@@ -1,5 +1,9 @@
 import * as hostPi from "@earendil-works/pi-coding-agent";
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionFactory,
+	ExtensionHandler,
+	SessionStartEvent,
+} from "@earendil-works/pi-coding-agent";
 
 import { initializeOwnerWorkflow } from "./bootstrap/owner-bootstrap.ts";
 import {
@@ -15,10 +19,17 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	assertHostModuleShape(hostPi);
 	const bridge = installInteractiveHostBridge(hostPi);
 
-	pi.on("session_start", async (_event, ctx) => {
+	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (_event, ctx) => {
 		if (ctx.mode !== "tui" || !ctx.hasUI) return;
-		await initializeOwnerWorkflow({ pi, ctx, bridge, entryModulePath: ENTRY_MODULE_PATH });
-	});
+		await initializeOwnerWorkflow({
+			pi,
+			ctx,
+			bridge,
+			entryModulePath: ENTRY_MODULE_PATH,
+			bootstrapHandler: bootstrapOwner,
+		});
+	};
+	pi.on("session_start", bootstrapOwner);
 };
 
 export default piAgentCoordination;

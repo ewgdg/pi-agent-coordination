@@ -2,7 +2,7 @@
 
 Durable Pi agents that collaborate asynchronously under explicit Owner and Spawner supervision.
 
-The current package boots an Owner-only Workflow in an interactive Pi TUI. It adopts the current session as the durable Workflow Owner, preserves Pi's native interaction, exposes Owner status through `agent_observe` and `/agents`, and coordinates orderly shutdown.
+The package boots a Workflow in an interactive Pi TUI. It adopts the current session as the durable Workflow Owner, lets ordinary Agents create context-isolated durable children with `agent_spawn`, exposes authorized status through `agent_observe` and `/agents`, preserves Pi's native interaction, and coordinates orderly shutdown.
 
 ```bash
 npm install
@@ -13,4 +13,4 @@ pi
 
 Print, JSON, and RPC modes do not activate coordination.
 
-See [Owner-only Workflow](docs/owner-workflow.md) for the runtime contract and compatibility behavior.
+See [Owner Workflow](docs/owner-workflow.md) for activation and compatibility behavior, and [Agent spawning](docs/agent-spawning.md) for child creation and receipt semantics.

@@ -1,11 +1,7 @@
 import {
-	createAssistantMessageEventStream,
-	type Api,
-	type AssistantMessage,
-	type AssistantMessageEventStream,
-	type Context,
-	type Model,
-	type SimpleStreamOptions,
+	createFauxCore,
+	fauxAssistantMessage,
+	type FauxResponseStep,
 } from "@earendil-works/pi-ai";
 import {
 	AgentSessionRuntime,
@@ -54,19 +50,30 @@ export type TestOwnerHost = {
 	session: AgentSession;
 	runtime: AgentSessionRuntime;
 	ui: TestUi;
+	model: {
+		setResponses(responses: FauxResponseStep[]): void;
+	};
 };
 
-export async function createTestOwnerHost(extension: ExtensionFactory): Promise<TestOwnerHost> {
-	const host = await createUnboundTestOwnerHost(extension);
+type TestOwnerHostOptions = {
+	persistent?: boolean;
+};
+
+export async function createTestOwnerHost(
+	extension: ExtensionFactory,
+	options?: TestOwnerHostOptions,
+): Promise<TestOwnerHost> {
+	const host = await createUnboundTestOwnerHost(extension, options);
 	await bindTestOwnerHost(host, "tui");
 	return host;
 }
 
 export async function createUnboundTestOwnerHost(
 	extension: ExtensionFactory,
+	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-agent-coordination-"));
-	const modelRuntime = await createTestModelRuntime();
+	const { modelRuntime, faux } = await createTestModelRuntime();
 	const model = modelRuntime.getModel(PROVIDER_ID, MODEL_ID);
 	if (!model) throw new Error("Deterministic test model was not registered");
 
@@ -80,14 +87,22 @@ export async function createUnboundTestOwnerHost(
 			noPromptTemplates: true,
 			noSkills: true,
 			noThemes: true,
-			extensionFactories: [{ name: "pi-agent-coordination", hidden: true, factory: extension }],
+			extensionFactories: [
+				{
+					name: "pi-agent-coordination",
+					hidden: false,
+					factory: extension,
+				},
+			],
 			extensionsOverride: (loaded) => ({
 				...loaded,
 				extensions: loaded.extensions.filter((candidate) => candidate.path.startsWith("<inline:")),
 			}),
 		},
 	});
-	const sessionManager = SessionManager.inMemory(cwd);
+	const sessionManager = options?.persistent
+		? SessionManager.create(cwd, join(cwd, "sessions"))
+		: SessionManager.inMemory(cwd);
 	const { session } = await createAgentSessionFromServices({
 		services,
 		sessionManager,
@@ -101,7 +116,7 @@ export async function createUnboundTestOwnerHost(
 	});
 	const ui = createTestUi();
 
-	return { cwd, services, session, runtime, ui };
+	return { cwd, services, session, runtime, ui, model: faux };
 }
 
 export async function bindTestOwnerHost(
@@ -203,13 +218,14 @@ function createTestUi(): TestUi {
 	} as unknown as TestUi;
 }
 
-async function createTestModelRuntime(): Promise<ModelRuntime> {
+async function createTestModelRuntime(): Promise<{
+	modelRuntime: ModelRuntime;
+	faux: { setResponses(responses: FauxResponseStep[]): void };
+}> {
 	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, modelsPath: null });
-	modelRuntime.registerProvider(PROVIDER_ID, {
-		name: "Coordination test",
-		baseUrl: PROVIDER_BASE_URL,
+	const faux = createFauxCore({
 		api: PROVIDER_ID,
-		apiKey: "in-memory-test",
+		provider: PROVIDER_ID,
 		models: [
 			{
 				id: MODEL_ID,
@@ -221,42 +237,15 @@ async function createTestModelRuntime(): Promise<ModelRuntime> {
 				maxTokens: 256,
 			},
 		],
-		streamSimple: deterministicStream,
 	});
-	return modelRuntime;
-}
-
-function deterministicStream(
-	model: Model<Api>,
-	_context: Context,
-	_options?: SimpleStreamOptions,
-): AssistantMessageEventStream {
-	const stream = createAssistantMessageEventStream();
-	const responseText = "Owner interaction preserved.";
-	const message = createMessage(model, [{ type: "text", text: responseText }]);
-	queueMicrotask(() => {
-		stream.push({ type: "start", partial: createMessage(model, []) });
-		stream.push({
-			type: "text_start",
-			contentIndex: 0,
-			partial: createMessage(model, [{ type: "text", text: "" }]),
-		});
-		stream.push({ type: "text_delta", contentIndex: 0, delta: responseText, partial: message });
-		stream.push({ type: "text_end", contentIndex: 0, content: responseText, partial: message });
-		stream.push({ type: "done", reason: "stop", message });
+	faux.setResponses([fauxAssistantMessage("Owner interaction preserved.")]);
+	modelRuntime.registerProvider(PROVIDER_ID, {
+		name: "Coordination test",
+		baseUrl: PROVIDER_BASE_URL,
+		api: PROVIDER_ID,
+		apiKey: "in-memory-test",
+		models: faux.models,
+		streamSimple: faux.streamSimple,
 	});
-	return stream;
-}
-
-function createMessage(model: Model<Api>, content: AssistantMessage["content"]): AssistantMessage {
-	return {
-		role: "assistant",
-		content,
-		api: model.api,
-		provider: model.provider,
-		model: model.id,
-		usage: EMPTY_USAGE,
-		stopReason: "stop",
-		timestamp: Date.now(),
-	};
+	return { modelRuntime, faux };
 }
