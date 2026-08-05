@@ -34,4 +34,6 @@ Each new distinct delivery admission uses the policy snapshot current at that ad
 
 ## Operation Review interval
 
-`operationReviewIntervalMs` is available for future Operation Review. This policy support does not start a timer, review a tool call, or create a Moderator.
+`operationReviewIntervalMs` limits one applicable review interval for each unresolved root Pi tool call owned by an answer-obligated Agent. Each call captures the complete policy snapshot current at execution admission, so reload affects only later calls.
+
+A blocking call starts its interval at execution admission. An asynchronous call starts an interval only when its Agent reaches an unattended Idle boundary. A Moderator may renew an exact current call for a positive interval no greater than the value captured by that call. Longer observation therefore requires another deliberate renewal; policy reload never stretches an admitted call's bound.

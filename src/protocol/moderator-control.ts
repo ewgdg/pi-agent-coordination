@@ -4,21 +4,38 @@ import { isDeepStrictEqual } from "node:util";
 
 export type EvidencePointer = EntryPointer | ToolCallPointer;
 
-export type ModeratorControlInput = Readonly<{
-	operation: "resolve";
-	summary: string;
-	rationale: string;
-	evidencePointers?: readonly EvidencePointer[];
-}>;
+export type ModeratorControlInput =
+	| Readonly<{
+		operation: "renew_review_deadline";
+		toolCall: ToolCallPointer;
+		nextReviewInMs: number;
+		rationale: string;
+	}>
+	| Readonly<{
+		operation: "resolve";
+		summary: string;
+		rationale: string;
+		evidencePointers?: readonly EvidencePointer[];
+	}>;
 
 export type ModeratorResolutionBlocker =
 	| "incoming_requests"
 	| "outgoing_requests"
 	| "obligation_stall"
 	| "run_failure"
-	| "dependency_deadlock";
+	| "dependency_deadlock"
+	| "operation_review";
 
 export type ModeratorControlReceipt =
+	| Readonly<{
+		disposition: "renewed";
+		toolCall: ToolCallPointer;
+		nextReviewInMs: number;
+	}>
+	| Readonly<{
+		disposition: "stale";
+		toolCall: ToolCallPointer;
+	}>
 	| Readonly<{ disposition: "resolved" }>
 	| Readonly<{ disposition: "already_cleared" }>
 	| Readonly<{
@@ -38,6 +55,29 @@ export function validateModeratorControlInput(
 ): ModeratorControlInput {
 	if (!isRecord(value)) {
 		throw new Error("invalid_input: Moderator control input must be an object");
+	}
+	if (value.operation === "renew_review_deadline") {
+		if (
+			!hasExactKeys(value, [
+				"operation",
+				"toolCall",
+				"nextReviewInMs",
+				"rationale",
+			]) ||
+			!isEvidencePointer(value.toolCall) ||
+			!("toolCallId" in value.toolCall) ||
+			!Number.isSafeInteger(value.nextReviewInMs) ||
+			(value.nextReviewInMs as number) <= 0 ||
+			!isNonEmptyString(value.rationale)
+		) {
+			throw new Error("invalid_input: Moderator review renewal input is invalid");
+		}
+		return {
+			operation: "renew_review_deadline",
+			toolCall: value.toolCall,
+			nextReviewInMs: value.nextReviewInMs as number,
+			rationale: value.rationale,
+		};
 	}
 	const expectedKeys = [
 		"operation",

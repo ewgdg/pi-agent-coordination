@@ -378,22 +378,40 @@ function registerAgentSurfaces(
 				{ additionalProperties: false },
 			),
 		]);
-		const moderatorControlParameters = Type.Object(
-			{
-				operation: Type.Literal("resolve"),
-				summary: Type.String({ minLength: 1 }),
-				rationale: Type.String({ minLength: 1 }),
-				evidencePointers: Type.Optional(Type.Array(evidencePointer)),
-			},
-			{ additionalProperties: false },
-		);
+		const moderatorControlParameters = Type.Union([
+			Type.Object(
+				{
+					operation: Type.Literal("renew_review_deadline"),
+					toolCall: Type.Object(
+						{
+							agentId: Type.String({ minLength: 1 }),
+							entryId: Type.String({ minLength: 1 }),
+							toolCallId: Type.String({ minLength: 1 }),
+						},
+						{ additionalProperties: false },
+					),
+					nextReviewInMs: Type.Integer({ minimum: 1 }),
+					rationale: Type.String({ minLength: 1 }),
+				},
+				{ additionalProperties: false },
+			),
+			Type.Object(
+				{
+					operation: Type.Literal("resolve"),
+					summary: Type.String({ minLength: 1 }),
+					rationale: Type.String({ minLength: 1 }),
+					evidencePointers: Type.Optional(Type.Array(evidencePointer)),
+				},
+				{ additionalProperties: false },
+			),
+		]);
 		pi.registerTool({
 			name: "moderator_control",
-			label: "Resolve Moderation",
+			label: "Control Moderation",
 			description:
-				"Resolve operational handling only after every mechanically checkable predicate clears.",
+				"Renew an exact Operation Review interval or resolve handling after every mechanically checkable predicate clears.",
 			promptSnippet:
-				"Record the handling summary and rationale, then revalidate the original condition.",
+				"Renew an exact reviewed call deliberately, or record a Resolution and revalidate the original condition.",
 			executionMode: "sequential",
 			parameters: moderatorControlParameters,
 			async execute(toolCallId, parameters) {

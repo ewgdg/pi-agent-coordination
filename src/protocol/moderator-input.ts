@@ -66,6 +66,11 @@ export type ModeratorTrigger =
 		kind: "dependency_deadlock";
 		agentIds: readonly string[];
 		requests: ModeratorRequestSet;
+	}>
+	| Readonly<{
+		kind: "operation_review";
+		toolCall: ToolCallPointer;
+		reviewIntervalMs: number;
 	}>;
 
 export type ModeratorInput = Readonly<{
@@ -311,6 +316,21 @@ function validateModeratorInput(value: unknown): ModeratorInput {
 			kind: "dependency_deadlock",
 			agentIds: affectedAgentIds,
 			requests: validateRequestSet(triggerValue.requests),
+		};
+	} else if (triggerValue.kind === "operation_review") {
+		requireExactKeys(triggerValue, ["kind", "toolCall", "reviewIntervalMs"]);
+		const toolCall = validateToolCallPointer(triggerValue.toolCall);
+		if (
+			!Number.isSafeInteger(triggerValue.reviewIntervalMs) ||
+			(triggerValue.reviewIntervalMs as number) <= 0
+		) {
+			throw new ProtocolInvariantError("Moderator Input review interval is invalid");
+		}
+		affectedAgentIds = [toolCall.agentId];
+		trigger = {
+			kind: "operation_review",
+			toolCall,
+			reviewIntervalMs: triggerValue.reviewIntervalMs as number,
 		};
 	} else {
 		throw new ProtocolInvariantError("Moderator Input trigger is invalid");

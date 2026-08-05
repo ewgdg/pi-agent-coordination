@@ -18,6 +18,10 @@ import {
 	createModeratorBoundExtension,
 } from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
+import {
+	WorkflowPolicyStore,
+	parseWorkflowPolicy,
+} from "../src/policy/workflow-policy.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { HumanRequestSurface } from "../src/presentation/human-request-surface.ts";
@@ -26,6 +30,7 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
+import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 1_000;
 
@@ -147,25 +152,180 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	await host.runtime.dispose();
 });
 
-test("an unexpectedly ended answer-obligated Run creates a Run Failure Moderator", async () => {
+test("an overdue answer-obligated root call creates one minimal Operation Review Moderator", async (t) => {
+	const registryKey = Symbol.for("pi-agent-coordination.test.execution-gate");
+	let toolStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		toolStarted = resolve;
+	});
+	let releaseTool!: () => void;
+	const released = new Promise<void>((resolve) => {
+		releaseTool = resolve;
+	});
+	(globalThis as Record<PropertyKey, unknown>)[registryKey] = {
+		async execute() {
+			toolStarted();
+			await released;
+		},
+	};
+	t.after(() => {
+		delete (globalThis as Record<PropertyKey, unknown>)[registryKey];
+	});
+	const clock = new ControllableOperationReviewClock();
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		implicitModeratorResponses: false,
+		additionalExtensionPaths: [
+			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
+		],
+	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	let coordinator!: WorkflowCoordinator;
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		workflowPolicy: new WorkflowPolicyStore(
+			parseWorkflowPolicy('{"operationReviewIntervalMs":1000}'),
+		),
+		operationReviewClock: clock,
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+	});
+	const owner = coordinator.forAgent(identity.agentId);
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("execution_gate", {}, { id: "overdue-root-call" }),
+			{ stopReason: "toolUse" },
+		),
+		(context) => {
+			const content = context.messages.flatMap((message) => {
+				if (message.role !== "user") return [];
+				if (typeof message.content === "string") return [message.content];
+				return message.content.flatMap((part) =>
+					part.type === "text" ? [part.text] : []
+				);
+			}).find((candidate) => candidate.includes('"kind":"operation_review"'));
+			assert.ok(content);
+			const trigger = (JSON.parse(content) as {
+				trigger: {
+					toolCall: { agentId: string; entryId: string; toolCallId: string };
+				};
+			}).trigger;
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"moderator_control",
+					{
+						operation: "renew_review_deadline",
+						toolCall: trigger.toolCall,
+						nextReviewInMs: 500,
+						rationale: "The exact call remains safe to observe for another short interval.",
+					},
+					{ id: "renew-overdue-root-call" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		},
+		fauxAssistantMessage("The exact review interval was renewed."),
+		fauxAssistantMessage("The renewed interval expired and requires fresh review."),
+	]);
+
+	const child = await spawnFromView(
+		host.session,
+		owner,
+		"spawn-operation-review-agent",
+		"Keep the Creation Request open while one root call remains unresolved.",
+	);
+	await started;
+	clock.advanceBy(1_000);
+	await coordinator.forAgent(child.agentId).reachSafeBoundary();
+
+	const moderator = await waitForModeratorKind(host, "operation_review");
+	const inputEntry = SessionManager.open(moderator.path).getEntries().find(
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.moderator-input",
+	);
+	assert.ok(inputEntry?.type === "custom_message" && typeof inputEntry.content === "string");
+	const input = JSON.parse(inputEntry.content) as {
+		trigger: {
+			kind: string;
+			toolCall: { agentId: string; entryId: string; toolCallId: string };
+			reviewIntervalMs: number;
+		};
+	};
+	assert.deepEqual(input.trigger, {
+		kind: "operation_review",
+		toolCall: {
+			agentId: child.agentId,
+			entryId: input.trigger.toolCall.entryId,
+			toolCallId: "overdue-root-call",
+		},
+		reviewIntervalMs: 1_000,
+	});
+	const childTranscriptPath = owner.status(child.agentId).primaryEvidence.transcriptPath;
+	assert.ok(childTranscriptPath);
+	assert.equal(
+		SessionManager.open(childTranscriptPath).getEntries().some(
+			(entry) =>
+				entry.id === input.trigger.toolCall.entryId &&
+				entry.type === "message" &&
+				entry.message.role === "assistant",
+		),
+		true,
+	);
+	const renewal = await waitForTranscriptEntry(
+		moderator.path,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "renew-overdue-root-call",
+	);
+	assert.ok(renewal.type === "message" && renewal.message.role === "toolResult");
+	assert.deepEqual(renewal.message.details, {
+		disposition: "renewed",
+		toolCall: input.trigger.toolCall,
+		nextReviewInMs: 500,
+	});
+
+	clock.advanceBy(499);
+	await coordinator.forAgent(child.agentId).reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 1);
+	clock.advanceBy(1);
+	await coordinator.forAgent(child.agentId).reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 2);
+
+	releaseTool();
+	await host.runtime.dispose();
+});
+
+test("one failed provider request creates Run Failure without regenerating an answer-obligated Run", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
 	});
+	let failedChildProviderRequests = 0;
 	const routedResponses = Array.from(
-		{ length: host.services.settingsManager.getRetrySettings().maxRetries + 3 },
+		{ length: 6 },
 		() => (context: Context) => {
 			if (context.tools?.some(({ name }) => name === "moderator_control")) {
 				return fauxAssistantMessage("I will diagnose the failed obligated Run.");
 			}
-			if (
-				JSON.stringify(context.messages).includes(
-					"Answer this Creation Request after the exact Run fails.",
-				)
-			) {
+			if (context.messages.some(
+				(message) =>
+					message.role === "user" &&
+					JSON.stringify(message.content).includes(
+						"Answer this Creation Request after the exact Run fails.",
+					),
+			)) {
+				failedChildProviderRequests += 1;
 				return fauxAssistantMessage("The exact child Run fails before answering.", {
 					stopReason: "error",
-					errorMessage: "deterministic answer-obligated Run failure",
+					errorMessage: "connection lost during the exact answer-obligated generation",
 				});
 			}
 			return fauxAssistantMessage("The failure case is delegated.");
@@ -222,6 +382,7 @@ test("an unexpectedly ended answer-obligated Run creates a Run Failure Moderator
 		phase: "dormant",
 		retentionReasons: [],
 	});
+	assert.equal(failedChildProviderRequests, 1);
 
 	await host.runtime.dispose();
 });

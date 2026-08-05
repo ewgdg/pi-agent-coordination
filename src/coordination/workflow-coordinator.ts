@@ -64,6 +64,11 @@ import type {
 	ModeratorControlReceipt,
 } from "../protocol/moderator-control.ts";
 import { isModeratorIdentity } from "../protocol/moderator-input.ts";
+import type { OperationReviewClock } from "./operation-review.ts";
+import {
+	configureCoordinatedSession,
+	type AutomaticGenerationReconciliationAdapter,
+} from "../pi-integration/automatic-reconciliation.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type {
@@ -106,6 +111,8 @@ type AgentCoordinatorView = Readonly<{
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(): Promise<void>;
 	ensureExecution(): Promise<void>;
+	beginToolExecution(toolCallId: string, toolName: string): void;
+	reconcileCommittedToolResults(): void;
 	endExecution(): void;
 }>;
 
@@ -154,6 +161,8 @@ export class WorkflowCoordinator {
 			messageBoundaryHooks?: MessageBoundaryHooks;
 			incidentBoundaryHooks?: OperationalIncidentBoundaryHooks;
 			operationalIncidentPresentation?: OperationalIncidentPresentation;
+			operationReviewClock?: OperationReviewClock;
+			automaticGenerationReconciliation?: AutomaticGenerationReconciliationAdapter;
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
 			humanRequestPresentation?: HumanRequestPresentation;
@@ -169,6 +178,10 @@ export class WorkflowCoordinator {
 		this.#executionScheduler = new WorkflowExecutionScheduler(this.#workflowPolicy);
 		this.#ownerIdentity = identity;
 		this.#humanSessionSelection = options.humanSessionSelection;
+		configureCoordinatedSession(
+			runtime.session,
+			options.automaticGenerationReconciliation,
+		);
 		this.#agents.set(identity.agentId, {
 			identity,
 			services: runtime.services,
@@ -183,6 +196,8 @@ export class WorkflowCoordinator {
 			templateRoots: options.templateRoots,
 			childExtensionFactory: options.childExtensionFactory,
 			moderatorExtensionFactory: options.moderatorExtensionFactory,
+			automaticGenerationReconciliation:
+				options.automaticGenerationReconciliation,
 		});
 		for (const recovered of options.recoveredWorkflow?.agents ?? []) {
 			if (
@@ -243,6 +258,12 @@ export class WorkflowCoordinator {
 			suspendExecution: (record) => {
 				this.#releaseExecution(record.identity.agentId);
 			},
+			beginHumanWaiting: (source) => {
+				this.#operationalIncidents.beginHumanWaiting(source);
+			},
+			beginHumanResultCommit: (source) => {
+				this.#operationalIncidents.beginHumanResultCommit(source);
+			},
 		});
 		this.#runSupervisor = new RunSupervisor({
 			agents: this.#agents,
@@ -255,6 +276,7 @@ export class WorkflowCoordinator {
 			ownerIdentity: identity,
 			sessionFactory,
 			messages: this.#messages,
+			workflowPolicy: this.#workflowPolicy,
 			integrateAgent: (record) => this.#integrateAgent(record),
 			isShuttingDown: () => this.#shuttingDown,
 			reportError: (error) => {
@@ -265,6 +287,7 @@ export class WorkflowCoordinator {
 			},
 			boundaryHooks: options.incidentBoundaryHooks,
 			presentation: options.operationalIncidentPresentation,
+			operationReviewClock: options.operationReviewClock,
 		});
 		for (const record of this.#agents.values()) this.#integrateAgent(record);
 		this.#spawner = new DefaultChildSpawner({
@@ -321,11 +344,20 @@ export class WorkflowCoordinator {
 			focusHumanRequest: (requestId) =>
 				this.#humanRequests.focus(agentId, requestId),
 			reachSafeBoundary: async () => {
+				this.#operationalIncidents.reconcileCommittedToolResults(agentId);
 				await this.#messages.reachSafeBoundary(agentId);
 				await this.#operationalIncidents.reachSafeBoundary();
 			},
 			beginExecution: () => this.#beginExecution(agentId),
 			ensureExecution: () => this.#ensureExecution(agentId),
+			beginToolExecution: (toolCallId, toolName) =>
+				this.#operationalIncidents.admitToolExecution(
+					agentId,
+					toolCallId,
+					toolName,
+				),
+			reconcileCommittedToolResults: () =>
+				this.#operationalIncidents.reconcileCommittedToolResults(agentId),
 			endExecution: () => this.#releaseExecution(agentId),
 		};
 	}
@@ -444,6 +476,7 @@ export class WorkflowCoordinator {
 			);
 		}
 		await this.#ensureExecution(agentId);
+		this.#operationalIncidents.beginExecution(agentId);
 	}
 
 	async #ensureExecution(agentId: string): Promise<void> {

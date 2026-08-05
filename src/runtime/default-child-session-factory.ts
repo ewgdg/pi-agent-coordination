@@ -40,6 +40,10 @@ import {
 	type AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
 import { workflowSessionDirectory } from "./workflow-session-directory.ts";
+import {
+	configureCoordinatedSession,
+	type AutomaticGenerationReconciliationAdapter,
+} from "../pi-integration/automatic-reconciliation.ts";
 
 export const ORDINARY_COORDINATION_TOOLS = [
 	"agent_message",
@@ -79,6 +83,9 @@ export class DefaultChildSessionFactory {
 	readonly #packageRoot: string;
 	readonly #childExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #moderatorExtensionFactory: (agentId: string) => ExtensionFactory;
+	readonly #automaticGenerationReconciliation:
+		| AutomaticGenerationReconciliationAdapter
+		| undefined;
 	readonly #templateRoots: ((baselineCwd: string, projectTrusted: boolean) => readonly AgentTemplateRoot[]) | undefined;
 	readonly #projectTrustByCwd = new Map<string, boolean>();
 
@@ -89,6 +96,7 @@ export class DefaultChildSessionFactory {
 		packageRoot: string;
 		childExtensionFactory(agentId: string): ExtensionFactory;
 		moderatorExtensionFactory(agentId: string): ExtensionFactory;
+		automaticGenerationReconciliation?: AutomaticGenerationReconciliationAdapter;
 		templateRoots?(baselineCwd: string, projectTrusted: boolean): readonly AgentTemplateRoot[];
 	}) {
 		this.#ownerRuntime = options.ownerRuntime;
@@ -97,6 +105,8 @@ export class DefaultChildSessionFactory {
 		this.#packageRoot = options.packageRoot;
 		this.#childExtensionFactory = options.childExtensionFactory;
 		this.#moderatorExtensionFactory = options.moderatorExtensionFactory;
+		this.#automaticGenerationReconciliation =
+			options.automaticGenerationReconciliation;
 		this.#templateRoots = options.templateRoots;
 	}
 
@@ -378,6 +388,10 @@ export class DefaultChildSessionFactory {
 		});
 		const session = created.session;
 		try {
+			configureCoordinatedSession(
+				session,
+				this.#automaticGenerationReconciliation,
+			);
 			this.#validateStartedSession(session, prepared.configuration);
 			const bindings = copyExtensionBindings(this.#ownerRuntime.session, session);
 			const ownerErrorListener = bindings.onError;

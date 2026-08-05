@@ -13,6 +13,7 @@ import {
 } from "../protocol/human-request.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { AgentRunHandle } from "../runtime/in-process-agent-host.ts";
+import type { ToolCallPointer } from "../protocol/identities.ts";
 const INTERRUPTED_MESSAGE = "Human request interrupted before an answer was provided.";
 const FENCED_MESSAGE = "Human request ended because its Agent Run is no longer available.";
 
@@ -84,6 +85,8 @@ export class HumanRequestCoordinator {
 	readonly #boundaryHooks: HumanRequestBoundaryHooks;
 	readonly #interruptRun: (record: AgentRecord) => void;
 	readonly #suspendExecution: (record: AgentRecord) => void;
+	readonly #beginHumanWaiting: (source: ToolCallPointer) => void;
+	readonly #beginHumanResultCommit: (source: ToolCallPointer) => void;
 	readonly #pendingByRequestId = new Map<string, PendingHumanRequest>();
 
 	constructor(options: {
@@ -93,6 +96,8 @@ export class HumanRequestCoordinator {
 		boundaryHooks?: HumanRequestBoundaryHooks;
 		interruptRun(record: AgentRecord): void;
 		suspendExecution(record: AgentRecord): void;
+		beginHumanWaiting(source: ToolCallPointer): void;
+		beginHumanResultCommit(source: ToolCallPointer): void;
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
@@ -100,6 +105,8 @@ export class HumanRequestCoordinator {
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#interruptRun = options.interruptRun;
 		this.#suspendExecution = options.suspendExecution;
+		this.#beginHumanWaiting = options.beginHumanWaiting;
+		this.#beginHumanResultCommit = options.beginHumanResultCommit;
 	}
 
 	async ask(
@@ -149,6 +156,7 @@ export class HumanRequestCoordinator {
 			record.host.beginInputRequired(handle, request.requestId);
 			this.#suspendExecution(record);
 			this.#pendingByRequestId.set(request.requestId, pending);
+			this.#beginHumanWaiting(request.source);
 			this.#presentation.present(
 				{
 					requestId: request.requestId,
@@ -278,6 +286,7 @@ export class HumanRequestCoordinator {
 		};
 		pending.phase = "submitted";
 		pending.answerCandidate = candidate;
+		this.#beginHumanResultCommit(pending.request.source);
 		pending.resolve(candidate);
 		return true;
 	}
@@ -310,6 +319,7 @@ export class HumanRequestCoordinator {
 		const pending = this.#pendingByRequestId.get(requestId);
 		if (!pending || pending.phase === "fenced") return;
 		pending.phase = "fenced";
+		this.#beginHumanResultCommit(pending.request.source);
 		// Submission and fencing are synchronous phase transitions. The last
 		// pre-append guard above rechecks this phase, so an asynchronous Run fence
 		// can still defeat a submitted candidate until native result commitment.

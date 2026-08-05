@@ -143,9 +143,15 @@ export function assertRuntimeInstanceShape(
 		"AgentSessionRuntime.services.modelRuntime.getModel",
 		version,
 	);
-	requireRecord(
+	const settingsManager = requireRecord(
 		services.settingsManager,
 		"AgentSessionRuntime.services.settingsManager",
+		version,
+	);
+	requireFunction(
+		settingsManager,
+		"applyOverrides",
+		"AgentSessionRuntime.services.settingsManager.applyOverrides",
 		version,
 	);
 	const resourceLoader = requireRecord(
@@ -224,6 +230,24 @@ export function assertAgentSessionShape(
 	requireFunction(session, "_runAgentPrompt", "AgentSession._runAgentPrompt", version);
 	requireRecord(session.extensionRunner, "AgentSession.extensionRunner", version);
 	requireRecord(session.sessionManager, "AgentSession.sessionManager", version);
+	const settingsManager = requireRecord(
+		session.settingsManager,
+		"AgentSession.settingsManager",
+		version,
+	);
+	requireFunction(
+		settingsManager,
+		"applyOverrides",
+		"AgentSession.settingsManager.applyOverrides",
+		version,
+	);
+	const agent = requireRecord(session.agent, "AgentSession.agent", version);
+	requireFunction(
+		agent,
+		"streamFunction",
+		"AgentSession.agent.streamFunction",
+		version,
+	);
 }
 
 function requirePrototype(value: unknown, name: string, version?: unknown): UnknownRecord {

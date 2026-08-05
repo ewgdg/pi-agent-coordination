@@ -100,20 +100,24 @@ function registerAgentBoundBehavior(
 	});
 	// A previous sequential tool result is committed before Pi admits the next
 	// sibling. Reconcile here so input-required attention cannot cross that barrier.
-	pi.on("tool_execution_start", async () => {
+	pi.on("tool_execution_start", async (event) => {
 		resolveView().reconcileHumanToolResults();
+		resolveView().reconcileCommittedToolResults();
 		await resolveView().ensureExecution();
+		resolveView().beginToolExecution(event.toolCallId, event.toolName);
 	});
 	// Pi awaits turn_end only after the complete issued tool batch and before it
 	// constructs the next model context, making this the Steer freeze boundary.
 	pi.on("turn_end", async () => {
 		resolveView().reconcileHumanToolResults();
+		resolveView().reconcileCommittedToolResults();
 		await resolveView().ensureExecution();
 		await resolveView().reachSafeBoundary();
 	});
 	// Aborted and failed turns may not reach turn_end. agent_end follows all native
 	// message commits, so it safely reconciles their final Human result as well.
 	pi.on("agent_end", () => {
+		resolveView().reconcileCommittedToolResults();
 		resolveView().endExecution();
 		resolveView().reconcileHumanToolResults();
 	});

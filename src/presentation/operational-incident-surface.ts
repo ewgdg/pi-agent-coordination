@@ -79,6 +79,9 @@ export function formatOperationalIncidentHeadline(
 export function operationalIncidentRequestEvidence(
 	attention: OperationalIncidentAttention,
 ) {
+	if (attention.trigger.kind === "operation_review") {
+		return { total: 0, sources: [] };
+	}
 	return attention.trigger.kind === "dependency_deadlock"
 		? attention.trigger.requests
 		: attention.trigger.obligations;

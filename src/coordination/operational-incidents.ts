@@ -27,13 +27,25 @@ import {
 	sameModeratorControlInput,
 	validateModeratorControlInput,
 } from "../protocol/moderator-control.ts";
-import { resolveCommittedToolCall } from "../protocol/identities.ts";
+import {
+	currentCoordinationScope,
+	resolveCommittedToolCall,
+	toolCallPointerKey,
+	type ToolCallPointer,
+} from "../protocol/identities.ts";
 import type { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
 import type { AgentRunHandle } from "../runtime/in-process-agent-host.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
+import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import { statusOf, type AgentRecord } from "./agent-record.ts";
 import { detectDependencyDeadlocks } from "./dependency-deadlock.ts";
 import type { MessageCoordinator } from "./messages.ts";
+import {
+	OperationReviewWatcher,
+	SYSTEM_OPERATION_REVIEW_CLOCK,
+	type OperationReviewClock,
+	type OperationReviewSnapshot,
+} from "./operation-review.ts";
 
 export const MAX_AUTOMATIC_MODERATOR_ATTEMPTS = 2;
 
@@ -59,10 +71,16 @@ type DependencyDeadlockSnapshot = ConditionSnapshotBase & Readonly<{
 	kind: "dependency_deadlock";
 }>;
 
+type OperationReviewConditionSnapshot = ConditionSnapshotBase & Readonly<{
+	kind: "operation_review";
+	review: OperationReviewSnapshot;
+}>;
+
 type OperationalConditionSnapshot =
 	| ObligationStallSnapshot
 	| RunFailureSnapshot
-	| DependencyDeadlockSnapshot;
+	| DependencyDeadlockSnapshot
+	| OperationReviewConditionSnapshot;
 
 type OperationalIncidentHandling = {
 	snapshot: OperationalConditionSnapshot;
@@ -104,6 +122,8 @@ export class OperationalIncidentCoordinator {
 	readonly #reportError: (error: unknown) => void;
 	readonly #boundaryHooks: OperationalIncidentBoundaryHooks;
 	readonly #presentation: OperationalIncidentPresentation;
+	readonly #workflowPolicy: WorkflowPolicyStore;
+	readonly #operationReviews: OperationReviewWatcher;
 	readonly #handlingByKey = new Map<string, OperationalIncidentHandling>();
 	readonly #attemptByModeratorAgentId = new Map<string, OperationalConditionSnapshot>();
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
@@ -116,21 +136,34 @@ export class OperationalIncidentCoordinator {
 		ownerIdentity: OwnerIdentity;
 		sessionFactory: DefaultChildSessionFactory;
 		messages: MessageCoordinator;
+		workflowPolicy: WorkflowPolicyStore;
 		integrateAgent(record: AgentRecord): void;
 		isShuttingDown(): boolean;
 		reportError(error: unknown): void;
 		boundaryHooks?: OperationalIncidentBoundaryHooks;
 		presentation?: OperationalIncidentPresentation;
+		operationReviewClock?: OperationReviewClock;
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#sessionFactory = options.sessionFactory;
 		this.#messages = options.messages;
+		this.#workflowPolicy = options.workflowPolicy;
 		this.#integrateAgent = options.integrateAgent;
 		this.#isShuttingDown = options.isShuttingDown;
 		this.#reportError = options.reportError;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#presentation = options.presentation ?? unavailablePresentation;
+		this.#operationReviews = new OperationReviewWatcher({
+			clock: options.operationReviewClock ?? SYSTEM_OPERATION_REVIEW_CLOCK,
+			isUnresolved: (toolCall) => this.#isToolCallUnresolved(toolCall),
+			hasAnswerObligation: (agentId) => {
+				const record = this.#agents.get(agentId);
+				return record !== undefined &&
+					this.#messages.answerObligationRequestIds(record).length > 0;
+			},
+			onReviewStateChanged: () => this.#scheduleReconciliation(),
+		});
 		const owner = options.agents.get(options.ownerIdentity.agentId);
 		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
 		this.#ownerRuntimeBaseline = options.sessionFactory.snapshotRuntimeBaseline(owner);
@@ -140,10 +173,12 @@ export class OperationalIncidentCoordinator {
 		if (this.#integratedAgentIds.has(record.identity.agentId)) return;
 		this.#integratedAgentIds.add(record.identity.agentId);
 		record.host.addSettledHandler((_handle, settlement) => {
+			this.#operationReviews.setAgentAttendance(record.identity.agentId, "idle");
 			if (settlement !== "settled") return;
 			this.#scheduleReconciliationAfterHostLane(record);
 		});
 		record.host.addEndedHandler((handle, cause) => {
+			this.#operationReviews.endRun(record.identity.agentId);
 			if (this.#isModerator(record)) {
 				if (cause === "failure" && !this.#isShuttingDown()) {
 					void this.#reconciliationLane
@@ -183,8 +218,55 @@ export class OperationalIncidentCoordinator {
 			this.#scheduleReconciliation();
 		});
 		record.host.addStateChangeHandler(() => {
+			this.#operationReviews.reconcileAgent(record.identity.agentId);
 			this.#scheduleReconciliation();
 		});
+	}
+
+	beginExecution(agentId: string): void {
+		this.#operationReviews.setAgentAttendance(agentId, "attended");
+	}
+
+	admitToolExecution(agentId: string, toolCallId: string, toolName: string): void {
+		const record = this.#requireAgent(agentId);
+		this.#operationReviews.reconcileAgent(agentId);
+		const { source } = resolveCommittedToolCall({
+			agentId,
+			sessionManager: record.host.sessionManager,
+			toolCallId,
+			toolName,
+		});
+		const entry = record.host.sessionManager.getEntry(source.entryId);
+		if (entry?.type !== "message" || entry.message.role !== "assistant") {
+			throw new Error("invariant_violation: root tool call source is unavailable");
+		}
+		const toolCalls = entry.message.content.filter((part) => part.type === "toolCall");
+		const classification = toolCalls.some((part) => {
+			const definition = record.host.requireLiveSession().getToolDefinition(part.name);
+			if (!definition) {
+				throw new Error(`invariant_violation: tool definition ${part.name} is unavailable`);
+			}
+			return definition.executionMode === "sequential";
+		})
+			? "blocking"
+			: "asynchronous";
+		this.#operationReviews.admit({
+			toolCall: source,
+			classification,
+			policyIntervalMs: this.#workflowPolicy.current().operationReviewIntervalMs,
+		});
+	}
+
+	beginHumanWaiting(toolCall: ToolCallPointer): void {
+		this.#operationReviews.beginHumanWaiting(toolCall);
+	}
+
+	beginHumanResultCommit(toolCall: ToolCallPointer): void {
+		this.#operationReviews.beginHumanResultCommit(toolCall);
+	}
+
+	reconcileCommittedToolResults(agentId: string): void {
+		this.#operationReviews.reconcileAgent(agentId);
 	}
 
 	executeModeratorControl(
@@ -206,6 +288,35 @@ export class OperationalIncidentCoordinator {
 				"invariant_violation: executed Moderator control input differs from its source",
 			);
 		}
+		return this.#reconciliationLane.run(() =>
+			input.operation === "renew_review_deadline"
+				? this.#renewOperationReview(input)
+				: this.#resolveHandling(moderatorAgentId, moderator)
+		);
+	}
+
+	async #renewOperationReview(
+		input: Extract<ModeratorControlInput, { operation: "renew_review_deadline" }>,
+	): Promise<ModeratorControlReceipt> {
+		this.#assertWorkflowToolCallPointer(input.toolCall);
+		const disposition = this.#operationReviews.renew(
+			input.toolCall,
+			input.nextReviewInMs,
+		);
+		await this.#reconcileWorkflow();
+		return disposition === "renewed"
+			? {
+				disposition,
+				toolCall: input.toolCall,
+				nextReviewInMs: input.nextReviewInMs,
+			}
+			: { disposition, toolCall: input.toolCall };
+	}
+
+	#resolveHandling(
+		moderatorAgentId: string,
+		moderator: AgentRecord,
+	): ModeratorControlReceipt {
 		const handling = [...this.#handlingByKey.values()].find(
 			(candidate) => candidate.moderatorAgentId === moderatorAgentId,
 		);
@@ -217,6 +328,7 @@ export class OperationalIncidentCoordinator {
 			| "obligation_stall"
 			| "run_failure"
 			| "dependency_deadlock"
+			| "operation_review"
 		> = [];
 		if (moderator.host.requestRelationshipIds("answer_owed").length > 0) {
 			predicates.push("incoming_requests");
@@ -229,9 +341,9 @@ export class OperationalIncidentCoordinator {
 			predicates.push(handling.snapshot.kind);
 		}
 		if (predicates.length > 0) {
-			return Promise.resolve({ disposition: "blocked", predicates });
+			return { disposition: "blocked", predicates };
 		}
-		if (!attempt) return Promise.resolve({ disposition: "already_cleared" });
+		if (!attempt) return { disposition: "already_cleared" };
 		if (handling) this.#releaseHandling(handling.snapshot.key);
 		this.#attemptByModeratorAgentId.delete(moderatorAgentId);
 		const originalObligationRemains = attempt.affectedAgentIds.some((agentId) => {
@@ -241,9 +353,9 @@ export class OperationalIncidentCoordinator {
 				attempt.requestIds,
 			);
 		});
-		return Promise.resolve({
+		return {
 			disposition: originalObligationRemains ? "resolved" : "already_cleared",
-		});
+		};
 	}
 
 	attentionItems(callerAgentId: string): readonly OperationalIncidentAttention[] {
@@ -269,6 +381,7 @@ export class OperationalIncidentCoordinator {
 			}
 			snapshots.push(snapshot);
 		}
+		snapshots.push(...this.#observeOperationReviews());
 		snapshots.push(...this.#observeDependencyDeadlocks());
 		for (const record of [...this.#agents.values()]) {
 			if (this.#isModerator(record)) continue;
@@ -352,6 +465,11 @@ export class OperationalIncidentCoordinator {
 		);
 		persistCommittedInput(sessionManager);
 		validateCommittedModeratorInput({ sessionManager, identity, input });
+		if (handling.snapshot.kind === "operation_review") {
+			this.#operationReviews.markModeratorInputCommitted(
+				handling.snapshot.review.toolCall,
+			);
+		}
 		handling.moderatorAgentId = agentId;
 		handling.committedAttemptCount += 1;
 		this.#attemptByModeratorAgentId.set(agentId, handling.snapshot);
@@ -413,6 +531,13 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#triggerFor(snapshot: OperationalConditionSnapshot): ModeratorTrigger {
+		if (snapshot.kind === "operation_review") {
+			return {
+				kind: "operation_review",
+				toolCall: snapshot.review.toolCall,
+				reviewIntervalMs: snapshot.review.reviewIntervalMs,
+			};
+		}
 		const requestSet = {
 			total: snapshot.requestIds.length,
 			sources: this.#messages.requestSources(
@@ -460,6 +585,9 @@ export class OperationalIncidentCoordinator {
 			...record.host.requestRelationshipIds("answer_owed"),
 		].sort();
 		if (requestIds.length === 0) return undefined;
+		if (this.#operationReviews.hasUnresolvedAsynchronousCall(record.identity.agentId)) {
+			return undefined;
+		}
 		if (this.#hasExternalProgress(record, new Set())) return undefined;
 		const inspectedThrough = statusOf(record).primaryEvidence.inspectedThrough;
 		return {
@@ -473,6 +601,11 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#conditionRemains(snapshot: OperationalConditionSnapshot): boolean {
+		if (snapshot.kind === "operation_review") {
+			return this.#operationReviews.expiredReviews().some(
+				(review) => toolCallPointerKey(review.toolCall) === snapshot.key,
+			);
+		}
 		if (snapshot.kind === "obligation_stall") {
 			const affected = this.#agents.get(snapshot.agentId);
 			return affected !== undefined &&
@@ -488,6 +621,23 @@ export class OperationalIncidentCoordinator {
 			);
 		}
 		return this.#observeDependencyDeadlocks().some(({ key }) => key === snapshot.key);
+	}
+
+	#observeOperationReviews(): readonly OperationReviewConditionSnapshot[] {
+		return this.#operationReviews.expiredReviews().flatMap((review) => {
+			const record = this.#agents.get(review.toolCall.agentId);
+			if (!record) return [];
+			const requestIds = [...this.#messages.answerObligationRequestIds(record)].sort();
+			if (requestIds.length === 0) return [];
+			return [{
+				kind: "operation_review" as const,
+				key: toolCallPointerKey(review.toolCall),
+				affectedAgentIds: [review.toolCall.agentId],
+				requestIds,
+				inspectedThrough: [statusOf(record).primaryEvidence.inspectedThrough],
+				review,
+			}];
+		});
 	}
 
 	#observeDependencyDeadlocks(): readonly DependencyDeadlockSnapshot[] {
@@ -526,6 +676,9 @@ export class OperationalIncidentCoordinator {
 			run.work === "settled" &&
 			run.attention === "none" &&
 			!record.host.currentRunFailed() &&
+			!this.#operationReviews.hasUnresolvedAsynchronousCall(
+				record.identity.agentId,
+			) &&
 			run.retentionReasons.length > 0 &&
 			run.retentionReasons.every(
 				({ reason }) => reason === "awaiting_answer" || reason === "answer_owed",
@@ -567,6 +720,54 @@ export class OperationalIncidentCoordinator {
 
 	#isModerator(record: AgentRecord): boolean {
 		return isModeratorIdentity(record.identity);
+	}
+
+	#requireAgent(agentId: string): AgentRecord {
+		const record = this.#agents.get(agentId);
+		if (!record) throw new Error(`unknown_identity: ${agentId}`);
+		return record;
+	}
+
+	#isToolCallUnresolved(toolCall: ToolCallPointer): boolean {
+		const record = this.#agents.get(toolCall.agentId);
+		if (!record) return false;
+		const entries = currentCoordinationScope(
+			record.host.sessionManager,
+			toolCall.agentId,
+		);
+		const sourceExists = entries.some(
+			(entry) =>
+				entry.id === toolCall.entryId &&
+				entry.type === "message" &&
+				entry.message.role === "assistant" &&
+				entry.message.content.some(
+					(part) => part.type === "toolCall" && part.id === toolCall.toolCallId,
+				),
+		);
+		if (!sourceExists) return false;
+		return !entries.some(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === toolCall.toolCallId,
+		);
+	}
+
+	#assertWorkflowToolCallPointer(toolCall: ToolCallPointer): void {
+		const record = this.#requireAgent(toolCall.agentId);
+		const source = currentCoordinationScope(
+			record.host.sessionManager,
+			toolCall.agentId,
+		).find((entry) => entry.id === toolCall.entryId);
+		if (
+			source?.type !== "message" ||
+			source.message.role !== "assistant" ||
+			!source.message.content.some(
+				(part) => part.type === "toolCall" && part.id === toolCall.toolCallId,
+			)
+		) {
+			throw new Error("unknown_evidence: Moderator renewal tool-call pointer is invalid");
+		}
 	}
 
 	#scheduleReconciliation(): void {

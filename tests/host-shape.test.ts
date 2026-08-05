@@ -106,3 +106,37 @@ test("runtime capture rejects a malformed live AgentSession before bootstrap", a
 	});
 	await host.runtime.dispose();
 });
+
+test("runtime capture identifies the coordinated settings override seam", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	const settings = host.services.settingsManager as unknown as Record<PropertyKey, unknown>;
+	const originalApplyOverrides = settings.applyOverrides;
+	settings.applyOverrides = undefined;
+	host.runtime.setBeforeSessionInvalidate(() => undefined);
+
+	await assert.rejects(
+		() => bindTestOwnerHost(host, "tui"),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName === "AgentSessionRuntime.services.settingsManager.applyOverrides",
+	);
+	settings.applyOverrides = originalApplyOverrides;
+	await host.runtime.dispose();
+});
+
+test("runtime capture identifies the provider stream adapter seam", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	const agent = host.session.agent as unknown as Record<PropertyKey, unknown>;
+	const originalStreamFunction = agent.streamFunction;
+	agent.streamFunction = undefined;
+	host.runtime.setBeforeSessionInvalidate(() => undefined);
+
+	await assert.rejects(
+		() => bindTestOwnerHost(host, "tui"),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName === "AgentSession.agent.streamFunction",
+	);
+	agent.streamFunction = originalStreamFunction;
+	await host.runtime.dispose();
+});
