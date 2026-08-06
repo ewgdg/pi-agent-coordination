@@ -14,6 +14,8 @@ Right Arrow or `l` enters the focused Agent's child scope. Left Arrow or `h` ret
 
 Enter submits the focused Live Agent to the native session-selection boundary. Selection belongs to the durable Agent; its current Run session is only the replaceable presentation binding. Selecting a live Agent rebinds Pi's transcript and editor without changing Workflow authority and retains that exact Run. Enter on `DECIDE` opens its Human Request. Enter on Operational `ATTENTION` does nothing.
 
+While a non-Owner Agent is selected, Pi's native footer keeps one quiet extension-status slot with the Agent label, compact identity, and current semantic Run state. `Dormant`, ordinary states, and `held` are dim; `waiting (human)` is the only warning state. A currently observable failed Run may use error emphasis. Selecting Owner clears the slot. This footer projection is independent of the scoped activity panel.
+
 ## Dormant
 
 Dormant is a flat list of every verified ordinary Agent and Moderator without a current Run. It follows Pi resume recency: latest user or assistant activity, then native session creation time. Moderator rows include their role and compact trigger description.

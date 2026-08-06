@@ -30,6 +30,11 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
+import {
+	executeAndCommitRegisteredTool,
+	selectAgent,
+	selectDormantAgent,
+} from "./support/agent-session.ts";
 import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 1_000;
@@ -148,6 +153,31 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.equal((await findModerators(host)).length, 1);
+
+	const termination = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-moderator-for-footer-status",
+		{ operation: "terminate", agentId: moderator.id },
+	);
+	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
+	await selectDormantAgent(host, moderator.id);
+	const moderatorStatus = [...host.ui.statuses.values()].find((value) =>
+		value.startsWith("moderator · ") && value.endsWith(" · Dormant")
+	);
+	assert.ok(moderatorStatus);
+	const compactModeratorIdentity = moderatorStatus.slice(
+		"moderator · ".length,
+		-" · Dormant".length,
+	);
+	assert.ok(moderator.id.endsWith(compactModeratorIdentity));
+	host.ui.statuses.set("third-party-status", "keep me");
+	await selectAgent(host, host.session.sessionId);
+	assert.equal(
+		[...host.ui.statuses.values()].some((value) => value.startsWith("moderator · ")),
+		false,
+	);
+	assert.equal(host.ui.statuses.get("third-party-status"), "keep me");
 
 	await host.runtime.dispose();
 });
@@ -1679,6 +1709,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 		humanRequestPresentation: new HumanRequestSurface(host.ui),
 		humanSessionSelection: {
 			selectedAgentId: () => selectedAgentId,
+			addChangeHandler: () => () => undefined,
 			isBoundTo: (agentId) => selectedAgentId === agentId,
 			async activate({ agentId }) {
 				selectedAgentId = agentId;

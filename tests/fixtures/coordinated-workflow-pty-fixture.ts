@@ -146,8 +146,14 @@ const terminateDormant = executeTool(host.session, "agent_control", "pty-termina
 releaseDormantGeneration();
 await terminateDormant;
 
-process.stdout.write(`\n__PTY_SETUP__${JSON.stringify({ ownerId, liveAgentId, dormantAgentId })}\n`);
+process.stdout.write(`\n__PTY_SETUP__${JSON.stringify({
+	ownerId,
+	liveAgentId,
+	dormantAgentId,
+	cwd: host.cwd,
+})}\n`);
 await openAgents(host.session);
+host.session.extensionRunner.createContext().ui.setStatus("pty-peer-status", "Native Peer");
 await waitFor(() => host.runtime.session.sessionId === dormantAgentId);
 const dormantPresentation = host.runtime.session;
 process.stdout.write("\n__PTY_SELECTED_DORMANT__\n");

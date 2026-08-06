@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import xtermHeadless from "@xterm/headless";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
 	TUI,
 	type Component,
@@ -38,6 +38,117 @@ const { Terminal: XtermTerminal } = xtermHeadless;
 const TERMINAL_COLUMNS = 80;
 const TERMINAL_ROWS = 12;
 const LLAMA_MODEL_ID = "local-conformance-model";
+
+function selectedAgentStatus(
+	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
+	agentId: string,
+	label: string,
+	phase: string,
+): string | undefined {
+	const prefix = `${label} · `;
+	const suffix = ` · ${phase}`;
+	const matches = [...host.ui.statuses.values()].filter((value) =>
+		value.startsWith(prefix) && value.endsWith(suffix)
+	);
+	if (matches.length !== 1) return undefined;
+	const status = matches[0]!;
+	const compactIdentity = status.slice(prefix.length, -suffix.length);
+	return compactIdentity.length < agentId.length && agentId.endsWith(compactIdentity)
+		? status
+		: undefined;
+}
+
+test("selected Agent status follows native selection and semantic Run changes", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	let markGenerationStarted!: () => void;
+	const generationStarted = new Promise<void>((resolve) => {
+		markGenerationStarted = resolve;
+	});
+	let releaseGeneration!: () => void;
+	const generationGate = new Promise<void>((resolve) => {
+		releaseGeneration = resolve;
+	});
+	host.model.setResponses([
+		async () => {
+			markGenerationStarted();
+			await generationGate;
+			return fauxAssistantMessage("The selected leaf settles after the status check.");
+		},
+	]);
+	const spawned = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-selected-status-leaf",
+		{
+			request: "Remain live while the selected footer status changes.",
+			label: "Selected Leaf",
+		},
+	);
+	const childAgentId = (spawned.details as { agentId: string }).agentId;
+	await generationStarted;
+
+	await selectAgent(host, childAgentId);
+	assert.ok(selectedAgentStatus(host, childAgentId, "Selected Leaf", "active"));
+	assert.equal(host.ui.widgets.size, 0);
+
+	releaseGeneration();
+	await host.runtime.session.waitForIdle();
+	await waitForCondition(() =>
+		selectedAgentStatus(host, childAgentId, "Selected Leaf", "settled") !== undefined
+	);
+
+	const held = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"hold-selected-status-leaf",
+		{ operation: "interrupt", agentId: childAgentId },
+	);
+	assert.equal((held.details as { disposition: string }).disposition, "held");
+	assert.ok(selectedAgentStatus(host, childAgentId, "Selected Leaf", "held"));
+
+	await selectAgent(host, host.session.sessionId);
+	assert.equal(selectedAgentStatus(host, childAgentId, "Selected Leaf", "held"), undefined);
+	await host.runtime.dispose();
+});
+
+test("selected Agent status exposes Human-waiting attention without changing the footer seam", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"ask_user_question",
+				{
+					questions: [{
+						kind: "text",
+						header: "Status check",
+						prompt: "Which status should be shown?",
+						multiline: false,
+					}],
+				},
+				{ id: "selected-status-human-question" },
+			),
+			{ stopReason: "toolUse" },
+		),
+	]);
+	const spawned = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-selected-status-human",
+		{ request: "Wait for the Human status projection.", label: "Human Waiter" },
+	);
+	const childAgentId = (spawned.details as { agentId: string }).agentId;
+	await waitForRunAttention(host, childAgentId, "input_required");
+
+	await selectAgent(host, childAgentId);
+	assert.ok(selectedAgentStatus(host, childAgentId, "Human Waiter", "waiting (human)"));
+
+	await selectAgent(host, host.session.sessionId);
+	assert.equal(
+		selectedAgentStatus(host, childAgentId, "Human Waiter", "waiting (human)"),
+		undefined,
+	);
+	await host.runtime.dispose();
+});
 
 test("retained native selection refreshes bindings without replaying session startup", async () => {
 	resetSessionStartProbe();
@@ -660,6 +771,29 @@ async function observeCurrentRunPhase(
 		session.extensionRunner.createContext(),
 	);
 	return (status.details as { run: { phase: string } }).run.phase;
+}
+
+async function waitForRunAttention(
+	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
+	agentId: string,
+	attention: string,
+): Promise<void> {
+	for (let attempt = 0; attempt < 1_000; attempt += 1) {
+		const observe = host.session.getToolDefinition("agent_observe");
+		assert.ok(observe);
+		const status = await observe.execute(
+			`wait-for-attention-${attempt}`,
+			{ operation: "status", agentId },
+			undefined,
+			undefined,
+			host.session.extensionRunner.createContext(),
+		);
+		if ((status.details as { run: { attention?: string } }).run.attention === attention) {
+			return;
+		}
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+	throw new Error(`Agent ${agentId} did not reach attention ${attention}`);
 }
 
 async function refreshLlamaCatalogThroughCommand(

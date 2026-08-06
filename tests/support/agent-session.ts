@@ -59,6 +59,9 @@ export async function selectAgent(
 	agentId: string,
 ): Promise<void> {
 	const { command, surface } = await openAgentsSurface(host);
+	if (surface.render(80).some((line) => line.includes("Dormant Agents"))) {
+		surface.handleInput?.("\t");
+	}
 	while (surface.render(80).some((line) => line.includes("Agents / "))) {
 		surface.handleInput?.("h");
 	}
@@ -69,6 +72,30 @@ export async function selectAgent(
 	}
 	await command;
 	assert.equal(host.runtime.session.sessionId, agentId);
+}
+
+export async function selectDormantAgent(
+	host: TestOwnerHost,
+	agentId: string,
+): Promise<void> {
+	const { command, surface } = await openAgentsSurface(host);
+	surface.handleInput?.("\t");
+	const firstRender = surface.render(80).join("\n");
+	let currentRender = firstRender;
+	for (let attempt = 0; attempt < 1_000; attempt += 1) {
+		if (focusedDetailsShowAgent(surface, agentId)) {
+			surface.handleInput?.("\r");
+			await command;
+			assert.equal(host.runtime.session.sessionId, agentId);
+			return;
+		}
+		surface.handleInput?.("j");
+		currentRender = surface.render(80).join("\n");
+		if (currentRender === firstRender) break;
+	}
+	surface.handleInput?.("\x1b");
+	await command;
+	assert.fail(`Dormant Agent ${agentId} is absent from the selector`);
 }
 
 export async function openAgentsSurface(

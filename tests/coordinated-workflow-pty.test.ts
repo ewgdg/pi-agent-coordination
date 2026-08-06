@@ -20,6 +20,7 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 			ownerId: string;
 			liveAgentId: string;
 			dormantAgentId: string;
+			cwd: string;
 		}>("__PTY_SETUP__");
 		await terminal.waitFor("Worker Live");
 		const liveFrame = await terminal.screen();
@@ -37,10 +38,25 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		await terminal.waitFor("Worker Dormant");
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_SELECTED_DORMANT__");
+		await terminal.waitFor("Worker Dormant · ");
+		const selectedDormantFrame = await terminal.screen();
+		assertSelectedAgentFooterStatus(
+			selectedDormantFrame,
+			"Worker Dormant",
+			setup.dormantAgentId,
+			"Dormant",
+		);
+		assertNativeFooterPreserved(selectedDormantFrame, setup.cwd);
 		terminal.write("selected dormant native input");
 		await terminal.waitFor("selected dormant native input");
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_SELECTED_RUN_FAILED__");
+		assertSelectedAgentFooterStatus(
+			await terminal.screen(),
+			"Worker Dormant",
+			setup.dormantAgentId,
+			"Dormant",
+		);
 		terminal.write("native input after selected Run failure");
 		await terminal.waitFor("native input after selected Run failure");
 		terminal.write("\r");
@@ -49,6 +65,14 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		terminal.write("k");
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_SELECTED_LIVE__");
+		await terminal.waitFor("Worker Live · ");
+		const selectedLiveFrame = await terminal.screen();
+		assertSelectedAgentFooterStatus(
+			selectedLiveFrame,
+			"Worker Live",
+			setup.liveAgentId,
+			"active",
+		);
 		terminal.write("selected native input");
 		await terminal.waitFor("selected native input");
 		terminal.write("\r");
@@ -61,9 +85,9 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_ROUND_TRIPS__");
 		await terminal.waitFor("__PTY_ATTENTION_READY__");
-		await terminal.waitFor("Operational Attention · 1");
 		await terminal.waitFor("ATTENTION 1");
 		terminal.write("\x1b");
+		await terminal.waitFor("Operational Attention · 1");
 
 		await terminal.closed();
 		assert.match(terminal.output(), /__PTY_ROUND_TRIPS__/);
@@ -72,6 +96,39 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		terminal.kill();
 	}
 });
+
+function assertSelectedAgentFooterStatus(
+	frame: readonly string[],
+	label: string,
+	agentId: string,
+	phase: string,
+): void {
+	const prefix = `${label} · `;
+	const suffix = ` · ${phase}`;
+	const matchingLines = frame.filter((line) =>
+		line.startsWith(prefix) && line.includes(suffix)
+	);
+	assert.equal(matchingLines.length, 1);
+	const statusLine = matchingLines[0]!;
+	const phaseIndex = statusLine.indexOf(suffix, prefix.length);
+	const compactIdentity = statusLine.slice(prefix.length, phaseIndex);
+	assert.ok(compactIdentity.length < agentId.length);
+	assert.ok(agentId.endsWith(compactIdentity));
+	assert.ok(frame.indexOf(statusLine) >= frame.length - 3);
+}
+
+function assertNativeFooterPreserved(frame: readonly string[], cwd: string): void {
+	const cwdLine = frame.findIndex((line) => line.includes(cwd));
+	const nativeStatsLine = frame.findIndex((line) =>
+		line.includes("/16k") && line.includes("deterministic-owner")
+	);
+	const extensionStatusLine = frame.find((line) => line.includes("Native Peer"));
+	assert.ok(cwdLine >= 0, JSON.stringify(frame));
+	assert.ok(nativeStatsLine > cwdLine, JSON.stringify(frame));
+	assert.ok(extensionStatusLine, JSON.stringify(frame));
+	assert.ok(frame.indexOf(extensionStatusLine) > nativeStatsLine);
+	assert.ok(extensionStatusLine.indexOf("Native Peer") > extensionStatusLine.indexOf("Dormant"));
+}
 
 function launchFixture() {
 	const command = `${quoteShell(process.execPath)} ${quoteShell(FIXTURE)}`;

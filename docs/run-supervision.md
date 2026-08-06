@@ -80,6 +80,8 @@ A supervisory or human dispatch failure reports an error, clears only the failed
 
 The [Agent selector](agent-selector.md) assigns the native editor and transcript to a durable Agent without changing protocol authority. A selected live Run gains `interactive_selection` retention. A selected Dormant Agent uses a presentation-only binding; its first committed native editor Message starts one successor and rebinds Pi before execution. Ordinary Message startup performs the same repair. Run failure returns the selected Agent to a Dormant presentation without replaying work. Leaving the Agent removes live selection retention, and orderly shutdown returns selection to the Owner before sessions are disposed.
 
+When a non-Owner Agent is selected, its label, compact identity, and concise semantic Run state appear through Pi's native footer extension-status seam. Dormant and ordinary Run states remain dim, `waiting (human)` is warning-emphasized, and only an observable current failure may use error emphasis. Owner selection clears this status without replacing the native footer or adding transcript evidence.
+
 ## Terminate an exact Run
 
 ```json

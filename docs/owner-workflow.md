@@ -29,7 +29,7 @@ After Owner Identity validation, the package binds the ordinary tools through a 
 - `agent_control` interrupts, explicitly resumes, or terminates one authorized exact child Run.
 - `/agents` opens the framed [Agent selector](agent-selector.md), with Owner-only Human and Operational attention plus separate Live and Dormant Agent views.
 
-These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer.
+These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer. A selected non-Owner Agent's label, compact identity, and concise Run state use Pi's native extension-status footer slot; Owner selection clears it.
 
 Coordination roles are trusted protocol participants, not a security boundary. Role-scoped tools constrain the intended workflow and keep caller identity out of model-supplied arguments; they do not isolate mutually hostile code or users.
 

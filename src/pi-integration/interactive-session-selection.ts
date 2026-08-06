@@ -22,6 +22,7 @@ type PresentationReplacementOptions = Readonly<{
 
 export type HumanSessionSelection = Readonly<{
 	selectedAgentId(): string;
+	addChangeHandler(handler: () => void): () => void;
 	activate(binding: HumanPresentationBinding): Promise<void>;
 	isBoundTo(agentId: string, session: AgentSession): boolean;
 	replaceIfSelected(
@@ -52,6 +53,10 @@ export function bindHumanSessionSelection(
 		diagnostics: runtime.diagnostics,
 	};
 	let selectedNativeBindingConfirmed = true;
+	const changeHandlers = new Set<() => void>();
+	const notifySelectionChanged = (): void => {
+		for (const handler of changeHandlers) handler();
+	};
 	const applyRuntimeBinding = (binding: HumanPresentationBinding): void => {
 		mutableRuntime._session = binding.session;
 		mutableRuntime._services = binding.services;
@@ -104,6 +109,7 @@ export function bindHumanSessionSelection(
 		}
 		selected = binding;
 		selectedNativeBindingConfirmed = true;
+		notifySelectionChanged();
 		try {
 			if (previous.session !== binding.session) await previous.release?.();
 		} catch (error) {
@@ -146,6 +152,7 @@ export function bindHumanSessionSelection(
 		}
 		selected = binding;
 		selectedNativeBindingConfirmed = replacementConfirmed;
+		notifySelectionChanged();
 		try {
 			if (previous.session !== binding.session) await previous.release?.();
 		} catch (error) {
@@ -162,6 +169,10 @@ export function bindHumanSessionSelection(
 	};
 	return {
 		selectedAgentId: () => selected.agentId,
+		addChangeHandler: (handler) => {
+			changeHandlers.add(handler);
+			return () => changeHandlers.delete(handler);
+		},
 		activate: (binding) => lane.run(async () => {
 			try {
 				await activateInLane(binding);

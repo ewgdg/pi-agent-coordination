@@ -58,6 +58,8 @@ export type TestUi = ExtensionUIContext & {
 	readonly genericSelectCalls: Array<{ title: string; options: string[] }>;
 	readonly notifications: Array<{ message: string; type?: "info" | "warning" | "error" }>;
 	readonly customSurfaces: Component[];
+	readonly statuses: Map<string, string>;
+	readonly widgets: Map<string, readonly string[]>;
 };
 
 export type TestOwnerHost = {
@@ -264,6 +266,8 @@ function createTestUi(): TestUi {
 	const genericSelectCalls: TestUi["genericSelectCalls"] = [];
 	const notifications: TestUi["notifications"] = [];
 	const customSurfaces: Component[] = [];
+	const statuses: TestUi["statuses"] = new Map();
+	const widgets: TestUi["widgets"] = new Map();
 	let editorText = "";
 	const testTui = {
 		terminal: { columns: 80, rows: 24 },
@@ -315,6 +319,8 @@ function createTestUi(): TestUi {
 		genericSelectCalls,
 		notifications,
 		customSurfaces,
+		statuses,
+		widgets,
 		async select(title: string, options: string[]) {
 			genericSelectCalls.push({ title, options: [...options] });
 			return undefined;
@@ -331,12 +337,18 @@ function createTestUi(): TestUi {
 		onTerminalInput() {
 			return () => undefined;
 		},
-		setStatus() {},
+		setStatus(key: string, value: string | undefined) {
+			if (value === undefined) statuses.delete(key);
+			else statuses.set(key, value);
+		},
 		setWorkingMessage() {},
 		setWorkingVisible() {},
 		setWorkingIndicator() {},
 		setHiddenThinkingLabel() {},
-		setWidget() {},
+		setWidget(key: string, value: readonly string[] | undefined) {
+			if (value === undefined) widgets.delete(key);
+			else widgets.set(key, value);
+		},
 		setFooter() {},
 		setHeader() {},
 		setTitle() {},
