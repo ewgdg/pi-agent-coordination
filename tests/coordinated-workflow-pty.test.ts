@@ -39,7 +39,7 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_SELECTED_DORMANT__");
 		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.startsWith("Worker Dormant · "))
+			frame.some((line) => line.includes("Worker Dormant · "))
 		);
 		const selectedDormantFrame = await terminal.screen();
 		assertSelectedAgentFooterStatus(
@@ -68,7 +68,7 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_SELECTED_LIVE__");
 		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.startsWith("● Worker Live · "))
+			frame.some((line) => line.includes("Worker Live · "))
 		);
 		const selectedLiveFrame = await terminal.screen();
 		assertSelectedAgentFooterStatus(
@@ -107,7 +107,8 @@ function assertSelectedAgentFooterStatus(
 	agentId: string,
 	phase: string,
 ): void {
-	const prefix = phase === "active" ? `● ${label} · ` : `${label} · `;
+	const marker = phase === "active" ? "● " : phase === "Dormant" ? "○ " : "";
+	const prefix = `${marker}${label} · `;
 	const suffix = ` · ${phase}`;
 	const matchingLines = frame.filter((line) =>
 		line.startsWith(prefix) && line.includes(suffix)

@@ -50,7 +50,8 @@ export function formatSelectedAgentStatus(
 	if (status.phase === "failed") {
 		return theme.fg("error", `${status.label}${identity}${phase}`);
 	}
-	const label = status.phase === "active" ? `● ${status.label}` : status.label;
+	const marker = status.phase === "active" ? "● " : status.phase === "dormant" ? "○ " : "";
+	const label = `${marker}${status.label}`;
 	const emphasizedLabel = theme.fg("accent", theme.bold(label));
 	if (status.phase === "waiting_human") {
 		return `${emphasizedLabel}${theme.fg("dim", identity)}${theme.fg("warning", phase)}`;

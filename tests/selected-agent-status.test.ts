@@ -43,7 +43,7 @@ test("Dormant selection emphasizes identity and is distinct from a failed Run", 
 			{ label: "Researcher", sessionId: "019fa1ff-6e95-761e-b4ce-7415983c81e3", phase: "dormant" },
 			theme,
 		),
-		"<accent><bold>Researcher</bold></accent><dim> · 983c81e3 · Dormant</dim>",
+		"<accent><bold>○ Researcher</bold></accent><dim> · 983c81e3 · Dormant</dim>",
 	);
 	assert.equal(
 		formatSelectedAgentStatus(
