@@ -171,6 +171,44 @@ test("Live and Dormant are explicit keyboard-accessible tabs", async () => {
 	assert.equal(await selection, undefined);
 });
 
+test("reopening preserves the selected Dormant Agent", async () => {
+	const harness = surfaceHarness(30);
+	const firstSelection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [
+			dormantAgentStatus("recent", "Recent", "owner"),
+			dormantAgentStatus("selected", "Selected", "owner"),
+		],
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+
+	harness.component.handleInput?.("\t");
+	harness.component.handleInput?.("j");
+	harness.component.handleInput?.("\r");
+	const selected = await firstSelection;
+	assert.deepEqual(selected, { kind: "select_agent", agentId: "selected" });
+	if (!selected || selected.kind !== "select_agent") throw new Error("selection missing");
+
+	const reopened = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [
+			dormantAgentStatus("recent", "Recent", "owner"),
+			dormantAgentStatus("selected", "Selected", "owner"),
+		],
+		selectedAgentId: selected.agentId,
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+
+	const rendered = harness.component.render(80).join("\n");
+	assert.match(rendered, /Live.*\[ Dormant \]/);
+	assert.match(rendered, /→ Selected/);
+	harness.component.handleInput?.("\x1b");
+	assert.equal(await reopened, undefined);
+});
+
 test("Live shows direct children and navigates Agent scopes", async () => {
 	const harness = surfaceHarness(30);
 	const selection = openAgentSelectorSurface(harness.ui, {

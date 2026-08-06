@@ -108,15 +108,19 @@ class AgentSelectorSurface implements Component {
 		this.#done = done;
 		this.#options = options;
 		const owner = this.#ownerStatus();
-		const selected = options.live.find(
+		const selectedLive = options.live.find(
 			({ agentId }) => agentId === options.selectedAgentId,
 		);
-		this.#scopeAgentId = selected?.agentId === owner.agentId
+		const selectedDormant = options.dormant.find(
+			({ agentId }) => agentId === options.selectedAgentId,
+		);
+		this.#activeTab = selectedDormant ? "dormant" : "live";
+		this.#scopeAgentId = selectedLive?.agentId === owner.agentId
 			? owner.agentId
-			: selected?.directSpawnerAgentId ?? owner.agentId;
+			: selectedLive?.directSpawnerAgentId ?? owner.agentId;
 		this.#selectedValueByTab = {
-			live: this.#attentionItems()[0]?.value ?? selected?.agentId ?? owner.agentId,
-			dormant: options.dormant[0]?.agentId,
+			live: this.#attentionItems()[0]?.value ?? selectedLive?.agentId ?? owner.agentId,
+			dormant: selectedDormant?.agentId ?? options.dormant[0]?.agentId,
 		};
 		this.#list = this.#createList();
 	}

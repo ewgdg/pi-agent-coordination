@@ -345,8 +345,9 @@ test("Dormant focus is passive and Enter binds the Agent transcript without star
 	assert.equal(host.runtime.session.sessionId, childAgentId);
 	const dormantPresentation = host.runtime.session;
 	const reselection = await openAgentsSurface(host);
-	reselection.surface.handleInput?.("\t");
-	assert.match(reselection.surface.render(80).join("\n"), new RegExp(childAgentId));
+	const reselectionRendered = reselection.surface.render(80).join("\n");
+	assert.match(reselectionRendered, /Dormant Agents/);
+	assert.match(reselectionRendered, new RegExp(childAgentId));
 	reselection.surface.handleInput?.("\r");
 	await reselection.command;
 	assert.equal(host.runtime.session, dormantPresentation);
@@ -484,15 +485,17 @@ test("same-Agent selection repairs a degraded Dormant binding after selected Run
 		/Interactive Selection detached from an ending Run.*failure-transition rebind failure/,
 	);
 	const failedRepair = await openAgentsSurface(host);
-	failedRepair.surface.handleInput?.("\t");
-	assert.match(failedRepair.surface.render(80).join("\n"), new RegExp(childAgentId));
+	const failedRepairRendered = failedRepair.surface.render(80).join("\n");
+	assert.match(failedRepairRendered, /Dormant Agents/);
+	assert.match(failedRepairRendered, new RegExp(childAgentId));
 	failedRepair.surface.handleInput?.("\r");
 	await failedRepair.command;
 	const attemptsBeforeRepair = rebindAttempts;
 	rebindBlocked = false;
 	const reselection = await openAgentsSurface(host);
-	reselection.surface.handleInput?.("\t");
-	assert.match(reselection.surface.render(80).join("\n"), new RegExp(childAgentId));
+	const reselectionRendered = reselection.surface.render(80).join("\n");
+	assert.match(reselectionRendered, /Dormant Agents/);
+	assert.match(reselectionRendered, new RegExp(childAgentId));
 	reselection.surface.handleInput?.("\r");
 	await reselection.command;
 	assert.equal(rebindAttempts, attemptsBeforeRepair + 1);
