@@ -78,7 +78,7 @@ The human can also use `/agents` to select a live held Agent and submit native e
 
 A supervisory or human dispatch failure reports an error, clears only the failed resumption attempt, and leaves the exact Hold available for an explicit retry. Failed human input is not passed through as an ordinary Pi prompt.
 
-The [Agent selector](agent-selector.md) switches the native editor and transcript view among retained live sessions without changing protocol authority. The selected session gains `interactive_selection` retention; leaving it removes that retention. A Dormant row can submit the same identity-based selection request, but the selector never starts a Run. Orderly shutdown returns selection to the Owner before sessions are disposed.
+The [Agent selector](agent-selector.md) assigns the native editor and transcript to a durable Agent without changing protocol authority. A selected live Run gains `interactive_selection` retention. A selected Dormant Agent uses a presentation-only binding; its first committed native editor Message starts one successor and rebinds Pi before execution. Ordinary Message startup performs the same repair. Run failure returns the selected Agent to a Dormant presentation without replaying work. Leaving the Agent removes live selection retention, and orderly shutdown returns selection to the Owner before sessions are disposed.
 
 ## Terminate an exact Run
 
@@ -89,7 +89,17 @@ The [Agent selector](agent-selector.md) switches the native editor and transcrip
 }
 ```
 
-Termination fences and confirms the end of the target's exact current Run, bypasses every Retention Reason, and discards its uncommitted coordination and native input. The receipt reports `terminated` or `not_running` plus complete live `residualRequests.incoming` and `residualRequests.outgoing` counts.
+Termination fences and confirms the end of the target's exact current Run, bypasses every Retention Reason, and discards its uncommitted coordination and native input. An Agent that currently owns Interactive Selection rejects ordinary termination without changing its Run or editor binding:
+
+```json
+{
+  "agentId": "child-agent-id",
+  "disposition": "rejected",
+  "rejectionReason": "interactive_selection"
+}
+```
+
+After completed deselection, ordinary termination may proceed. A successful or already-Dormant receipt reports `terminated` or `not_running` plus complete live `residualRequests.incoming` and `residualRequests.outgoing` counts. Coordinated shutdown remains a dedicated lifecycle path and restores Owner selection before ending child Runs.
 
 Termination does not roll back effects, Answer or cancel Requests, notify participants, mutate descendants, remove the Agent, or create Agent lifecycle evidence. Later Message Delivery may start a fresh successor Run for the same Agent identity. Recovery of any discarded Message remains explicit through transcript inspection, poll, or retry.
 

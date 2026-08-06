@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import type {
+	HumanPresentationCoordinatorView,
 	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
 } from "../coordination/workflow-coordinator.ts";
@@ -30,6 +31,32 @@ type AgentCoordinatorView =
 	| OrdinaryAgentCoordinatorView
 	| ModeratorAgentCoordinatorView;
 type ViewResolver = () => AgentCoordinatorView;
+
+export function registerAgentsCommand(
+	pi: ExtensionAPI,
+	resolveView: () => HumanPresentationCoordinatorView,
+): void {
+	pi.registerCommand("agents", {
+		description: "Show Agents in the current Workflow",
+		handler: async (_args, ctx) => {
+			const view = resolveView();
+			const roster = view.selectionRoster();
+			const selectedAgent = view.status();
+			const ownerVisible = selectedAgent.agentId === selectedAgent.workflowId;
+			const action = await openAgentSelectorSurface(ctx.ui, {
+				...roster,
+				selectedAgentId: selectedAgent.agentId,
+				humanAttention: ownerVisible ? view.humanAttention() : [],
+				operationalAttention: ownerVisible ? view.operationalAttention() : [],
+			});
+			if (action?.kind === "select_agent") {
+				await view.selectForHuman(action.agentId);
+			} else if (action?.kind === "focus_human_request") {
+				await view.focusHumanRequest(action.requestId);
+			}
+		},
+	});
+}
 
 export function registerOrdinaryAgentSurfaces(
 	pi: ExtensionAPI,
@@ -439,24 +466,5 @@ function registerAgentSurfaces(
 		});
 	}
 
-	pi.registerCommand("agents", {
-		description: "Show Agents in the current Workflow",
-		handler: async (_args, ctx) => {
-			const view = resolveView();
-			const roster = view.selectionRoster();
-			const selectedAgent = view.status();
-			const ownerVisible = selectedAgent.agentId === selectedAgent.workflowId;
-			const action = await openAgentSelectorSurface(ctx.ui, {
-				...roster,
-				selectedAgentId: selectedAgent.agentId,
-				humanAttention: ownerVisible ? view.humanAttention() : [],
-				operationalAttention: ownerVisible ? view.operationalAttention() : [],
-			});
-			if (action?.kind === "select_agent") {
-				await view.selectForHuman(action.agentId);
-			} else if (action?.kind === "focus_human_request") {
-				await view.focusHumanRequest(action.requestId);
-			}
-		},
-	});
+	registerAgentsCommand(pi, resolveView);
 }

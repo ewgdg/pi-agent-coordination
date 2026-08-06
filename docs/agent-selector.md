@@ -12,13 +12,17 @@ Live uses one continuous list across three adjacent sections:
 
 Right Arrow or `l` enters the focused Agent's child scope. Left Arrow or `h` returns to its parent and refocuses that Agent. Breadcrumbs omit Owner, retain the newest three Agent scopes, and tighten to the available width. Reopening starts in the selected Agent's parent scope so the selected row remains visible.
 
-Enter submits the focused Live Agent to the native session-selection boundary. Selecting a retained live session rebinds Pi's transcript and editor without changing Workflow authority. Enter on `DECIDE` opens its Human Request. Enter on Operational `ATTENTION` does nothing.
+Enter submits the focused Live Agent to the native session-selection boundary. Selection belongs to the durable Agent; its current Run session is only the replaceable presentation binding. Selecting a live Agent rebinds Pi's transcript and editor without changing Workflow authority and retains that exact Run. Enter on `DECIDE` opens its Human Request. Enter on Operational `ATTENTION` does nothing.
 
 ## Dormant
 
 Dormant is a flat list of every verified ordinary Agent and Moderator without a current Run. It follows Pi resume recency: latest user or assistant activity, then native session creation time. Moderator rows include their role and compact trigger description.
 
-Moving focus is passive: it does not start a Run, invoke a model, append transcript evidence, or change native selection. Enter submits the durable Agent identity to the same native selection boundary as Live. That boundary may bind an inspectable transcript, but the selector never starts work.
+Moving focus is passive: it does not start a Run, invoke a model, append transcript evidence, or change native selection. Enter selects the durable Agent and binds a presentation-only session to its existing transcript and native editor. That binding registers only `/agents` and the native input router; other prompt sources are handled without model invocation, and no coordination tools are present. It is neither a Run nor a coordination writer.
+
+The first native editor Message starts one successor in the selected Agent's serialized lane, replaces the presentation binding with the fresh Run session, and commits the exact input once before execution. An ordinary Message that starts a selected Agent also replaces the binding automatically. Terminal Run failure preserves selection by returning to a Dormant presentation without replaying work; later editor input or ordinary Message may start the successor.
+
+Selecting the same Agent is a no-op only while Pi already holds its current presentation binding. Enter repairs a stale session incarnation while preserving the Agent selection.
 
 ## Focused details and keys
 

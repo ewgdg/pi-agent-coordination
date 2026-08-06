@@ -48,7 +48,10 @@ import type {
 	RunControlInput,
 	RunControlReceipt,
 } from "../protocol/run-control.ts";
-import type { HumanSessionSelection } from "../pi-integration/interactive-session-selection.ts";
+import type {
+	HumanPresentationBinding,
+	HumanSessionSelection,
+} from "../pi-integration/interactive-session-selection.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type { AgentTemplateRoot } from "../templates/agent-templates.ts";
 import { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
@@ -74,6 +77,7 @@ import {
 	configureCoordinatedSession,
 	type AutomaticGenerationReconciliationAdapter,
 } from "../pi-integration/automatic-reconciliation.ts";
+import { createPresentationBoundExtension } from "../bootstrap/agent-extension.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type AgentRosterStatus = AgentStatus & Readonly<{
@@ -92,11 +96,8 @@ export type {
 	MessageBoundaryHooks,
 } from "./messages.ts";
 
-type AgentCoordinatorView = Readonly<{
+export type HumanPresentationCoordinatorView = Readonly<{
 	status(agentId?: string): AgentStatus;
-	children(agentId?: string): readonly AgentStatus[];
-	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
-	control(toolCallId: string, input: RunControlInput): Promise<RunControlReceipt>;
 	resumeFromHuman(
 		text: string,
 		images: readonly ImageContent[] | undefined,
@@ -106,6 +107,15 @@ type AgentCoordinatorView = Readonly<{
 		dormant: readonly AgentRosterStatus[];
 	}>;
 	selectForHuman(agentId: string): Promise<"selected" | "dormant">;
+	humanAttention(): readonly HumanAttentionItem[];
+	operationalAttention(): readonly OperationalIncidentAttention[];
+	focusHumanRequest(requestId: string): Promise<void>;
+}>;
+
+type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
+	children(agentId?: string): readonly AgentStatus[];
+	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
+	control(toolCallId: string, input: RunControlInput): Promise<RunControlReceipt>;
 	askHuman(
 		toolCallId: string,
 		input: HumanRequestInput,
@@ -115,9 +125,6 @@ type AgentCoordinatorView = Readonly<{
 		message: MessageEndEvent["message"],
 	): MessageEndEvent["message"] | undefined;
 	reconcileHumanToolResults(): void;
-	humanAttention(): readonly HumanAttentionItem[];
-	operationalAttention(): readonly OperationalIncidentAttention[];
-	focusHumanRequest(requestId: string): Promise<void>;
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(): Promise<void>;
 	ensureExecution(): Promise<void>;
@@ -141,12 +148,14 @@ export class WorkflowCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
+	readonly #sessionFactory: DefaultChildSessionFactory;
 	readonly #messages: MessageCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
 	readonly #runSupervisor: RunSupervisor;
 	readonly #operationalIncidents: OperationalIncidentCoordinator;
 	readonly #humanSessionSelection: HumanSessionSelection | undefined;
 	readonly #selectionLane = new SerialLane();
+	readonly #dormantPresentations = new Map<string, HumanPresentationBinding>();
 	readonly #workflowPolicy: WorkflowPolicyStore;
 	readonly #executionScheduler: WorkflowExecutionScheduler;
 	readonly #executionPermits = new Map<string, WorkflowExecutionPermit>();
@@ -206,9 +215,12 @@ export class WorkflowCoordinator {
 			templateRoots: options.templateRoots,
 			childExtensionFactory: options.childExtensionFactory,
 			moderatorExtensionFactory: options.moderatorExtensionFactory,
+			presentationExtensionFactory: (agentId) =>
+				createPresentationBoundExtension(() => this.#agentView(agentId)),
 			automaticGenerationReconciliation:
 				options.automaticGenerationReconciliation,
 		});
+		this.#sessionFactory = sessionFactory;
 		for (const recovered of options.recoveredWorkflow?.agents ?? []) {
 			if (
 				options.recoveredWorkflow?.transcriptPathByAgentId.get(
@@ -280,6 +292,8 @@ export class WorkflowCoordinator {
 			quarantinedAgentIds: this.#quarantinedAgentIds,
 			ownerAgentId: identity.agentId,
 			messages: this.#messages,
+			isInteractivelySelected: (agentId) =>
+				this.#humanSessionSelection?.selectedAgentId() === agentId,
 		});
 		this.#operationalIncidents = new OperationalIncidentCoordinator({
 			agents: this.#agents,
@@ -345,7 +359,7 @@ export class WorkflowCoordinator {
 			},
 			resumeFromHuman: (text, images) => {
 				this.#assertAdmissionOpen();
-				return this.#runSupervisor.resumeFromHuman(agentId, text, images);
+				return this.#handleHumanInput(agentId, text, images);
 			},
 			selectionRoster: () => this.#selectionRoster(),
 			selectForHuman: (targetAgentId) => {
@@ -524,8 +538,49 @@ export class WorkflowCoordinator {
 	}
 
 	#integrateAgent(record: AgentRecord): void {
+		record.host.setRunStartedHandler((session) =>
+			this.#bindSelectedRunInLane(record, session)
+		);
+		record.host.setRunEndingHandler((session, _handle, cause) =>
+			this.#replaceSelectedFailedRunInLane(record, session, cause)
+		);
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
+	}
+
+	async #bindSelectedRunInLane(
+		record: AgentRecord,
+		session: AgentSessionRuntime["session"],
+	): Promise<void> {
+		const selection = this.#humanSessionSelection;
+		if (!selection || selection.selectedAgentId() !== record.identity.agentId) return;
+		record.host.addRetentionReason("interactive_selection");
+		const stillSelected = await selection.replaceIfSelected(
+			record.identity.agentId,
+			this.#livePresentationBinding(record, session),
+		);
+		if (!stillSelected) record.host.removeRetentionReason("interactive_selection");
+	}
+
+	async #replaceSelectedFailedRunInLane(
+		record: AgentRecord,
+		session: AgentSessionRuntime["session"],
+		cause: "failure" | "termination" | "shutdown",
+	): Promise<void> {
+		const selection = this.#humanSessionSelection;
+		if (
+			cause !== "failure" ||
+			!selection?.isBoundTo(record.identity.agentId, session)
+		) return;
+		const presentation = await this.#dormantPresentationBinding(record);
+		await selection.replaceIfSelected(
+			record.identity.agentId,
+			presentation,
+			{
+				expectedSession: session,
+				previousBindingDisposition: "disposing",
+			},
+		);
 	}
 
 	async #beginExecution(agentId: string): Promise<void> {
@@ -563,6 +618,59 @@ export class WorkflowCoordinator {
 		if (!permit) return;
 		this.#executionPermits.delete(agentId);
 		permit.release();
+	}
+
+	#handleHumanInput(
+		agentId: string,
+		text: string,
+		images: readonly ImageContent[] | undefined,
+	): Promise<boolean> {
+		const selection = this.#humanSessionSelection;
+		if (!selection) {
+			return this.#runSupervisor.resumeFromHuman(agentId, text, images);
+		}
+		if (selection.selectedAgentId() !== agentId) return Promise.resolve(true);
+		const record = this.#requireAgent(agentId);
+		return record.host.lane.run(async () => {
+			if (selection.selectedAgentId() !== agentId) return true;
+			const currentSession = record.host.currentHandle()
+				? record.host.requireLiveSession()
+				: undefined;
+			if (
+				currentSession &&
+				selection.isBoundTo(agentId, currentSession) &&
+				!record.host.currentInterruptionHold()
+			) return false;
+			const session = currentSession ??
+				await record.host.startInLane(["interactive_selection"]);
+			if (currentSession) record.host.addRetentionReason("interactive_selection");
+			const stillSelected = await selection.replaceIfSelected(
+				agentId,
+				this.#livePresentationBinding(record, session),
+			);
+			if (!stillSelected) {
+				record.host.removeRetentionReason("interactive_selection");
+				return true;
+			}
+			if (record.host.currentInterruptionHold()) {
+				return this.#runSupervisor.resumeFromHumanInLane(record, text, images);
+			}
+			await this.#runSupervisor.submitFromHumanInLane(record, text, images);
+			return true;
+		});
+	}
+
+	#livePresentationBinding(
+		record: AgentRecord,
+		session = record.host.requireLiveSession(),
+	): HumanPresentationBinding {
+		const services = requireLiveServices(record);
+		return {
+			agentId: record.identity.agentId,
+			session,
+			services,
+			diagnostics: services.diagnostics,
+		};
 	}
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
@@ -626,35 +734,75 @@ export class WorkflowCoordinator {
 		return this.#selectionLane.run(async () => {
 			const target = this.#requireAgent(agentId);
 			const previousAgentId = selection.selectedAgentId();
-			if (previousAgentId === agentId) return "selected";
-			const activated = await target.host.lane.run(async () => {
-				const session = target.host.currentHandle()
-					? target.host.requireLiveSession()
-					: undefined;
-				if (!session) return false;
-				const services = requireLiveServices(target);
-				target.host.addRetentionReason("interactive_selection");
-				try {
-					await selection.activate({
-						agentId,
-						session,
-						services,
-						diagnostics: services.diagnostics,
-					});
-					return true;
-				} catch (error) {
-					target.host.removeRetentionReason("interactive_selection");
-					throw error;
-				}
-			});
-			if (!activated) return "dormant";
+			if (previousAgentId === agentId) {
+				await target.host.lane.run(() =>
+					this.#activateSelectionInLane(target, selection)
+				);
+				return "selected" as const;
+			}
 			const previous = this.#requireAgent(previousAgentId);
-			await previous.host.lane.run(() => {
+			// Hold the previous Agent lane through activation so its queued input or
+			// termination cannot cross the selection change. The outer selection lane
+			// gives every change the same previous-then-target acquisition order.
+			await previous.host.lane.run(async () => {
+				await target.host.lane.run(() =>
+					this.#activateSelectionInLane(target, selection)
+				);
 				previous.host.removeRetentionReason("interactive_selection");
 			});
 			await this.#messages.requestRelease(previous);
-			return "selected";
+			return "selected" as const;
 		});
+	}
+
+	async #activateSelectionInLane(
+		target: AgentRecord,
+		selection: HumanSessionSelection,
+	): Promise<void> {
+		const session = target.host.currentHandle()
+			? target.host.requireLiveSession()
+			: undefined;
+		const binding = session
+			? this.#livePresentationBinding(target, session)
+			: await this.#dormantPresentationBinding(target);
+		if (!session && selection.isBoundTo(target.identity.agentId, binding.session)) {
+			return;
+		}
+		const retainedBeforeActivation = session
+			? target.host.hasRetentionReason("interactive_selection")
+			: false;
+		if (session) target.host.addRetentionReason("interactive_selection");
+		try {
+			await selection.activate(binding);
+		} catch (error) {
+			if (session) {
+				if (!retainedBeforeActivation) {
+					target.host.removeRetentionReason("interactive_selection");
+				}
+			}
+			throw error;
+		}
+	}
+
+	async #dormantPresentationBinding(
+		record: AgentRecord,
+	): Promise<HumanPresentationBinding> {
+		const agentId = record.identity.agentId;
+		const existing = this.#dormantPresentations.get(agentId);
+		if (existing) return existing;
+		const created = await this.#sessionFactory.createPresentationBinding(record);
+		let tracked!: HumanPresentationBinding;
+		tracked = {
+			...created,
+			release: async () => {
+				if (this.#dormantPresentations.get(agentId) === tracked) {
+					this.#dormantPresentations.delete(agentId);
+				}
+				await created.release?.();
+			},
+		};
+		this.#dormantPresentations.set(agentId, tracked);
+		return tracked;
 	}
 }
 

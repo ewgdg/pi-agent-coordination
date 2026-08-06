@@ -5,14 +5,30 @@ import type {
 	AgentSessionServices,
 } from "@earendil-works/pi-coding-agent";
 
+import { SerialLane } from "../runtime/serial-lane.ts";
+
+export type HumanPresentationBinding = Readonly<{
+	agentId: string;
+	session: AgentSession;
+	services: AgentSessionServices;
+	diagnostics: readonly AgentSessionRuntimeDiagnostic[];
+	release?(): void | Promise<void>;
+}>;
+
+type PresentationReplacementOptions = Readonly<{
+	expectedSession?: AgentSession;
+	previousBindingDisposition?: "retained" | "disposing";
+}>;
+
 export type HumanSessionSelection = Readonly<{
 	selectedAgentId(): string;
-	activate(slot: Readonly<{
-		agentId: string;
-		session: AgentSession;
-		services: AgentSessionServices;
-		diagnostics: readonly AgentSessionRuntimeDiagnostic[];
-	}>): Promise<void>;
+	activate(binding: HumanPresentationBinding): Promise<void>;
+	isBoundTo(agentId: string, session: AgentSession): boolean;
+	replaceIfSelected(
+		agentId: string,
+		binding: HumanPresentationBinding,
+		options?: PresentationReplacementOptions,
+	): Promise<boolean>;
 }>;
 
 type MutableRuntimeState = {
@@ -28,23 +44,173 @@ export function bindHumanSessionSelection(
 	ownerAgentId: string,
 ): HumanSessionSelection {
 	const mutableRuntime = runtime as unknown as MutableRuntimeState;
-	let selectedAgentId = ownerAgentId;
-	return {
-		selectedAgentId: () => selectedAgentId,
-		async activate(slot) {
-			if (slot.agentId === selectedAgentId) return;
-			const rebindSession = mutableRuntime.rebindSession;
-			if (!rebindSession) {
-				throw new Error("Pi InteractiveMode has not registered its session rebind callback");
+	const lane = new SerialLane();
+	let selected: HumanPresentationBinding = {
+		agentId: ownerAgentId,
+		session: runtime.session,
+		services: runtime.services,
+		diagnostics: runtime.diagnostics,
+	};
+	let selectedNativeBindingConfirmed = true;
+	const applyRuntimeBinding = (binding: HumanPresentationBinding): void => {
+		mutableRuntime._session = binding.session;
+		mutableRuntime._services = binding.services;
+		mutableRuntime._diagnostics = [...binding.diagnostics];
+	};
+	const releaseIfNotSelected = async (
+		binding: HumanPresentationBinding,
+	): Promise<void> => {
+		if (binding.session === selected.session) return;
+		await binding.release?.();
+	};
+	const activateInLane = async (binding: HumanPresentationBinding): Promise<void> => {
+		if (
+			binding.agentId === selected.agentId &&
+			binding.session === selected.session &&
+			selectedNativeBindingConfirmed
+		) return;
+		const rebindSession = mutableRuntime.rebindSession;
+		if (!rebindSession) {
+			throw new Error("Pi InteractiveMode has not registered its session rebind callback");
+		}
+		const previous = selected;
+		// Pi normally performs this synchronous teardown immediately before session
+		// replacement. Retained and presentation-only bindings need the same UI seam.
+		mutableRuntime.beforeSessionInvalidate?.();
+		applyRuntimeBinding(binding);
+		try {
+			await rebindSession(binding.session);
+		} catch (activationError) {
+			const rollbackErrors: unknown[] = [];
+			try {
+				mutableRuntime.beforeSessionInvalidate?.();
+			} catch (rollbackError) {
+				rollbackErrors.push(rollbackError);
 			}
-			// Pi normally performs this synchronous teardown immediately before session
-			// replacement. Retained Agent Runs need the same UI boundary without disposal.
+			applyRuntimeBinding(previous);
+			try {
+				await rebindSession(previous.session);
+			} catch (rollbackError) {
+				rollbackErrors.push(rollbackError);
+			}
+			selectedNativeBindingConfirmed = rollbackErrors.length === 0;
+			if (rollbackErrors.length > 0) {
+				throw new AggregateError(
+					[activationError, ...rollbackErrors],
+					"Pi Interactive Selection activation and rollback failed",
+				);
+			}
+			throw activationError;
+		}
+		selected = binding;
+		selectedNativeBindingConfirmed = true;
+		try {
+			if (previous.session !== binding.session) await previous.release?.();
+		} catch (error) {
+			// Rebinding is already committed. A previous presentation cleanup failure
+			// must not invalidate the newly selected session beneath Pi's editor.
+			mutableRuntime._diagnostics.push({
+				type: "error",
+				message: `Previous Interactive Selection binding cleanup failed: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			});
+		}
+	};
+	const commitReplacementBeforeDispose = async (
+		binding: HumanPresentationBinding,
+		activationError: unknown,
+	): Promise<void> => {
+		const previous = selected;
+		const recoveryErrors: unknown[] = [activationError];
+		let replacementConfirmed = true;
+		// Rollback cannot remain the final state because the previous exact Run
+		// will be disposed immediately after this transition completes.
+		try {
 			mutableRuntime.beforeSessionInvalidate?.();
-			mutableRuntime._session = slot.session;
-			mutableRuntime._services = slot.services;
-			mutableRuntime._diagnostics = [...slot.diagnostics];
-			await rebindSession(slot.session);
-			selectedAgentId = slot.agentId;
-		},
+		} catch (error) {
+			recoveryErrors.push(error);
+			replacementConfirmed = false;
+		}
+		applyRuntimeBinding(binding);
+		const rebindSession = mutableRuntime.rebindSession;
+		if (!rebindSession) {
+			replacementConfirmed = false;
+		} else {
+			try {
+				await rebindSession(binding.session);
+			} catch (error) {
+				recoveryErrors.push(error);
+				replacementConfirmed = false;
+			}
+		}
+		selected = binding;
+		selectedNativeBindingConfirmed = replacementConfirmed;
+		try {
+			if (previous.session !== binding.session) await previous.release?.();
+		} catch (error) {
+			recoveryErrors.push(error);
+		}
+		mutableRuntime._diagnostics.push({
+			type: "error",
+			message: `Interactive Selection detached from an ending Run after native rebinding failed: ${
+				recoveryErrors.map((error) =>
+					error instanceof Error ? error.message : String(error)
+				).join("; ")
+			}`,
+		});
+	};
+	return {
+		selectedAgentId: () => selected.agentId,
+		activate: (binding) => lane.run(async () => {
+			try {
+				await activateInLane(binding);
+			} catch (activationError) {
+				try {
+					await releaseIfNotSelected(binding);
+				} catch (cleanupError) {
+					throw new AggregateError(
+						[activationError, cleanupError],
+						"Interactive Selection activation and cleanup failed",
+					);
+				}
+				throw activationError;
+			}
+		}),
+		isBoundTo: (agentId, session) =>
+			selectedNativeBindingConfirmed &&
+			selected.agentId === agentId && selected.session === session,
+		replaceIfSelected: (
+			agentId,
+			binding,
+			options,
+		) => lane.run(async () => {
+			if (
+				selected.agentId !== agentId ||
+				(options?.expectedSession !== undefined &&
+					selected.session !== options.expectedSession)
+			) {
+				await releaseIfNotSelected(binding);
+				return false;
+			}
+			try {
+				await activateInLane(binding);
+			} catch (activationError) {
+				if (options?.previousBindingDisposition === "disposing") {
+					await commitReplacementBeforeDispose(binding, activationError);
+					return true;
+				}
+				try {
+					await releaseIfNotSelected(binding);
+				} catch (cleanupError) {
+					throw new AggregateError(
+						[activationError, cleanupError],
+						"Interactive Selection replacement and cleanup failed",
+					);
+				}
+				throw activationError;
+			}
+			return true;
+		}),
 	};
 }

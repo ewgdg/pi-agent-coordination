@@ -20,17 +20,20 @@ export class RunSupervisor {
 	readonly #ownerAgentId: string;
 	readonly #messages: MessageCoordinator;
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
+	readonly #isInteractivelySelected: (agentId: string) => boolean;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		quarantinedAgentIds?: ReadonlySet<string>;
 		ownerAgentId: string;
 		messages: MessageCoordinator;
+		isInteractivelySelected(agentId: string): boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
 		this.#ownerAgentId = options.ownerAgentId;
 		this.#messages = options.messages;
+		this.#isInteractivelySelected = options.isInteractivelySelected;
 	}
 
 	execute(
@@ -49,6 +52,13 @@ export class RunSupervisor {
 		const target = this.#requireControllableTarget(callerAgentId, control.agentId);
 		return target.host.lane.run(async () => {
 			if (control.operation === "terminate") {
+				if (this.#isInteractivelySelected(target.identity.agentId)) {
+					return {
+						agentId: target.identity.agentId,
+						disposition: "rejected",
+						rejectionReason: "interactive_selection",
+					};
+				}
 				const residualRequests = target.host.residualRequestCounts();
 				if (!target.host.currentHandle()) {
 					return {
@@ -102,45 +112,59 @@ export class RunSupervisor {
 		images: readonly ImageContent[] | undefined,
 	): Promise<boolean> {
 		const record = this.#requireAgent(agentId);
-		return record.host.lane.run(async () => {
-			const hold = record.host.currentInterruptionHold();
-			if (!hold) return false;
-			if (!record.host.beginIsolatedResumptionInLane(hold)) {
-				throw new Error("Run resumption is already in progress");
+		return record.host.lane.run(() =>
+			this.resumeFromHumanInLane(record, text, images)
+		);
+	}
+
+	async resumeFromHumanInLane(
+		record: AgentRecord,
+		text: string,
+		images: readonly ImageContent[] | undefined,
+	): Promise<boolean> {
+		const hold = record.host.currentInterruptionHold();
+		if (!hold) return false;
+		if (!record.host.beginIsolatedResumptionInLane(hold)) {
+			throw new Error("Run resumption is already in progress");
+		}
+		try {
+			await this.submitFromHumanInLane(record, text, images);
+			if (!record.host.commitIsolatedResumptionInLane(hold)) {
+				throw new Error(
+					"invariant_violation: committed human resume Message lost its exact Hold",
+				);
 			}
-			const session = requireLiveSession(record);
-			const content: Array<TextContent | ImageContent> = [
-				{ type: "text", text },
-				...(images ?? []),
-			];
-			try {
-				const committed = await sendAndAwaitTranscriptCommit({
-					session,
-					matchesCandidate: (event) =>
-						event.type === "message_end" && event.message.role === "user",
-					inspectCommit: () => {
-						const tail = session.sessionManager.getEntries().at(-1);
-						return tail?.type === "message" &&
-							tail.message.role === "user" &&
-							JSON.stringify(tail.message.content) === JSON.stringify(content);
-					},
-					send: () => session.sendUserMessage(content),
-					onDispatched: (completion) => record.host.trackOperation(completion),
-				});
-				if (!committed) {
-					throw new Error("Run resumption input did not commit");
-				}
-				if (!record.host.commitIsolatedResumptionInLane(hold)) {
-					throw new Error(
-						"invariant_violation: committed human resume Message lost its exact Hold",
-					);
-				}
-				return true;
-			} catch (error) {
-				record.host.cancelIsolatedResumptionInLane(hold);
-				throw error;
-			}
+			return true;
+		} catch (error) {
+			record.host.cancelIsolatedResumptionInLane(hold);
+			throw error;
+		}
+	}
+
+	async submitFromHumanInLane(
+		record: AgentRecord,
+		text: string,
+		images: readonly ImageContent[] | undefined,
+	): Promise<void> {
+		const session = requireLiveSession(record);
+		const content: Array<TextContent | ImageContent> = [
+			{ type: "text", text },
+			...(images ?? []),
+		];
+		const committed = await sendAndAwaitTranscriptCommit({
+			session,
+			matchesCandidate: (event) =>
+				event.type === "message_end" && event.message.role === "user",
+			inspectCommit: () => {
+				const tail = session.sessionManager.getEntries().at(-1);
+				return tail?.type === "message" &&
+					tail.message.role === "user" &&
+					JSON.stringify(tail.message.content) === JSON.stringify(content);
+			},
+			send: () => session.sendUserMessage(content),
+			onDispatched: (completion) => record.host.trackOperation(completion),
 		});
+		if (!committed) throw new Error("Human input did not commit");
 	}
 
 	#requireControllableTarget(callerAgentId: string, targetAgentId: string): AgentRecord {

@@ -21,6 +21,7 @@ import {
 import { copyExtensionBindings } from "../pi-integration/extension-bindings.ts";
 import { resolveAgentRunProjectTrust } from "../pi-integration/project-trust.ts";
 import { resolveRunExtensions } from "../pi-integration/named-inline-extension-factories.ts";
+import type { HumanPresentationBinding } from "../pi-integration/interactive-session-selection.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
 import type {
@@ -84,6 +85,7 @@ export class DefaultChildSessionFactory {
 	readonly #packageRoot: string;
 	readonly #childExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #moderatorExtensionFactory: (agentId: string) => ExtensionFactory;
+	readonly #presentationExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #automaticGenerationReconciliation:
 		| AutomaticGenerationReconciliationAdapter
 		| undefined;
@@ -97,6 +99,7 @@ export class DefaultChildSessionFactory {
 		packageRoot: string;
 		childExtensionFactory(agentId: string): ExtensionFactory;
 		moderatorExtensionFactory(agentId: string): ExtensionFactory;
+		presentationExtensionFactory(agentId: string): ExtensionFactory;
 		automaticGenerationReconciliation?: AutomaticGenerationReconciliationAdapter;
 		templateRoots?(baselineCwd: string, projectTrusted: boolean): readonly AgentTemplateRoot[];
 	}) {
@@ -106,6 +109,7 @@ export class DefaultChildSessionFactory {
 		this.#packageRoot = options.packageRoot;
 		this.#childExtensionFactory = options.childExtensionFactory;
 		this.#moderatorExtensionFactory = options.moderatorExtensionFactory;
+		this.#presentationExtensionFactory = options.presentationExtensionFactory;
 		this.#automaticGenerationReconciliation =
 			options.automaticGenerationReconciliation;
 		this.#templateRoots = options.templateRoots;
@@ -415,6 +419,50 @@ export class DefaultChildSessionFactory {
 			throw error;
 		}
 		return session;
+	}
+
+	async createPresentationBinding(record: AgentRecord): Promise<HumanPresentationBinding> {
+		const agentId = record.identity.agentId;
+		const services = await createAgentSessionServices({
+			cwd: record.host.sessionManager.getCwd(),
+			agentDir: this.#ownerRuntime.services.agentDir,
+			modelRuntime: this.#ownerRuntime.services.modelRuntime,
+			settingsManager: this.#ownerRuntime.services.settingsManager,
+			resourceLoaderOptions: {
+				noContextFiles: true,
+				noPromptTemplates: true,
+				noSkills: true,
+				noThemes: true,
+				noExtensions: true,
+				extensionFactories: [{
+					name: `pi-agent-coordination-presentation:${agentId}`,
+					hidden: true,
+					factory: this.#presentationExtensionFactory(agentId),
+				}],
+			},
+		});
+		const created = await createAgentSessionFromServices({
+			services,
+			sessionManager: record.host.sessionManager,
+			noTools: "builtin",
+		});
+		const session = created.session;
+		try {
+			await session.bindExtensions(
+				copyExtensionBindings(this.#ownerRuntime.session, session),
+			);
+			session.setActiveToolsByName([]);
+		} catch (error) {
+			session.dispose();
+			throw error;
+		}
+		return {
+			agentId,
+			session,
+			services,
+			diagnostics: services.diagnostics,
+			release: () => session.dispose(),
+		};
 	}
 
 	workflowSessionDirectory(): string {

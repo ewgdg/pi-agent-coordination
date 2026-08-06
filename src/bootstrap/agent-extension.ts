@@ -7,10 +7,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import type {
+	HumanPresentationCoordinatorView,
 	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
 } from "../coordination/workflow-coordinator.ts";
 import {
+	registerAgentsCommand,
 	registerModeratorAgentSurfaces,
 	registerOrdinaryAgentSurfaces,
 } from "../tools/owner-surfaces.ts";
@@ -31,6 +33,26 @@ export function createModeratorBoundExtension(
 		resolveView,
 		registerModeratorAgentSurfaces,
 	);
+}
+
+export function createPresentationBoundExtension(
+	resolveView: () => HumanPresentationCoordinatorView,
+): ExtensionFactory {
+	return (pi) => {
+		registerAgentsCommand(pi, resolveView);
+		pi.on("input", async (event, ctx) => {
+			if (event.source !== "interactive") return { action: "handled" };
+			try {
+				await resolveView().resumeFromHuman(event.text, event.images);
+			} catch (error) {
+				ctx.ui.notify(
+					`Agent input failed: ${error instanceof Error ? error.message : String(error)}`,
+					"error",
+				);
+			}
+			return { action: "handled" };
+		});
+	};
 }
 
 function createParticipantBoundExtension<
@@ -115,7 +137,7 @@ function registerAgentBoundBehavior(
 			return resumed ? { action: "handled" } : { action: "continue" };
 		} catch (error) {
 			ctx.ui.notify(
-				`Run resumption failed: ${error instanceof Error ? error.message : String(error)}`,
+				`Agent input failed: ${error instanceof Error ? error.message : String(error)}`,
 				"error",
 			);
 			return { action: "handled" };

@@ -21,9 +21,11 @@ import {
 } from "./fixtures/session-start-probe-extension.ts";
 import {
 	executeAndCommitRegisteredTool,
+	openAgentsSurface,
 	selectAgent,
 } from "./support/agent-session.ts";
 import {
+	bindTestOwnerHost,
 	createPiCliTestOwnerHost,
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -74,6 +76,444 @@ test("retained native selection refreshes bindings without replaying session sta
 
 	assert.deepEqual(sessionStartReasons(host.session.sessionId), ["startup"]);
 	assert.deepEqual(sessionStartReasons(childAgentId), ["startup"]);
+	await host.runtime.dispose();
+});
+
+test("interactive selection rejects ordinary termination until the Agent is deselected", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage("Remain live while interactive termination is checked."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+
+	await selectAgent(host, childAgentId);
+	const selectedSession = host.runtime.session;
+	const rejected = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"reject-selected-child-termination",
+		{
+			operation: "terminate",
+			agentId: childAgentId,
+		},
+	);
+
+	assert.deepEqual(rejected.details, {
+		agentId: childAgentId,
+		disposition: "rejected",
+		rejectionReason: "interactive_selection",
+	});
+	assert.equal(host.runtime.session, selectedSession);
+	assert.equal(selectedSession.isIdle, true);
+
+	await selectAgent(host, host.session.sessionId);
+	const terminated = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-deselected-child",
+		{
+			operation: "terminate",
+			agentId: childAgentId,
+		},
+	);
+	assert.equal(
+		(terminated.details as { disposition: string }).disposition,
+		"terminated",
+	);
+	await host.runtime.dispose();
+});
+
+test("queued native input commits before a later deselection can take the Agent lane", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage("Remain live until the native-input ordering check."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	await selectAgent(host, childAgentId);
+	const childSession = host.runtime.session;
+
+	let markGenerationStarted!: () => void;
+	const generationStarted = new Promise<void>((resolve) => {
+		markGenerationStarted = resolve;
+	});
+	let releaseGeneration!: () => void;
+	const generationGate = new Promise<void>((resolve) => {
+		releaseGeneration = resolve;
+	});
+	host.model.setResponses([
+		async () => {
+			markGenerationStarted();
+			await generationGate;
+			return fauxAssistantMessage("The interrupted work reached its boundary.");
+		},
+		fauxAssistantMessage("The queued input ran after winning the Agent lane."),
+	]);
+	const activePrompt = childSession.prompt("Keep the selected Agent lane occupied.");
+	await generationStarted;
+
+	const interruption = executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"interrupt-before-stale-native-input",
+		{ operation: "interrupt", agentId: childAgentId },
+	);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const queuedText = "This queued input wins before the later deselection.";
+	const queuedInput = childSession.prompt(queuedText);
+	const deselection = selectAgent(host, host.session.sessionId);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(host.runtime.session, childSession);
+
+	releaseGeneration();
+	await activePrompt;
+	assert.deepEqual((await interruption).details, {
+		agentId: childAgentId,
+		disposition: "held",
+	});
+	await queuedInput;
+	await deselection;
+
+	assert.equal(host.runtime.session, host.session);
+	assert.equal(
+		JSON.stringify(childSession.sessionManager.getEntries()).split(queuedText).length - 1,
+		1,
+	);
+	await host.runtime.dispose();
+});
+
+test("deselection swallows later input from the obsolete Agent session", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage("Remain live until the obsolete-input check."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	await selectAgent(host, childAgentId);
+	const obsoleteSession = host.runtime.session;
+	await selectAgent(host, host.session.sessionId);
+
+	const staleInput = "This input arrived after the Agent lost Interactive Selection.";
+	await obsoleteSession.prompt(staleInput);
+
+	assert.equal(host.runtime.session, host.session);
+	assert.equal(
+		JSON.stringify(obsoleteSession.sessionManager.getEntries()).includes(staleInput),
+		false,
+	);
+	await host.runtime.dispose();
+});
+
+test("termination that takes the Agent lane first leaves later selection Dormant", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	let markGenerationStarted!: () => void;
+	const generationStarted = new Promise<void>((resolve) => {
+		markGenerationStarted = resolve;
+	});
+	let releaseGeneration!: () => void;
+	const generationGate = new Promise<void>((resolve) => {
+		releaseGeneration = resolve;
+	});
+	host.model.setResponses([
+		async () => {
+			markGenerationStarted();
+			await generationGate;
+			return fauxAssistantMessage("The terminated work reached its boundary.");
+		},
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	await generationStarted;
+
+	const termination = executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-native-selection",
+		{ operation: "terminate", agentId: childAgentId },
+	);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const selection = selectAgent(host, childAgentId);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(host.runtime.session, host.session);
+
+	releaseGeneration();
+	assert.equal(
+		((await termination).details as { disposition: string }).disposition,
+		"terminated",
+	);
+	await selection;
+
+	assert.equal(host.runtime.session.sessionId, childAgentId);
+	assert.equal(
+		await observeCurrentRunPhase(
+			host,
+			childAgentId,
+			"observe-termination-first-selection",
+		),
+		"dormant",
+	);
+	await host.runtime.dispose();
+});
+
+test("failed native rebind restores the Dormant presentation and discards the successor", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage("Settle before the failed native rebind check."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-failed-native-rebind",
+		{ operation: "terminate", agentId: childAgentId },
+	);
+	const { command, surface } = await openAgentsSurface(host);
+	surface.handleInput?.("\t");
+	assert.match(surface.render(80).join("\n"), new RegExp(childAgentId));
+	surface.handleInput?.("\r");
+	await command;
+	const dormantPresentation = host.runtime.session;
+	const evidenceBeforeInput = dormantPresentation.sessionManager
+		.getEntries()
+		.map(({ id }) => id);
+	let failNextRebind = true;
+	host.runtime.setRebindSession(async () => {
+		if (!failNextRebind) return;
+		failNextRebind = false;
+		throw new Error("deterministic native rebind failure");
+	});
+
+	await dormantPresentation.prompt("Input whose successor cannot become visible.");
+
+	assert.equal(host.runtime.session, dormantPresentation);
+	assert.equal(
+		await observeCurrentRunPhase(
+			host,
+			childAgentId,
+			"observe-after-failed-native-rebind",
+		),
+		"dormant",
+	);
+	assert.deepEqual(
+		dormantPresentation.sessionManager.getEntries().map(({ id }) => id),
+		evidenceBeforeInput,
+	);
+	assert.match(
+		host.ui.notifications.at(-1)?.message ?? "",
+		/deterministic native rebind failure/,
+	);
+
+	await bindTestOwnerHost(host, "tui");
+	await host.runtime.dispose();
+});
+
+test("Dormant focus is passive and Enter binds the Agent transcript without starting a Run", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage("Settle before becoming Dormant for native selection."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-dormant-selection",
+		{
+			operation: "terminate",
+			agentId: childAgentId,
+		},
+	);
+	const observed = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_observe",
+		"locate-dormant-selection-transcript",
+		{ operation: "status", agentId: childAgentId },
+	);
+	const transcriptPath = (observed.details as {
+		primaryEvidence: { transcriptPath: string | null };
+	}).primaryEvidence.transcriptPath;
+	assert.ok(transcriptPath);
+	const childManager = hostPi.SessionManager.open(transcriptPath);
+	const evidenceBeforeSelection = childManager.getEntries().map(({ id }) => id);
+
+	const { command, surface } = await openAgentsSurface(host);
+	surface.handleInput?.("\t");
+	assert.equal(host.runtime.session.sessionId, host.session.sessionId);
+	assert.equal(
+		host.session.sessionManager.getEntries().map(({ id }) => id).length > 0,
+		true,
+	);
+	surface.handleInput?.("\r");
+	await command;
+
+	assert.equal(host.runtime.session.sessionId, childAgentId);
+	const dormantPresentation = host.runtime.session;
+	const reselection = await openAgentsSurface(host);
+	reselection.surface.handleInput?.("\t");
+	assert.match(reselection.surface.render(80).join("\n"), new RegExp(childAgentId));
+	reselection.surface.handleInput?.("\r");
+	await reselection.command;
+	assert.equal(host.runtime.session, dormantPresentation);
+	assert.ok(host.runtime.session.extensionRunner.getCommand("agents"));
+	for (const toolName of [
+		"agent_message",
+		"agent_control",
+		"agent_observe",
+		"agent_spawn",
+		"ask_user_question",
+	]) {
+		assert.equal(host.runtime.session.getToolDefinition(toolName), undefined);
+	}
+	host.model.setResponses([
+		fauxAssistantMessage("A Dormant presentation must never invoke this response."),
+	]);
+	await host.runtime.session.prompt("Non-interactive presentation input.", {
+		source: "rpc",
+	});
+	assert.deepEqual(
+		host.runtime.session.sessionManager.getEntries().map(({ id }) => id),
+		evidenceBeforeSelection,
+	);
+	assert.equal(
+		await observeCurrentRunPhase(
+			host,
+			childAgentId,
+			"observe-dormant-native-selection",
+		),
+		"dormant",
+	);
+	assert.deepEqual(
+		host.runtime.session.sessionManager.getEntries().map(({ id }) => id),
+		evidenceBeforeSelection,
+	);
+	await host.runtime.dispose();
+});
+
+test("an ordinary Message starts and selects the successor of a selected Dormant Agent", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage("Settle before the Message-started successor check."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-message-started-successor",
+		{ operation: "terminate", agentId: childAgentId },
+	);
+
+	const { command, surface } = await openAgentsSurface(host);
+	surface.handleInput?.("\t");
+	assert.match(surface.render(80).join("\n"), new RegExp(childAgentId));
+	surface.handleInput?.("\r");
+	await command;
+	const dormantPresentation = host.runtime.session;
+
+	host.model.setResponses([
+		fauxAssistantMessage("The selected Agent received its Message in one successor."),
+	]);
+	const sent = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_message",
+		"message-starts-selected-successor",
+		{
+			operation: "send",
+			targetAgentId: childAgentId,
+			content: "Start the selected Agent through an ordinary Message.",
+		},
+	);
+
+	assert.equal((sent.details as { delivery: string }).delivery, "pending");
+	assert.notEqual(host.runtime.session, dormantPresentation);
+	assert.equal(host.runtime.session.sessionId, childAgentId);
+	await host.runtime.session.waitForIdle();
+	assert.match(
+		JSON.stringify(host.runtime.session.sessionManager.getEntries()),
+		/Start the selected Agent through an ordinary Message\./,
+	);
+	await host.runtime.dispose();
+});
+
+test("same-Agent selection repairs a degraded Dormant binding after selected Run failure", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		settings: { retry: { enabled: false } },
+	});
+	let markGenerationStarted!: () => void;
+	const generationStarted = new Promise<void>((resolve) => {
+		markGenerationStarted = resolve;
+	});
+	let releaseFailure!: () => void;
+	const failureGate = new Promise<void>((resolve) => {
+		releaseFailure = resolve;
+	});
+	host.model.setResponses([
+		async () => {
+			markGenerationStarted();
+			await failureGate;
+			return fauxAssistantMessage("The selected exact Run fails terminally.", {
+				stopReason: "error",
+				errorMessage: "deterministic selected Run failure",
+			});
+		},
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	await generationStarted;
+	await selectAgent(host, childAgentId);
+	const failedSession = host.runtime.session;
+	let rebindBlocked = true;
+	let rebindAttempts = 0;
+	host.runtime.setRebindSession(async () => {
+		rebindAttempts += 1;
+		if (rebindBlocked) {
+			throw new Error("deterministic failure-transition rebind failure");
+		}
+	});
+
+	releaseFailure();
+	await failedSession.waitForIdle();
+	await waitForCondition(() => host.runtime.session !== failedSession);
+
+	assert.equal(host.runtime.session.sessionId, childAgentId);
+	assert.equal(
+		await observeCurrentRunPhase(
+			host,
+			childAgentId,
+			"observe-selected-agent-after-run-failure",
+		),
+		"dormant",
+	);
+	assert.match(
+		host.runtime.diagnostics.at(-1)?.message ?? "",
+		/Interactive Selection detached from an ending Run.*failure-transition rebind failure/,
+	);
+	const failedRepair = await openAgentsSurface(host);
+	failedRepair.surface.handleInput?.("\t");
+	assert.match(failedRepair.surface.render(80).join("\n"), new RegExp(childAgentId));
+	failedRepair.surface.handleInput?.("\r");
+	await failedRepair.command;
+	const attemptsBeforeRepair = rebindAttempts;
+	rebindBlocked = false;
+	const reselection = await openAgentsSurface(host);
+	reselection.surface.handleInput?.("\t");
+	assert.match(reselection.surface.render(80).join("\n"), new RegExp(childAgentId));
+	reselection.surface.handleInput?.("\r");
+	await reselection.command;
+	assert.equal(rebindAttempts, attemptsBeforeRepair + 1);
+	assert.notEqual(host.runtime.session, failedSession);
+	const repairedSurface = await openAgentsSurface(host);
+	repairedSurface.surface.handleInput?.("\x1b");
+	await repairedSurface.command;
+	const repairedPresentation = host.runtime.session;
+	const repairedInput = "Native input after same-Agent binding repair.";
+	host.model.setResponses([
+		fauxAssistantMessage("The repaired presentation started one successor."),
+	]);
+	await repairedPresentation.prompt(repairedInput);
+
+	assert.notEqual(host.runtime.session, repairedPresentation);
+	assert.equal(
+		JSON.stringify(host.runtime.session.sessionManager.getEntries()).split(repairedInput)
+			.length - 1,
+		1,
+	);
+	await bindTestOwnerHost(host, "tui");
 	await host.runtime.dispose();
 });
 
@@ -199,6 +639,24 @@ async function spawnRetainedChild(
 	);
 	assert.equal((result.details as { disposition: string }).disposition, "pending");
 	return (result.details as { agentId: string }).agentId;
+}
+
+async function observeCurrentRunPhase(
+	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
+	agentId: string,
+	toolCallId: string,
+): Promise<string> {
+	const session = host.session;
+	const observe = session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const status = await observe.execute(
+		toolCallId,
+		{ operation: "status", agentId },
+		undefined,
+		undefined,
+		session.extensionRunner.createContext(),
+	);
+	return (status.details as { run: { phase: string } }).run.phase;
 }
 
 async function refreshLlamaCatalogThroughCommand(

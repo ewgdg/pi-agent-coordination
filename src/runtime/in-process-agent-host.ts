@@ -66,6 +66,15 @@ export type ResidualRequestRelationships = Readonly<{
 	answerOwedRequestIds: readonly string[];
 }>;
 type RunStartInitializer = () => ResidualRequestRelationships;
+type RunStartedHandler = (
+	session: AgentSession,
+	handle: AgentRunHandle,
+) => void | Promise<void>;
+type RunEndingHandler = (
+	session: AgentSession,
+	handle: AgentRunHandle,
+	cause: Exclude<AgentRunEndCause, "clean">,
+) => void | Promise<void>;
 
 export class InProcessAgentHost {
 	readonly lane = new SerialLane();
@@ -88,6 +97,8 @@ export class InProcessAgentHost {
 	readonly #stateChangeHandlers = new Set<StateChangeHandler>();
 	#runFenceHandler: RunFenceHandler | undefined;
 	#runStartInitializer: RunStartInitializer | undefined;
+	#runStartedHandler: RunStartedHandler | undefined;
+	#runEndingHandler: RunEndingHandler | undefined;
 	#inputRequired: { handle: AgentRunHandle; requestId: string } | undefined;
 	#interruptionHold: InterruptionHoldHandle | undefined;
 	#isolatedResumption:
@@ -173,6 +184,14 @@ export class InProcessAgentHost {
 
 	setRunStartInitializer(initializer: RunStartInitializer): void {
 		this.#runStartInitializer = initializer;
+	}
+
+	setRunStartedHandler(handler: RunStartedHandler): void {
+		this.#runStartedHandler = handler;
+	}
+
+	setRunEndingHandler(handler: RunEndingHandler): void {
+		this.#runEndingHandler = handler;
 	}
 
 	initializeBoundRunRelationships(): void {
@@ -344,9 +363,14 @@ export class InProcessAgentHost {
 			this.#initializeRequestRelationships();
 			const session = await this.#startSession();
 			this.#bindRun(session);
+			await this.#runStartedHandler?.(session, this.#run!.handle);
 			return session;
 		} catch (error) {
+			const cleanupErrors = [error, ...this.#discardFailedStart()];
 			this.#clearRunScopedState();
+			if (cleanupErrors.length > 1) {
+				throw new AggregateError(cleanupErrors, "Agent Run startup cleanup failed");
+			}
 			throw error;
 		} finally {
 			this.#starting = false;
@@ -486,6 +510,9 @@ export class InProcessAgentHost {
 		this.#notifyStateChanged();
 		this.#runFenceHandler?.(run.handle);
 		try {
+			await attemptCleanup(() =>
+				this.#runEndingHandler?.(run.session, run.handle, cause)
+			);
 			await attemptCleanup(() => run.unsubscribe());
 			await attemptCleanup(() => run.session.clearQueue());
 			if (disposeRun) {
@@ -518,6 +545,24 @@ export class InProcessAgentHost {
 		this.#isolatedResumption = undefined;
 		this.#interrupting = false;
 		this.#heldNativeQueue = undefined;
+	}
+
+	#discardFailedStart(): unknown[] {
+		const failedStart = this.#run;
+		if (!failedStart) return [];
+		const cleanupErrors: unknown[] = [];
+		try {
+			failedStart.unsubscribe();
+		} catch (error) {
+			cleanupErrors.push(error);
+		}
+		try {
+			failedStart.session.dispose();
+		} catch (error) {
+			cleanupErrors.push(error);
+		}
+		this.#run = undefined;
+		return cleanupErrors;
 	}
 
 	#markRunFailed(run: BoundRun, handle: AgentRunHandle): void {

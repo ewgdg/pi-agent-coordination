@@ -13,13 +13,22 @@ import piAgentCoordination from "../../src/index.ts";
 import { deriveMessageIdentity } from "../../src/protocol/identities.ts";
 import { createUnboundTestOwnerHost } from "../support/pi-host.ts";
 
+// Each routed phase has bounded, fail-fast headroom for foreground and Moderator requests.
+const ROUTED_MODEL_REQUEST_CAPACITY = 16;
+
 const host = await createUnboundTestOwnerHost(piAgentCoordination, {
 	persistent: true,
 	implicitModeratorResponses: false,
+	settings: { retry: { enabled: false } },
 });
 const ownerId = host.session.sessionId;
 const mode = new InteractiveMode(host.runtime, { verbose: false });
 await mode.init();
+void mode.run().catch((error: unknown) => {
+	process.nextTick(() => {
+		throw error;
+	});
+});
 
 let releaseLiveGeneration!: () => void;
 const liveGenerationGate = new Promise<void>((resolve) => {
@@ -37,6 +46,15 @@ let markDormantGenerationStarted!: () => void;
 const dormantGenerationStarted = new Promise<void>((resolve) => {
 	markDormantGenerationStarted = resolve;
 });
+let releaseSelectedRunFailure!: () => void;
+const selectedRunFailureGate = new Promise<void>((resolve) => {
+	releaseSelectedRunFailure = resolve;
+});
+let markSelectedRunFailureStarted!: () => void;
+const selectedRunFailureStarted = new Promise<void>((resolve) => {
+	markSelectedRunFailureStarted = resolve;
+});
+let selectedRunFailureRequests = 0;
 
 const liveSpawn = appendToolSource(host.session, "agent_spawn", "pty-spawn-live", {
 	request: "Stay active until selected, then answer this Creation Request.",
@@ -47,8 +65,48 @@ const liveRequestId = deriveMessageIdentity({
 	entryId: liveSpawn.entryId,
 	toolCallId: liveSpawn.toolCallId,
 });
-host.model.setResponses([
-	async () => {
+const routeInitialWorkflow = async (context: Context) => {
+	const messages = JSON.stringify(context.messages);
+	const userMessages = JSON.stringify(
+		context.messages.filter(({ role }) => role === "user"),
+	);
+	if (context.tools?.some(({ name }) => name === "moderator_control")) {
+		return fauxAssistantMessage("I will inspect the dormant obligation separately.");
+	}
+	if (userMessages.includes("native input after selected Run failure")) {
+		return fauxAssistantMessage("Post-failure native editor input started one successor.");
+	}
+	if (userMessages.includes("selected dormant native input")) {
+		selectedRunFailureRequests += 1;
+		markSelectedRunFailureStarted();
+		await selectedRunFailureGate;
+		return fauxAssistantMessage("The selected exact Run fails terminally.", {
+			stopReason: "error",
+			errorMessage: "deterministic selected PTY Run failure",
+		});
+	}
+	if (userMessages.includes("Start, then become Dormant through explicit termination.")) {
+		markDormantGenerationStarted();
+		await dormantGenerationGate;
+		return fauxAssistantMessage("A terminated child must not commit this response.");
+	}
+	if (userMessages.includes("selected native input")) {
+		if (messages.includes("Human request interrupted before an answer was provided.")) {
+			return fauxAssistantMessage("The child remains held after Human Escape.");
+		}
+		return fauxAssistantMessage(
+			fauxToolCall("ask_user_question", {
+				questions: [{
+					kind: "text",
+					header: "Escape checkpoint",
+					prompt: "Press Escape to establish a Hold.",
+					multiline: false,
+				}],
+			}, { id: "pty-human-escape" }),
+			{ stopReason: "toolUse" },
+		);
+	}
+	if (userMessages.includes("Stay active until selected, then answer this Creation Request.")) {
 		markLiveGenerationStarted();
 		await liveGenerationGate;
 		return fauxAssistantMessage(
@@ -59,26 +117,17 @@ host.model.setResponses([
 			}, { id: "pty-answer-creation" }),
 			{ stopReason: "toolUse" },
 		);
-	},
-	async () => {
-		markDormantGenerationStarted();
-		await dormantGenerationGate;
-		return fauxAssistantMessage("A terminated child must not commit this response.");
-	},
-	fauxAssistantMessage("The Owner received the child Creation Answer."),
-	fauxAssistantMessage(
-		fauxToolCall("ask_user_question", {
-			questions: [{
-				kind: "text",
-				header: "Escape checkpoint",
-				prompt: "Press Escape to establish a Hold.",
-				multiline: false,
-			}],
-		}, { id: "pty-human-escape" }),
-		{ stopReason: "toolUse" },
-	),
-	fauxAssistantMessage("The child remains held after Human Escape."),
-]);
+	}
+	if (messages.includes("The selected PTY child completed its Creation Request.")) {
+		return fauxAssistantMessage("The Owner received the child Creation Answer.");
+	}
+	throw new Error(`Unexpected initial PTY model context: ${messages}`);
+};
+// One shared faux provider serves concurrent sessions, so route by transcript instead of request order.
+host.model.setResponses(Array.from(
+	{ length: ROUTED_MODEL_REQUEST_CAPACITY },
+	() => routeInitialWorkflow,
+));
 const liveReceipt = await executeCommittedTool(host.session, liveSpawn);
 const liveAgentId = detailString(liveReceipt.details, "agentId");
 await liveGenerationStarted;
@@ -99,10 +148,68 @@ await terminateDormant;
 
 process.stdout.write(`\n__PTY_SETUP__${JSON.stringify({ ownerId, liveAgentId, dormantAgentId })}\n`);
 await openAgents(host.session);
+await waitFor(() => host.runtime.session.sessionId === dormantAgentId);
+const dormantPresentation = host.runtime.session;
+process.stdout.write("\n__PTY_SELECTED_DORMANT__\n");
+await waitFor(() => host.runtime.session !== dormantPresentation);
+await waitFor(() => dormantPresentation.sessionManager.getEntries().some(
+	(entry) =>
+		entry.type === "message" &&
+		entry.message.role === "user" &&
+		messageContainsText(entry.message.content, "selected dormant native input"),
+));
+const failedSelectedRun = host.runtime.session;
+await selectedRunFailureStarted;
+releaseSelectedRunFailure();
+await failedSelectedRun.waitForIdle();
+await waitFor(() => host.runtime.session !== failedSelectedRun);
+const failedRunPresentation = host.runtime.session;
+if (selectedRunFailureRequests !== 1) {
+	throw new Error(`Selected Run failure executed ${selectedRunFailureRequests} model requests`);
+}
+process.stdout.write("\n__PTY_SELECTED_RUN_FAILED__\n");
+
+await waitFor(() => host.runtime.session !== failedRunPresentation);
+const dormantSuccessor = host.runtime.session;
+await waitFor(() => dormantSuccessor.sessionManager.getEntries().some(
+	(entry) =>
+		entry.type === "message" &&
+		entry.message.role === "user" &&
+		messageContainsText(
+			entry.message.content,
+			"native input after selected Run failure",
+		),
+));
+await dormantSuccessor.waitForIdle();
+const matchingDormantInputs = dormantSuccessor.sessionManager.getEntries().filter(
+	(entry) =>
+		entry.type === "message" &&
+		entry.message.role === "user" &&
+		messageContainsText(entry.message.content, "selected dormant native input"),
+);
+if (matchingDormantInputs.length !== 1) {
+	throw new Error(`Dormant native input committed ${matchingDormantInputs.length} times`);
+}
+const matchingPostFailureInputs = dormantSuccessor.sessionManager.getEntries().filter(
+	(entry) =>
+		entry.type === "message" &&
+		entry.message.role === "user" &&
+		messageContainsText(
+			entry.message.content,
+			"native input after selected Run failure",
+		),
+);
+if (matchingPostFailureInputs.length !== 1) {
+	throw new Error(
+		`Post-failure native input committed ${matchingPostFailureInputs.length} times`,
+	);
+}
+process.stdout.write("\n__PTY_DORMANT_INPUT_COMMITTED__\n");
+
+await openAgents(dormantSuccessor);
 await waitFor(() => host.runtime.session.sessionId === liveAgentId);
 const liveSession = host.runtime.session;
 process.stdout.write("\n__PTY_SELECTED_LIVE__\n");
-await liveSession.prompt("selected native input", { streamingBehavior: "steer" });
 await waitFor(() =>
 	liveSession.getSteeringMessages().some((message) =>
 		JSON.stringify(message).includes("selected native input")
@@ -162,7 +269,10 @@ const routeAttentionFailure = (context: Context) =>
 			errorMessage: "deterministic PTY Moderator failure",
 		})
 		: fauxAssistantMessage("The Attention child settled with an unresolved obligation.");
-host.model.setResponses(Array.from({ length: 16 }, () => routeAttentionFailure));
+host.model.setResponses(Array.from(
+	{ length: ROUTED_MODEL_REQUEST_CAPACITY },
+	() => routeAttentionFailure,
+));
 await executeTool(host.session, "agent_spawn", "pty-spawn-attention", {
 	request: "Settle without answering so bounded Moderator failure reaches Owner Attention.",
 	label: "Worker Attention",
@@ -259,6 +369,15 @@ function detailString(details: unknown, key: string): string {
 		typeof (details as Record<string, unknown>)[key] !== "string"
 	) throw new Error(`PTY receipt is missing ${key}`);
 	return (details as Record<string, string>)[key]!;
+}
+
+function messageContainsText(
+	content: string | readonly { type: string; text?: string }[],
+	expected: string,
+): boolean {
+	return typeof content === "string"
+		? content === expected
+		: content.some((part) => part.type === "text" && part.text === expected);
 }
 
 async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {

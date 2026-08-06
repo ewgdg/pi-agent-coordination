@@ -1679,8 +1679,16 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 		humanRequestPresentation: new HumanRequestSurface(host.ui),
 		humanSessionSelection: {
 			selectedAgentId: () => selectedAgentId,
+			isBoundTo: (agentId) => selectedAgentId === agentId,
 			async activate({ agentId }) {
 				selectedAgentId = agentId;
+			},
+			async replaceIfSelected(agentId, binding) {
+				if (selectedAgentId !== agentId) {
+					await binding.release?.();
+					return false;
+				}
+				return true;
 			},
 		},
 		spawnBoundaryHooks: {

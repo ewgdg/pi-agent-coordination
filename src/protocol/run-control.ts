@@ -38,14 +38,19 @@ export type RunResumeReceipt = Readonly<{
 	}>
 );
 
-export type RunTerminationReceipt = Readonly<{
-	agentId: string;
-	disposition: "terminated" | "not_running";
-	residualRequests: Readonly<{
-		incoming: number;
-		outgoing: number;
-	}>;
-}>;
+export type RunTerminationReceipt = Readonly<{ agentId: string }> & (
+	| Readonly<{
+		disposition: "terminated" | "not_running";
+		residualRequests: Readonly<{
+			incoming: number;
+			outgoing: number;
+		}>;
+	}>
+	| Readonly<{
+		disposition: "rejected";
+		rejectionReason: "interactive_selection";
+	}>
+);
 
 export type RunControlReceipt =
 	| RunInterruptionReceipt

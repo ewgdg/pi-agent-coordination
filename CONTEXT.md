@@ -94,7 +94,7 @@ A transient, live-observed reason the host must retain an exact Agent Run rather
 _Avoid_: Completion blocker, Request blocker
 
 **Interactive Selection**:
-The transient presentation choice of which Agent receives native editor input. It retains that Agent's current Run without starting a dormant Agent.
+The transient human presentation choice of which durable Agent owns Pi's native transcript and editor. Its current binding is replaceable: a live Run session receives `interactive_selection` retention, while a presentation-only Dormant binding can render the Agent transcript and route input without becoming a Run or coordination writer. Explicit selection never starts work. The first Dormant editor Message or an ordinary Message starts one successor through the Agent lane and replaces the binding before execution; exact Run failure replaces the failed binding without starting or replaying work.
 
 **Interruption Hold**:
 The transient exact-Run pause established by confirmed authorized-supervisor interruption or Human Escape. It retains the Run, Requests, obligations, and pending scheduling while blocking ordinary Message Delivery commits and stuck-condition moderation. Only a native human editor Message commit or a standalone Supervisory Resume Message Delivery commit bound to that exact Hold atomically replaces it with an isolated resumption turn; explicit Run Termination instead ends the held Run and discards its undelivered backlog.
@@ -106,11 +106,11 @@ An authorized supervisor's free-form Message requesting that one exact held Agen
 The live decision that permits automatic disposal of a child Agent Run only when no Run Retention Reason remains.
 
 **Run Termination**:
-An authorized controlled end of one exact current Agent Run that deliberately bypasses its Run Retention Reasons. It settles an exact pending Human Request through interruption but does not cancel Agent Requests, affect descendants, or create Agent lifecycle state. A later Message may start a successor Run for the same Agent.
+An authorized controlled end of one exact current Agent Run that deliberately bypasses its Run Retention Reasons. Ordinary termination is rejected while the Agent owns Interactive Selection; completed deselection permits termination. It settles an exact pending Human Request through interruption but does not cancel Agent Requests, affect descendants, or create Agent lifecycle state. A later Message may start a successor Run for the same Agent.
 _Avoid_: Agent termination
 
 **Run Failure**:
-The unexpected terminal end of one exact Agent Run after any applicable Automatic Reconciliation could not preserve that Run. It starts Moderator handling only while the failed Agent retains an unresolved Answer Obligation and clears when a successor Run starts or every such obligation ends through Agent Answer commit or Request Cancellation Delivery. It does not mark the durable Agent or Workflow failed, reconstruct work, or start a successor Run automatically.
+The unexpected terminal end of one exact Agent Run after any applicable Automatic Reconciliation could not preserve that Run. It starts Moderator handling only while the failed Agent retains an unresolved Answer Obligation and clears when a successor Run starts or every such obligation ends through Agent Answer commit or Request Cancellation Delivery. It does not mark the durable Agent or Workflow failed, reconstruct work, or start a successor Run automatically. Interactive Selection remains on the durable Agent through a Dormant presentation binding until later human input or ordinary Message starts a successor.
 
 **Dependency Deadlock**:
 A live closed component of current Agent Runs in which every Run is settled, retained solely by unresolved Request relationships within the component, and has no admitted input or other progress source. It is a transient observation that clears when its predicate changes, grants no additional authority, and is not reconstructed after host loss.
