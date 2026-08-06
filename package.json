@@ -10,25 +10,23 @@
     "pi-package"
   ],
   "files": [
-    "dist",
+    "src",
     "docs",
     "agents",
     "README.md"
   ],
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
     }
   },
   "pi": {
     "extensions": [
-      "./dist/index.js"
+      "./src/index.ts"
     ]
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "prepare": "npm run build",
     "test": "node --test --test-reporter=dot tests/*.test.ts",
     "test:conformance": "node --test --test-reporter=spec tests/host-shape.test.ts tests/host-module-world.test.ts tests/pi-host-behavior-conformance.test.ts tests/interactive-host-conformance.test.ts tests/extension-conformance.test.ts tests/human-request.test.ts tests/owner-workflow.test.ts tests/coordinated-workflow-pty.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
