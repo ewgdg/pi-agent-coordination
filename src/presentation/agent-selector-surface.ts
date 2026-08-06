@@ -179,10 +179,9 @@ class AgentSelectorSurface implements Component {
 			contentLines,
 			Math.max(0, this.#maximumOverlayRows() - FRAME_ROWS),
 		);
-		const blockWidth = Math.min(
-			contentWidth,
-			Math.max(1, ...visibleContentLines.map((line) => visibleWidth(line))),
-		);
+		// Fixed inner padding keeps roster content and focus changes from shifting
+		// every row horizontally.
+		const blockWidth = contentWidth;
 		const leftMargin = Math.floor((innerWidth - blockWidth) / 2);
 		const rightMargin = innerWidth - blockWidth - leftMargin;
 		return [

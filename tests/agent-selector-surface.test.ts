@@ -74,15 +74,6 @@ test("a long Live roster stays bounded and scrolls from the selected Agent", asy
 	assert.match(rendered.find((line) => line.includes("Agent 10")) ?? "", /→ Agent 10/);
 	assert.match(rendered[0] ?? "", /^┌─+┐$/);
 	assert.match(rendered.at(-1) ?? "", /^└─+┘$/);
-	const bodyLines = rendered.slice(1, -1).map((line) => line.slice(1, -1));
-	const leftMargin = Math.min(
-		...bodyLines.map((line) => line.search(/\S/)).filter((margin) => margin >= 0),
-	);
-	const rightmostContent = Math.max(
-		...bodyLines.map((line) => line.search(/\s*$/) - 1),
-	);
-	const rightMargin = (bodyLines[0]?.length ?? 0) - rightmostContent - 1;
-	assert.ok(Math.abs(leftMargin - rightMargin) <= 1);
 
 	component.handleInput?.("j");
 	assert.match(
@@ -289,6 +280,57 @@ test("focused Agent details use a stable four-row budget", async () => {
 		researcherRendered,
 		/research-provider\/research-model · thinking medium · 1 queued/,
 	);
+	harness.component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("the selector uses fixed one-cell horizontal padding", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [],
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+
+	const tabs = harness.component.render(80).find((line) => line.includes("Live"));
+	assert.ok(tabs);
+	assert.equal(tabs.slice(1).search(/\S/u), 1);
+	harness.component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("long focused descriptions do not change horizontal padding", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [
+			{
+				...dormantAgentStatus("short", "Short", "owner"),
+				description: "Short description",
+			},
+			{
+				...dormantAgentStatus("long", "Long", "owner"),
+				description:
+					"A particularly long description that previously changed the padding of every row",
+			},
+		],
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+	harness.component.handleInput?.("\t");
+
+	const shortDescriptionLines = harness.component.render(80);
+	const shortTabs = shortDescriptionLines.find((line) => line.includes("Live"));
+	assert.ok(shortTabs);
+	harness.component.handleInput?.("j");
+	const longDescriptionLines = harness.component.render(80);
+	const longTabs = longDescriptionLines.find((line) => line.includes("Live"));
+	assert.ok(longTabs);
+
+	assert.equal(longTabs.indexOf("Live"), shortTabs.indexOf("Live"));
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
