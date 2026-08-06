@@ -28,6 +28,10 @@ The child receives a fresh durable Pi session. Its immutable baseline captures t
 
 Each Run resolves the stored baseline, the current complete selected Template, immutable spawn overrides, and fixed ordinary-Agent requirements in that order. Later parent changes do not cascade. Template content is not copied into Agent Identity, so a changed Template affects the next Run; a missing, malformed, or ambiguous selected Template prevents that Run from starting without stale fallback.
 
+File-backed extensions remain durable file references. A named inline extension remains a canonical `<inline:name>` reference and resolves against the current host registry whenever a Run starts. Pi invokes the resolved factory with that Run's fresh extension API, so loaded tools, handlers, commands, providers, and factory-local state are never copied between Runs. `extensions: "none"` excludes both file-backed and named inline inheritance; callers must also deselect tools supplied only by those extensions.
+
+Only named inline factories are durably inheritable. A missing or duplicate name, or an anonymous positional inline reference, prevents initial child Identity commitment. If the same resource is unavailable when an existing or cold-recovered Agent is asked to start a successor Run, the Agent remains durable and Dormant while that startup request reports the target as unavailable.
+
 ## Agent Templates
 
 Templates are discovered recursively from these roots, lowest to highest precedence:

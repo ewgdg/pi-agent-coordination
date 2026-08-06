@@ -4,11 +4,16 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+	SessionManager,
+	type InlineExtension,
+} from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 import piAgentCoordination from "../src/index.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
+import { executeRegisteredTool } from "./support/agent-session.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -160,6 +165,92 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		[spawned.agentId],
 	);
 	await reopenedAgain.runtime.dispose();
+});
+
+test("a cold-recovered Agent stays durable and dormant when its named inline factory is unavailable", async () => {
+	const requiredInline: InlineExtension = {
+		name: "cold-required-inline",
+		factory(pi) {
+			pi.registerTool({
+				name: "cold_inline_probe",
+				label: "Cold inline probe",
+				description: "Requires the named inline factory for every Run.",
+				parameters: Type.Object({}, { additionalProperties: false }),
+				async execute() {
+					return {
+						content: [{ type: "text", text: "cold inline available" }],
+						details: { available: true },
+					};
+				},
+			});
+		},
+	};
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [requiredInline],
+	});
+	await bindTestOwnerHost(host, "tui");
+	host.model.setResponses([
+		fauxAssistantMessage("The child committed durable work before host loss."),
+	]);
+	const spawned = await executeTool(
+		host,
+		"agent_spawn",
+		"spawn-before-inline-factory-loss",
+		{ request: "Persist this Agent before its required factory disappears." },
+	) as { disposition: string; agentId: string };
+	assert.equal(spawned.disposition, "pending");
+	const childSessionFile = await waitForSessionFile(
+		workflowSessionDirectory(host),
+		spawned.agentId,
+	);
+	const ownerSessionFile = host.session.sessionManager.getSessionFile();
+	assert.ok(ownerSessionFile);
+	await host.runtime.dispose();
+
+	const reopened = await reopenOwner(host, ownerSessionFile);
+	const observe = reopened.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const observeStatus = async (toolCallId: string) => {
+		const result = await observe.execute(
+			toolCallId,
+			{ operation: "status", agentId: spawned.agentId },
+			undefined,
+			undefined,
+			reopened.session.extensionRunner.createContext(),
+		);
+		return result.details as { run: { phase: string } };
+	};
+	assert.equal((await observeStatus("observe-cold-inline-before-start")).run.phase, "dormant");
+	const identityCountBefore = SessionManager.open(childSessionFile).getEntries().filter(
+		(entry) =>
+			entry.type === "custom" &&
+			entry.customType === "agent-coordination.identity",
+	).length;
+	const unavailable = await executeTool(
+		reopened,
+		"agent_message",
+		"start-cold-agent-without-inline-factory",
+		{
+			operation: "send",
+			targetAgentId: spawned.agentId,
+			content: "Attempt successor startup without the required named factory.",
+		},
+	) as { delivery: string; rejectionReason: string };
+	assert.deepEqual(
+		{ delivery: unavailable.delivery, rejectionReason: unavailable.rejectionReason },
+		{ delivery: "rejected", rejectionReason: "target_unavailable" },
+	);
+	assert.equal((await observeStatus("observe-cold-inline-after-start")).run.phase, "dormant");
+	assert.equal(
+		SessionManager.open(childSessionFile).getEntries().filter(
+			(entry) =>
+				entry.type === "custom" &&
+				entry.customType === "agent-coordination.identity",
+		).length,
+		identityCountBefore,
+	);
+	await reopened.runtime.dispose();
 });
 
 test("duplicate spawn claims quarantine only their dependent authority subtree", async () => {
@@ -989,20 +1080,11 @@ async function executeTool(
 	toolCallId: string,
 	input: Record<string, unknown>,
 ): Promise<unknown> {
-	host.runtime.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall(toolName, input, { id: toolCallId }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const tool = host.runtime.session.getToolDefinition(toolName);
-	assert.ok(tool);
-	const result = await tool.execute(
+	const result = await executeRegisteredTool(
+		host.runtime.session,
+		toolName,
 		toolCallId,
 		input,
-		undefined,
-		undefined,
-		host.runtime.session.extensionRunner.createContext(),
 	);
 	return result.details;
 }

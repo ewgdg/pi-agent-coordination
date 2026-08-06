@@ -267,6 +267,10 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			`AgentSessionRuntime.services.settingsManager.${member}`,
 		] as const),
 		[["services", "resourceLoader"], "AgentSessionRuntime.services.resourceLoader"],
+		[
+			["services", "resourceLoader", "extensionFactories"],
+			"AgentSessionRuntime.services.resourceLoader.extensionFactories",
+		],
 		...["getExtensions", "getSkills", "reload"].map((member) => [
 			["services", "resourceLoader", member],
 			`AgentSessionRuntime.services.resourceLoader.${member}`,
@@ -318,6 +322,67 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 		);
 	}
 	await host.runtime.dispose();
+});
+
+test("live preflight validates Pi's private inline extension factory registry", async () => {
+	const host = await createUnboundTestOwnerHost(() => undefined);
+	host.runtime.setRebindSession(async () => undefined);
+	host.runtime.setBeforeSessionInvalidate(() => undefined);
+	const loader = host.services.resourceLoader as unknown as {
+		extensionFactories: unknown;
+	};
+	const original = loader.extensionFactories;
+	const sparse = new Array(1);
+	const malformed = [
+		{
+			value: {},
+			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories",
+		},
+		{
+			value: sparse,
+			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0]",
+		},
+		{
+			value: [null],
+			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0]",
+		},
+		{
+			value: [{ name: "", factory() {} }],
+			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0].name",
+		},
+		{
+			value: [{ name: "named", factory: undefined }],
+			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0].factory",
+		},
+		{
+			value: [{ name: "named", factory() {}, hidden: "yes" }],
+			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0].hidden",
+		},
+	] as const;
+	try {
+		for (const sample of malformed) {
+			loader.extensionFactories = sample.value;
+			assert.throws(
+				() => assertRuntimeInstanceShape(host.runtime),
+				(error: unknown) =>
+					error instanceof IncompatiblePiHostError &&
+					error.memberName === sample.expected,
+				sample.expected,
+			);
+		}
+		for (const accepted of [
+			[() => undefined],
+			[{ name: "named", factory() {} }],
+			[{ name: "hidden", factory() {}, hidden: true }],
+			[{ name: "visible", factory() {}, hidden: false }],
+		]) {
+			loader.extensionFactories = accepted;
+			assert.doesNotThrow(() => assertRuntimeInstanceShape(host.runtime));
+		}
+	} finally {
+		loader.extensionFactories = original;
+		await host.runtime.dispose();
+	}
 });
 
 test("live preflight rejects every required InteractiveMode seam", async () => {
@@ -505,6 +570,35 @@ test("runtime capture rejects a malformed live AgentSession before bootstrap", a
 		configurable: true,
 		value: originalSendCustomMessage,
 	});
+	await host.runtime.dispose();
+});
+
+test("runtime capture rejects a malformed inline factory registry before Owner bootstrap", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	const loader = host.services.resourceLoader as unknown as {
+		extensionFactories: unknown;
+	};
+	const original = loader.extensionFactories;
+	loader.extensionFactories = [{ name: "broken", factory: undefined }];
+	host.runtime.setBeforeSessionInvalidate(() => undefined);
+
+	await assert.rejects(
+		() => bindTestOwnerHost(host, "tui"),
+		(error: unknown) =>
+			error instanceof IncompatiblePiHostError &&
+			error.memberName ===
+				"AgentSessionRuntime.services.resourceLoader.extensionFactories[0].factory",
+	);
+	assert.equal(
+		host.session.sessionManager.getEntries().some(
+			(entry) =>
+				entry.type === "custom" &&
+				entry.customType === "agent-coordination.identity",
+		),
+		false,
+	);
+	assert.equal(host.session.getToolDefinition("agent_spawn"), undefined);
+	loader.extensionFactories = original;
 	await host.runtime.dispose();
 });
 

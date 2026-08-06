@@ -20,6 +20,7 @@ import {
 } from "../coordination/agent-record.ts";
 import { copyExtensionBindings } from "../pi-integration/extension-bindings.ts";
 import { resolveAgentRunProjectTrust } from "../pi-integration/project-trust.ts";
+import { resolveRunExtensions } from "../pi-integration/named-inline-extension-factories.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
 import type {
@@ -262,6 +263,10 @@ export class DefaultChildSessionFactory {
 			overrides: options.overrides,
 			fixedTools: options.fixedTools,
 		});
+		const runExtensions = resolveRunExtensions(
+			this.#ownerRuntime.services.resourceLoader,
+			configuration.extensions,
+		);
 		await this.#validateWorkingDirectory(configuration.cwd);
 		const cachedProjectTrust = this.#projectTrustByCwd.get(configuration.cwd);
 		const trustResolutionRequired =
@@ -298,8 +303,9 @@ export class DefaultChildSessionFactory {
 				: {}),
 			resourceLoaderOptions: {
 				noExtensions: true,
-				additionalExtensionPaths: [...configuration.extensions],
+				additionalExtensionPaths: [...runExtensions.filePaths],
 				extensionFactories: [
+					...runExtensions.inlineFactories,
 					{
 						name: options.extensionName,
 						hidden: true,

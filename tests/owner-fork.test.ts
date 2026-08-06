@@ -14,6 +14,10 @@ import { join } from "node:path";
 
 import piAgentCoordination from "../src/index.ts";
 import {
+	executeAndCommitRegisteredTool,
+	selectAgent,
+} from "./support/agent-session.ts";
+import {
 	bindTestOwnerHost,
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -422,41 +426,13 @@ async function executeTool(
 	toolCallId: string,
 	input: Record<string, unknown>,
 ): Promise<unknown> {
-	const session = host.runtime.session;
-	session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall(toolName, input, { id: toolCallId }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const tool = session.getToolDefinition(toolName);
-	assert.ok(tool);
-	const result = await tool.execute(
+	const result = await executeAndCommitRegisteredTool(
+		host.runtime.session,
+		toolName,
 		toolCallId,
 		input,
-		undefined,
-		undefined,
-		session.extensionRunner.createContext(),
 	);
-	session.sessionManager.appendMessage({
-		role: "toolResult",
-		toolCallId,
-		toolName,
-		content: [{ type: "text", text: JSON.stringify(result.details) }],
-		details: result.details,
-		isError: false,
-		timestamp: Date.now(),
-	});
 	return result.details;
-}
-
-async function selectAgent(host: TestOwnerHost, agentId: string): Promise<void> {
-	host.ui.select = async (title, options) => {
-		host.ui.agentViews.push({ title, options: [...options] });
-		return options.find((option) => option.includes(agentId));
-	};
-	await host.runtime.session.prompt("/agents");
-	assert.equal(host.runtime.session.sessionId, agentId);
 }
 
 function countDisposals(session: AgentSession): () => number {

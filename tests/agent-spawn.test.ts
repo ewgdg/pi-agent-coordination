@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -9,7 +10,10 @@ import {
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { ProjectTrustStore, SessionManager } from "@earendil-works/pi-coding-agent";
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionFactory,
+	InlineExtension,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
 import {
@@ -30,8 +34,17 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
+import {
+	executeAndCommitRegisteredTool as executeRegisteredTool,
+	selectAgent,
+} from "./support/agent-session.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 100;
+const FILE_EXTENSION_FIXTURE = fileURLToPath(
+	new URL("./fixtures/inherited-extension-fixture.ts", import.meta.url),
+);
+
+type NamedInlineExtension = Exclude<InlineExtension, ExtensionFactory>;
 
 test("an authenticated ordinary Agent creates a durable isolated child and admits its Creation Request", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
@@ -490,6 +503,314 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 	assert.match(repairedSystemPrompt, /Repaired Template context/);
 
 	await coordinator.shutdown(async () => host.runtime.dispose());
+});
+
+test("agent_spawn resolves <inline:llama.cpp> through its named factory instead of as a file path", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "llama.cpp",
+			hidden: true,
+			factory: () => undefined,
+		}],
+	});
+	host.model.setResponses([
+		fauxAssistantMessage("The child started with the named inline extension."),
+	]);
+
+	const spawn = await executeRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-with-llama-inline-regression",
+		{ request: "Start with the inherited llama.cpp extension." },
+	);
+	const receipt = spawn.details as AgentSpawnReceipt;
+	assert.equal(receipt.disposition, "pending");
+	assert.ok("agentId" in receipt);
+	assert.deepEqual(receipt.effectiveConfiguration.extensions, ["<inline:llama.cpp>"]);
+
+	await host.runtime.dispose();
+});
+
+test("named inline and file-backed extensions are inherited with fresh state through nested Agent Runs", async () => {
+	let nextInstanceId = 0;
+	const startedInstances: number[] = [];
+	const namedExtension: NamedInlineExtension = {
+		name: "stateful-inheritance-probe",
+		factory(pi) {
+			const instanceId = ++nextInstanceId;
+			let sessionStarts = 0;
+			pi.on("session_start", () => {
+				sessionStarts += 1;
+				startedInstances.push(instanceId);
+			});
+			pi.registerTool({
+				name: "inline_extension_probe",
+				label: "Inline extension probe",
+				description: "Reports factory-local state for this Agent Run.",
+				parameters: Type.Object({}, { additionalProperties: false }),
+				async execute() {
+					return {
+						content: [{ type: "text", text: `inline instance ${instanceId}` }],
+						details: { instanceId, sessionStarts },
+					};
+				},
+			});
+		},
+	};
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionPaths: [FILE_EXTENSION_FIXTURE],
+		additionalExtensionFactories: [namedExtension],
+	});
+	host.model.setResponses([
+		fauxAssistantMessage("The child inherited fresh extension state."),
+		fauxAssistantMessage("The grandchild inherited another fresh extension state."),
+		fauxAssistantMessage("The extension-free child started without inherited extensions."),
+	]);
+
+	const ownerProbe = await executeRegisteredTool(
+		host.session,
+		"inline_extension_probe",
+		"probe-inline-owner",
+		{},
+	);
+	assert.deepEqual(ownerProbe.details, { instanceId: 1, sessionStarts: 1 });
+
+	const child = await executeRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-inline-child",
+		{ request: "Inherit both extension kinds and remain available." },
+	);
+	const childReceipt = child.details as AgentSpawnReceipt;
+	assert.equal(childReceipt.disposition, "pending");
+	assert.ok("agentId" in childReceipt);
+	assert.deepEqual(
+		new Set(childReceipt.effectiveConfiguration.extensions),
+		new Set([FILE_EXTENSION_FIXTURE, "<inline:stateful-inheritance-probe>"]),
+	);
+	await waitForCondition(() => startedInstances.includes(2));
+	await selectAgent(host, childReceipt.agentId);
+	assert.ok(host.runtime.session.getToolDefinition("file_extension_probe"));
+	const childProbe = await executeRegisteredTool(
+		host.runtime.session,
+		"inline_extension_probe",
+		"probe-inline-child",
+		{},
+	);
+	assert.deepEqual(childProbe.details, { instanceId: 2, sessionStarts: 1 });
+
+	const grandchild = await executeRegisteredTool(
+		host.runtime.session,
+		"agent_spawn",
+		"spawn-inline-grandchild",
+		{ request: "Inherit both extension kinds one generation deeper." },
+	);
+	const grandchildReceipt = grandchild.details as AgentSpawnReceipt;
+	assert.equal(grandchildReceipt.disposition, "pending");
+	assert.ok("agentId" in grandchildReceipt);
+	await waitForCondition(() => startedInstances.includes(3));
+	await selectAgent(host, grandchildReceipt.agentId);
+	assert.ok(host.runtime.session.getToolDefinition("file_extension_probe"));
+	const grandchildProbe = await executeRegisteredTool(
+		host.runtime.session,
+		"inline_extension_probe",
+		"probe-inline-grandchild",
+		{},
+	);
+	assert.deepEqual(grandchildProbe.details, { instanceId: 3, sessionStarts: 1 });
+
+	await selectAgent(host, host.session.sessionId);
+	const extensionFree = await executeRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-without-extensions",
+		{
+			request: "Start without inherited ordinary extensions.",
+			config: { extensions: "none", tools: [] },
+		},
+	);
+	const extensionFreeReceipt = extensionFree.details as AgentSpawnReceipt;
+	assert.equal(extensionFreeReceipt.disposition, "pending");
+	assert.ok("agentId" in extensionFreeReceipt);
+	assert.deepEqual(extensionFreeReceipt.effectiveConfiguration.extensions, []);
+	await selectAgent(host, extensionFreeReceipt.agentId);
+	assert.equal(host.runtime.session.getToolDefinition("inline_extension_probe"), undefined);
+	assert.equal(host.runtime.session.getToolDefinition("file_extension_probe"), undefined);
+	assert.equal(nextInstanceId, 3);
+
+	await host.runtime.dispose();
+});
+
+test("missing, duplicate, and anonymous inline factories fail before Agent Identity", async (t) => {
+	const namedFactory: ExtensionFactory = () => undefined;
+	const cases: Array<{
+		name: string;
+		factories: InlineExtension[];
+		afterLoad?: () => void;
+	}> = [];
+	const missingDescriptor: NamedInlineExtension = {
+		name: "required-inline",
+		factory: namedFactory,
+	};
+	cases.push({
+		name: "missing current descriptor",
+		factories: [missingDescriptor],
+		afterLoad: () => {
+			missingDescriptor.name = "renamed-after-owner-load";
+		},
+	});
+	cases.push({
+		name: "duplicate named descriptors",
+		factories: [
+			{ name: "duplicate-inline", factory: namedFactory },
+			{ name: "duplicate-inline", factory: namedFactory },
+		],
+	});
+	cases.push({
+		name: "anonymous descriptor",
+		factories: [namedFactory],
+	});
+
+	for (const sample of cases) {
+		await t.test(sample.name, async () => {
+			const host = await createTestOwnerHost(piAgentCoordination, {
+				persistent: true,
+				additionalExtensionFactories: sample.factories,
+			});
+			try {
+				sample.afterLoad?.();
+				const spawn = await executeRegisteredTool(
+					host.session,
+					"agent_spawn",
+					`spawn-${sample.name.replaceAll(" ", "-")}`,
+					{ request: "Do not commit an Agent Identity without inheritable resources." },
+				);
+				assert.deepEqual(spawn.details, {
+					disposition: "not_created",
+					failedStage: "identity_commit",
+				});
+				const children = await executeRegisteredTool(
+					host.session,
+					"agent_observe",
+					`observe-${sample.name.replaceAll(" ", "-")}`,
+					{ operation: "children" },
+				);
+				assert.deepEqual(children.details, { children: [] });
+			} finally {
+				await host.runtime.dispose();
+			}
+		});
+	}
+});
+
+test("successor Runs re-resolve the current named inline factory and stay dormant when it disappears", async () => {
+	let originalInvocations = 0;
+	let replacementInvocations = 0;
+	const createProbeFactory = (generation: "original" | "replacement"): ExtensionFactory =>
+		(pi) => {
+			if (generation === "original") originalInvocations += 1;
+			else replacementInvocations += 1;
+			pi.registerTool({
+				name: "successor_inline_probe",
+				label: "Successor inline probe",
+				description: "Reports which current factory created this Run.",
+				parameters: Type.Object({}, { additionalProperties: false }),
+				async execute() {
+					return {
+						content: [{ type: "text", text: generation }],
+						details: { generation },
+					};
+				},
+			});
+		};
+	const descriptor: NamedInlineExtension = {
+		name: "successor-inline-probe",
+		factory: createProbeFactory("original"),
+	};
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [descriptor],
+	});
+	host.model.setResponses([
+		fauxAssistantMessage("The first Run loaded the original factory."),
+		fauxAssistantMessage("The successor Run loaded the replacement factory."),
+	]);
+
+	const spawn = await executeRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-successor-inline-probe",
+		{ request: "Start with the original inline factory." },
+	);
+	const receipt = spawn.details as AgentSpawnReceipt;
+	assert.equal(receipt.disposition, "pending");
+	assert.ok("agentId" in receipt);
+	await waitForCondition(() => originalInvocations === 2);
+	await executeRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-original-inline-run",
+		{ operation: "terminate", agentId: receipt.agentId },
+	);
+
+	descriptor.factory = createProbeFactory("replacement");
+	const successor = await executeRegisteredTool(
+		host.session,
+		"agent_message",
+		"start-replacement-inline-run",
+		{
+			operation: "send",
+			targetAgentId: receipt.agentId,
+			content: "Start a successor with the current inline factory.",
+		},
+	);
+	assert.equal((successor.details as { delivery: string }).delivery, "pending");
+	await waitForCondition(() => replacementInvocations === 1);
+	await selectAgent(host, receipt.agentId);
+	const replacementProbe = await executeRegisteredTool(
+		host.runtime.session,
+		"successor_inline_probe",
+		"probe-replacement-inline-run",
+		{},
+	);
+	assert.deepEqual(replacementProbe.details, { generation: "replacement" });
+
+	await selectAgent(host, host.session.sessionId);
+	await executeRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-replacement-inline-run",
+		{ operation: "terminate", agentId: receipt.agentId },
+	);
+	descriptor.name = "renamed-successor-inline-probe";
+	const unavailable = await executeRegisteredTool(
+		host.session,
+		"agent_message",
+		"start-missing-inline-run",
+		{
+			operation: "send",
+			targetAgentId: receipt.agentId,
+			content: "This successor must remain unavailable.",
+		},
+	);
+	assert.deepEqual(
+		{
+			delivery: (unavailable.details as { delivery: string }).delivery,
+			rejectionReason: (unavailable.details as { rejectionReason: string }).rejectionReason,
+		},
+		{ delivery: "rejected", rejectionReason: "target_unavailable" },
+	);
+	const status = await executeRegisteredTool(
+		host.session,
+		"agent_observe",
+		"observe-missing-inline-successor",
+		{ operation: "status", agentId: receipt.agentId },
+	);
+	assert.equal((status.details as { run: { phase: string } }).run.phase, "dormant");
+
+	await host.runtime.dispose();
 });
 
 test("invalid default-child metadata fails before Agent Identity", async () => {

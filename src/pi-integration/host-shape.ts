@@ -4,6 +4,8 @@ import type {
 	ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 
+import { assertInlineExtensionFactoryRegistryShape } from "./named-inline-extension-factories.ts";
+
 type UnknownRecord = Record<PropertyKey, unknown>;
 
 export class IncompatiblePiHostError extends Error {
@@ -256,6 +258,13 @@ export function assertRuntimeInstanceShape(
 			version,
 		);
 	}
+	assertInlineExtensionFactoryRegistryShape(
+		resourceLoader,
+		"AgentSessionRuntime.services.resourceLoader.extensionFactories",
+		(memberName) => {
+			throw new IncompatiblePiHostError(memberName, version);
+		},
+	);
 	assertAgentSessionShape(runtime.session, version);
 }
 

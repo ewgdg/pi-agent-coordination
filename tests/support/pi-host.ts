@@ -19,6 +19,7 @@ import {
 	type AgentSession,
 	type AgentSessionServices,
 	type ExtensionFactory,
+	type InlineExtension,
 	type ExtensionUIContext,
 	type KeybindingsManager,
 	type Theme,
@@ -31,6 +32,8 @@ import type {
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { loadPiBuiltInExtensionFactories } from "../../src/pi-integration/named-inline-extension-factories.ts";
 
 const PROVIDER_ID = "coordination-test";
 const MODEL_ID = "deterministic-owner";
@@ -72,6 +75,7 @@ export type TestOwnerHost = {
 export type TestOwnerHostOptions = {
 	persistent?: boolean;
 	additionalExtensionPaths?: string[];
+	additionalExtensionFactories?: InlineExtension[];
 	cwd?: string;
 	agentDir?: string;
 	sessionFile?: string;
@@ -88,16 +92,41 @@ export async function createTestOwnerHost(
 	return host;
 }
 
+export async function createPiCliTestOwnerHost(
+	extension: ExtensionFactory,
+	options?: TestOwnerHostOptions,
+): Promise<TestOwnerHost> {
+	const host = await createUnboundTestOwnerHostWithRuntime(
+		extension,
+		options,
+		await loadPiBuiltInExtensionFactories(),
+		true,
+	);
+	await bindTestOwnerHost(host, "tui");
+	return host;
+}
+
 export async function createUnboundTestOwnerHost(
 	extension: ExtensionFactory,
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
+	return createUnboundTestOwnerHostWithRuntime(extension, options, [], false);
+}
+
+async function createUnboundTestOwnerHostWithRuntime(
+	extension: ExtensionFactory,
+	options: TestOwnerHostOptions | undefined,
+	piBuiltInExtensionFactories: readonly InlineExtension[],
+	allowModelNetwork: boolean,
+): Promise<TestOwnerHost> {
 	const cwd = options?.cwd ?? await mkdtemp(join(tmpdir(), "pi-agent-coordination-"));
 	const agentDir = options?.agentDir ?? join(cwd, ".pi-agent");
 	const additionalExtensionPaths = options?.additionalExtensionPaths ?? [];
+	const additionalExtensionFactories = options?.additionalExtensionFactories ?? [];
 	const retainedExtensionPaths = new Set(additionalExtensionPaths);
 	const { modelRuntime, faux } = await createTestModelRuntime({
 		implicitModeratorResponses: options?.implicitModeratorResponses ?? true,
+		allowModelNetwork,
 	});
 	const sessionManager = options?.sessionFile
 		? SessionManager.open(options.sessionFile)
@@ -117,6 +146,8 @@ export async function createUnboundTestOwnerHost(
 				noThemes: true,
 				additionalExtensionPaths,
 				extensionFactories: [
+					...piBuiltInExtensionFactories,
+					...additionalExtensionFactories,
 					{
 						name: "pi-agent-coordination",
 						hidden: false,
@@ -354,11 +385,15 @@ function createTestOverlayHandle(): OverlayHandle {
 
 async function createTestModelRuntime(options: {
 	implicitModeratorResponses: boolean;
+	allowModelNetwork: boolean;
 }): Promise<{
 	modelRuntime: ModelRuntime;
 	faux: { setResponses(responses: FauxResponseStep[]): void };
 }> {
-	const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, modelsPath: null });
+	const modelRuntime = await ModelRuntime.create({
+		allowModelNetwork: options.allowModelNetwork,
+		modelsPath: null,
+	});
 	const faux = createFauxCore({
 		api: PROVIDER_ID,
 		provider: PROVIDER_ID,
