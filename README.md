@@ -2,19 +2,62 @@
 
 Durable Pi agents that collaborate asynchronously under explicit Owner and Spawner supervision.
 
-The package boots a Workflow in an interactive Pi TUI. It adopts the current session as the durable Workflow Owner, lets the Owner fork or clone copied conversation into a fresh independent Workflow, lets ordinary Agents create context-isolated durable children with `agent_spawn`, and provides immutable Deferred or Steer Messages plus correlated Request, Answer, retrieval, and cancellation through `agent_message`. Any Agent can block its exact Run on structured human input through `ask_user_question`; background requests appear as passive `DECIDE` attention. Workflow Owners and Direct Spawners can inspect authorized Agents with `agent_observe` and interrupt, explicitly resume, or terminate exact Runs with `agent_control`. Overdue answer-obligated root tool calls, Obligation Stalls, answer-obligated Run Failures, and closed live Dependency Deadlocks receive isolated Moderator handling with workflow-wide inspection, policy-bounded review renewal, non-Owner Run control, ordinary Owner escalation, and mechanically gated Resolution. Coordinated model generations never use generic regenerated-prompt retry; only adapter-proven same-generation continuation is eligible. One failed Moderator may be replaced once; a second failure creates passive Owner-only Operational Attention. `/agents` presents attention plus live and dormant Agents while preserving native interaction for retained sessions. A fresh host rediscovers verified ordinary authority, standalone Moderators, and residual Request retention from complete Pi transcripts without replaying volatile work. A reloadable Workflow Policy applies fair ordinary execution, per-recipient delivery limits, and captured Operation Review intervals. The package preserves Pi's transcript authority and coordinates orderly shutdown.
+## Features
+
+- **Owner-directed Workflows:** the current interactive Pi session becomes the durable Workflow Owner. The Owner can fork or clone copied conversation into a fresh, independent Workflow.
+- **Durable child Agents:** ordinary Agents can create context-isolated children with `agent_spawn`.
+- **Messaging and Requests:** `agent_message` supports immutable Deferred and Steer Messages, correlated Requests and Answers, retrieval, and cancellation.
+- **Human decisions for spawned Agents:** `ask_user_question` lets a spawned Agent block its exact Run on structured human input. Background requests appear as passive `DECIDE` attention.
+- **Run supervision:** Workflow Owners and Direct Spawners can inspect authorized Agents with `agent_observe`, then interrupt, explicitly resume, or terminate exact Runs with `agent_control`.
+- **Operational incident handling:** isolated Moderators handle overdue answer obligations, Obligation Stalls, answer-obligated Run Failures, and closed live Dependency Deadlocks. Review renewal, Run control, Owner escalation, and Resolution are policy-bounded and mechanically gated.
+- **Durable recovery:** a fresh host reconstructs verified authority, standalone Moderators, and residual Request retention from complete Pi transcripts without replaying volatile work.
+- **Workflow visibility:** `/agents` presents attention plus live and dormant Agents while preserving native interaction for retained sessions.
+
+Coordinated model generations never use generic regenerated-prompt retry. Only adapter-proven continuation of the same generation is eligible. One failed Moderator may be replaced once; a second failure creates passive, Owner-only Operational Attention.
+
+## Installation
+
+Install directly from the Git repository:
 
 ```bash
-npm install
-npm run build
-pi install .
+pi install git:github.com/ewgdg/pi-agent-coordination
+```
+
+## Usage
+
+Start an interactive Pi TUI:
+
+```bash
 pi
 ```
 
-Print, JSON, and RPC modes do not activate coordination.
+The package adopts the current session as the Workflow Owner; no separate activation command is required. Print, JSON, and RPC modes do not activate coordination.
 
-Pi supplies the package's Pi peer modules. Compatibility is defined jointly by a fail-fast structural gate against the running host module world and the native behavioral conformance suite; the Pi version is diagnostic only. Maintainers can run the focused gate with `npm run test:conformance`, while `npm test` remains the complete regression suite.
+## Compatibility
 
-Coordination is a trust-based protocol, not a security boundary. Owners, Spawners, ordinary Agents, and Moderators are trusted participants acting through role-scoped tools. Pi transcripts are the durable authority for identity, Messages, Requests, Deliveries, and committed results. Scheduling queues, Holds, live Run state, UI attention, and selected-session state are volatile: orderly shutdown closes them, while abrupt process loss can discard them without claiming durable completion.
+Pi supplies the package's Pi peer modules. Compatibility is defined jointly by a fail-fast structural gate against the running host module world and the native behavioral conformance suite. The Pi version is diagnostic only.
 
-See [Owner Workflow](docs/owner-workflow.md) for activation and compatibility behavior, [Operational Incident moderation](docs/operational-incident-moderation.md) for trigger detection, bounded handling, Moderator authority, Resolution, and recovery, [Cold host recovery](docs/cold-host-recovery.md) for transcript discovery, quarantine, dormant rosters, and residual Requests, [Workflow Policy](docs/workflow-policy.md) for reloadable execution, delivery, and review limits, [Agent spawning](docs/agent-spawning.md) for child creation and receipt semantics, [Agent messaging](docs/agent-messaging.md) for delivery modes and Agent Requests, [Human Requests](docs/human-requests.md) for structured Questions and native interaction, and [Run supervision](docs/run-supervision.md) for observation, interruption, resumption, termination, and session selection.
+Maintainers can run the focused compatibility gate with:
+
+```bash
+npm run test:conformance
+```
+
+`npm test` remains the complete regression suite.
+
+## Trust and persistence
+
+Coordination is a trust-based protocol, not a security boundary. Owners, Spawners, ordinary Agents, and Moderators are trusted participants acting through role-scoped tools.
+
+Pi transcripts are the durable authority for identity, Messages, Requests, Deliveries, and committed results. Scheduling queues, Holds, live Run state, UI attention, and selected-session state are volatile: orderly shutdown closes them, while abrupt process loss can discard them without claiming durable completion.
+
+## Documentation
+
+- [Owner Workflow](docs/owner-workflow.md) — activation and compatibility behavior
+- [Operational Incident moderation](docs/operational-incident-moderation.md) — trigger detection, bounded handling, Moderator authority, Resolution, and recovery
+- [Cold host recovery](docs/cold-host-recovery.md) — transcript discovery, quarantine, dormant rosters, and residual Requests
+- [Workflow Policy](docs/workflow-policy.md) — reloadable execution, delivery, and review limits
+- [Agent spawning](docs/agent-spawning.md) — child creation and receipt semantics
+- [Agent messaging](docs/agent-messaging.md) — delivery modes and Agent Requests
+- [Human Requests](docs/human-requests.md) — structured Questions and native interaction
+- [Run supervision](docs/run-supervision.md) — observation, interruption, resumption, termination, and session selection
