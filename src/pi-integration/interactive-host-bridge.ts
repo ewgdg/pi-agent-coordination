@@ -48,10 +48,14 @@ const bridgeStates = (globalBridgeRegistry[BRIDGE_REGISTRY_KEY] ??= new WeakMap(
 export function installInteractiveHostBridge(hostValue: unknown): InteractiveHostBridge {
 	assertHostModuleShape(hostValue);
 	const host = hostValue as HostModule & object;
-	let state = bridgeStates.get(host);
+	// Pi's reload loader recreates the host module namespace while reusing the
+	// running host constructors. The prototype is the stable seam we mutate and
+	// therefore remains the ownership key across those namespace re-evaluations.
+	const bridgeKey = host.InteractiveMode.prototype;
+	let state = bridgeStates.get(bridgeKey);
 	if (!state) {
 		state = installRuntimeCapture(host);
-		bridgeStates.set(host, state);
+		bridgeStates.set(bridgeKey, state);
 	}
 
 	return {
@@ -93,7 +97,7 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 					interactivePrototype.bindCurrentSessionExtensions =
 						originalBindCurrentSessionExtensions;
 				}
-				bridgeStates.delete(host as object);
+				bridgeStates.delete(host.InteractiveMode.prototype);
 				for (const waiter of state.waiters.splice(0)) waiter.reject(error);
 				throw error;
 			}

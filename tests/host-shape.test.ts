@@ -511,7 +511,7 @@ test("host preflight validates running-host AI and schema values", () => {
 	);
 });
 
-test("host bridge installation remains idempotent across extension module reload", async () => {
+test("host bridge installation remains idempotent across extension and host module reload", async () => {
 	installInteractiveHostBridge(hostPi);
 	const interactivePrototype = hostPi.InteractiveMode
 		.prototype as unknown as InteractivePrototype;
@@ -526,7 +526,9 @@ test("host bridge installation remains idempotent across extension module reload
 		"../src/pi-integration/interactive-host-bridge.ts"
 	);
 
-	reloadedBridgeModule.installInteractiveHostBridge(hostPi);
+	// Pi's reload loader recreates the host module namespace while reusing the
+	// running host constructors and their prototypes.
+	reloadedBridgeModule.installInteractiveHostBridge({ ...hostPi });
 
 	assert.equal(
 		interactivePrototype.bindCurrentSessionExtensions,
