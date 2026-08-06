@@ -45,7 +45,7 @@ function selectedAgentStatus(
 	label: string,
 	phase: string,
 ): string | undefined {
-	const prefix = `${label} · `;
+	const prefix = phase === "active" ? `● ${label} · ` : `${label} · `;
 	const suffix = ` · ${phase}`;
 	const matches = [...host.ui.statuses.values()].filter((value) =>
 		value.startsWith(prefix) && value.endsWith(suffix)

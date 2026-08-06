@@ -38,7 +38,9 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		await terminal.waitFor("Worker Dormant");
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_SELECTED_DORMANT__");
-		await terminal.waitFor("Worker Dormant · ");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.startsWith("Worker Dormant · "))
+		);
 		const selectedDormantFrame = await terminal.screen();
 		assertSelectedAgentFooterStatus(
 			selectedDormantFrame,
@@ -65,7 +67,9 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		terminal.write("k");
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_SELECTED_LIVE__");
-		await terminal.waitFor("Worker Live · ");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.startsWith("● Worker Live · "))
+		);
 		const selectedLiveFrame = await terminal.screen();
 		assertSelectedAgentFooterStatus(
 			selectedLiveFrame,
@@ -103,7 +107,7 @@ function assertSelectedAgentFooterStatus(
 	agentId: string,
 	phase: string,
 ): void {
-	const prefix = `${label} · `;
+	const prefix = phase === "active" ? `● ${label} · ` : `${label} · `;
 	const suffix = ` · ${phase}`;
 	const matchingLines = frame.filter((line) =>
 		line.startsWith(prefix) && line.includes(suffix)
@@ -199,6 +203,44 @@ class PtyFixture {
 		const match = new RegExp(`${prefix}(\\{[^\\r\\n]+\\})`).exec(this.#output);
 		if (!match) throw new Error(`PTY marker ${prefix} has no JSON payload`);
 		return JSON.parse(match[1]!) as T;
+	}
+
+	async waitForScreen(predicate: (frame: readonly string[]) => boolean): Promise<void> {
+		if (predicate(await this.screen())) return;
+		await new Promise<void>((resolve, reject) => {
+			let checking = false;
+			const timeout = setTimeout(() => {
+				cleanup();
+				reject(new Error(`Timed out waiting for a matching PTY screen\n${this.#output}`));
+			}, 20_000);
+			const inspect = () => {
+				if (checking) return;
+				checking = true;
+				void this.screen().then((frame) => {
+					checking = false;
+					if (!predicate(frame)) return;
+					cleanup();
+					resolve();
+				}).catch((error: unknown) => {
+					checking = false;
+					cleanup();
+					reject(error);
+				});
+			};
+			const closed = () => {
+				cleanup();
+				reject(new Error(`PTY fixture closed before a matching screen appeared\n${this.#output}`));
+			};
+			const cleanup = () => {
+				clearTimeout(timeout);
+				this.#child.stdout.off("data", inspect);
+				this.#child.stderr.off("data", inspect);
+				this.#child.off("close", closed);
+			};
+			this.#child.stdout.on("data", inspect);
+			this.#child.stderr.on("data", inspect);
+			this.#child.once("close", closed);
+		});
 	}
 
 	async waitFor(value: string): Promise<void> {

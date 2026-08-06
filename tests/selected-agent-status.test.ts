@@ -10,39 +10,40 @@ import {
 
 const theme = {
 	fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
+	bold: (text: string) => `<bold>${text}</bold>`,
 } as Theme;
 
-test("selected Agent footer keeps identity and ordinary Run states dim", () => {
+test("selected Agent footer emphasizes identity and keeps ordinary Run states dim", () => {
 	assert.equal(
 		formatSelectedAgentStatus(
 			{ label: "Researcher", sessionId: "019fa1ff-6e95-761e-b4ce-7415983c81e3", phase: "active" },
 			theme,
 		),
-		"<dim>Researcher · 983c81e3 · active</dim>",
+		"<accent><bold>● Researcher</bold></accent><dim> · 983c81e3 · active</dim>",
 	);
 	assert.equal(
 		formatSelectedAgentStatus(
 			{ label: "Researcher", sessionId: "019fa1ff-6e95-761e-b4ce-7415983c81e3", phase: "settled" },
 			theme,
 		),
-		"<dim>Researcher · 983c81e3 · settled</dim>",
+		"<accent><bold>Researcher</bold></accent><dim> · 983c81e3 · settled</dim>",
 	);
 	assert.equal(
 		formatSelectedAgentStatus(
 			{ label: "Researcher", sessionId: "019fa1ff-6e95-761e-b4ce-7415983c81e3", phase: "held" },
 			theme,
 		),
-		"<dim>Researcher · 983c81e3 · held</dim>",
+		"<accent><bold>Researcher</bold></accent><dim> · 983c81e3 · held</dim>",
 	);
 });
 
-test("Dormant selection stays dim and is distinct from a failed Run", () => {
+test("Dormant selection emphasizes identity and is distinct from a failed Run", () => {
 	assert.equal(
 		formatSelectedAgentStatus(
 			{ label: "Researcher", sessionId: "019fa1ff-6e95-761e-b4ce-7415983c81e3", phase: "dormant" },
 			theme,
 		),
-		"<dim>Researcher · 983c81e3 · Dormant</dim>",
+		"<accent><bold>Researcher</bold></accent><dim> · 983c81e3 · Dormant</dim>",
 	);
 	assert.equal(
 		formatSelectedAgentStatus(
@@ -63,7 +64,7 @@ test("only Human-waiting receives warning emphasis", () => {
 			},
 			theme,
 		),
-		"<dim>Researcher · 983c81e3 · </dim><warning>waiting (human)</warning>",
+		"<accent><bold>Researcher</bold></accent><dim> · 983c81e3 · </dim><warning>waiting (human)</warning>",
 	);
 });
 
@@ -83,6 +84,9 @@ test("status surface updates one native footer slot and clears it", () => {
 
 	assert.equal(updates.length, 2);
 	assert.equal(updates[0]?.key, updates[1]?.key);
-	assert.equal(updates[0]?.value, "<dim>Researcher · searcher · settled</dim>");
+	assert.equal(
+		updates[0]?.value,
+		"<accent><bold>Researcher</bold></accent><dim> · searcher · settled</dim>",
+	);
 	assert.equal(updates[1]?.value, undefined);
 });

@@ -45,12 +45,17 @@ export function formatSelectedAgentStatus(
 	status: SelectedAgentStatus,
 	theme: Theme,
 ): string {
-	const prefix = `${status.label} · ${formatSessionIdentity(status.sessionId)} · `;
-	if (status.phase === "waiting_human") {
-		return `${theme.fg("dim", prefix)}${theme.fg("warning", formatAgentPhase(status.phase))}`;
+	const phase = formatAgentPhase(status.phase);
+	const identity = ` · ${formatSessionIdentity(status.sessionId)} · `;
+	if (status.phase === "failed") {
+		return theme.fg("error", `${status.label}${identity}${phase}`);
 	}
-	const color = status.phase === "failed" ? "error" : "dim";
-	return theme.fg(color, `${prefix}${formatAgentPhase(status.phase)}`);
+	const label = status.phase === "active" ? `● ${status.label}` : status.label;
+	const emphasizedLabel = theme.fg("accent", theme.bold(label));
+	if (status.phase === "waiting_human") {
+		return `${emphasizedLabel}${theme.fg("dim", identity)}${theme.fg("warning", phase)}`;
+	}
+	return `${emphasizedLabel}${theme.fg("dim", `${identity}${phase}`)}`;
 }
 
 export class SelectedAgentStatusSurface implements SelectedAgentStatusPresentation {
