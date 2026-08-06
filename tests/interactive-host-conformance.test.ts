@@ -23,6 +23,7 @@ import {
 	executeAndCommitRegisteredTool,
 	openAgentsSurface,
 	selectAgent,
+	selectDormantAgent,
 } from "./support/agent-session.ts";
 import {
 	bindTestOwnerHost,
@@ -539,6 +540,46 @@ test("an ordinary Message starts and selects the successor of a selected Dormant
 	assert.match(
 		JSON.stringify(host.runtime.session.sessionManager.getEntries()),
 		/Start the selected Agent through an ordinary Message\./,
+	);
+	await host.runtime.dispose();
+});
+
+test("native editor input starts a dormant successor with its named inline extensions", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "llama.cpp",
+			hidden: true,
+			factory: () => undefined,
+		}],
+	});
+	host.model.setResponses([
+		fauxAssistantMessage("The initial named-inline child settled."),
+		fauxAssistantMessage("The dormant successor accepted native editor input."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-named-inline-editor-input",
+		{ operation: "terminate", agentId: childAgentId },
+	);
+	await selectDormantAgent(host, childAgentId);
+	const dormantPresentation = host.runtime.session;
+	const input = "Start this dormant Agent from the native editor.";
+
+	await dormantPresentation.prompt(input);
+
+	assert.notEqual(host.runtime.session, dormantPresentation);
+	assert.equal(host.runtime.session.sessionId, childAgentId);
+	await host.runtime.session.waitForIdle();
+	assert.match(
+		JSON.stringify(host.runtime.session.sessionManager.getEntries()),
+		new RegExp(input),
+	);
+	assert.equal(
+		host.ui.notifications.some(({ message }) => message.includes("Agent input failed")),
+		false,
 	);
 	await host.runtime.dispose();
 });

@@ -80,6 +80,7 @@ export type PreparedAgentRun = Readonly<{
 
 export class DefaultChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
+	readonly #hostResourceLoader: AgentSessionServices["resourceLoader"];
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #entryModulePath: string;
 	readonly #packageRoot: string;
@@ -104,6 +105,10 @@ export class DefaultChildSessionFactory {
 		templateRoots?(baselineCwd: string, projectTrusted: boolean): readonly AgentTemplateRoot[];
 	}) {
 		this.#ownerRuntime = options.ownerRuntime;
+		// Interactive selection temporarily rebinds ownerRuntime.services to a
+		// presentation-only loader. Successor Runs still resolve inherited named
+		// factories against the host registry admitted with the Workflow.
+		this.#hostResourceLoader = options.ownerRuntime.services.resourceLoader;
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#entryModulePath = options.entryModulePath;
 		this.#packageRoot = options.packageRoot;
@@ -268,7 +273,7 @@ export class DefaultChildSessionFactory {
 			fixedTools: options.fixedTools,
 		});
 		const runExtensions = resolveRunExtensions(
-			this.#ownerRuntime.services.resourceLoader,
+			this.#hostResourceLoader,
 			configuration.extensions,
 		);
 		await this.#validateWorkingDirectory(configuration.cwd);
