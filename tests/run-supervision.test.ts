@@ -27,6 +27,7 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
+import { selectAgent } from "./support/agent-session.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 100;
 
@@ -899,11 +900,7 @@ test("/agents selects live sessions, returns to Owner, and restores Owner for sh
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 
-	host.ui.select = async (title, options) => {
-		host.ui.agentViews.push({ title, options: [...options] });
-		return options.find((option) => option.includes(childAgentId));
-	};
-	await host.session.prompt("/agents");
+	await selectAgent(host, childAgentId);
 	assert.equal(host.runtime.session.sessionId, childAgentId);
 	const observe = host.runtime.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
@@ -921,18 +918,10 @@ test("/agents selects live sessions, returns to Owner, and restores Owner for sh
 		true,
 	);
 
-	host.ui.select = async (title, options) => {
-		host.ui.agentViews.push({ title, options: [...options] });
-		return options.find((option) => option.includes(host.session.sessionId));
-	};
-	await host.runtime.session.prompt("/agents");
+	await selectAgent(host, host.session.sessionId);
 	assert.equal(host.runtime.session.sessionId, host.session.sessionId);
 
-	host.ui.select = async (title, options) => {
-		host.ui.agentViews.push({ title, options: [...options] });
-		return options.find((option) => option.includes(childAgentId));
-	};
-	await host.runtime.session.prompt("/agents");
+	await selectAgent(host, childAgentId);
 	assert.equal(host.runtime.session.sessionId, childAgentId);
 	await host.runtime.dispose();
 	assert.equal(host.runtime.session.sessionId, host.session.sessionId);

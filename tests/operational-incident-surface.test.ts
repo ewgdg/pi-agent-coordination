@@ -4,7 +4,6 @@ import test from "node:test";
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 
 import { OperationalIncidentSurface } from "../src/presentation/operational-incident-surface.ts";
-import { formatOperationalIncidentOption } from "../src/tools/owner-surfaces.ts";
 
 test("exhausted handling is presented passively with bounded diagnostic evidence", () => {
 	const statuses: Array<string | undefined> = [];
@@ -78,27 +77,4 @@ test("exhausted handling is presented passively with bounded diagnostic evidence
 		"      Request · agent-delta · request-c · call-c",
 		"    Diagnostic · moderator-third · terminal-third",
 	]);
-});
-
-test("the Agent picker identifies the exhausted condition and its evidence", () => {
-	assert.equal(
-		formatOperationalIncidentOption({
-			trigger: {
-				kind: "run_failure",
-				agentId: "agent-charlie",
-				runSequence: 7,
-				obligations: {
-					total: 1,
-					sources: [{
-						agentId: "agent-delta",
-						entryId: "request-c",
-						toolCallId: "call-c",
-					}],
-				},
-			},
-			affectedAgentIds: ["agent-charlie"],
-			diagnostics: [{ agentId: "moderator-third", entryId: "terminal-third" }],
-		}, 0),
-		"ATTENTION 1 · Run Failure · agent-charlie · Run 7 · Requests 1 · Request agent-delta/request-c/call-c · Diagnostic moderator-third/terminal-third",
-	);
 });

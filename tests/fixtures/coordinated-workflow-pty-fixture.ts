@@ -121,7 +121,7 @@ await waitFor(() => liveSession.sessionManager.getEntries().some(
 await liveSession.waitForIdle();
 process.stdout.write("\n__PTY_HUMAN_ESCAPED__\n");
 
-await openAgents(host.session);
+await openAgents(liveSession);
 await waitFor(() => host.runtime.session.sessionId === ownerId);
 host.model.setResponses([
 	fauxAssistantMessage("The held child resumed in one isolated turn."),

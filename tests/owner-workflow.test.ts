@@ -5,10 +5,14 @@ import {
 	fauxAssistantMessage,
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+	AgentSession,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
+import { selectAgent } from "./support/agent-session.ts";
 
 const MAX_SESSION_DISCOVERY_ATTEMPTS = 1_000;
 
@@ -69,15 +73,22 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		},
 	});
 
-	await host.session.prompt("/agents");
-	assert.deepEqual(host.ui.agentViews, [
-		{
-			title: "Agents",
-			options: [
-				`Live · owner · ${host.session.sessionId} · live/settled · owner host binding, interactive selection`,
-			],
-		},
-	]);
+	const agentsCommand = host.session.prompt("/agents");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(host.ui.genericSelectCalls, []);
+	assert.equal(host.ui.customSurfaces.length, 1);
+	const agentsSurface = host.ui.customSurfaces[0]!;
+	const renderedAgents = agentsSurface.render(100);
+	assert.match(renderedAgents[0] ?? "", /^┌─+┐$/);
+	assert.match(renderedAgents.join("\n"), /Live.*Dormant/);
+	assert.match(renderedAgents.join("\n"), /Owner/);
+	assert.match(renderedAgents.join("\n"), new RegExp(host.session.sessionId));
+	assert.match(
+		renderedAgents.join("\n"),
+		/coordination-test\/deterministic-owner · thinking off · 0 queued/,
+	);
+	agentsSurface.handleInput?.("\x1b");
+	await agentsCommand;
 
 	await host.session.prompt("Keep native Pi behavior authoritative.");
 	await host.session.waitForIdle();
@@ -127,9 +138,7 @@ test("native Owner replacement closes every retained source Workflow session", a
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 
-	host.ui.select = async (_title, options) =>
-		options.find((option) => option.includes(childAgentId));
-	await host.session.prompt("/agents");
+	await selectAgent(host, childAgentId);
 	const childSession = host.runtime.session;
 	const nativeChildDispose = childSession.dispose.bind(childSession);
 	let childDisposeCalls = 0;
@@ -137,9 +146,7 @@ test("native Owner replacement closes every retained source Workflow session", a
 		childDisposeCalls += 1;
 		nativeChildDispose();
 	};
-	host.ui.select = async (_title, options) =>
-		options.find((option) => option.includes(host.session.sessionId));
-	await childSession.prompt("/agents");
+	await selectAgent(host, host.session.sessionId);
 
 	await host.runtime.newSession();
 
@@ -181,41 +188,30 @@ test("orderly shutdown disposes retained child, Moderator, and Owner sessions ex
 		[moderatorAgentId, 0],
 		[host.session.sessionId, 0],
 	]);
-	const countDisposal = (session: typeof host.session) => {
-		const nativeDispose = session.dispose.bind(session);
-		session.dispose = () => {
+	const nativeDispose = AgentSession.prototype.dispose;
+	AgentSession.prototype.dispose = function countWorkflowDisposal() {
+		if (disposalCounts.has(this.sessionId)) {
 			disposalCounts.set(
-				session.sessionId,
-				(disposalCounts.get(session.sessionId) ?? 0) + 1,
+				this.sessionId,
+				(disposalCounts.get(this.sessionId) ?? 0) + 1,
 			);
-			nativeDispose();
-		};
+		}
+		return nativeDispose.call(this);
 	};
-	countDisposal(host.session);
-
-	host.ui.select = async (_title, options) =>
-		options.find((option) => option.includes(childAgentId));
-	await host.session.prompt("/agents");
-	const childSession = host.runtime.session;
-	assert.equal(childSession.sessionId, childAgentId);
-	countDisposal(childSession);
-	host.ui.select = async (_title, options) =>
-		options.find((option) => option.includes(moderatorAgentId));
-	await childSession.prompt("/agents");
-	const moderatorSession = host.runtime.session;
-	assert.equal(moderatorSession.sessionId, moderatorAgentId);
-	countDisposal(moderatorSession);
-
-	await Promise.all([host.runtime.dispose(), host.runtime.dispose()]);
-	assert.equal(host.runtime.session.sessionId, host.session.sessionId);
-	assert.deepEqual(
-		Object.fromEntries(disposalCounts),
-		{
-			[childAgentId]: 1,
-			[moderatorAgentId]: 1,
-			[host.session.sessionId]: 1,
-		},
-	);
+	try {
+		await Promise.all([host.runtime.dispose(), host.runtime.dispose()]);
+		assert.equal(host.runtime.session.sessionId, host.session.sessionId);
+		assert.deepEqual(
+			Object.fromEntries(disposalCounts),
+			{
+				[childAgentId]: 1,
+				[moderatorAgentId]: 1,
+				[host.session.sessionId]: 1,
+			},
+		);
+	} finally {
+		AgentSession.prototype.dispose = nativeDispose;
+	}
 });
 
 test("orderly shutdown disposes child and Owner sessions even when child abort fails", async () => {
@@ -241,13 +237,9 @@ test("orderly shutdown disposes child and Owner sessions even when child abort f
 		host.session.extensionRunner.createContext(),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
-	host.ui.select = async (_title, options) =>
-		options.find((option) => option.includes(childAgentId));
-	await host.session.prompt("/agents");
+	await selectAgent(host, childAgentId);
 	const childSession = host.runtime.session;
-	host.ui.select = async (_title, options) =>
-		options.find((option) => option.includes(host.session.sessionId));
-	await childSession.prompt("/agents");
+	await selectAgent(host, host.session.sessionId);
 
 	childSession.abort = async () => {
 		throw new Error("injected child abort failure");

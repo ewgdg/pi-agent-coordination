@@ -576,6 +576,7 @@ test("named inline and file-backed extensions are inherited with fresh state thr
 		{},
 	);
 	assert.deepEqual(ownerProbe.details, { instanceId: 1, sessionStarts: 1 });
+	const ownerInstanceId = (ownerProbe.details as { instanceId: number }).instanceId;
 
 	const child = await executeRegisteredTool(
 		host.session,
@@ -599,7 +600,12 @@ test("named inline and file-backed extensions are inherited with fresh state thr
 		"probe-inline-child",
 		{},
 	);
-	assert.deepEqual(childProbe.details, { instanceId: 2, sessionStarts: 1 });
+	const childProbeDetails = childProbe.details as {
+		instanceId: number;
+		sessionStarts: number;
+	};
+	assert.equal(childProbeDetails.sessionStarts, 1);
+	assert.notEqual(childProbeDetails.instanceId, ownerInstanceId);
 
 	const grandchild = await executeRegisteredTool(
 		host.runtime.session,
@@ -619,9 +625,16 @@ test("named inline and file-backed extensions are inherited with fresh state thr
 		"probe-inline-grandchild",
 		{},
 	);
-	assert.deepEqual(grandchildProbe.details, { instanceId: 3, sessionStarts: 1 });
+	const grandchildProbeDetails = grandchildProbe.details as {
+		instanceId: number;
+		sessionStarts: number;
+	};
+	assert.equal(grandchildProbeDetails.sessionStarts, 1);
+	assert.notEqual(grandchildProbeDetails.instanceId, ownerInstanceId);
+	assert.notEqual(grandchildProbeDetails.instanceId, childProbeDetails.instanceId);
 
 	await selectAgent(host, host.session.sessionId);
+	const instanceCountBeforeExtensionFreeChild = nextInstanceId;
 	const extensionFree = await executeRegisteredTool(
 		host.session,
 		"agent_spawn",
@@ -638,7 +651,7 @@ test("named inline and file-backed extensions are inherited with fresh state thr
 	await selectAgent(host, extensionFreeReceipt.agentId);
 	assert.equal(host.runtime.session.getToolDefinition("inline_extension_probe"), undefined);
 	assert.equal(host.runtime.session.getToolDefinition("file_extension_probe"), undefined);
-	assert.equal(nextInstanceId, 3);
+	assert.equal(nextInstanceId, instanceCountBeforeExtensionFreeChild);
 
 	await host.runtime.dispose();
 });

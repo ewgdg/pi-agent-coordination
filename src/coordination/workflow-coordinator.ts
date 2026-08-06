@@ -26,6 +26,11 @@ import {
 	type MessageBoundaryHooks,
 } from "./messages.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
+import {
+	isRuntimeThinkingLevel,
+	type ModelReference,
+	type RuntimeThinkingLevel,
+} from "../protocol/runtime-configuration.ts";
 import { InProcessAgentHost } from "../runtime/in-process-agent-host.ts";
 import { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
 import {
@@ -71,6 +76,11 @@ import {
 } from "../pi-integration/automatic-reconciliation.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
+export type AgentRosterStatus = AgentStatus & Readonly<{
+	model: ModelReference;
+	thinking: RuntimeThinkingLevel;
+	queuedInputCount: number;
+}>;
 export type {
 	AgentSpawnInput,
 	AgentSpawnReceipt,
@@ -92,8 +102,8 @@ type AgentCoordinatorView = Readonly<{
 		images: readonly ImageContent[] | undefined,
 	): Promise<boolean>;
 	selectionRoster(): Readonly<{
-		live: readonly AgentStatus[];
-		dormant: readonly AgentStatus[];
+		live: readonly AgentRosterStatus[];
+		dormant: readonly AgentRosterStatus[];
 	}>;
 	selectForHuman(agentId: string): Promise<"selected" | "dormant">;
 	askHuman(
@@ -422,8 +432,8 @@ export class WorkflowCoordinator {
 	}
 
 	#selectionRoster(): Readonly<{
-		live: readonly AgentStatus[];
-		dormant: readonly AgentStatus[];
+		live: readonly AgentRosterStatus[];
+		dormant: readonly AgentRosterStatus[];
 	}> {
 		const authorityOrder: AgentRecord[] = [];
 		const appendAuthoritySubtree = (agentId: string) => {
@@ -435,12 +445,14 @@ export class WorkflowCoordinator {
 		for (const record of this.#agents.values()) {
 			if (!authorityOrder.includes(record)) authorityOrder.push(record);
 		}
-		const live: AgentStatus[] = [];
-		const dormant: Array<{ status: AgentStatus; recency: number; order: number }> = [];
+		const live: AgentRosterStatus[] = [];
+		const dormant: Array<{ status: AgentRosterStatus; recency: number; order: number }> = [];
 		for (const [order, record] of authorityOrder.entries()) {
-			const status = statusOf(record);
+			const status = this.#rosterStatus(record);
 			if (status.run.phase !== "dormant") {
-				live.push(status);
+				// Moderators are standalone participants rather than members of the
+				// ordinary creation hierarchy rendered by the Live tab.
+				if (!this.#isModerator(status.agentId)) live.push(status);
 				continue;
 			}
 			const header = record.host.sessionManager.getHeader();
@@ -461,6 +473,32 @@ export class WorkflowCoordinator {
 		return {
 			live,
 			dormant: dormant.map(({ status }) => status),
+		};
+	}
+
+	#rosterStatus(record: AgentRecord): AgentRosterStatus {
+		const status = statusOf(record);
+		const liveSession = record.host.currentHandle()
+			? record.host.requireLiveSession()
+			: undefined;
+		const transcriptContext = record.host.sessionManager.buildSessionContext();
+		const configured = record.effectiveConfiguration ?? record.identity.configuration.baseline;
+		const model = liveSession?.model
+			? { provider: liveSession.model.provider, modelId: liveSession.model.id }
+			: transcriptContext.model ?? configured.model;
+		const hasRecordedThinking = record.host.sessionManager.getBranch().some(
+			(entry) => entry.type === "thinking_level_change",
+		);
+		const thinking = liveSession?.thinkingLevel ??
+			(hasRecordedThinking ? transcriptContext.thinkingLevel : configured.thinking);
+		if (!isRuntimeThinkingLevel(thinking)) {
+			throw new Error(`invariant_violation: Agent ${status.agentId} has invalid thinking level`);
+		}
+		return {
+			...status,
+			model,
+			thinking,
+			queuedInputCount: record.host.queuedInputCount(),
 		};
 	}
 

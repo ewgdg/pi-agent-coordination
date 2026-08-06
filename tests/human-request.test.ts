@@ -521,12 +521,22 @@ test("two Agents wait independently while Steer follows Answer commit and Deferr
 		view.humanAttention().map(({ agentId }) => agentId).sort(),
 		[first.agentId, second.agentId].sort(),
 	);
-	await host.session.prompt("/agents");
-	const decideRows = host.ui.agentViews.at(-1)?.options.slice(0, 2);
-	assert.deepEqual(decideRows, [
-		"DECIDE 1 · agent · 1 Question",
-		"DECIDE 2 · agent · 1 Question",
-	]);
+	const childAgentsCommand = first.session.prompt("/agents");
+	await waitForCondition(() => host.ui.customSurfaces.length === 1);
+	assert.doesNotMatch(
+		host.ui.customSurfaces[0]!.render(80).join("\n"),
+		/Attention Inbox|DECIDE 1/,
+	);
+	host.ui.customSurfaces[0]!.handleInput?.("\x1b");
+	await childAgentsCommand;
+	const agentsCommand = host.session.prompt("/agents");
+	await waitForCondition(() => host.ui.customSurfaces.length === 1);
+	assert.deepEqual(host.ui.genericSelectCalls, []);
+	const agentsSurface = host.ui.customSurfaces[0]!;
+	const renderedAgents = agentsSurface.render(80).join("\n");
+	assert.match(renderedAgents, /Attention Inbox/);
+	assert.match(renderedAgents, /→ DECIDE 1 · agent/);
+	assert.match(renderedAgents, /DECIDE 2 · agent/);
 
 	await authorMessageToAgent(
 		host,
@@ -546,15 +556,15 @@ test("two Agents wait independently while Steer follows Answer commit and Deferr
 	);
 	assert.equal(observedAttention(view, second.agentId), "input_required");
 
-	const firstAttention = view.humanAttention().find(
-		(item) => item.agentId === first.agentId,
-	);
-	assert.ok(firstAttention);
-	const firstFocus = view.focusHumanRequest(firstAttention.requestId);
+	agentsSurface.handleInput?.("\r");
 	await waitForCondition(() => host.ui.customSurfaces.length === 1);
+	assert.match(
+		host.ui.customSurfaces[0]!.render(80).join("\n"),
+		/Answer the first child\./,
+	);
 	host.ui.customSurfaces[0]!.handleInput?.("First positional Answer");
 	host.ui.customSurfaces[0]!.handleInput?.("\r");
-	await firstFocus;
+	await agentsCommand;
 	await firstRun;
 	await waitForCondition(() => continuationObservations.length === 2);
 	assert.equal(observedAttention(view, second.agentId), "input_required");

@@ -13,7 +13,10 @@ import { Type } from "typebox";
 import piAgentCoordination from "../src/index.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
-import { executeRegisteredTool } from "./support/agent-session.ts";
+import {
+	executeRegisteredTool,
+	openAgentsSurface,
+} from "./support/agent-session.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -123,19 +126,18 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		[{ agentId: grandchildAgentId, phase: "dormant" }],
 	);
 
-	await reopened.session.prompt("/agents");
-	assert.equal(
-		reopened.ui.agentViews.at(-1)?.options.some(
-			(option) => option.includes(`recovered-child · ${spawned.agentId} · dormant`),
-		),
-		true,
-	);
-	assert.equal(
-		reopened.ui.agentViews.at(-1)?.options.some(
-			(option) => option.includes(`recovered-grandchild · ${grandchildAgentId} · dormant`),
-		),
-		true,
-	);
+	const recoveredAgents = await openAgentsSurface(reopened);
+	const selectedBeforeDormantFocus = reopened.runtime.session.sessionId;
+	recoveredAgents.surface.handleInput?.("\t");
+	const recoveredDormant = recoveredAgents.surface.render(80).join("\n");
+	assert.match(recoveredDormant, /recovered-child/);
+	assert.match(recoveredDormant, new RegExp(spawned.agentId));
+	assert.match(recoveredDormant, /recovered-grandchild/);
+	assert.equal(reopened.runtime.session.sessionId, selectedBeforeDormantFocus);
+	recoveredAgents.surface.handleInput?.("\r");
+	await recoveredAgents.command;
+	assert.equal(reopened.runtime.session.sessionId, selectedBeforeDormantFocus);
+	assert.equal(reopened.ui.customSurfaces.length, 0);
 	assert.equal(
 		(await observe.execute(
 			"observe-still-dormant",
@@ -755,20 +757,14 @@ test("recovered authority keeps physical child order while Dormant view uses Pi 
 		),
 		[first.agentId, second.agentId],
 	);
-	await reopened.session.prompt("/agents");
-	const options = reopened.ui.agentViews.at(-1)?.options ?? [];
-	assert.match(options[0] ?? "", /^Live · owner · /);
-	const ordinaryChildren = options.filter(
-		(option) => option.includes("recent-second") || option.includes("physical-first"),
-	);
-	assert.match(
-		ordinaryChildren[0] ?? "",
-		new RegExp(`^Dormant · recent-second · ${second.agentId}`),
-	);
-	assert.match(
-		ordinaryChildren[1] ?? "",
-		new RegExp(`^Dormant · physical-first · ${first.agentId}`),
-	);
+	const recencyAgents = await openAgentsSurface(reopened);
+	recencyAgents.surface.handleInput?.("\t");
+	const dormantLines = recencyAgents.surface.render(80);
+	const recentIndex = dormantLines.findIndex((line) => line.includes("recent-second"));
+	const physicalIndex = dormantLines.findIndex((line) => line.includes("physical-first"));
+	assert.ok(recentIndex >= 0 && recentIndex < physicalIndex);
+	recencyAgents.surface.handleInput?.("\x1b");
+	await recencyAgents.command;
 	await reopened.runtime.dispose();
 });
 
@@ -846,13 +842,14 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 		),
 		false,
 	);
-	await reopened.session.prompt("/agents");
-	assert.equal(
-		reopened.ui.agentViews.at(-1)?.options.some(
-			(option) => option.includes(`moderator · ${moderator.agentId} · dormant`),
-		),
-		true,
-	);
+	const moderatorAgents = await openAgentsSurface(reopened);
+	moderatorAgents.surface.handleInput?.("\t");
+	moderatorAgents.surface.handleInput?.("j");
+	const dormantModerator = moderatorAgents.surface.render(80).join("\n");
+	assert.match(dormantModerator, /moderator.*Moderator.*obligation stall/i);
+	assert.match(dormantModerator, new RegExp(moderator.agentId));
+	moderatorAgents.surface.handleInput?.("\x1b");
+	await moderatorAgents.command;
 
 	let recoveredTools: string[] = [];
 	reopened.model.setResponses([
@@ -932,19 +929,14 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		});
 		return failedModerators.length === 2;
 	});
-	await host.session.prompt("/agents");
-	assert.equal(
-		host.ui.agentViews.at(-1)?.options.some(
-			(option) => {
-				const diagnosticPointers = option.match(/ · Diagnostic /g) ?? [];
-				return option.startsWith("ATTENTION 1 · Obligation Stall") &&
-					option.includes(affected.agentId) &&
-					option.includes(" · Requests 1 · Request ") &&
-					diagnosticPointers.length === 2;
-			},
-		),
-		true,
-	);
+	const attentionAgents = await openAgentsSurface(host);
+	const operationalAttention = attentionAgents.surface.render(80).join("\n");
+	assert.match(operationalAttention, /→ ATTENTION 1 · Obligation Stall/);
+	assert.match(operationalAttention, new RegExp(affected.agentId));
+	assert.match(operationalAttention, /Request .*\/.*\/.*/);
+	assert.equal((operationalAttention.match(/Diagnostic /g) ?? []).length, 2);
+	attentionAgents.surface.handleInput?.("\x1b");
+	await attentionAgents.command;
 
 	const ownerSessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(ownerSessionFile);
@@ -952,13 +944,10 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 	const reopened = await reopenOwner(host, ownerSessionFile, {
 		implicitModeratorResponses: false,
 	});
-	await reopened.session.prompt("/agents");
-	assert.equal(
-		reopened.ui.agentViews.at(-1)?.options.some(
-			(option) => option.startsWith("ATTENTION "),
-		),
-		false,
-	);
+	const reopenedAgents = await openAgentsSurface(reopened);
+	assert.doesNotMatch(reopenedAgents.surface.render(80).join("\n"), /ATTENTION 1/);
+	reopenedAgents.surface.handleInput?.("\x1b");
+	await reopenedAgents.command;
 	await reopened.runtime.dispose();
 });
 

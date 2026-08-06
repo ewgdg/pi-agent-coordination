@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import xtermHeadless from "@xterm/headless";
+
 const SCRIPT = "/usr/bin/script";
 const FIXTURE = fileURLToPath(
 	new URL("./fixtures/coordinated-workflow-pty-fixture.ts", import.meta.url),
@@ -20,7 +22,21 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 			dormantAgentId: string;
 		}>("__PTY_SETUP__");
 		await terminal.waitFor("Worker Live");
+		const liveFrame = await terminal.screen();
+		assert.equal(liveFrame.some((line) => /^┌─+┐$/.test(line)), true);
+		assert.equal(
+			liveFrame.some((line) => /^│.*Live.*Dormant.*│$/.test(line)),
+			true,
+		);
+		assert.equal(
+			liveFrame.some((line) => /^│.*children.*parent.*│$/.test(line)),
+			true,
+		);
+		assert.equal(liveFrame.some((line) => /^└─+┘$/.test(line)), true);
+		terminal.write("\t");
 		await terminal.waitFor("Worker Dormant");
+		terminal.write("\t");
+		await terminal.waitFor("Worker Live");
 		terminal.write("\x1b[B");
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_SELECTED_LIVE__");
@@ -28,6 +44,7 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		terminal.write("\x1b");
 		await terminal.waitFor("__PTY_HUMAN_ESCAPED__");
 
+		terminal.write("k");
 		await terminal.waitFor(setup.ownerId);
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_ROUND_TRIPS__");
@@ -88,6 +105,20 @@ class PtyFixture {
 
 	output(): string {
 		return this.#output;
+	}
+
+	async screen(): Promise<string[]> {
+		const terminal = new xtermHeadless.Terminal({
+			allowProposedApi: true,
+			cols: 80,
+			rows: 24,
+			scrollback: 1_000,
+		});
+		await new Promise<void>((resolve) => terminal.write(this.#output, resolve));
+		const buffer = terminal.buffer.active;
+		return Array.from({ length: 24 }, (_value, index) =>
+			buffer.getLine(buffer.viewportY + index)?.translateToString(true).trim() ?? ""
+		);
 	}
 
 	closed(): Promise<void> {

@@ -27,13 +27,13 @@ After Owner Identity validation, the package binds the ordinary tools through a 
 - `ask_user_question` blocks the caller's exact Run on one or more structured Questions. Its matching successful native tool result is the sole Human Answer.
 - `agent_observe` returns an authorized Agent's durable identity, structural relationship, bounded primary transcript evidence, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
 - `agent_control` interrupts, explicitly resumes, or terminates one authorized exact child Run.
-- `/agents` presents numbered `DECIDE` Human Request rows, passive Owner-only `ATTENTION` rows for exhausted Operational Incident handling, and Workflow Agent statuses. Selecting a live Agent switches the native editor and transcript view to that retained session; selecting a `DECIDE` row opens that exact Human Request without background focus theft.
+- `/agents` opens the framed [Agent selector](agent-selector.md), with Owner-only Human and Operational attention plus separate Live and Dormant Agent views.
 
 These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer.
 
 Coordination roles are trusted protocol participants, not a security boundary. Role-scoped tools constrain the intended workflow and keep caller identity out of model-supplied arguments; they do not isolate mutually hostile code or users.
 
-See [Human Requests](human-requests.md) for the Question and Answer shapes, interaction keys, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and `/agents` selection.
+See [Human Requests](human-requests.md) for the Question and Answer shapes, interaction keys, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and session selection.
 
 ## Activation modes
 

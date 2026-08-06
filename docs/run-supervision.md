@@ -78,7 +78,7 @@ The human can also use `/agents` to select a live held Agent and submit native e
 
 A supervisory or human dispatch failure reports an error, clears only the failed resumption attempt, and leaves the exact Hold available for an explicit retry. Failed human input is not passed through as an ordinary Pi prompt.
 
-`/agents` switches the native editor and transcript view among retained live sessions without changing protocol authority. The selected session gains `interactive_selection` retention; leaving it removes that retention. Dormant Agents remain observable but cannot be selected. Orderly shutdown returns selection to the Owner before sessions are disposed.
+The [Agent selector](agent-selector.md) switches the native editor and transcript view among retained live sessions without changing protocol authority. The selected session gains `interactive_selection` retention; leaving it removes that retention. A Dormant row can submit the same identity-based selection request, but the selector never starts a Run. Orderly shutdown returns selection to the Owner before sessions are disposed.
 
 ## Terminate an exact Run
 

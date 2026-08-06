@@ -48,9 +48,7 @@ test("retained native selection refreshes bindings without replaying session sta
 	]);
 	const childAgentId = await spawnRetainedChild(host);
 
-	host.ui.select = async (_title, options) =>
-		options.find((option) => option.includes(childAgentId));
-	await host.session.prompt("/agents");
+	await selectAgent(host, childAgentId);
 	const selectedChild = host.runtime.session;
 	const observe = selectedChild.getToolDefinition("agent_observe");
 	assert.ok(observe);
@@ -71,12 +69,8 @@ test("retained native selection refreshes bindings without replaying session sta
 		childCoordinationExtensions[0]?.handlers.has("session_start"),
 		false,
 	);
-	host.ui.select = async (_title, options) =>
-		options.find((option) => option.includes(host.session.sessionId));
-	await selectedChild.prompt("/agents");
-	host.ui.select = async (_title, options) =>
-		options.find((option) => option.includes(childAgentId));
-	await host.runtime.session.prompt("/agents");
+	await selectAgent(host, host.session.sessionId);
+	await selectAgent(host, childAgentId);
 
 	assert.deepEqual(sessionStartReasons(host.session.sessionId), ["startup"]);
 	assert.deepEqual(sessionStartReasons(childAgentId), ["startup"]);

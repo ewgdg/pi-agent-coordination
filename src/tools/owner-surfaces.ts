@@ -6,14 +6,7 @@ import type {
 	OrdinaryAgentCoordinatorView,
 } from "../coordination/workflow-coordinator.ts";
 import type { RunControlReceipt } from "../protocol/run-control.ts";
-import {
-	MAX_AUTOMATIC_MODERATOR_ATTEMPTS,
-	type OperationalIncidentAttention,
-} from "../coordination/operational-incidents.ts";
-import {
-	formatOperationalIncidentHeadline,
-	operationalIncidentRequestEvidence,
-} from "../presentation/operational-incident-surface.ts";
+import { openAgentSelectorSurface } from "../presentation/agent-selector-surface.ts";
 import {
 	renderAgentControlCall,
 	renderAgentControlResult,
@@ -451,73 +444,19 @@ function registerAgentSurfaces(
 		handler: async (_args, ctx) => {
 			const view = resolveView();
 			const roster = view.selectionRoster();
-			const statusRows = [
-				...roster.live.map((status) => ({
-					status,
-					option: `Live · ${formatAgentRow(status)}`,
-				})),
-				...roster.dormant.map((status) => ({
-					status,
-					option: `Dormant · ${formatAgentRow(status)}`,
-				})),
-			];
-			const attention = view.humanAttention();
-			const attentionOptions = attention.map(
-				(item, index) =>
-					`DECIDE ${index + 1} · ${item.agentLabel} · ${item.questionCount} Question${item.questionCount === 1 ? "" : "s"}`,
-			);
-				const operationalAttention = view.operationalAttention();
-				const operationalOptions = operationalAttention.map(
-					(item, index) => formatOperationalIncidentOption(item, index),
-				);
-			const selected = await ctx.ui.select("Agents", [
-				...attentionOptions,
-				...operationalOptions,
-				...statusRows.map(({ option }) => option),
-			]);
-			const attentionIndex = selected === undefined
-				? -1
-				: attentionOptions.indexOf(selected);
-			if (attentionIndex >= 0) {
-				await view.focusHumanRequest(attention[attentionIndex]!.requestId);
-				return;
+			const selectedAgent = view.status();
+			const ownerVisible = selectedAgent.agentId === selectedAgent.workflowId;
+			const action = await openAgentSelectorSurface(ctx.ui, {
+				...roster,
+				selectedAgentId: selectedAgent.agentId,
+				humanAttention: ownerVisible ? view.humanAttention() : [],
+				operationalAttention: ownerVisible ? view.operationalAttention() : [],
+			});
+			if (action?.kind === "select_agent") {
+				await view.selectForHuman(action.agentId);
+			} else if (action?.kind === "focus_human_request") {
+				await view.focusHumanRequest(action.requestId);
 			}
-			if (selected !== undefined && operationalOptions.includes(selected)) return;
-			const selectedStatus = statusRows.find(({ option }) => option === selected)?.status;
-			if (selectedStatus) await view.selectForHuman(selectedStatus.agentId);
 		},
 	});
-}
-
-export function formatOperationalIncidentOption(
-	attention: OperationalIncidentAttention,
-	index: number,
-): string {
-	const requests = operationalIncidentRequestEvidence(attention);
-	return [
-		`ATTENTION ${index + 1}`,
-		formatOperationalIncidentHeadline(attention),
-		`Requests ${requests.total}`,
-		...requests.sources.map(
-			(pointer) => `Request ${pointer.agentId}/${pointer.entryId}/${pointer.toolCallId}`,
-		),
-		...attention.diagnostics.slice(0, MAX_AUTOMATIC_MODERATOR_ATTEMPTS).map(
-			(pointer) => `Diagnostic ${pointer.agentId}/${pointer.entryId}`,
-		),
-	].join(" · ");
-}
-
-function formatAgentRow(status: ReturnType<OrdinaryAgentCoordinatorView["status"]>): string {
-	const run = status.run;
-	const work = "work" in run && run.work ? `/${run.work}` : "";
-	const binding = run.retentionReasons.length === 0
-		? undefined
-		: run.retentionReasons.map((retention) => [
-			retention.reason.replaceAll("_", " "),
-			retention.count > 1 ? `×${retention.count}` : undefined,
-		].filter(Boolean).join(" ")).join(", ");
-	return [
-		`${status.label} · ${status.agentId} · ${run.phase}${work}`,
-		binding,
-	].filter(Boolean).join(" · ");
 }

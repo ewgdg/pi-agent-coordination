@@ -55,10 +55,9 @@ const EMPTY_USAGE = {
 } as const;
 
 export type TestUi = ExtensionUIContext & {
-	readonly agentViews: Array<{ title: string; options: string[] }>;
+	readonly genericSelectCalls: Array<{ title: string; options: string[] }>;
 	readonly notifications: Array<{ message: string; type?: "info" | "warning" | "error" }>;
 	readonly customSurfaces: Component[];
-	selectionResponses: string[];
 };
 
 export type TestOwnerHost = {
@@ -262,12 +261,14 @@ async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
 }
 
 function createTestUi(): TestUi {
-	const agentViews: TestUi["agentViews"] = [];
+	const genericSelectCalls: TestUi["genericSelectCalls"] = [];
 	const notifications: TestUi["notifications"] = [];
 	const customSurfaces: Component[] = [];
-	const selectionResponses: string[] = [];
 	let editorText = "";
-	const testTui = { requestRender() {} } as unknown as TUI;
+	const testTui = {
+		terminal: { columns: 80, rows: 24 },
+		requestRender() {},
+	} as unknown as TUI;
 	const testTheme = {
 		fg: (_color: string, text: string) => text,
 		bg: (_color: string, text: string) => text,
@@ -311,13 +312,12 @@ function createTestUi(): TestUi {
 		});
 	};
 	return {
-		agentViews,
+		genericSelectCalls,
 		notifications,
 		customSurfaces,
-		selectionResponses,
 		async select(title: string, options: string[]) {
-			agentViews.push({ title, options: [...options] });
-			return selectionResponses.shift();
+			genericSelectCalls.push({ title, options: [...options] });
+			return undefined;
 		},
 		async confirm() {
 			return false;

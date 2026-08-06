@@ -423,6 +423,12 @@ export class InProcessAgentHost {
 		};
 	}
 
+	queuedInputCount(): number {
+		const held = this.#heldNativeQueue;
+		return (this.#run?.session.pendingMessageCount ?? 0) +
+			(held ? held.steering.length + held.followUp.length : 0);
+	}
+
 	trackOperation(operation: Promise<unknown>): void {
 		const tracked = operation.then(
 			() => undefined,

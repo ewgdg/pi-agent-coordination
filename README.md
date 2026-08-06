@@ -60,4 +60,5 @@ Pi transcripts are the durable authority for identity, Messages, Requests, Deliv
 - [Agent spawning](docs/agent-spawning.md) — child creation and receipt semantics
 - [Agent messaging](docs/agent-messaging.md) — delivery modes and Agent Requests
 - [Human Requests](docs/human-requests.md) — structured Questions and native interaction
+- [Agent selector](docs/agent-selector.md) — Live hierarchy, Dormant recency, attention, and keyboard navigation
 - [Run supervision](docs/run-supervision.md) — observation, interruption, resumption, termination, and session selection

@@ -34,11 +34,7 @@ test("native clone is cancelled while an ordinary child is selected", async () =
 			request: "Remain available while native clone authorization is checked.",
 		});
 		const childAgentId = (spawn as { agentId: string }).agentId;
-		host.ui.select = async (title, options) => {
-			host.ui.agentViews.push({ title, options: [...options] });
-			return options.find((option) => option.includes(childAgentId));
-		};
-		await host.session.prompt("/agents");
+		await selectAgent(host, childAgentId);
 		const selectedChild = host.runtime.session;
 		assert.equal(selectedChild.sessionId, childAgentId);
 		await selectedChild.waitForIdle();
