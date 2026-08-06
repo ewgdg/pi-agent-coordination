@@ -134,7 +134,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 	assert.match(recoveredDormant, new RegExp(spawned.agentId));
 	assert.match(recoveredDormant, /recovered-grandchild/);
 	assert.equal(reopened.runtime.session.sessionId, selectedBeforeDormantFocus);
-	recoveredAgents.surface.handleInput?.("\r");
+	recoveredAgents.surface.handleInput?.("\x1b");
 	await recoveredAgents.command;
 	assert.equal(reopened.runtime.session.sessionId, selectedBeforeDormantFocus);
 	assert.equal(reopened.ui.customSurfaces.length, 0);
