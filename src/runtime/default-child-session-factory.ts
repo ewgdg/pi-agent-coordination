@@ -18,7 +18,11 @@ import {
 	requireLiveServices,
 	type AgentRecord,
 } from "../coordination/agent-record.ts";
-import { copyExtensionBindings } from "../pi-integration/extension-bindings.ts";
+import {
+	copyExtensionBindings,
+	rememberNativeExtensionUIState,
+	setNativeExtensionUIState,
+} from "../pi-integration/extension-bindings.ts";
 import { resolveAgentRunProjectTrust } from "../pi-integration/project-trust.ts";
 import { resolveRunExtensions } from "../pi-integration/named-inline-extension-factories.ts";
 import type { HumanPresentationBinding } from "../pi-integration/interactive-session-selection.ts";
@@ -419,6 +423,7 @@ export class DefaultChildSessionFactory {
 			if (startupErrors.length > 0) {
 				throw new Error(`Agent extension startup failed: ${startupErrors[0]}`);
 			}
+			rememberNativeExtensionUIState(session);
 		} catch (error) {
 			session.dispose();
 			throw error;
@@ -456,6 +461,7 @@ export class DefaultChildSessionFactory {
 			await session.bindExtensions(
 				copyExtensionBindings(this.#ownerRuntime.session, session),
 			);
+			setNativeExtensionUIState(session, { editorComponent: undefined });
 			session.setActiveToolsByName([]);
 		} catch (error) {
 			session.dispose();

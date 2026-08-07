@@ -1,6 +1,13 @@
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type {
+	AgentSession,
+	ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
 
 type ExtensionBindings = Parameters<AgentSession["bindExtensions"]>[0];
+
+export type NativeExtensionUIState = Readonly<{
+	editorComponent: ReturnType<ExtensionUIContext["getEditorComponent"]>;
+}>;
 
 type BoundSession = {
 	_extensionUIContext: ExtensionBindings["uiContext"];
@@ -9,8 +16,49 @@ type BoundSession = {
 	_extensionAbortHandler: ExtensionBindings["abortHandler"];
 	_extensionShutdownHandler: ExtensionBindings["shutdownHandler"];
 	_extensionErrorListener: ExtensionBindings["onError"];
+	// Pi clears host-owned extension UI before a native rebind. Retained sessions
+	// skip session_start, so the last editor factory must survive that reset.
+	_nativeExtensionUIState?: NativeExtensionUIState;
 	_applyExtensionBindings(runner: AgentSession["extensionRunner"]): void;
 };
+
+export function captureNativeExtensionUIState(
+	session: AgentSession,
+): NativeExtensionUIState {
+	const bound = session as unknown as BoundSession;
+	return {
+		editorComponent: bound._extensionUIContext?.getEditorComponent(),
+	};
+}
+
+export function rememberNativeExtensionUIState(session: AgentSession): void {
+	const bound = session as unknown as BoundSession;
+	bound._nativeExtensionUIState = captureNativeExtensionUIState(session);
+}
+
+export function readNativeExtensionUIState(
+	session: AgentSession,
+): NativeExtensionUIState {
+	const bound = session as unknown as BoundSession;
+	return bound._nativeExtensionUIState ?? captureNativeExtensionUIState(session);
+}
+
+export function setNativeExtensionUIState(
+	session: AgentSession,
+	state: NativeExtensionUIState,
+): void {
+	const bound = session as unknown as BoundSession;
+	bound._nativeExtensionUIState = state;
+}
+
+export function restoreNativeExtensionUIState(
+	session: AgentSession,
+	state: NativeExtensionUIState,
+): void {
+	const bound = session as unknown as BoundSession;
+	bound._nativeExtensionUIState = state;
+	bound._extensionUIContext?.setEditorComponent(state.editorComponent);
+}
 
 export function hasInstalledExtensionBindings(session: AgentSession): boolean {
 	const bound = session as unknown as BoundSession;

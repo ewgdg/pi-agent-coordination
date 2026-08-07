@@ -268,6 +268,7 @@ function createTestUi(): TestUi {
 	const customSurfaces: Component[] = [];
 	const statuses: TestUi["statuses"] = new Map();
 	const widgets: TestUi["widgets"] = new Map();
+	let editorComponent: ReturnType<ExtensionUIContext["getEditorComponent"]>;
 	let editorText = "";
 	const testTui = {
 		terminal: { columns: 80, rows: 24 },
@@ -363,7 +364,12 @@ function createTestUi(): TestUi {
 		async editor() {
 			return undefined;
 		},
-		setEditorComponent() {},
+		setEditorComponent(factory: ReturnType<ExtensionUIContext["getEditorComponent"]>) {
+			editorComponent = factory;
+		},
+		getEditorComponent() {
+			return editorComponent;
+		},
 		theme: testTheme,
 	} as unknown as TestUi;
 }

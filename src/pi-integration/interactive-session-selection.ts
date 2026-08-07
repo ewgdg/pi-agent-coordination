@@ -5,6 +5,10 @@ import type {
 	AgentSessionServices,
 } from "@earendil-works/pi-coding-agent";
 
+import {
+	readNativeExtensionUIState,
+	restoreNativeExtensionUIState,
+} from "./extension-bindings.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 
 export type HumanPresentationBinding = Readonly<{
@@ -81,12 +85,18 @@ export function bindHumanSessionSelection(
 			throw new Error("Pi InteractiveMode has not registered its session rebind callback");
 		}
 		const previous = selected;
+		// Native teardown clears the shared TUI extension state. Read each session's
+		// last binding before teardown and restore only after the target is rebound;
+		// replaying session_start would duplicate non-UI extension lifecycle work.
+		const previousExtensionUIState = readNativeExtensionUIState(previous.session);
+		const nextExtensionUIState = readNativeExtensionUIState(binding.session);
 		// Pi normally performs this synchronous teardown immediately before session
 		// replacement. Retained and presentation-only bindings need the same UI seam.
 		mutableRuntime.beforeSessionInvalidate?.();
 		applyRuntimeBinding(binding);
 		try {
 			await rebindSession(binding.session);
+			restoreNativeExtensionUIState(binding.session, nextExtensionUIState);
 		} catch (activationError) {
 			const rollbackErrors: unknown[] = [];
 			try {
@@ -97,6 +107,7 @@ export function bindHumanSessionSelection(
 			applyRuntimeBinding(previous);
 			try {
 				await rebindSession(previous.session);
+				restoreNativeExtensionUIState(previous.session, previousExtensionUIState);
 			} catch (rollbackError) {
 				rollbackErrors.push(rollbackError);
 			}
@@ -131,6 +142,7 @@ export function bindHumanSessionSelection(
 	): Promise<void> => {
 		const previous = selected;
 		const recoveryErrors: unknown[] = [activationError];
+		const nextExtensionUIState = readNativeExtensionUIState(binding.session);
 		let replacementConfirmed = true;
 		// Rollback cannot remain the final state because the previous exact Run
 		// will be disposed immediately after this transition completes.
@@ -147,6 +159,7 @@ export function bindHumanSessionSelection(
 		} else {
 			try {
 				await rebindSession(binding.session);
+				restoreNativeExtensionUIState(binding.session, nextExtensionUIState);
 			} catch (error) {
 				recoveryErrors.push(error);
 				replacementConfirmed = false;

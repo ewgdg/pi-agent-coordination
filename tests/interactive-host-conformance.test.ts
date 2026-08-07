@@ -192,6 +192,40 @@ test("retained native selection refreshes bindings without replaying session sta
 	await host.runtime.dispose();
 });
 
+test("retained native selection restores third-party editor bindings", async () => {
+	const editorFactories = new Map<string, unknown>();
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "third-party-modal-editor",
+			hidden: true,
+			factory: (pi) => {
+				pi.on("session_start", (_event, ctx) => {
+					const editorFactory = () => undefined as never;
+					editorFactories.set(ctx.sessionManager.getSessionId(), editorFactory);
+					ctx.ui.setEditorComponent(editorFactory);
+				});
+			},
+		}],
+	});
+	host.runtime.setBeforeSessionInvalidate(() => host.ui.setEditorComponent(undefined));
+	const ownerEditorFactory = host.ui.getEditorComponent();
+	assert.equal(ownerEditorFactory, editorFactories.get(host.session.sessionId));
+	host.model.setResponses([
+		fauxAssistantMessage("Remain live while the editor binding moves between Agents."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	const childEditorFactory = editorFactories.get(childAgentId);
+	assert.ok(childEditorFactory);
+
+	await selectAgent(host, childAgentId);
+	assert.equal(host.ui.getEditorComponent(), childEditorFactory);
+
+	await selectAgent(host, host.session.sessionId);
+	assert.equal(host.ui.getEditorComponent(), ownerEditorFactory);
+	await host.runtime.dispose();
+});
+
 test("interactive selection rejects ordinary termination until the Agent is deselected", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
 	host.model.setResponses([
