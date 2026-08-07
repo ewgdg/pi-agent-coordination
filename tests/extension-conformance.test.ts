@@ -100,7 +100,7 @@ test("role-bound extensions expose strict sequential tools with compact native r
 				assert.equal(tool.executionMode, "sequential", toolName);
 				assert.equal(typeof tool.renderCall, "function", toolName);
 				assert.equal(typeof tool.renderResult, "function", toolName);
-				assertStrictObjectVariants(tool.parameters, toolName);
+				assertProviderCompatibleObjectSchema(tool.parameters, toolName);
 			}
 			assert.equal(
 				host.services.resourceLoader.getExtensions().extensions.length,
@@ -227,12 +227,14 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 	await moderatorHost.runtime.dispose();
 });
 
-function assertStrictObjectVariants(schema: unknown, toolName: string): void {
+function assertProviderCompatibleObjectSchema(schema: unknown, toolName: string): void {
 	assert.ok(typeof schema === "object" && schema !== null, toolName);
 	const record = schema as {
+		type?: unknown;
 		additionalProperties?: unknown;
 		anyOf?: Array<{ additionalProperties?: unknown }>;
 	};
+	assert.equal(record.type, "object", toolName);
 	const variants = record.anyOf ?? [record];
 	assert.ok(variants.length > 0, toolName);
 	for (const variant of variants) {

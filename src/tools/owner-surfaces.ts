@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
 
 import type {
 	HumanPresentationCoordinatorView,
@@ -100,7 +100,7 @@ function registerAgentSurfaces(
 		humanRequest: boolean;
 	}>,
 ): void {
-	const messageParameters = Type.Union([
+	const messageParameters = objectRootUnion(Type.Union([
 		Type.Object(
 			{
 				operation: Type.Literal("send"),
@@ -159,7 +159,7 @@ function registerAgentSurfaces(
 			},
 			{ additionalProperties: false },
 		),
-	]);
+	]));
 	const spawnParameters = Type.Object(
 		{
 			request: Type.String({ minLength: 1 }),
@@ -216,7 +216,7 @@ function registerAgentSurfaces(
 		},
 		{ additionalProperties: false },
 	);
-	const observeParameters = Type.Union([
+	const observeParameters = objectRootUnion(Type.Union([
 		Type.Object(
 			{
 				operation: Type.Literal("status"),
@@ -231,8 +231,8 @@ function registerAgentSurfaces(
 			},
 			{ additionalProperties: false },
 		),
-	]);
-	const controlParameters = Type.Union([
+	]));
+	const controlParameters = objectRootUnion(Type.Union([
 		Type.Object(
 			{
 				operation: Type.Literal("interrupt"),
@@ -255,7 +255,7 @@ function registerAgentSurfaces(
 			},
 			{ additionalProperties: false },
 		),
-	]);
+	]));
 	const humanOption = Type.Object(
 		{
 			label: Type.String({ minLength: 1 }),
@@ -440,7 +440,7 @@ function registerAgentSurfaces(
 				{ additionalProperties: false },
 			),
 		]);
-		const moderatorControlParameters = Type.Union([
+		const moderatorControlParameters = objectRootUnion(Type.Union([
 			Type.Object(
 				{
 					operation: Type.Literal("renew_review_deadline"),
@@ -466,7 +466,7 @@ function registerAgentSurfaces(
 				},
 				{ additionalProperties: false },
 			),
-		]);
+		]));
 		pi.registerTool({
 			name: "moderator_control",
 			label: "Control Moderation",
@@ -492,4 +492,11 @@ function registerAgentSurfaces(
 	}
 
 	registerAgentsCommand(pi, resolveView);
+}
+
+function objectRootUnion<T extends TSchema>(schema: T): T {
+	// DeepSeek validates the function schema root before evaluating its variants.
+	// Keep TypeBox's discriminated union for Pi validation while exposing the
+	// object root required by OpenAI-compatible providers.
+	return Object.assign(schema, { type: "object" as const });
 }
