@@ -16,6 +16,8 @@ Enter submits the focused Live Agent to the native session-selection boundary. S
 
 While a non-Owner Agent is selected, Pi's native footer keeps one extension-status slot with the Agent label, compact identity, and current semantic Run state. The selected Agent label is accented and bold for non-failed states; an active Run prefixes it with `●`, while a Dormant Agent uses `○`. Compact identity and ordinary states remain dim, `waiting (human)` is the only warning state, and a currently observable failed Run uses error emphasis. Selecting Owner clears the slot. This footer projection is independent of the scoped activity panel.
 
+Native session replacement remains Owner-only while a non-Owner Agent is selected. `/resume` and `/fork` are omitted from slash-command autocomplete, and Pi cancels switch or fork requests before invalidating the selected Agent's presentation binding. Return to Owner before replacing or forking the native session.
+
 ## Dormant
 
 Dormant is a flat list of every verified ordinary Agent and Moderator without a current Run. It follows Pi resume recency: latest user or assistant activity, then native session creation time. Moderator rows include their role and compact trigger description.

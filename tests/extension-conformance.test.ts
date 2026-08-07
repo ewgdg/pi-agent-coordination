@@ -6,8 +6,10 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
 	createAgentBoundExtension,
 	createModeratorBoundExtension,
+	createPresentationBoundExtension,
 } from "../src/bootstrap/agent-extension.ts";
 import type {
+	HumanPresentationCoordinatorView,
 	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
 } from "../src/coordination/workflow-coordinator.ts";
@@ -31,6 +33,39 @@ const plainTheme = {
 	fg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 } as unknown as Theme;
+
+test("child session surfaces disable native session replacement", async (t) => {
+	const unavailableView = () => {
+		throw new Error("Child session command conformance does not execute coordination behavior");
+	};
+	const childSurfaces = [
+		{
+			name: "live",
+			extension: createAgentBoundExtension(
+				unavailableView as () => OrdinaryAgentCoordinatorView,
+			),
+		},
+		{
+			name: "dormant",
+			extension: createPresentationBoundExtension(
+				unavailableView as () => HumanPresentationCoordinatorView,
+			),
+		},
+	] as const;
+
+	for (const { name, extension } of childSurfaces) {
+		await t.test(name, async () => {
+			const host = await createTestOwnerHost(extension, { persistent: true });
+			const sessionFile = host.session.sessionManager.getSessionFile();
+			assert.ok(sessionFile);
+			assert.deepEqual(
+				await host.runtime.switchSession(sessionFile),
+				{ cancelled: true },
+			);
+			await host.runtime.dispose();
+		});
+	}
+});
 
 test("role-bound extensions expose strict sequential tools with compact native renderers", async (t) => {
 	for (const role of ["ordinary", "moderator"] as const) {

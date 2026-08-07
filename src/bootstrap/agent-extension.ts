@@ -39,6 +39,7 @@ export function createPresentationBoundExtension(
 	resolveView: () => HumanPresentationCoordinatorView,
 ): ExtensionFactory {
 	return (pi) => {
+		registerChildNativeSessionPolicy(pi);
 		registerAgentsCommand(pi, resolveView);
 		pi.on("input", async (event, ctx) => {
 			if (event.source !== "interactive") return { action: "handled" };
@@ -62,11 +63,15 @@ function createParticipantBoundExtension<
 	registerSurfaces: (pi: ExtensionAPI, resolveView: () => View) => void,
 ): ExtensionFactory {
 	return (pi) => {
-		pi.on("session_before_fork", () => ({ cancel: true }));
-		pi.on("session_before_switch", () => ({ cancel: true }));
+		registerChildNativeSessionPolicy(pi);
 		registerSurfaces(pi, resolveView);
 		registerAgentBoundBehavior(pi, resolveView);
 	};
+}
+
+function registerChildNativeSessionPolicy(pi: ExtensionAPI): void {
+	pi.on("session_before_fork", () => ({ cancel: true }));
+	pi.on("session_before_switch", () => ({ cancel: true }));
 }
 
 export function bindHiddenOwnerAgentExtension(options: {

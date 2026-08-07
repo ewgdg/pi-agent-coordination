@@ -1,5 +1,7 @@
 import type {
 	AgentSessionRuntime,
+	AutocompleteProviderFactory,
+	ExtensionUIContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
@@ -38,12 +40,54 @@ export type InteractiveHostBridge = {
 };
 
 const BRIDGE_REGISTRY_KEY = "__piAgentCoordinationInteractiveHostBridge";
+const CHILD_NATIVE_SESSION_REGISTRY_KEY = "__piAgentCoordinationChildNativeSessions";
 const globalBridgeRegistry = globalThis as typeof globalThis & {
 	[BRIDGE_REGISTRY_KEY]?: WeakMap<object, BridgeState>;
+	[CHILD_NATIVE_SESSION_REGISTRY_KEY]?: WeakSet<SessionManager>;
 };
 // Pi may re-evaluate extension modules during resource reload. Process-global
 // ownership prevents a second evaluation from stacking private host patches.
 const bridgeStates = (globalBridgeRegistry[BRIDGE_REGISTRY_KEY] ??= new WeakMap());
+const childNativeSessions = (
+	globalBridgeRegistry[CHILD_NATIVE_SESSION_REGISTRY_KEY] ??= new WeakSet()
+);
+const CHILD_HIDDEN_NATIVE_COMMANDS = new Set(["resume", "fork"]);
+
+const hideChildNativeCommands: AutocompleteProviderFactory = (current) => ({
+	...(current.triggerCharacters === undefined
+		? {}
+		: { triggerCharacters: current.triggerCharacters }),
+	async getSuggestions(lines, cursorLine, cursorCol, options) {
+		const suggestions = await current.getSuggestions(
+			lines,
+			cursorLine,
+			cursorCol,
+			options,
+		);
+		const textBeforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
+		const isNativeCommandList =
+			!options.force &&
+			textBeforeCursor.startsWith("/") &&
+			!textBeforeCursor.includes(" ");
+		if (!suggestions || !isNativeCommandList) return suggestions;
+		const items = suggestions.items.filter(
+			({ value }) => !CHILD_HIDDEN_NATIVE_COMMANDS.has(value),
+		);
+		return items.length === 0 ? null : { ...suggestions, items };
+	},
+	applyCompletion: (lines, cursorLine, cursorCol, item, prefix) =>
+		current.applyCompletion(lines, cursorLine, cursorCol, item, prefix),
+	...(current.shouldTriggerFileCompletion === undefined
+		? {}
+		: {
+			shouldTriggerFileCompletion: (lines: string[], cursorLine: number, cursorCol: number) =>
+				current.shouldTriggerFileCompletion!(lines, cursorLine, cursorCol),
+		}),
+});
+
+export function markChildNativeSession(sessionManager: SessionManager): void {
+	childNativeSessions.add(sessionManager);
+}
 
 export function installInteractiveHostBridge(hostValue: unknown): InteractiveHostBridge {
 	assertHostModuleShape(hostValue);
@@ -112,18 +156,31 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 			}
 			if (!hasInstalledExtensionBindings(runtime.session)) {
 				await originalBindCurrentSessionExtensions.call(this);
-				requestFullInteractiveRender(this);
-				return;
+			} else {
+				await refreshNativeExtensionBindings(runtime.session, () =>
+					originalBindCurrentSessionExtensions.call(this),
+				);
 			}
-			await refreshNativeExtensionBindings(runtime.session, () =>
-				originalBindCurrentSessionExtensions.call(this),
-			);
+			applyChildNativeCommandPresentation(this, runtime.session.sessionManager);
 			requestFullInteractiveRender(this);
 		};
 	interactivePrototype.bindCurrentSessionExtensions =
 		captureValidatedInteractiveRuntime;
 
 	return state;
+}
+
+function applyChildNativeCommandPresentation(
+	interactiveMode: unknown,
+	sessionManager: SessionManager,
+): void {
+	if (!childNativeSessions.has(sessionManager)) return;
+	// Native slash commands live above AgentSession and cannot be unregistered.
+	// Apply the public autocomplete wrapper only after Pi binds the selected session.
+	const uiContext = (interactiveMode as {
+		createExtensionUIContext(): ExtensionUIContext;
+	}).createExtensionUIContext();
+	uiContext.addAutocompleteProvider(hideChildNativeCommands);
 }
 
 function requestFullInteractiveRender(interactiveMode: unknown): void {

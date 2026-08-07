@@ -7,6 +7,7 @@ import test from "node:test";
 import xtermHeadless from "@xterm/headless";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
+	type AutocompleteProvider,
 	type Component,
 	type Terminal,
 	TuiMainScreen,
@@ -189,6 +190,67 @@ test("retained native selection refreshes bindings without replaying session sta
 
 	assert.deepEqual(sessionStartReasons(host.session.sessionId), ["startup"]);
 	assert.deepEqual(sessionStartReasons(childAgentId), ["startup"]);
+	await host.runtime.dispose();
+});
+
+test("native session replacement commands are available only while Owner is selected", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage("Remain live while native resume availability follows selection."),
+	]);
+	assert.equal(host.ui.autocompleteProviderFactories.length, 0);
+
+	const childAgentId = await spawnRetainedChild(host);
+	assert.equal(host.ui.autocompleteProviderFactories.length, 0);
+	await selectAgent(host, childAgentId);
+	assert.equal(host.ui.autocompleteProviderFactories.length, 1);
+
+	const currentProvider: AutocompleteProvider = {
+		triggerCharacters: ["/"],
+		async getSuggestions() {
+			return {
+				prefix: "/",
+				items: [
+					{ value: "resume", label: "resume" },
+					{ value: "fork", label: "fork" },
+					{ value: "session", label: "session" },
+				],
+			};
+		},
+		applyCompletion(lines, cursorLine, cursorCol) {
+			return { lines, cursorLine, cursorCol };
+		},
+	};
+	const childProvider = host.ui.autocompleteProviderFactories[0]!(currentProvider);
+	const suggestions = await childProvider.getSuggestions(
+		["/"],
+		0,
+		1,
+		{ signal: new AbortController().signal },
+	);
+	assert.deepEqual(suggestions?.items.map(({ value }) => value), ["session"]);
+
+	const selectedChildSession = host.runtime.session;
+	const childSessionFile = selectedChildSession.sessionManager.getSessionFile();
+	assert.ok(childSessionFile);
+	assert.deepEqual(
+		await host.runtime.switchSession(childSessionFile),
+		{ cancelled: true },
+	);
+	assert.equal(host.runtime.session, selectedChildSession);
+
+	await selectAgent(host, host.session.sessionId);
+	assert.equal(host.ui.autocompleteProviderFactories.length, 0);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-dormant-resume-policy-check",
+		{ operation: "terminate", agentId: childAgentId },
+	);
+	await selectDormantAgent(host, childAgentId);
+	assert.equal(host.ui.autocompleteProviderFactories.length, 1);
+	await selectAgent(host, host.session.sessionId);
+	assert.equal(host.ui.autocompleteProviderFactories.length, 0);
 	await host.runtime.dispose();
 });
 
