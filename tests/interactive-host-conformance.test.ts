@@ -7,9 +7,9 @@ import test from "node:test";
 import xtermHeadless from "@xterm/headless";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
-	TUI,
 	type Component,
 	type Terminal,
+	TuiMainScreen,
 } from "@earendil-works/pi-tui";
 import * as hostPi from "@earendil-works/pi-coding-agent";
 
@@ -729,7 +729,7 @@ test("native long-to-short rebinding reconstructs the complete terminal viewport
 	researcherHost.runtime.setBeforeSessionInvalidate(() => undefined);
 	researcherHost.runtime.setRebindSession(async () => undefined);
 	const terminal = new HeadlessTerminal();
-	const tui = new TUI(terminal);
+	const tui = new TuiMainScreen(terminal);
 	const visibleTranscript = new MutableTranscript(transcript("Researcher", 20));
 	tui.addChild(visibleTranscript);
 	tui.requestRender(true);

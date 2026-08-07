@@ -163,18 +163,18 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
 	await selectDormantAgent(host, moderator.id);
 	const moderatorStatus = [...host.ui.statuses.values()].find((value) =>
-		value.startsWith("moderator · ") && value.endsWith(" · Dormant")
+		value.startsWith("○ moderator · ") && value.endsWith(" · Dormant")
 	);
 	assert.ok(moderatorStatus);
 	const compactModeratorIdentity = moderatorStatus.slice(
-		"moderator · ".length,
+		"○ moderator · ".length,
 		-" · Dormant".length,
 	);
 	assert.ok(moderator.id.endsWith(compactModeratorIdentity));
 	host.ui.statuses.set("third-party-status", "keep me");
 	await selectAgent(host, host.session.sessionId);
 	assert.equal(
-		[...host.ui.statuses.values()].some((value) => value.startsWith("moderator · ")),
+		[...host.ui.statuses.values()].some((value) => value.startsWith("○ moderator · ")),
 		false,
 	);
 	assert.equal(host.ui.statuses.get("third-party-status"), "keep me");

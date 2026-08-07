@@ -84,8 +84,20 @@ test("one native PTY spans the coordinated Workflow and containing-process shutd
 		terminal.write("\x1b");
 		await terminal.waitFor("__PTY_HUMAN_ESCAPED__");
 
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Tab views")) &&
+			frame.some((line) => line.includes("→ Worker Live"))
+		);
+		assertSelectedAgentFooterStatus(
+			await terminal.screen(),
+			"Worker Live",
+			setup.liveAgentId,
+			"held",
+		);
 		terminal.write("k");
-		await terminal.waitFor(setup.ownerId);
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("→ owner"))
+		);
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_ROUND_TRIPS__");
 		await terminal.waitFor("__PTY_ATTENTION_READY__");
@@ -210,6 +222,7 @@ class PtyFixture {
 		if (predicate(await this.screen())) return;
 		await new Promise<void>((resolve, reject) => {
 			let checking = false;
+			let poll: ReturnType<typeof setInterval> | undefined;
 			const timeout = setTimeout(() => {
 				cleanup();
 				reject(new Error(`Timed out waiting for a matching PTY screen\n${this.#output}`));
@@ -233,6 +246,7 @@ class PtyFixture {
 				reject(new Error(`PTY fixture closed before a matching screen appeared\n${this.#output}`));
 			};
 			const cleanup = () => {
+				if (poll !== undefined) clearInterval(poll);
 				clearTimeout(timeout);
 				this.#child.stdout.off("data", inspect);
 				this.#child.stderr.off("data", inspect);
@@ -241,6 +255,8 @@ class PtyFixture {
 			this.#child.stdout.on("data", inspect);
 			this.#child.stderr.on("data", inspect);
 			this.#child.once("close", closed);
+			poll = setInterval(inspect, 10);
+			inspect();
 		});
 	}
 

@@ -233,8 +233,11 @@ await waitFor(() => liveSession.sessionManager.getEntries().some(
 ));
 await liveSession.waitForIdle();
 process.stdout.write("\n__PTY_HUMAN_ESCAPED__\n");
-
-await openAgents(liveSession);
+const reboundLiveSession = host.runtime.session;
+if (reboundLiveSession.sessionId !== liveAgentId) {
+	throw new Error(`Human Escape rebound to ${reboundLiveSession.sessionId}, expected ${liveAgentId}`);
+}
+await openAgents(reboundLiveSession);
 await waitFor(() => host.runtime.session.sessionId === ownerId);
 host.model.setResponses([
 	fauxAssistantMessage("The held child resumed in one isolated turn."),

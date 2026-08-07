@@ -280,6 +280,7 @@ export class WorkflowCoordinator {
 			presentation: options.humanRequestPresentation,
 			boundaryHooks: options.humanRequestBoundaryHooks,
 			interruptRun: (record) => {
+				record.host.prepareInterruption();
 				void record.host.lane.run(async () => {
 					this.#messages.prepareInterruptionInLane(record);
 					await record.host.interruptCurrentRunInLane();

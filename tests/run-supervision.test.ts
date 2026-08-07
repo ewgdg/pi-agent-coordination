@@ -74,6 +74,48 @@ test("interruption holds one exact settled Run and blocks ordinary Message Deliv
 	await harness.shutdown();
 });
 
+test("interruption keeps an aborted Human Request Run held when Pi reports an error", async () => {
+	const harness = await createRunSupervisionHarness();
+	const child = await harness.spawnChild("spawn-aborted-human-request-child");
+	await child.session.waitForIdle();
+	const input = {
+		questions: [{
+			kind: "text" as const,
+			header: "Interruptible Request",
+			prompt: "This request remains unanswered while its Run is held.",
+			multiline: false,
+		}],
+	};
+	const toolCallId = "ask-aborted-human-request";
+	harness.host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("ask_user_question", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The aborted Human Request must not continue before resumption."),
+	]);
+	const prompt = child.session.prompt("Open an interruptible Human Request.");
+	await waitForCondition(() => {
+		const run = child.view.status().run;
+		return run.phase !== "dormant" && run.attention === "input_required";
+	});
+	const attention = harness.ownerView.humanAttention().find(
+		(item) => item.agentId === child.agentId,
+	);
+	assert.ok(attention);
+	const focus = harness.ownerView.focusHumanRequest(attention.requestId);
+	await waitForCondition(() => harness.host.ui.customSurfaces.length === 1);
+	harness.host.ui.customSurfaces[0]!.handleInput?.("\x1b");
+	await focus;
+	await prompt;
+	assert.equal(child.view.status().run.phase, "live");
+	assert.equal(child.view.status().run.retentionReasons.some(
+		({ reason }) => reason === "interruption_hold",
+	), true);
+
+	await harness.shutdown();
+});
+
 test("interruption preserves Message admission that wins the target lane first", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-interruption-order-child");

@@ -294,8 +294,8 @@ export class HumanRequestCoordinator {
 	#interrupt(requestId: string): void {
 		const pending = this.#pendingByRequestId.get(requestId);
 		if (!pending || pending.phase !== "open") return;
-		this.#fence(requestId, INTERRUPTED_MESSAGE);
 		this.#interruptRun(pending.record);
+		this.#fence(requestId, INTERRUPTED_MESSAGE);
 	}
 
 	#fenceRun(agentId: string, handle: AgentRunHandle): void {

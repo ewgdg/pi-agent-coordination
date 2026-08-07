@@ -46,6 +46,7 @@ type BoundRun = {
 	session: AgentSession;
 	unsubscribe: () => void;
 	failed: boolean;
+	expectedInterruption: boolean;
 };
 
 type HeldNativeQueue = {
@@ -264,6 +265,7 @@ export class InProcessAgentHost {
 		if (!run || this.#starting || this.#ending || run.failed) return "not_running";
 		if (this.#interruptionHold?.run === run.handle) return "already_held";
 		this.#isolatedResumption = undefined;
+		run.expectedInterruption = true;
 		this.#interrupting = true;
 		try {
 			const cleared = run.session.clearQueue();
@@ -292,7 +294,23 @@ export class InProcessAgentHost {
 			return "held";
 		} finally {
 			this.#interrupting = false;
+			run.expectedInterruption = false;
 		}
+	}
+
+	prepareInterruption(): void {
+		const run = this.#run;
+		if (
+			!run ||
+			this.#starting ||
+			this.#ending ||
+			run.failed ||
+			this.#interruptionHold?.run === run.handle
+		) return;
+		// Pi 0.84 can emit agent_end(error) from an AbortSignal before the
+		// serialized interruption lane reaches interruptCurrentRunInLane(). Arm
+		// the exact Run at the human boundary so that event is not Run Failure.
+		run.expectedInterruption = true;
 	}
 
 	beginInputRequired(handle: AgentRunHandle, requestId: string): void {
@@ -580,19 +598,46 @@ export class InProcessAgentHost {
 			session,
 			unsubscribe: () => undefined,
 			failed: false,
+			expectedInterruption: false,
 		};
-		run.unsubscribe = session.subscribe((event) => {
+		const originalAbort = session.agent.abort;
+		session.agent.abort = () => {
+			// Pi's TUI Escape path calls Agent.abort() directly, before the
+			// Human Request surface can enqueue the serialized interruption.
+			// Host-owned cleanup already has an explicit lifecycle flag, so only
+			// an external abort can arm this exact Run for that interruption.
+			const externalAbort = !this.#interrupting && !this.#ending && !run.failed;
+			if (externalAbort) {
+				run.expectedInterruption = true;
+			}
+			originalAbort.call(session.agent);
+			if (externalAbort) {
+				this.trackOperation(
+					this.lane.run(() => this.interruptCurrentRunInLane()).then(() => undefined),
+				);
+			}
+		};
+		const unsubscribe = session.subscribe((event) => {
 			if (event.type === "agent_start") this.#notifyStateChanged();
 			if (event.type === "agent_end") {
 				const assistant = [...event.messages]
 					.reverse()
 					.find((message) => message.role === "assistant");
+				const expectedInterruption = run.expectedInterruption;
+				run.expectedInterruption = false;
 				const terminalFailure = assistant?.role === "assistant" &&
 					assistant.stopReason === "error" &&
-					!event.willRetry;
+					!event.willRetry &&
+					// Pi 0.84 can report an error when an interrupted sequential tool
+					// rejects before the abort reaches the model loop. The explicit
+					// interruption request owns that terminal transition; do not turn it
+					// into Run Failure before the exact Hold is established.
+					!this.#interrupting &&
+					!expectedInterruption;
 				if (terminalFailure) this.#markRunFailed(run, handle);
 			}
 			if (event.type === "agent_settled") {
+				run.expectedInterruption = false;
 				for (const handler of this.#settledHandlers) {
 					handler(handle, run.failed ? "failed" : "settled");
 				}
@@ -601,6 +646,10 @@ export class InProcessAgentHost {
 				this.#restoreHeldNativeQueueAfterIsolatedTurn(run, handle, event);
 			}
 		});
+		run.unsubscribe = () => {
+			session.agent.abort = originalAbort;
+			unsubscribe();
+		};
 		this.#run = run;
 		this.#ending = false;
 		this.#notifyStateChanged();
