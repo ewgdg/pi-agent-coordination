@@ -62,20 +62,43 @@ export function registerOrdinaryAgentSurfaces(
 	pi: ExtensionAPI,
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): void {
-	registerAgentSurfaces(pi, resolveView, { spawn: true, moderatorControl: false });
+	registerAgentSurfaces(pi, resolveView, {
+		spawn: true,
+		moderatorControl: false,
+		humanRequest: true,
+	});
+}
+
+export function registerOwnerAgentSurfaces(
+	pi: ExtensionAPI,
+	resolveView: () => OrdinaryAgentCoordinatorView,
+): void {
+	registerAgentSurfaces(pi, resolveView, {
+		spawn: true,
+		moderatorControl: false,
+		humanRequest: false,
+	});
 }
 
 export function registerModeratorAgentSurfaces(
 	pi: ExtensionAPI,
 	resolveView: () => ModeratorAgentCoordinatorView,
 ): void {
-	registerAgentSurfaces(pi, resolveView, { spawn: false, moderatorControl: true });
+	registerAgentSurfaces(pi, resolveView, {
+		spawn: false,
+		moderatorControl: true,
+		humanRequest: true,
+	});
 }
 
 function registerAgentSurfaces(
 	pi: ExtensionAPI,
 	resolveView: ViewResolver,
-	role: Readonly<{ spawn: boolean; moderatorControl: boolean }>,
+	role: Readonly<{
+		spawn: boolean;
+		moderatorControl: boolean;
+		humanRequest: boolean;
+	}>,
 ): void {
 	const messageParameters = Type.Union([
 		Type.Object(
@@ -372,29 +395,31 @@ function registerAgentSurfaces(
 			};
 		},
 	});
-	pi.registerTool({
-		name: "ask_user_question",
-		label: "Ask Human",
-		description:
-			"Ask the human one or more structured Questions and wait for one complete positional Answer.",
-		promptSnippet:
-			"Use for decisions that require human select-one, select-many, or non-empty text input.",
-		executionMode: "sequential",
-		parameters: humanRequestParameters,
-		renderCall: renderHumanRequestCall,
-		renderResult: renderHumanRequestResult,
-		async execute(toolCallId, parameters, signal) {
-			const answer = await resolveView().askHuman(
-				toolCallId,
-				parameters,
-				signal,
-			);
-			return {
-				content: [{ type: "text", text: JSON.stringify(answer) }],
-				details: answer,
-			};
-		},
-	});
+	if (role.humanRequest) {
+		pi.registerTool({
+			name: "ask_user_question",
+			label: "Ask Human",
+			description:
+				"Ask the human one or more structured Questions and wait for one complete positional Answer.",
+			promptSnippet:
+				"Use for decisions that require human select-one, select-many, or non-empty text input.",
+			executionMode: "sequential",
+			parameters: humanRequestParameters,
+			renderCall: renderHumanRequestCall,
+			renderResult: renderHumanRequestResult,
+			async execute(toolCallId, parameters, signal) {
+				const answer = await resolveView().askHuman(
+					toolCallId,
+					parameters,
+					signal,
+				);
+				return {
+					content: [{ type: "text", text: JSON.stringify(answer) }],
+					details: answer,
+				};
+			},
+		});
+	}
 
 	if (role.moderatorControl) {
 		const moderatorView = resolveView as () => ModeratorAgentCoordinatorView;

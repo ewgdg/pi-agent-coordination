@@ -15,6 +15,7 @@ import type {
 import {
 	registerAgentsCommand,
 	registerModeratorAgentSurfaces,
+	registerOwnerAgentSurfaces,
 	registerOrdinaryAgentSurfaces,
 } from "../tools/owner-surfaces.ts";
 
@@ -106,9 +107,9 @@ export function bindHiddenOwnerAgentExtension(options: {
 	const ownerExtension = requireOwnerAgentExtension(runtime, bootstrapHandler);
 
 	// Pi loads package extensions publicly. Once this session is authenticated as
-	// Owner, the same extension becomes its hidden identity-bound ordinary surface.
+	// Owner, the same extension becomes its hidden identity-bound Owner surface.
 	ownerExtension.hidden = true;
-	registerOrdinaryAgentSurfaces(pi, resolveView);
+	registerOwnerAgentSurfaces(pi, resolveView);
 	registerAgentBoundBehavior(pi, resolveView);
 	pi.on("session_shutdown", (event) => {
 		if (

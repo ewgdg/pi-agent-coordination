@@ -43,6 +43,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
+	assert.equal(host.session.getToolDefinition("ask_user_question"), undefined);
 	const statusResult = await observe.execute(
 		"observe-owner",
 		{ operation: "status" },

@@ -1,6 +1,6 @@
 # Human Requests
 
-Any ordinary Agent can call `ask_user_question` to ask the human one or more structured Questions and block its current Run until the native tool call succeeds or is interrupted.
+Any spawned ordinary Agent or Moderator can call `ask_user_question` to ask the human one or more structured Questions and block its current Run until the native tool call succeeds or is interrupted. The Workflow Owner does not have this tool.
 
 ```ts
 ask_user_question({

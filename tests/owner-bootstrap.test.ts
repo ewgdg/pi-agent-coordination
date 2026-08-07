@@ -34,6 +34,7 @@ test("an existing exact Owner Identity is validated without duplication", async 
 	);
 	assert.ok(host.session.getToolDefinition("agent_observe"));
 	assert.ok(host.session.getToolDefinition("agent_control"));
+	assert.equal(host.session.getToolDefinition("ask_user_question"), undefined);
 	const ordinaryAgentExtensions = host.services.resourceLoader
 		.getExtensions()
 		.extensions.filter((extension) => extension.tools.has("agent_spawn"));

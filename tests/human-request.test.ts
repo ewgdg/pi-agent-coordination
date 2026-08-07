@@ -261,7 +261,7 @@ test("the native Human Request result is the sole positional Answer and sequenti
 });
 
 test("an all-select request accepts allowed custom input and submits from its final tab", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination);
+	const { host, coordinator, view, child } = await createHumanRequestChild();
 	const input = {
 		questions: [
 			{
@@ -291,9 +291,15 @@ test("an all-select request accepts allowed custom input and submits from its fi
 		),
 		fauxAssistantMessage("The custom selection was committed."),
 	]);
-	const prompt = host.session.prompt("Ask for the all-select decision.");
+	const prompt = child.session.prompt("Ask for the all-select decision.");
 	let completed = false;
 	try {
+		await waitForInputRequired(view, child.agentId);
+		const attention = view.humanAttention().find(
+			(item) => item.agentId === child.agentId,
+		);
+		assert.ok(attention);
+		const focused = view.focusHumanRequest(attention.requestId);
 		await waitForCondition(() => host.ui.customSurfaces.length === 1);
 		const surface = host.ui.customSurfaces[0];
 		assert.ok(surface?.handleInput);
@@ -309,10 +315,11 @@ test("an all-select request accepts allowed custom input and submits from its fi
 		surface.handleInput(" ");
 		surface.handleInput("\r");
 		await prompt;
-		await host.session.waitForIdle();
+		await focused;
+		await child.session.waitForIdle();
 		completed = true;
 
-		const answerResult = host.session.sessionManager.getEntries().find(
+		const answerResult = child.session.sessionManager.getEntries().find(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "toolResult" &&
@@ -333,12 +340,12 @@ test("an all-select request accepts allowed custom input and submits from its fi
 			host.ui.customSurfaces[0]?.handleInput?.("\x1b");
 			await prompt.catch(() => undefined);
 		}
-		await host.runtime.dispose();
+		await coordinator.shutdown(async () => host.runtime.dispose());
 	}
 });
 
 test("the registered tool rejects malformed Questions before opening human attention", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination);
+	const { host, coordinator, child } = await createHumanRequestChild();
 	const invalidCalls = [
 		fauxToolCall(
 			"ask_user_question",
@@ -399,11 +406,11 @@ test("the registered tool rejects malformed Questions before opening human atten
 		fauxAssistantMessage(invalidCalls, { stopReason: "toolUse" }),
 		fauxAssistantMessage("The malformed Questions were rejected."),
 	]);
-	await host.session.prompt("Try malformed Human Questions.");
-	await host.session.waitForIdle();
+	await child.session.prompt("Try malformed Human Questions.");
+	await child.session.waitForIdle();
 
 	const invalidCallIds = invalidCalls.map(({ id }) => id);
-	const results = host.session.sessionManager.getEntries().filter(
+	const results = child.session.sessionManager.getEntries().filter(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -419,7 +426,7 @@ test("the registered tool rejects malformed Questions before opening human atten
 	);
 	assert.equal(host.ui.customSurfaces.length, 0);
 
-	await host.runtime.dispose();
+	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
 test("two Agents wait independently while Steer follows Answer commit and Deferred follows settlement", async () => {
@@ -608,7 +615,7 @@ test("two Agents wait independently while Steer follows Answer commit and Deferr
 });
 
 test("Escape settles one matching error result and does not run a later sibling call", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination);
+	const { host, coordinator, view, child } = await createHumanRequestChild();
 	host.ui.setEditorText("preserve this occupied editor draft");
 	const questionCallId = "ask-before-escape";
 	const laterCallId = "observe-after-escape";
@@ -637,13 +644,20 @@ test("Escape settles one matching error result and does not run a later sibling 
 		),
 		fauxAssistantMessage("This automatic continuation must not run."),
 	]);
-	const prompt = host.session.prompt("Open a Human Request that I will interrupt.");
+	const prompt = child.session.prompt("Open a Human Request that I will interrupt.");
+	await waitForInputRequired(view, child.agentId);
+	const attention = view.humanAttention().find(
+		(item) => item.agentId === child.agentId,
+	);
+	assert.ok(attention);
+	const focused = view.focusHumanRequest(attention.requestId);
 	await waitForCondition(() => host.ui.customSurfaces.length === 1);
 	host.ui.customSurfaces[0]!.handleInput?.("\x1b");
 	await prompt;
-	await host.session.waitForIdle();
+	await focused;
+	await child.session.waitForIdle();
 
-	const results = host.session.sessionManager.getEntries().filter(
+	const results = child.session.sessionManager.getEntries().filter(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -666,19 +680,19 @@ test("Escape settles one matching error result and does not run a later sibling 
 	assert.equal(host.ui.getEditorText(), "preserve this occupied editor draft");
 	assert.equal(host.ui.customSurfaces.length, 0);
 	assert.equal(
-		host.session.sessionManager.getEntries().some(
+		child.session.sessionManager.getEntries().some(
 			(entry) => entry.type === "custom" && entry.customType.includes("human"),
 		),
 		false,
 	);
-	const observe = host.session.getToolDefinition("agent_observe");
+	const observe = child.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const heldStatus = await observe.execute(
 		"observe-human-escape-hold",
 		{ operation: "status" },
 		undefined,
 		undefined,
-		host.session.extensionRunner.createContext(),
+		child.session.extensionRunner.createContext(),
 	);
 	assert.equal(
 		(heldStatus.details as {
@@ -687,11 +701,13 @@ test("Escape settles one matching error result and does not run a later sibling 
 		true,
 	);
 
-	await host.runtime.dispose();
+	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
 test("a committed Human Answer remains canonical when the Run subsequently fails", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const { host, coordinator, view, child } = await createHumanRequestChild({
+		persistent: true,
+	});
 	const input = {
 		questions: [{
 			kind: "text" as const,
@@ -711,14 +727,21 @@ test("a committed Human Answer remains canonical when the Run subsequently fails
 			errorMessage: "deterministic post-Answer Run failure",
 		}),
 	]);
-	const prompt = host.session.prompt("Ask before this Run fails.");
+	const prompt = child.session.prompt("Ask before this Run fails.");
+	await waitForInputRequired(view, child.agentId);
+	const attention = view.humanAttention().find(
+		(item) => item.agentId === child.agentId,
+	);
+	assert.ok(attention);
+	const focused = view.focusHumanRequest(attention.requestId);
 	await waitForCondition(() => host.ui.customSurfaces.length === 1);
 	host.ui.customSurfaces[0]!.handleInput?.("Canonical despite later failure");
 	host.ui.customSurfaces[0]!.handleInput?.("\r");
 	await prompt;
-	await host.session.waitForIdle();
+	await focused;
+	await child.session.waitForIdle();
 
-	const sourceEntry = host.session.sessionManager.getEntries().find(
+	const sourceEntry = child.session.sessionManager.getEntries().find(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "assistant" &&
@@ -727,11 +750,11 @@ test("a committed Human Answer remains canonical when the Run subsequently fails
 			),
 	);
 	assert.ok(sourceEntry);
-	const sessionFile = host.session.sessionManager.getSessionFile();
+	const sessionFile = child.session.sessionManager.getSessionFile();
 	if (!sessionFile) throw new Error("Persistent Human Request test has no session file");
 	const reopened = SessionManager.open(sessionFile);
 	const request = resolveCommittedHumanRequest({
-		agentId: host.session.sessionId,
+		agentId: child.agentId,
 		sessionManager: reopened,
 		toolCallId,
 		providedInput: input,
@@ -754,7 +777,7 @@ test("a committed Human Answer remains canonical when the Run subsequently fails
 	);
 	assert.equal(host.ui.customSurfaces.length, 0);
 
-	await host.runtime.dispose();
+	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
 test("a Run fence after submission but before result commitment prevents a Human Answer", async () => {
@@ -1060,6 +1083,57 @@ async function spawnLiveChild(
 	);
 	await session.waitForIdle();
 	return { agentId: childId, session };
+}
+
+async function createHumanRequestChild(options?: {
+	persistent?: boolean;
+}): Promise<{
+	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>;
+	coordinator: WorkflowCoordinator;
+	view: ReturnType<WorkflowCoordinator["forAgent"]>;
+	child: { agentId: string; session: AgentSession };
+}> {
+	let ownerView: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+	const childSessions = new Map<string, AgentSession>();
+	const host = await createUnboundTestOwnerHost(
+		createAgentBoundExtension(() => {
+			if (!ownerView) throw new Error("Human Request child test view is unavailable");
+			return ownerView;
+		}),
+		{ persistent: true, ...options },
+	);
+	const identity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	let coordinator!: WorkflowCoordinator;
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		humanRequestPresentation: new HumanRequestSurface(host.ui),
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+		incidentBoundaryHooks: {
+			beforeModeratorRunStart: () => "confirmed_failure",
+		},
+		spawnBoundaryHooks: {
+			afterRunStart({ identity: childIdentity, session }) {
+				childSessions.set(childIdentity.agentId, session);
+			},
+		},
+	});
+	const view = coordinator.forAgent(identity.agentId);
+	ownerView = view;
+	await bindTestOwnerHost(host, "tui");
+	const child = await spawnLiveChild(
+		host,
+		view,
+		childSessions,
+		"spawn-human-request-child",
+		"Run the Human Request test as a spawned Agent.",
+	);
+	return { host, coordinator, view, child };
 }
 
 function observedAttention(
