@@ -24,6 +24,7 @@ export type HumanSessionSelection = Readonly<{
 	selectedAgentId(): string;
 	addChangeHandler(handler: () => void): () => void;
 	activate(binding: HumanPresentationBinding): Promise<void>;
+	restoreOwnerRuntimeForShutdown(): Promise<void>;
 	isBoundTo(agentId: string, session: AgentSession): boolean;
 	replaceIfSelected(
 		agentId: string,
@@ -46,12 +47,13 @@ export function bindHumanSessionSelection(
 ): HumanSessionSelection {
 	const mutableRuntime = runtime as unknown as MutableRuntimeState;
 	const lane = new SerialLane();
-	let selected: HumanPresentationBinding = {
+	const owner: HumanPresentationBinding = {
 		agentId: ownerAgentId,
 		session: runtime.session,
 		services: runtime.services,
 		diagnostics: runtime.diagnostics,
 	};
+	let selected = owner;
 	let selectedNativeBindingConfirmed = true;
 	const changeHandlers = new Set<() => void>();
 	const notifySelectionChanged = (): void => {
@@ -187,6 +189,16 @@ export function bindHumanSessionSelection(
 				}
 				throw activationError;
 			}
+		}),
+		restoreOwnerRuntimeForShutdown: () => lane.run(async () => {
+			if (selected.agentId === owner.agentId && selected.session === owner.session) return;
+			const previous = selected;
+			// Native disposal requires Owner runtime state, not a presentation change.
+			// Interactive quit has stopped the TUI; signal shutdown is about to stop it.
+			applyRuntimeBinding(owner);
+			selected = owner;
+			selectedNativeBindingConfirmed = false;
+			await previous.release?.();
 		}),
 		isBoundTo: (agentId, session) =>
 			selectedNativeBindingConfirmed &&

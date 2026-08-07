@@ -600,24 +600,7 @@ export class InProcessAgentHost {
 			failed: false,
 			expectedInterruption: false,
 		};
-		const originalAbort = session.agent.abort;
-		session.agent.abort = () => {
-			// Pi's TUI Escape path calls Agent.abort() directly, before the
-			// Human Request surface can enqueue the serialized interruption.
-			// Host-owned cleanup already has an explicit lifecycle flag, so only
-			// an external abort can arm this exact Run for that interruption.
-			const externalAbort = !this.#interrupting && !this.#ending && !run.failed;
-			if (externalAbort) {
-				run.expectedInterruption = true;
-			}
-			originalAbort.call(session.agent);
-			if (externalAbort) {
-				this.trackOperation(
-					this.lane.run(() => this.interruptCurrentRunInLane()).then(() => undefined),
-				);
-			}
-		};
-		const unsubscribe = session.subscribe((event) => {
+		run.unsubscribe = session.subscribe((event) => {
 			if (event.type === "agent_start") this.#notifyStateChanged();
 			if (event.type === "agent_end") {
 				const assistant = [...event.messages]
@@ -646,10 +629,6 @@ export class InProcessAgentHost {
 				this.#restoreHeldNativeQueueAfterIsolatedTurn(run, handle, event);
 			}
 		});
-		run.unsubscribe = () => {
-			session.agent.abort = originalAbort;
-			unsubscribe();
-		};
 		this.#run = run;
 		this.#ending = false;
 		this.#notifyStateChanged();

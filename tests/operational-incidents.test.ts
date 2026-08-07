@@ -1714,6 +1714,9 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 			async activate({ agentId }) {
 				selectedAgentId = agentId;
 			},
+			async restoreOwnerRuntimeForShutdown() {
+				selectedAgentId = identity.agentId;
+			},
 			async replaceIfSelected(agentId, binding) {
 				if (selectedAgentId !== agentId) {
 					await binding.release?.();

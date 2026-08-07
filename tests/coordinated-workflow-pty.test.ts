@@ -7,6 +7,8 @@ import test from "node:test";
 import xtermHeadless from "@xterm/headless";
 
 const SCRIPT = "/usr/bin/script";
+const PTY_WAIT_TIMEOUT_MS = 20_000;
+const SCREEN_POLL_INTERVAL_MS = 10;
 const FIXTURE = fileURLToPath(
 	new URL("./fixtures/coordinated-workflow-pty-fixture.ts", import.meta.url),
 );
@@ -226,7 +228,7 @@ class PtyFixture {
 			const timeout = setTimeout(() => {
 				cleanup();
 				reject(new Error(`Timed out waiting for a matching PTY screen\n${this.#output}`));
-			}, 20_000);
+			}, PTY_WAIT_TIMEOUT_MS);
 			const inspect = () => {
 				if (checking) return;
 				checking = true;
@@ -255,7 +257,7 @@ class PtyFixture {
 			this.#child.stdout.on("data", inspect);
 			this.#child.stderr.on("data", inspect);
 			this.#child.once("close", closed);
-			poll = setInterval(inspect, 10);
+			poll = setInterval(inspect, SCREEN_POLL_INTERVAL_MS);
 			inspect();
 		});
 	}
@@ -266,7 +268,7 @@ class PtyFixture {
 			const timeout = setTimeout(() => {
 				cleanup();
 				reject(new Error(`Timed out waiting for ${JSON.stringify(value)}\n${this.#output}`));
-			}, 20_000);
+			}, PTY_WAIT_TIMEOUT_MS);
 			const inspect = () => {
 				if (!this.#output.includes(value)) return;
 				cleanup();

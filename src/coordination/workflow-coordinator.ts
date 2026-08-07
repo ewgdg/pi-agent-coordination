@@ -279,6 +279,8 @@ export class WorkflowCoordinator {
 			ownerIdentity: identity,
 			presentation: options.humanRequestPresentation,
 			boundaryHooks: options.humanRequestBoundaryHooks,
+			isInteractivelySelected: (agentId) =>
+				this.#humanSessionSelection?.selectedAgentId() === agentId,
 			interruptRun: (record) => {
 				record.host.prepareInterruption();
 				void record.host.lane.run(async () => {
@@ -727,17 +729,20 @@ export class WorkflowCoordinator {
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
 		const cleanupErrors: unknown[] = [];
+		const selection = this.#humanSessionSelection;
 		await collectCleanupFailure(
 			cleanupErrors,
 			() => this.#operationalIncidents.shutdown(),
 		);
 		if (
-			this.#humanSessionSelection &&
-			this.#humanSessionSelection.selectedAgentId() !== this.#ownerIdentity.agentId
+			selection &&
+			selection.selectedAgentId() !== this.#ownerIdentity.agentId
 		) {
 			await collectCleanupFailure(
 				cleanupErrors,
-				() => this.#selectForHuman(this.#ownerIdentity.agentId),
+				() => this.#selectionLane.run(() =>
+					selection.restoreOwnerRuntimeForShutdown()
+				),
 			);
 		}
 		const children = [...this.#agents.values()].filter(

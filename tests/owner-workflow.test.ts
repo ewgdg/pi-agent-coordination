@@ -155,6 +155,42 @@ test("native Owner replacement closes every retained source Workflow session", a
 	await host.runtime.dispose();
 });
 
+test("shutdown from a selected child restores Owner disposal without rebinding stopped interactive UI", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage("Remain retained while shutdown begins from this selection."),
+	]);
+	const spawnInput = { request: "Remain retained for selected-child shutdown." };
+	const spawnToolCallId = "spawn-before-selected-child-shutdown";
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, { id: spawnToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const spawn = host.session.getToolDefinition("agent_spawn");
+	assert.ok(spawn);
+	const spawnResult = await spawn.execute(
+		spawnToolCallId,
+		spawnInput,
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
+	await selectAgent(host, childAgentId);
+
+	let shutdownRebindCalls = 0;
+	host.runtime.setRebindSession(async () => {
+		shutdownRebindCalls += 1;
+	});
+
+	await host.runtime.dispose();
+
+	assert.equal(shutdownRebindCalls, 0);
+	assert.equal(host.runtime.session, host.session);
+});
+
 test("orderly shutdown disposes retained child, Moderator, and Owner sessions exactly once", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,

@@ -86,6 +86,7 @@ const extension: ExtensionFactory = (pi) => {
 					resolveOutcome({ kind: "submit", answers });
 					return true;
 				},
+				ownsInteractiveSelection: () => false,
 				interrupt() {
 					resolveOutcome({ kind: "interrupt" });
 				},

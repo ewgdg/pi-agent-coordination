@@ -116,6 +116,24 @@ test("interruption keeps an aborted Human Request Run held when Pi reports an er
 	await harness.shutdown();
 });
 
+test("an unrelated Agent abort does not preempt a later explicit interruption", async () => {
+	const harness = await createRunSupervisionHarness();
+	const child = await harness.spawnChild("spawn-direct-abort-child");
+	await child.session.waitForIdle();
+
+	child.session.agent.abort();
+	const interrupted = await harness.control("interrupt-after-direct-abort", {
+		operation: "interrupt",
+		agentId: child.agentId,
+	});
+
+	assert.deepEqual(interrupted, {
+		agentId: child.agentId,
+		disposition: "held",
+	});
+	await harness.shutdown();
+});
+
 test("interruption preserves Message admission that wins the target lane first", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-interruption-order-child");

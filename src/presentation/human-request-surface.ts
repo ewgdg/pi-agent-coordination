@@ -46,6 +46,7 @@ export class HumanRequestSurface implements HumanRequestPresentation {
 	readonly #ui: ExtensionUIContext;
 	#focused: FocusedSurface | undefined;
 	#focusChain = Promise.resolve();
+	#removeTerminalListener: (() => void) | undefined;
 
 	constructor(ui: ExtensionUIContext) {
 		this.#ui = ui;
@@ -59,12 +60,17 @@ export class HumanRequestSurface implements HumanRequestPresentation {
 			throw new Error(`invariant_violation: Human Request ${presentation.requestId} is already open`);
 		}
 		this.#requests.set(presentation.requestId, presentation);
+		this.#ensureTerminalListener();
 		this.#renderPassiveAttention();
 		if (foreground) void this.focus(presentation.requestId);
 	}
 
 	dismiss(requestId: string): void {
 		this.#requests.delete(requestId);
+		if (this.#requests.size === 0) {
+			this.#removeTerminalListener?.();
+			this.#removeTerminalListener = undefined;
+		}
 		if (this.#focused?.requestId === requestId) {
 			this.#focused.finish({ kind: "dismissed" });
 		}
@@ -149,6 +155,24 @@ export class HumanRequestSurface implements HumanRequestPresentation {
 			if (this.#focused === focused) this.#focused = undefined;
 			settleFocused();
 		}
+	}
+
+	#ensureTerminalListener(): void {
+		if (this.#removeTerminalListener) return;
+		this.#removeTerminalListener = this.#ui.onTerminalInput((data) => {
+			if (!matchesKey(data, Key.escape)) return undefined;
+			// Child Human Requests remain passive even when their Agent owns the
+			// native editor. Start the same interruption path before Pi aborts that
+			// selected session, while leaving Escape untouched for native handling.
+			const focused = this.#focused
+				? this.#requests.get(this.#focused.requestId)
+				: undefined;
+			const target = focused ?? [...this.#requests.values()].find(
+				(request) => request.ownsInteractiveSelection(),
+			);
+			target?.interrupt();
+			return undefined;
+		});
 	}
 
 	#renderPassiveAttention(): void {

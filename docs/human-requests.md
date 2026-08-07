@@ -60,7 +60,7 @@ A select-one Answer contains either one zero-based `selectedOptionIndex` or one 
 
 The Owner's own request opens immediately. A background Agent's request adds passive `DECIDE` attention without taking focus. Use `/agents` and select the numbered `DECIDE` row to open that request.
 
-The request surface has one tab per Question. Use Tab or Left/Right to change Questions, Up/Down to move through options, Space to toggle select-many options, Enter to confirm, and Escape to interrupt. Partial selections remain only in the open surface. Pi preserves the native editor contents while the surface is open and restores the editor when it closes.
+The request surface has one tab per Question. Use Tab or Left/Right to change Questions, Up/Down to move through options, Space to toggle select-many options, Enter to confirm, and Escape to interrupt. If a background Agent owns Interactive Selection, Escape from its native session interrupts only that Agent's open request and establishes its exact-Run Interruption Hold. Partial selections remain only in the open surface. Pi preserves the native editor contents while the surface is open and restores the editor when it closes.
 
 ## Commitment and scheduling
 

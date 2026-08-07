@@ -41,6 +41,7 @@ export type HumanAttentionItem = Readonly<{
 export type PresentedHumanRequest = HumanAttentionItem & Readonly<{
 	request: HumanRequest;
 	submit(answers: readonly HumanQuestionAnswer[]): boolean;
+	ownsInteractiveSelection(): boolean;
 	interrupt(): void;
 }>;
 
@@ -83,6 +84,7 @@ export class HumanRequestCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #presentation: HumanRequestPresentation;
 	readonly #boundaryHooks: HumanRequestBoundaryHooks;
+	readonly #isInteractivelySelected: (agentId: string) => boolean;
 	readonly #interruptRun: (record: AgentRecord) => void;
 	readonly #suspendExecution: (record: AgentRecord) => void;
 	readonly #beginHumanWaiting: (source: ToolCallPointer) => void;
@@ -94,6 +96,7 @@ export class HumanRequestCoordinator {
 		ownerIdentity: OwnerIdentity;
 		presentation?: HumanRequestPresentation;
 		boundaryHooks?: HumanRequestBoundaryHooks;
+		isInteractivelySelected(agentId: string): boolean;
 		interruptRun(record: AgentRecord): void;
 		suspendExecution(record: AgentRecord): void;
 		beginHumanWaiting(source: ToolCallPointer): void;
@@ -103,6 +106,7 @@ export class HumanRequestCoordinator {
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#presentation = options.presentation ?? unavailablePresentation;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
+		this.#isInteractivelySelected = options.isInteractivelySelected;
 		this.#interruptRun = options.interruptRun;
 		this.#suspendExecution = options.suspendExecution;
 		this.#beginHumanWaiting = options.beginHumanWaiting;
@@ -165,6 +169,7 @@ export class HumanRequestCoordinator {
 					questionCount: request.questions.length,
 					request,
 					submit: (answers) => this.#submit(request.requestId, answers),
+					ownsInteractiveSelection: () => this.#isInteractivelySelected(callerAgentId),
 					interrupt: () => this.#interrupt(request.requestId),
 				},
 				callerAgentId === this.#ownerIdentity.agentId,
