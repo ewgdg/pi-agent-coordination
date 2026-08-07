@@ -18,7 +18,6 @@ import {
 	type CreateAgentSessionRuntimeFactory,
 	type AgentSession,
 	type AgentSessionServices,
-	type AutocompleteProviderFactory,
 	type ExtensionFactory,
 	type InlineExtension,
 	type ExtensionUIContext,
@@ -56,7 +55,6 @@ const EMPTY_USAGE = {
 } as const;
 
 export type TestUi = ExtensionUIContext & {
-	readonly autocompleteProviderFactories: AutocompleteProviderFactory[];
 	readonly genericSelectCalls: Array<{ title: string; options: string[] }>;
 	readonly notifications: Array<{ message: string; type?: "info" | "warning" | "error" }>;
 	readonly customSurfaces: Component[];
@@ -215,9 +213,7 @@ export async function bindTestOwnerHost(
 	if (mode === "tui") {
 		// InteractiveMode installs these callbacks before it binds extensions. Using
 		// the real runtime here preserves that observable startup order without a TTY.
-		host.runtime.setBeforeSessionInvalidate(() => {
-			host.ui.autocompleteProviderFactories.length = 0;
-		});
+		host.runtime.setBeforeSessionInvalidate(() => undefined);
 		host.runtime.setRebindSession(async () => undefined);
 		await bindInteractiveTestHost(host);
 		return;
@@ -267,7 +263,6 @@ async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
 }
 
 function createTestUi(): TestUi {
-	const autocompleteProviderFactories: AutocompleteProviderFactory[] = [];
 	const genericSelectCalls: TestUi["genericSelectCalls"] = [];
 	const notifications: TestUi["notifications"] = [];
 	const customSurfaces: Component[] = [];
@@ -321,7 +316,6 @@ function createTestUi(): TestUi {
 		});
 	};
 	return {
-		autocompleteProviderFactories,
 		genericSelectCalls,
 		notifications,
 		customSurfaces,
@@ -368,9 +362,6 @@ function createTestUi(): TestUi {
 		},
 		async editor() {
 			return undefined;
-		},
-		addAutocompleteProvider(factory: AutocompleteProviderFactory) {
-			autocompleteProviderFactories.push(factory);
 		},
 		setEditorComponent() {},
 		theme: testTheme,

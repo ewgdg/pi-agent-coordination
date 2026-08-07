@@ -62,6 +62,17 @@ test("child session surfaces disable native session replacement", async (t) => {
 				await host.runtime.switchSession(sessionFile),
 				{ cancelled: true },
 			);
+			assert.deepEqual(await host.runtime.fork("unused-entry"), { cancelled: true });
+			assert.deepEqual(host.ui.notifications.slice(-2), [
+				{
+					message: "Return to Owner before replacing or forking the native session.",
+					type: "error",
+				},
+				{
+					message: "Return to Owner before replacing or forking the native session.",
+					type: "error",
+				},
+			]);
 			await host.runtime.dispose();
 		});
 	}

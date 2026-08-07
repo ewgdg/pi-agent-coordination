@@ -90,7 +90,6 @@ export function assertHostModuleShape(hostValue: unknown): void {
 	const interactivePrototype = requirePrototype(host.InteractiveMode, "InteractiveMode", version);
 	for (const member of [
 		"bindCurrentSessionExtensions",
-		"createExtensionUIContext",
 		"rebindCurrentSession",
 		"getUserInput",
 	] as const) {
@@ -281,7 +280,6 @@ export function assertInteractiveModeInstanceShape(value: unknown, version?: unk
 	requireFunction(ui, "requestRender", "InteractiveMode.ui.requestRender", version);
 	for (const member of [
 		"bindCurrentSessionExtensions",
-		"createExtensionUIContext",
 		"rebindCurrentSession",
 		"getUserInput",
 		"setWorkingVisible",

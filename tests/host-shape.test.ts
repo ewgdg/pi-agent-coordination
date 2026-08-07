@@ -391,7 +391,6 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 		runtimeHost: host.runtime,
 		ui: { requestRender() {} },
 		bindCurrentSessionExtensions() {},
-		createExtensionUIContext() {},
 		rebindCurrentSession() {},
 		getUserInput() {},
 		setWorkingVisible() {},
@@ -403,7 +402,7 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 		[["runtimeHost", "session"], "InteractiveMode.runtimeHost.session"],
 		[["ui"], "InteractiveMode.ui"],
 		[["ui", "requestRender"], "InteractiveMode.ui.requestRender"],
-		...["bindCurrentSessionExtensions", "createExtensionUIContext", "rebindCurrentSession", "getUserInput", "setWorkingVisible", "clearStatusIndicator", "showError"]
+		...["bindCurrentSessionExtensions", "rebindCurrentSession", "getUserInput", "setWorkingVisible", "clearStatusIndicator", "showError"]
 			.map((member) => [[member], `InteractiveMode.${member}`] as const),
 	] as const;
 	for (const [path, expected] of requirements) {

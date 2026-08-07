@@ -22,7 +22,6 @@ import { copyExtensionBindings } from "../pi-integration/extension-bindings.ts";
 import { resolveAgentRunProjectTrust } from "../pi-integration/project-trust.ts";
 import { resolveRunExtensions } from "../pi-integration/named-inline-extension-factories.ts";
 import type { HumanPresentationBinding } from "../pi-integration/interactive-session-selection.ts";
-import { markChildNativeSession } from "../pi-integration/interactive-host-bridge.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
 import type {
@@ -403,7 +402,6 @@ export class DefaultChildSessionFactory {
 			tools: [...prepared.configuration.tools],
 		});
 		const session = created.session;
-		markChildNativeSession(sessionManager);
 		try {
 			configureCoordinatedSession(
 				session,
@@ -454,7 +452,6 @@ export class DefaultChildSessionFactory {
 			noTools: "builtin",
 		});
 		const session = created.session;
-		markChildNativeSession(record.host.sessionManager);
 		try {
 			await session.bindExtensions(
 				copyExtensionBindings(this.#ownerRuntime.session, session),

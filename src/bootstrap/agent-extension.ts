@@ -1,6 +1,7 @@
 import type {
 	AgentSessionRuntime,
 	ExtensionAPI,
+	ExtensionContext,
 	ExtensionFactory,
 	ExtensionHandler,
 	SessionStartEvent,
@@ -16,6 +17,9 @@ import {
 	registerModeratorAgentSurfaces,
 	registerOrdinaryAgentSurfaces,
 } from "../tools/owner-surfaces.ts";
+
+const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
+	"Return to Owner before replacing or forking the native session.";
 
 export function createAgentBoundExtension(
 	resolveView: () => OrdinaryAgentCoordinatorView,
@@ -70,8 +74,19 @@ function createParticipantBoundExtension<
 }
 
 function registerChildNativeSessionPolicy(pi: ExtensionAPI): void {
-	pi.on("session_before_fork", () => ({ cancel: true }));
-	pi.on("session_before_switch", () => ({ cancel: true }));
+	pi.on("session_before_fork", (_event, ctx) =>
+		cancelChildNativeSessionReplacement(ctx)
+	);
+	pi.on("session_before_switch", (_event, ctx) =>
+		cancelChildNativeSessionReplacement(ctx)
+	);
+}
+
+function cancelChildNativeSessionReplacement(
+	ctx: ExtensionContext,
+): { cancel: true } {
+	ctx.ui.notify(CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE, "error");
+	return { cancel: true };
 }
 
 export function bindHiddenOwnerAgentExtension(options: {
