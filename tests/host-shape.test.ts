@@ -507,6 +507,7 @@ test("preflight rejects read-only integration targets that coordination mutates"
 		[["_modelFallbackMessage"], "AgentSessionRuntime._modelFallbackMessage"],
 		[["dispose"], "AgentSessionRuntime.dispose"],
 		[["session", "bindExtensions"], "AgentSession.bindExtensions"],
+		[["session", "_runAgentPrompt"], "AgentSession._runAgentPrompt"],
 		[["session", "_extensionUIContext"], "AgentSession._extensionUIContext"],
 		[["session", "_extensionMode"], "AgentSession._extensionMode"],
 		[["session", "_extensionCommandContextActions"], "AgentSession._extensionCommandContextActions"],

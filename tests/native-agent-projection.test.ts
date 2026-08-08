@@ -6,6 +6,7 @@ import {
 	InteractiveMode,
 	SessionManager,
 	createAgentSessionFromServices,
+	createAgentSessionServices,
 	initTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -150,6 +151,84 @@ test("projection compatibility failure restores Owner globals before subscribing
 	await host.runtime.dispose();
 });
 
+test("session_start model work begins only after the live projection is subscribed", async () => {
+	const host = await createTestOwnerHost(() => undefined, { persistent: true });
+	const ownerIdentity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	const factory = new DefaultChildSessionFactory({
+		ownerRuntime: host.runtime,
+		ownerIdentity,
+		entryModulePath: "<inline:pi-agent-coordination>",
+		packageRoot: host.cwd,
+		childExtensionFactory: () => () => undefined,
+		moderatorExtensionFactory: () => () => undefined,
+		presentationExtensionFactory: () => () => undefined,
+	});
+	let markResponseStarted!: () => void;
+	const responseStarted = new Promise<void>((resolve) => {
+		markResponseStarted = resolve;
+	});
+	let releaseResponse!: () => void;
+	const responseGate = new Promise<void>((resolve) => {
+		releaseResponse = resolve;
+	});
+	host.model.setResponses([
+		async () => {
+			markResponseStarted();
+			await responseGate;
+			return fauxAssistantMessage("Child startup model work completed.");
+		},
+	]);
+	const model = host.session.model;
+	assert.ok(model);
+	const childServices = await createAgentSessionServices({
+		cwd: host.cwd,
+		agentDir: host.services.agentDir,
+		modelRuntime: host.services.modelRuntime,
+		settingsManager: host.services.settingsManager,
+		resourceLoaderOptions: {
+			noContextFiles: true,
+			noPromptTemplates: true,
+			noSkills: true,
+			noThemes: true,
+			extensionFactories: [{
+				name: "session-start-model-work-probe",
+				hidden: true,
+				factory(pi) {
+					pi.on("session_start", () => {
+						pi.sendUserMessage("Model work emitted by child session_start.");
+					});
+				},
+			}],
+		},
+	});
+	const startedRun = await factory.startSession({
+		sessionManager: SessionManager.inMemory(host.cwd),
+		prepared: {
+			services: childServices,
+			configuration: {
+				cwd: host.cwd,
+				model: { provider: model.provider, modelId: model.id },
+				thinking: "off",
+				tools: [],
+				skills: [],
+				extensions: [],
+			},
+		},
+	});
+	await responseStarted;
+	const statusDuringStartupWork = renderText(startedRun.projection.runStatus);
+
+	releaseResponse();
+	await startedRun.session.waitForIdle();
+	startedRun.projection.dispose();
+	startedRun.session.dispose();
+	await host.runtime.dispose();
+	assert.match(statusDuringStartupWork, /Working/);
+});
+
 test("projection construction failure disposes a partially started real Run session once", async () => {
 	const host = await createTestOwnerHost(() => undefined, { persistent: true });
 	const ownerIdentity = adoptOrValidateOwnerIdentity(
@@ -178,12 +257,40 @@ test("projection construction failure disposes a partially started real Run sess
 	});
 	const model = host.session.model;
 	assert.ok(model);
+	let childModelRequests = 0;
+	host.model.setResponses([
+		() => {
+			childModelRequests += 1;
+			return fauxAssistantMessage("This response must never start.");
+		},
+	]);
+	const childServices = await createAgentSessionServices({
+		cwd: host.cwd,
+		agentDir: host.services.agentDir,
+		modelRuntime: host.services.modelRuntime,
+		settingsManager: host.services.settingsManager,
+		resourceLoaderOptions: {
+			noContextFiles: true,
+			noPromptTemplates: true,
+			noSkills: true,
+			noThemes: true,
+			extensionFactories: [{
+				name: "failed-session-start-model-work-probe",
+				hidden: true,
+				factory(pi) {
+					pi.on("session_start", () => {
+						pi.sendUserMessage("Do not admit failed child startup work.");
+					});
+				},
+			}],
+		},
+	});
 
 	await assert.rejects(
 		() => factory.startSession({
 			sessionManager: SessionManager.inMemory(host.cwd),
 			prepared: {
-				services: host.services,
+				services: childServices,
 				configuration: {
 					cwd: host.cwd,
 					model: { provider: model.provider, modelId: model.id },
@@ -196,7 +303,9 @@ test("projection construction failure disposes a partially started real Run sess
 		}),
 		/confirmed projection constructor failure/,
 	);
+	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.equal(childSessionDisposals, 1);
+	assert.equal(childModelRequests, 0);
 	assert.equal(host.runtime.session, host.session);
 	await host.runtime.dispose();
 });

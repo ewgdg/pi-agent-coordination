@@ -29,6 +29,10 @@ import {
 	type PiNativeProjectionHost,
 } from "../pi-integration/native-agent-projection.ts";
 import { resolveAgentRunProjectTrust } from "../pi-integration/project-trust.ts";
+import {
+	holdModelRunsUntilProjectionAdmission,
+	type ModelRunAdmission,
+} from "../pi-integration/run-admission.ts";
 import { resolveRunExtensions } from "../pi-integration/named-inline-extension-factories.ts";
 import type { HumanPresentationBinding } from "../pi-integration/interactive-session-selection.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
@@ -432,6 +436,7 @@ export class DefaultChildSessionFactory {
 		});
 		const session = created.session;
 		let projection: PiNativeAgentProjection | undefined;
+		let modelRunAdmission: ModelRunAdmission | undefined;
 		try {
 			configureCoordinatedSession(
 				session,
@@ -445,6 +450,7 @@ export class DefaultChildSessionFactory {
 				startupErrors.push(error.error);
 				ownerErrorListener?.(error);
 			};
+			modelRunAdmission = holdModelRunsUntilProjectionAdmission(session);
 			await session.bindExtensions(bindings);
 			if (startupErrors.length > 0) {
 				throw new Error(`Agent extension startup failed: ${startupErrors[0]}`);
@@ -455,7 +461,9 @@ export class DefaultChildSessionFactory {
 				session,
 				services: prepared.services,
 			});
+			modelRunAdmission.admit();
 		} catch (error) {
+			modelRunAdmission?.cancel(error);
 			const cleanupErrors: unknown[] = [error];
 			try {
 				projection?.dispose();

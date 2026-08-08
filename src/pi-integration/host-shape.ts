@@ -371,7 +371,9 @@ export function assertAgentSessionShape(
 	] as const) {
 		requireFunction(session, member, `AgentSession.${member}`, version);
 	}
-	requireWritableMember(session, "bindExtensions", "AgentSession.bindExtensions", version);
+	for (const member of ["bindExtensions", "_runAgentPrompt"] as const) {
+		requireWritableMember(session, member, `AgentSession.${member}`, version);
+	}
 	for (const member of [
 		"model",
 		"thinkingLevel",

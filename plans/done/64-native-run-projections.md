@@ -43,6 +43,7 @@ Treat Pi-native presentation as a Run-owned resource. Construct it after the Run
 - [x] Added red-first adapter and exact-Run lifecycle tests.
 - [x] Implemented the native projection adapter, live/Dormant construction, and exact ownership.
 - [x] Verified ordinary-child/Moderator parity through real-session projection rendering.
+- [x] Closed review findings with real-session regressions for `session_start` model admission and termination settlement ordering.
 - [x] Full regression, conformance, typecheck, package dry run, and dependency audit are green.
 
 ## Surprises & discoveries
@@ -50,6 +51,8 @@ Treat Pi-native presentation as a Run-owned resource. Construct it after the Run
 - `InteractiveMode` construction allocates the footer watcher, editor, renderer, keybindings, and theme controller before `init()`. Its event handler calls `init()` unless the adapter marks the detached mode initialized, so the adapter must prevent native terminal startup explicitly.
 - Construction mutates process-global theme registration/theme state and TUI keybindings. The adapter must restore those synchronously before yielding, while retaining the projection's instance-local renderer/editor/keybinding resources.
 - `InteractiveMode.stop()` disposes footer and status resources but does not dispose its `AgentSessionRuntime`; this matches exact Run ownership because the Run host remains the sole session disposer.
+- Pi extension binding emits `session_start`, whose handlers can schedule `_runAgentPrompt()` without awaiting it. Live startup therefore needs an admission gate at the model Run entry point until projection subscription completes.
+- Aborting a live Pi session emits final `agent_end` and `agent_settled` events. Projection disposal belongs after that settlement, not before abort.
 
 ## Decisions
 

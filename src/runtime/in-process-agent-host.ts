@@ -557,13 +557,17 @@ export class InProcessAgentHost {
 				this.#runEndingHandler?.(run.session, run.handle, cause)
 			);
 			await attemptCleanup(() => run.unsubscribe());
-			await attemptCleanup(() => run.projection?.dispose());
 			await attemptCleanup(() => run.session.clearQueue());
 			if (disposeRun) {
 				await attemptCleanup(() => disposeRun(run.session));
 			} else {
 				await attemptCleanup(() => run.session.abort());
 				await attemptCleanup(() => run.session.waitForIdle());
+			}
+			// The projection remains subscribed until the exact Run has emitted its
+			// final abort/settlement presentation, then stops before normal disposal.
+			await attemptCleanup(() => run.projection?.dispose());
+			if (!disposeRun) {
 				await attemptCleanup(() => run.session.dispose());
 			}
 			await attemptCleanup(() => Promise.all([...this.#trackedOperations]).then(

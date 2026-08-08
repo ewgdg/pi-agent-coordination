@@ -1,14 +1,25 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import {
 	SessionManager,
+	createAgentSessionFromServices,
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import {
+	stripTerminalSequences,
+	type Component,
+} from "@earendil-works/pi-tui";
 
-import type { PiNativeAgentProjection } from "../src/pi-integration/native-agent-projection.ts";
+import {
+	createPiNativeProjectionHost,
+	type PiNativeAgentProjection,
+} from "../src/pi-integration/native-agent-projection.ts";
 import { InProcessAgentHost } from "../src/runtime/in-process-agent-host.ts";
+import { createTestOwnerHost } from "./support/pi-host.ts";
+
+const PROJECTION_RENDER_WIDTH = 120;
 
 test("clean release disposes the exact projection and session once", async () => {
 	const resource = createRunResource();
@@ -97,6 +108,87 @@ test("native subscription failure rolls back the already-created projection and 
 		unsubscriptions: 0,
 	});
 	assert.equal(host.observe().phase, "dormant");
+});
+
+test("termination keeps the projection subscribed through final Run settlement", async () => {
+	const ownerHost = await createTestOwnerHost(() => undefined, { persistent: true });
+	let markResponseStarted!: () => void;
+	const responseStarted = new Promise<void>((resolve) => {
+		markResponseStarted = resolve;
+	});
+	let releaseResponse!: () => void;
+	const responseGate = new Promise<void>((resolve) => {
+		releaseResponse = resolve;
+	});
+	ownerHost.model.setResponses([
+		async () => {
+			markResponseStarted();
+			await responseGate;
+			return fauxAssistantMessage("This response is aborted during termination.");
+		},
+	]);
+	const model = ownerHost.session.model;
+	assert.ok(model);
+	const created = await createAgentSessionFromServices({
+		services: ownerHost.services,
+		sessionManager: SessionManager.inMemory(ownerHost.cwd),
+		model,
+		thinkingLevel: "off",
+		noTools: "all",
+	});
+	const session = created.session;
+	await session.bindExtensions({ mode: "tui", uiContext: ownerHost.ui });
+	const events: string[] = [];
+	let eventsAtProjectionDisposal: readonly string[] = [];
+	let statusAtProjectionDisposal = "";
+	let transcriptAtProjectionDisposal = "";
+	let projectionDisposals = 0;
+	const unsubscribeEventProbe = session.subscribe((event) => {
+		events.push(event.type);
+	});
+	const nativeProjection = await createPiNativeProjectionHost({
+		ownerRuntime: ownerHost.runtime,
+	}).createProjection({
+		kind: "live",
+		session,
+		services: ownerHost.services,
+	});
+	const projection: PiNativeAgentProjection = {
+		...nativeProjection,
+		dispose() {
+			projectionDisposals += 1;
+			eventsAtProjectionDisposal = [...events];
+			statusAtProjectionDisposal = stripTerminalSequences(
+				nativeProjection.runStatus.render(PROJECTION_RENDER_WIDTH).join("\n"),
+			);
+			transcriptAtProjectionDisposal = stripTerminalSequences(
+				nativeProjection.transcript.render(PROJECTION_RENDER_WIDTH).join("\n"),
+			);
+			unsubscribeEventProbe();
+			nativeProjection.dispose();
+		},
+	};
+	const agentHost = InProcessAgentHost.createChild({
+		sessionManager: session.sessionManager,
+		startSession: async () => ({ session, projection }),
+	});
+	await agentHost.lane.run(() => agentHost.startInLane());
+	const prompt = session.prompt("Keep the projection until this Run settles.");
+	await responseStarted;
+	const nativeAbort = session.abort.bind(session);
+	session.abort = async () => {
+		releaseResponse();
+		await nativeAbort();
+	};
+
+	await agentHost.lane.run(() => agentHost.discardAndEndInLane("termination"));
+	await prompt;
+	assert.equal(projectionDisposals, 1);
+	assert.equal(eventsAtProjectionDisposal.includes("agent_end"), true);
+	assert.equal(eventsAtProjectionDisposal.includes("agent_settled"), true);
+	assert.equal(statusAtProjectionDisposal.includes("Working"), false);
+	assert.match(transcriptAtProjectionDisposal, /Operation aborted/);
+	await ownerHost.runtime.dispose();
 });
 
 test("cleanup continues through projection failure and still disposes the exact session", async () => {

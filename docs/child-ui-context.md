@@ -49,14 +49,18 @@ for every session.
 
 Every exact live non-Owner Run also owns a real Pi `InteractiveMode` projection.
 It is constructed after that Run binds extensions and before coordination admits
-model-visible work. The projection subscribes for the Run's complete subsequent
-event sequence and exposes only two native components: transcript presentation
+model-visible work. Model work scheduled by `session_start` is held at Pi's Run
+entry point until projection subscription completes. The projection therefore
+receives the Run's complete event sequence and exposes only two native components:
+transcript presentation
 and Run-status presentation. Its detached terminal cannot write progress, title,
 input, or frames into the Owner terminal.
 
 Projection ownership follows the exact Run rather than Interactive Selection.
 Clean release, failure, termination, startup rollback, and Workflow shutdown
-dispose the projection before disposing its session. Closing or opening a
+dispose the projection with its session. Termination keeps the projection
+subscribed through abort and final Run settlement, then stops it before normal
+session disposal. Closing or opening a
 presentation surface is therefore not part of live projection ownership.
 
 Dormant inspection uses the same component seam over a separate passive session
