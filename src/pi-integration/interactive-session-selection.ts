@@ -6,7 +6,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import {
+	attachNativeExtensionUIContext,
 	readNativeExtensionUIState,
+	reinstallDetachedExtensionUIContext,
 	restoreNativeExtensionUIState,
 } from "./extension-bindings.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
@@ -97,6 +99,13 @@ export function bindHumanSessionSelection(
 		try {
 			await rebindSession(binding.session);
 			restoreNativeExtensionUIState(binding.session, nextExtensionUIState);
+			// A deselected session must not keep the TUI-bound context from its
+			// own presentation: its later UI calls would land in the newly
+			// selected Agent's view. Children fall back to their detached context.
+			// Same-session re-activation keeps its freshly rebound native context.
+			if (previous.session !== binding.session) {
+				reinstallDetachedExtensionUIContext(previous.session);
+			}
 		} catch (activationError) {
 			const rollbackErrors: unknown[] = [];
 			try {
@@ -154,8 +163,15 @@ export function bindHumanSessionSelection(
 		}
 		applyRuntimeBinding(binding);
 		const rebindSession = mutableRuntime.rebindSession;
+		const degradeSelectedPresentation = (): void => {
+			// The presentation is the selected session even when its native rebind
+			// failed; its UI calls belong in the Owner's TUI, and a detached
+			// context would leave its surfaces inert.
+			attachNativeExtensionUIContext(binding.session, owner.session);
+		};
 		if (!rebindSession) {
 			replacementConfirmed = false;
+			degradeSelectedPresentation();
 		} else {
 			try {
 				await rebindSession(binding.session);
@@ -163,6 +179,7 @@ export function bindHumanSessionSelection(
 			} catch (error) {
 				recoveryErrors.push(error);
 				replacementConfirmed = false;
+				degradeSelectedPresentation();
 			}
 		}
 		selected = binding;

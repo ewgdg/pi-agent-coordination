@@ -20,8 +20,8 @@ import {
 } from "../coordination/agent-record.ts";
 import {
 	copyExtensionBindings,
+	createDetachedExtensionUIContext,
 	rememberNativeExtensionUIState,
-	setNativeExtensionUIState,
 } from "../pi-integration/extension-bindings.ts";
 import { resolveAgentRunProjectTrust } from "../pi-integration/project-trust.ts";
 import { resolveRunExtensions } from "../pi-integration/named-inline-extension-factories.ts";
@@ -413,6 +413,12 @@ export class DefaultChildSessionFactory {
 			);
 			this.#validateStartedSession(session, prepared.configuration);
 			const bindings = copyExtensionBindings(this.#ownerRuntime.session, session);
+			// Child session_start must run against the child's own detached UI
+			// context so its side effects never land in the Owner's presentation.
+			bindings.uiContext = createDetachedExtensionUIContext(
+				session,
+				this.#ownerRuntime.session,
+			);
 			const ownerErrorListener = bindings.onError;
 			const startupErrors: string[] = [];
 			bindings.onError = (error) => {
@@ -459,9 +465,18 @@ export class DefaultChildSessionFactory {
 		const session = created.session;
 		try {
 			await session.bindExtensions(
-				copyExtensionBindings(this.#ownerRuntime.session, session),
+				{
+					...copyExtensionBindings(this.#ownerRuntime.session, session),
+					uiContext: createDetachedExtensionUIContext(
+						session,
+						this.#ownerRuntime.session,
+					),
+				},
 			);
-			setNativeExtensionUIState(session, { editorComponent: undefined });
+			// The detached context starts without an editor, and its own
+			// session_start can only register one per-child. Nothing reaches the
+			// Owner's editor slot.
+			rememberNativeExtensionUIState(session);
 			session.setActiveToolsByName([]);
 		} catch (error) {
 			session.dispose();

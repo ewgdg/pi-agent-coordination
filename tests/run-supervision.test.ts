@@ -16,6 +16,7 @@ import {
 	type AgentMessageInput,
 } from "../src/coordination/workflow-coordinator.ts";
 import { HumanRequestSurface } from "../src/presentation/human-request-surface.ts";
+import { readDetachedChildUIState } from "../src/pi-integration/extension-bindings.ts";
 import piAgentCoordination from "../src/index.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -480,12 +481,21 @@ test("a failed native human resume dispatch leaves its exact Hold retryable", as
 		return nativeSendUserMessage.call(child.session, content, options);
 	};
 	await child.session.prompt("This human resume fails before commitment.");
+	// The backgrounded child's input failure is recorded in its own detached UI
+	// context; it never reaches the Owner's TUI (#59).
+	const childUIState = readDetachedChildUIState(child.session);
 	assert.equal(
-		harness.host.ui.notifications.some(
+		childUIState?.notifications.some(
 			({ message, type }) =>
 				type === "error" && message.includes("human resume dispatch failed"),
 		),
 		true,
+	);
+	assert.equal(
+		harness.host.ui.notifications.some(({ message }) =>
+			message.includes("human resume dispatch failed")
+		),
+		false,
 	);
 	assert.equal(
 		child.session.sessionManager.getEntries().some(

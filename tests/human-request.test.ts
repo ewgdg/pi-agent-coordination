@@ -529,13 +529,10 @@ test("two Agents wait independently while Steer follows Answer commit and Deferr
 		[first.agentId, second.agentId].sort(),
 	);
 	const childAgentsCommand = first.session.prompt("/agents");
-	await waitForCondition(() => host.ui.customSurfaces.length === 1);
-	assert.doesNotMatch(
-		host.ui.customSurfaces[0]!.render(80).join("\n"),
-		/Attention Inbox|DECIDE 1/,
-	);
-	host.ui.customSurfaces[0]!.handleInput?.("\x1b");
 	await childAgentsCommand;
+	// A backgrounded child's command surface stays in its own detached context;
+	// it must not open a modal in the Owner's TUI (#59).
+	assert.equal(host.ui.customSurfaces.length, 0);
 	const agentsCommand = host.session.prompt("/agents");
 	await waitForCondition(() => host.ui.customSurfaces.length === 1);
 	assert.deepEqual(host.ui.genericSelectCalls, []);

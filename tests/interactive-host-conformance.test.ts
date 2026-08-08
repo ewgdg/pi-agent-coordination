@@ -14,6 +14,7 @@ import {
 import * as hostPi from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
+import { readDetachedChildUIState } from "../src/pi-integration/extension-bindings.ts";
 import { installInteractiveHostBridge } from "../src/pi-integration/interactive-host-bridge.ts";
 import {
 	resetSessionStartProbe,
@@ -217,12 +218,94 @@ test("retained native selection restores third-party editor bindings", async () 
 	const childAgentId = await spawnRetainedChild(host);
 	const childEditorFactory = editorFactories.get(childAgentId);
 	assert.ok(childEditorFactory);
+	// The child's session_start editor registration stays in its own context
+	// instead of replacing the Owner's editor slot.
+	assert.equal(host.ui.getEditorComponent(), ownerEditorFactory);
 
 	await selectAgent(host, childAgentId);
 	assert.equal(host.ui.getEditorComponent(), childEditorFactory);
 
 	await selectAgent(host, host.session.sessionId);
 	assert.equal(host.ui.getEditorComponent(), ownerEditorFactory);
+	await host.runtime.dispose();
+});
+
+test("child session_start UI side effects stay in the child's detached context", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "detached-child-ui-probe",
+			hidden: true,
+			factory: (pi) => {
+				pi.on("session_start", (_event, ctx) => {
+					ctx.ui.notify("startup-notice", "info");
+					ctx.ui.setStatus("probe-status", "starting");
+					ctx.ui.setWidget("probe-widget", ["probe-content"]);
+					ctx.ui.setEditorComponent(() => undefined as never);
+				});
+			},
+		}],
+	});
+	// Owner session_start behavior is unchanged: the probe reached the Owner TUI.
+	assert.equal(host.ui.notifications.length, 1);
+	assert.equal(host.ui.notifications[0]?.message, "startup-notice");
+	const ownerEditorFactory = host.ui.getEditorComponent();
+	const ownerStatusesBefore = new Map(host.ui.statuses);
+	const ownerWidgetsBefore = new Map(host.ui.widgets);
+
+	host.model.setResponses([
+		fauxAssistantMessage("Remain live while child UI side effects stay detached."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+
+	// The child's session_start wrote into its own detached context only: no
+	// notify, status, widget, or editor registration reached the Owner's TUI.
+	assert.equal(host.ui.notifications.length, 1);
+	assert.deepEqual(host.ui.statuses, ownerStatusesBefore);
+	assert.deepEqual(host.ui.widgets, ownerWidgetsBefore);
+	assert.equal(host.ui.getEditorComponent(), ownerEditorFactory);
+
+	await selectAgent(host, childAgentId);
+	const childState = readDetachedChildUIState(host.runtime.session);
+	assert.equal(childState?.notifications.length, 1);
+	assert.equal(childState?.notifications[0]?.message, "startup-notice");
+	assert.equal(childState?.statuses.get("probe-status"), "starting");
+	const probeWidget = childState?.widgets.get("probe-widget")?.content;
+	assert.ok(Array.isArray(probeWidget));
+	assert.deepEqual(probeWidget, ["probe-content"]);
+	assert.ok(childState?.editorComponent);
+	await host.runtime.dispose();
+});
+
+test("deselected child UI writes stay in the child's detached context", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	host.model.setResponses([
+		fauxAssistantMessage("Remain live while the deselected child writes detached UI state."),
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+
+	await selectAgent(host, childAgentId);
+	const childSession = host.runtime.session;
+	await selectAgent(host, host.session.sessionId);
+
+	const editorBefore = host.ui.getEditorComponent();
+	const childUi = childSession.extensionRunner.createContext().ui;
+	childUi.notify("background-notice", "info");
+	childUi.setStatus("background-status", "waiting");
+	childUi.setWidget("background-widget", ["background-content"]);
+	childUi.setEditorComponent(() => undefined as never);
+
+	// A deselected child must not reach the Owner's presentation, even after a
+	// native selection round-trip reinstalled its presentation context.
+	assert.equal(host.ui.notifications.length, 0);
+	assert.equal(host.ui.statuses.has("background-status"), false);
+	assert.equal(host.ui.widgets.has("background-widget"), false);
+	assert.equal(host.ui.getEditorComponent(), editorBefore);
+
+	const childState = readDetachedChildUIState(childSession);
+	assert.equal(childState?.notifications[0]?.message, "background-notice");
+	assert.equal(childState?.statuses.get("background-status"), "waiting");
+	assert.ok(childState?.widgets.has("background-widget"));
 	await host.runtime.dispose();
 });
 
