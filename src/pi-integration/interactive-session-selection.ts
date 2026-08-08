@@ -11,6 +11,7 @@ import {
 	reinstallDetachedExtensionUIContext,
 	restoreNativeExtensionUIState,
 } from "./extension-bindings.ts";
+import type { PiNativeAgentProjection } from "./native-agent-projection.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 
 export type HumanPresentationBinding = Readonly<{
@@ -18,6 +19,7 @@ export type HumanPresentationBinding = Readonly<{
 	session: AgentSession;
 	services: AgentSessionServices;
 	diagnostics: readonly AgentSessionRuntimeDiagnostic[];
+	projection?: PiNativeAgentProjection;
 	release?(): void | Promise<void>;
 }>;
 

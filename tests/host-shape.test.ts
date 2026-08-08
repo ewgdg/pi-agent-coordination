@@ -12,6 +12,7 @@ import {
 	assertExtensionApiShape,
 	assertHostModuleShape,
 	assertInteractiveModeInstanceShape,
+	assertProjectionInteractiveModeInstanceShape,
 	assertPiAiModuleShape,
 	assertRuntimeInstanceShape,
 	assertTuiModuleShape,
@@ -138,6 +139,7 @@ test("module preflight rejects every required host export and prototype seam", (
 		["createAgentSessionServices"],
 		["createAgentSessionFromServices"],
 		["defineTool"],
+		["getPackageDir"],
 		["hasTrustRequiringProjectResources"],
 		["CURRENT_SESSION_VERSION"],
 		...[
@@ -149,6 +151,9 @@ test("module preflight rejects every required host export and prototype seam", (
 			"bindCurrentSessionExtensions",
 			"rebindCurrentSession",
 			"getUserInput",
+			"renderInitialMessages",
+			"subscribeToAgent",
+			"stop",
 		].map((member) => ["InteractiveMode", "prototype", member]),
 		...["create", "open", "continueRecent", "inMemory"].map(
 			(member) => ["SessionManager", member],
@@ -194,7 +199,9 @@ test("module preflight rejects every required host export and prototype seam", (
 test("module preflight rejects every required TUI, AI, and schema value", () => {
 	const tuiRequirements = [
 		["Text"],
+		["getKeybindings"],
 		["matchesKey"],
+		["setKeybindings"],
 		["visibleWidth"],
 		["wrapTextWithAnsi"],
 		["Key"],
@@ -260,6 +267,8 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"applyOverrides",
 			"getDefaultProjectTrust",
 			"getProviderRetrySettings",
+			"getShowHardwareCursor",
+			"getThemeSetting",
 			"getTransport",
 			"isProjectTrusted",
 		].map((member) => [
@@ -301,6 +310,8 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"applyOverrides",
 			"getDefaultProjectTrust",
 			"getProviderRetrySettings",
+			"getShowHardwareCursor",
+			"getThemeSetting",
 			"getTransport",
 			"isProjectTrusted",
 		].map((member) => [
@@ -411,6 +422,61 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 			(error: unknown) =>
 				error instanceof IncompatiblePiHostError &&
 				error.memberName === expected,
+			expected,
+		);
+	}
+	await host.runtime.dispose();
+});
+
+test("live preflight rejects every projection-owned InteractiveMode seam", async () => {
+	const host = await createUnboundTestOwnerHost(() => undefined);
+	const component = { render: () => [], invalidate() {} };
+	const mode = {
+		chatContainer: component,
+		statusContainer: component,
+		footerDataProvider: { dispose() {} },
+		isInitialized: false,
+		renderer: { terminal: {} },
+		themeController: {},
+		renderInitialMessages() {},
+		subscribeToAgent() {},
+		stop() {},
+	};
+	const requirements = [
+		[["chatContainer"], "InteractiveMode.chatContainer"],
+		[["chatContainer", "render"], "InteractiveMode.chatContainer.render"],
+		[["chatContainer", "invalidate"], "InteractiveMode.chatContainer.invalidate"],
+		[["statusContainer"], "InteractiveMode.statusContainer"],
+		[["statusContainer", "render"], "InteractiveMode.statusContainer.render"],
+		[["statusContainer", "invalidate"], "InteractiveMode.statusContainer.invalidate"],
+		[["footerDataProvider"], "InteractiveMode.footerDataProvider"],
+		[["footerDataProvider", "dispose"], "InteractiveMode.footerDataProvider.dispose"],
+		[["isInitialized"], "InteractiveMode.isInitialized"],
+		[["renderer"], "InteractiveMode.renderer"],
+		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
+		[["themeController"], "InteractiveMode.themeController"],
+		[["renderInitialMessages"], "InteractiveMode.renderInitialMessages"],
+		[["subscribeToAgent"], "InteractiveMode.subscribeToAgent"],
+		[["stop"], "InteractiveMode.stop"],
+	] as const;
+	for (const [path, expected] of requirements) {
+		assert.throws(
+			() => assertProjectionInteractiveModeInstanceShape(withoutMemberAtPath(mode, path)),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError && error.memberName === expected,
+			expected,
+		);
+	}
+	for (const [path, expected] of [
+		[["isInitialized"], "InteractiveMode.isInitialized"],
+		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
+	] as const) {
+		assert.throws(
+			() => assertProjectionInteractiveModeInstanceShape(
+				readonlyMemberAtPath(mode, path),
+			),
+			(error: unknown) =>
+				error instanceof IncompatiblePiHostError && error.memberName === expected,
 			expected,
 		);
 	}

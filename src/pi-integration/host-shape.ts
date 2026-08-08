@@ -44,6 +44,7 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"createAgentSessionServices",
 		"createAgentSessionFromServices",
 		"defineTool",
+		"getPackageDir",
 		"hasTrustRequiringProjectResources",
 	] as const) {
 		requireFunction(host, factoryName, factoryName, version);
@@ -92,6 +93,9 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"bindCurrentSessionExtensions",
 		"rebindCurrentSession",
 		"getUserInput",
+		"renderInitialMessages",
+		"subscribeToAgent",
+		"stop",
 	] as const) {
 		requireFunction(
 			interactivePrototype,
@@ -154,7 +158,9 @@ export function assertTuiModuleShape(tuiValue: unknown, version?: unknown): void
 	const tui = requireRecord(tuiValue, "PiTUI", version);
 	for (const member of [
 		"Text",
+		"getKeybindings",
 		"matchesKey",
+		"setKeybindings",
 		"visibleWidth",
 		"wrapTextWithAnsi",
 	] as const) {
@@ -268,6 +274,61 @@ export function assertRuntimeInstanceShape(
 	assertAgentSessionShape(runtime.session, version);
 }
 
+export function assertProjectionInteractiveModeInstanceShape(
+	value: unknown,
+	version?: unknown,
+): void {
+	const interactiveMode = requireRecord(value, "Projection InteractiveMode", version);
+	for (const member of ["chatContainer", "statusContainer"] as const) {
+		const component = requireRecord(
+			interactiveMode[member],
+			`InteractiveMode.${member}`,
+			version,
+		);
+		requireFunction(component, "render", `InteractiveMode.${member}.render`, version);
+		requireFunction(component, "invalidate", `InteractiveMode.${member}.invalidate`, version);
+	}
+	const footerDataProvider = requireRecord(
+		interactiveMode.footerDataProvider,
+		"InteractiveMode.footerDataProvider",
+		version,
+	);
+	requireFunction(
+		footerDataProvider,
+		"dispose",
+		"InteractiveMode.footerDataProvider.dispose",
+		version,
+	);
+	if (typeof interactiveMode.isInitialized !== "boolean") {
+		throw new IncompatiblePiHostError("InteractiveMode.isInitialized", version);
+	}
+	requireWritableMember(
+		interactiveMode,
+		"isInitialized",
+		"InteractiveMode.isInitialized",
+		version,
+	);
+	const renderer = requireRecord(
+		interactiveMode.renderer,
+		"InteractiveMode.renderer",
+		version,
+	);
+	requireWritableMember(
+		renderer,
+		"terminal",
+		"InteractiveMode.renderer.terminal",
+		version,
+	);
+	requireRecord(
+		interactiveMode.themeController,
+		"InteractiveMode.themeController",
+		version,
+	);
+	for (const member of ["renderInitialMessages", "subscribeToAgent", "stop"] as const) {
+		requireFunction(interactiveMode, member, `InteractiveMode.${member}`, version);
+	}
+}
+
 export function assertInteractiveModeInstanceShape(value: unknown, version?: unknown): void {
 	const interactiveMode = requireRecord(value, "InteractiveMode", version);
 	const runtimeHost = requireRecord(
@@ -377,6 +438,8 @@ function assertSettingsManagerShape(
 		"applyOverrides",
 		"getDefaultProjectTrust",
 		"getProviderRetrySettings",
+		"getShowHardwareCursor",
+		"getThemeSetting",
 		"getTransport",
 		"isProjectTrusted",
 	] as const) {

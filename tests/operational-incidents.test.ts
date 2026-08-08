@@ -11,6 +11,7 @@ import {
 	SessionManager,
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import piAgentCoordination from "../src/index.ts";
 import {
@@ -26,6 +27,10 @@ import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { HumanRequestSurface } from "../src/presentation/human-request-surface.ts";
 import {
+	createPiNativeProjectionHost,
+	type PiNativeAgentProjection,
+} from "../src/pi-integration/native-agent-projection.ts";
+import {
 	bindTestOwnerHost,
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -38,6 +43,7 @@ import {
 import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 1_000;
+const PROJECTION_RENDER_WIDTH = 240;
 
 test("a settled answer-obligated Agent creates one atomic Obligation Stall Moderator", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
@@ -192,6 +198,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	const released = new Promise<void>((resolve) => {
 		releaseTool = resolve;
 	});
+	t.after(() => releaseTool());
 	(globalThis as Record<PropertyKey, unknown>)[registryKey] = {
 		async execute() {
 			toolStarted();
@@ -214,9 +221,20 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 		host.runtime,
 		"<inline:pi-agent-coordination>",
 	);
+	const nativeProjectionHost = createPiNativeProjectionHost({
+		ownerRuntime: host.runtime,
+	});
+	const projectionsBySessionId = new Map<string, PiNativeAgentProjection>();
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
+		projectionHost: {
+			async createProjection(options) {
+				const projection = await nativeProjectionHost.createProjection(options);
+				projectionsBySessionId.set(projection.sessionId, projection);
+				return projection;
+			},
+		},
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy('{"operationReviewIntervalMs":1000}'),
 		),
@@ -275,6 +293,22 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	await coordinator.forAgent(child.agentId).reachSafeBoundary();
 
 	const moderator = await waitForModeratorKind(host, "operation_review");
+	const ordinaryProjection = projectionsBySessionId.get(child.agentId);
+	const moderatorProjection = projectionsBySessionId.get(moderator.id);
+	assert.equal(ordinaryProjection?.kind, "live");
+	assert.equal(moderatorProjection?.kind, "live");
+	assert.match(
+		stripTerminalSequences(
+			ordinaryProjection.transcript.render(PROJECTION_RENDER_WIDTH).join("\n"),
+		),
+		/Keep the Creation Request open/,
+	);
+	assert.match(
+		stripTerminalSequences(
+			moderatorProjection.transcript.render(PROJECTION_RENDER_WIDTH).join("\n"),
+		),
+		/operation_review/,
+	);
 	const inputEntry = SessionManager.open(moderator.path).getEntries().find(
 		(entry) =>
 			entry.type === "custom_message" &&
@@ -1062,8 +1096,31 @@ test("external Answer clearance releases Moderator handling", async () => {
 	assert.ok(requestSource);
 	const requestId = deriveMessageIdentity(requestSource);
 
-	host.model.setResponses([
-		fauxAssistantMessage(
+	const routePostReminderResponse = (context: Context) => {
+		const transcript = JSON.stringify(context.messages);
+		if (!context.tools?.some(({ name }) => name === "ask_user_question")) {
+			return fauxAssistantMessage("The Owner observed the externally committed Answer.");
+		}
+		if (transcript.includes("answer-after-reminder")) {
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"ask_user_question",
+					{
+						questions: [
+							{
+								kind: "text",
+								header: "Pause",
+								prompt: "Keep this Run active after its Answer commits.",
+								multiline: false,
+							},
+						],
+					},
+					{ id: "wait-after-answer-clearance" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage(
 			fauxToolCall(
 				"agent_message",
 				{
@@ -1074,25 +1131,12 @@ test("external Answer clearance releases Moderator handling", async () => {
 				{ id: "answer-after-reminder" },
 			),
 			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage(
-			fauxToolCall(
-				"ask_user_question",
-				{
-					questions: [
-						{
-							kind: "text",
-							header: "Pause",
-							prompt: "Keep this Run active after its Answer commits.",
-							multiline: false,
-						},
-					],
-				},
-				{ id: "wait-after-answer-clearance" },
-			),
-			{ stopReason: "toolUse" },
-		),
-	]);
+		);
+	};
+	// Live projections add real native rendering work to each event. Route this
+	// concurrency-sensitive fixture by transcript instead of assuming which Run
+	// reaches the shared faux model queue first.
+	host.model.setResponses(Array.from({ length: 4 }, () => routePostReminderResponse));
 	await sendOwnerMessage(
 		host,
 		parsedInput.trigger.agentId,

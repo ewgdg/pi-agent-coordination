@@ -44,3 +44,23 @@ A child's extension context follows the selected presentation:
 Owner behavior is unchanged: the Owner's session keeps its native TUI context
 throughout, and the editor-preservation seam (`capture`/`restore`) is the same
 for every session.
+
+## Pi-native Run projections
+
+Every exact live non-Owner Run also owns a real Pi `InteractiveMode` projection.
+It is constructed after that Run binds extensions and before coordination admits
+model-visible work. The projection subscribes for the Run's complete subsequent
+event sequence and exposes only two native components: transcript presentation
+and Run-status presentation. Its detached terminal cannot write progress, title,
+input, or frames into the Owner terminal.
+
+Projection ownership follows the exact Run rather than Interactive Selection.
+Clean release, failure, termination, startup rollback, and Workflow shutdown
+dispose the projection before disposing its session. Closing or opening a
+presentation surface is therefore not part of live projection ownership.
+
+Dormant inspection uses the same component seam over a separate passive session
+opened on the Agent's durable `SessionManager`. The passive session has no active
+tools and the seam exposes no editor or input method; releasing it disposes both
+the Dormant projection and that passive session without starting a successor Run
+or appending transcript evidence.

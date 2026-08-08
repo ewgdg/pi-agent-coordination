@@ -49,7 +49,7 @@ export async function initializeOwnerWorkflow(options: {
 	event: SessionStartEvent;
 }): Promise<void> {
 	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event } = options;
-	const runtime = await bridge.captureRuntime(
+	const { runtime, projectionHost } = await bridge.capture(
 		ctx.sessionManager as AgentSession["sessionManager"],
 	);
 	const existing = initializedWorkflows.get(runtime.session);
@@ -99,6 +99,7 @@ export async function initializeOwnerWorkflow(options: {
 		humanRequestPresentation: new HumanRequestSurface(ctx.ui),
 		operationalIncidentPresentation: new OperationalIncidentSurface(ctx.ui),
 		selectedAgentStatusPresentation: new SelectedAgentStatusSurface(ctx.ui),
+		projectionHost,
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>

@@ -23,6 +23,11 @@ import {
 	createDetachedExtensionUIContext,
 	rememberNativeExtensionUIState,
 } from "../pi-integration/extension-bindings.ts";
+import {
+	createPiNativeProjectionHost,
+	type PiNativeAgentProjection,
+	type PiNativeProjectionHost,
+} from "../pi-integration/native-agent-projection.ts";
 import { resolveAgentRunProjectTrust } from "../pi-integration/project-trust.ts";
 import { resolveRunExtensions } from "../pi-integration/named-inline-extension-factories.ts";
 import type { HumanPresentationBinding } from "../pi-integration/interactive-session-selection.ts";
@@ -38,7 +43,10 @@ import {
 } from "../templates/agent-configuration.ts";
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { ModeratorIdentity } from "../protocol/moderator-input.ts";
-import { InProcessAgentHost } from "./in-process-agent-host.ts";
+import {
+	InProcessAgentHost,
+	type StartedAgentRun,
+} from "./in-process-agent-host.ts";
 import { discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
 import {
 	selectAgentTemplateForRun,
@@ -91,6 +99,7 @@ export class DefaultChildSessionFactory {
 	readonly #childExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #moderatorExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #presentationExtensionFactory: (agentId: string) => ExtensionFactory;
+	readonly #projectionHost: PiNativeProjectionHost;
 	readonly #automaticGenerationReconciliation:
 		| AutomaticGenerationReconciliationAdapter
 		| undefined;
@@ -105,6 +114,7 @@ export class DefaultChildSessionFactory {
 		childExtensionFactory(agentId: string): ExtensionFactory;
 		moderatorExtensionFactory(agentId: string): ExtensionFactory;
 		presentationExtensionFactory(agentId: string): ExtensionFactory;
+		projectionHost?: PiNativeProjectionHost;
 		automaticGenerationReconciliation?: AutomaticGenerationReconciliationAdapter;
 		templateRoots?(baselineCwd: string, projectTrusted: boolean): readonly AgentTemplateRoot[];
 	}) {
@@ -119,6 +129,9 @@ export class DefaultChildSessionFactory {
 		this.#childExtensionFactory = options.childExtensionFactory;
 		this.#moderatorExtensionFactory = options.moderatorExtensionFactory;
 		this.#presentationExtensionFactory = options.presentationExtensionFactory;
+		this.#projectionHost = options.projectionHost ?? createPiNativeProjectionHost({
+			ownerRuntime: options.ownerRuntime,
+		});
 		this.#automaticGenerationReconciliation =
 			options.automaticGenerationReconciliation;
 		this.#templateRoots = options.templateRoots;
@@ -177,10 +190,10 @@ export class DefaultChildSessionFactory {
 					blueprint,
 				);
 				firstPrepared = undefined;
-				const session = await this.startSession({ sessionManager, prepared });
+				const startedRun = await this.startSession({ sessionManager, prepared });
 				child.services = prepared.services;
 				child.effectiveConfiguration = prepared.configuration;
-				return session;
+				return startedRun;
 			},
 		});
 		child = {
@@ -213,10 +226,10 @@ export class DefaultChildSessionFactory {
 					identity.configuration.baseline,
 				);
 				firstPrepared = undefined;
-				const session = await this.startSession({ sessionManager, prepared });
+				const startedRun = await this.startSession({ sessionManager, prepared });
 				moderator.services = prepared.services;
 				moderator.effectiveConfiguration = prepared.configuration;
-				return session;
+				return startedRun;
 			},
 		});
 		moderator = {
@@ -402,7 +415,7 @@ export class DefaultChildSessionFactory {
 	async startSession(options: {
 		sessionManager: SessionManager;
 		prepared: PreparedAgentRun;
-	}): Promise<AgentSession> {
+	}): Promise<StartedAgentRun> {
 		const { sessionManager, prepared } = options;
 		const model = prepared.services.modelRuntime.getModel(
 			prepared.configuration.model.provider,
@@ -418,6 +431,7 @@ export class DefaultChildSessionFactory {
 			tools: [...prepared.configuration.tools],
 		});
 		const session = created.session;
+		let projection: PiNativeAgentProjection | undefined;
 		try {
 			configureCoordinatedSession(
 				session,
@@ -436,11 +450,29 @@ export class DefaultChildSessionFactory {
 				throw new Error(`Agent extension startup failed: ${startupErrors[0]}`);
 			}
 			rememberNativeExtensionUIState(session);
+			projection = await this.#projectionHost.createProjection({
+				kind: "live",
+				session,
+				services: prepared.services,
+			});
 		} catch (error) {
-			session.dispose();
+			const cleanupErrors: unknown[] = [error];
+			try {
+				projection?.dispose();
+			} catch (cleanupError) {
+				cleanupErrors.push(cleanupError);
+			}
+			try {
+				session.dispose();
+			} catch (cleanupError) {
+				cleanupErrors.push(cleanupError);
+			}
+			if (cleanupErrors.length > 1) {
+				throw new AggregateError(cleanupErrors, "Agent projection startup cleanup failed");
+			}
 			throw error;
 		}
-		return session;
+		return { session, projection };
 	}
 
 	async createPresentationBinding(record: AgentRecord): Promise<HumanPresentationBinding> {
@@ -469,6 +501,7 @@ export class DefaultChildSessionFactory {
 			noTools: "builtin",
 		});
 		const session = created.session;
+		let projection: PiNativeAgentProjection | undefined;
 		try {
 			await session.bindExtensions(
 				this.#detachedChildBindings(session),
@@ -478,16 +511,53 @@ export class DefaultChildSessionFactory {
 			// Owner's editor slot.
 			rememberNativeExtensionUIState(session);
 			session.setActiveToolsByName([]);
+			projection = await this.#projectionHost.createProjection({
+				kind: "dormant",
+				session,
+				services,
+			});
 		} catch (error) {
-			session.dispose();
+			const cleanupErrors: unknown[] = [error];
+			try {
+				projection?.dispose();
+			} catch (cleanupError) {
+				cleanupErrors.push(cleanupError);
+			}
+			try {
+				session.dispose();
+			} catch (cleanupError) {
+				cleanupErrors.push(cleanupError);
+			}
+			if (cleanupErrors.length > 1) {
+				throw new AggregateError(cleanupErrors, "Dormant projection startup cleanup failed");
+			}
 			throw error;
 		}
+		let released = false;
 		return {
 			agentId,
 			session,
 			services,
 			diagnostics: services.diagnostics,
-			release: () => session.dispose(),
+			projection,
+			release: () => {
+				if (released) return;
+				released = true;
+				const cleanupErrors: unknown[] = [];
+				try {
+					projection.dispose();
+				} catch (error) {
+					cleanupErrors.push(error);
+				}
+				try {
+					session.dispose();
+				} catch (error) {
+					cleanupErrors.push(error);
+				}
+				if (cleanupErrors.length > 0) {
+					throw new AggregateError(cleanupErrors, "Dormant projection cleanup failed");
+				}
+			},
 		};
 	}
 

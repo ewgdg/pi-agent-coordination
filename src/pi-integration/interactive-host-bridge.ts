@@ -9,6 +9,10 @@ import {
 	assertRuntimeInstanceShape,
 } from "./host-shape.ts";
 import {
+	createPiNativeProjectionHost,
+	type PiNativeProjectionHost,
+} from "./native-agent-projection.ts";
+import {
 	hasInstalledExtensionBindings,
 	rememberNativeExtensionUIState,
 	refreshNativeExtensionBindings,
@@ -23,19 +27,24 @@ type HostModule = {
 	};
 };
 
+type InteractiveCapture = Readonly<{
+	runtime: AgentSessionRuntime;
+	projectionHost: PiNativeProjectionHost;
+}>;
+
 type RuntimeWaiter = {
 	sessionManager: SessionManager;
-	resolve(runtime: AgentSessionRuntime): void;
+	resolve(capture: InteractiveCapture): void;
 	reject(error: unknown): void;
 };
 
 type BridgeState = {
-	runtimesBySessionManager: WeakMap<SessionManager, WeakRef<AgentSessionRuntime>>;
+	capturesBySessionManager: WeakMap<SessionManager, InteractiveCapture>;
 	waiters: RuntimeWaiter[];
 };
 
 export type InteractiveHostBridge = {
-	captureRuntime(sessionManager: SessionManager): Promise<AgentSessionRuntime>;
+	capture(sessionManager: SessionManager): Promise<InteractiveCapture>;
 };
 
 const BRIDGE_REGISTRY_KEY = "__piAgentCoordinationInteractiveHostBridge";
@@ -60,9 +69,9 @@ export function installInteractiveHostBridge(hostValue: unknown): InteractiveHos
 	}
 
 	return {
-		captureRuntime(sessionManager) {
-			const runtime = state.runtimesBySessionManager.get(sessionManager)?.deref();
-			if (runtime) return Promise.resolve(runtime);
+		capture(sessionManager) {
+			const capture = state.capturesBySessionManager.get(sessionManager);
+			if (capture) return Promise.resolve(capture);
 			return new Promise((resolve, reject) =>
 				state.waiters.push({ sessionManager, resolve, reject })
 			);
@@ -72,7 +81,7 @@ export function installInteractiveHostBridge(hostValue: unknown): InteractiveHos
 
 function installRuntimeCapture(host: HostModule): BridgeState {
 	const state: BridgeState = {
-		runtimesBySessionManager: new WeakMap(),
+		capturesBySessionManager: new WeakMap(),
 		waiters: [],
 	};
 	const interactivePrototype = host.InteractiveMode.prototype;
@@ -103,13 +112,20 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 				throw error;
 			}
 			const sessionManager = runtime.session.sessionManager;
-			// TUI binding is Pi's first mode-specific seam. Keep this association weak
-			// so failed startup never turns runtime discovery into host retention.
-			state.runtimesBySessionManager.set(sessionManager, new WeakRef(runtime));
+			const capture = {
+				runtime,
+				projectionHost: createPiNativeProjectionHost({
+					ownerRuntime: runtime,
+					ownerInteractiveMode: this,
+				}),
+			};
+			// TUI binding is Pi's first mode-specific seam. The WeakMap association
+			// cannot retain a failed or disposed Owner session by itself.
+			state.capturesBySessionManager.set(sessionManager, capture);
 			for (const waiter of [...state.waiters]) {
 				if (waiter.sessionManager !== sessionManager) continue;
 				state.waiters.splice(state.waiters.indexOf(waiter), 1);
-				waiter.resolve(runtime);
+				waiter.resolve(capture);
 			}
 			if (!hasInstalledExtensionBindings(runtime.session)) {
 				await originalBindCurrentSessionExtensions.call(this);

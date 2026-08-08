@@ -82,6 +82,7 @@ import type {
 	SelectedAgentPhase,
 	SelectedAgentStatusPresentation,
 } from "../presentation/selected-agent-status.ts";
+import type { PiNativeProjectionHost } from "../pi-integration/native-agent-projection.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type AgentRosterStatus = AgentStatus & Readonly<{
@@ -193,6 +194,7 @@ export class WorkflowCoordinator {
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
 			humanSessionSelection?: HumanSessionSelection;
 			selectedAgentStatusPresentation?: SelectedAgentStatusPresentation;
+			projectionHost?: PiNativeProjectionHost;
 		},
 	) {
 		this.#quarantinedAgentIds = options.recoveredWorkflow?.quarantinedAgentIds ?? new Set();
@@ -225,6 +227,7 @@ export class WorkflowCoordinator {
 			moderatorExtensionFactory: options.moderatorExtensionFactory,
 			presentationExtensionFactory: (agentId) =>
 				createPresentationBoundExtension(() => this.#agentView(agentId)),
+			projectionHost: options.projectionHost,
 			automaticGenerationReconciliation:
 				options.automaticGenerationReconciliation,
 		});
@@ -724,6 +727,7 @@ export class WorkflowCoordinator {
 			session,
 			services,
 			diagnostics: services.diagnostics,
+			projection: record.host.currentProjection(),
 		};
 	}
 

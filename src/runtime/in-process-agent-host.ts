@@ -4,6 +4,7 @@ import type {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
+import type { PiNativeAgentProjection } from "../pi-integration/native-agent-projection.ts";
 import { SerialLane } from "./serial-lane.ts";
 
 export type RunRetentionReason =
@@ -41,9 +42,15 @@ export type InterruptionHoldHandle = Readonly<{
 	sequence: number;
 }>;
 
+export type StartedAgentRun = Readonly<{
+	session: AgentSession;
+	projection: PiNativeAgentProjection;
+}>;
+
 type BoundRun = {
 	handle: AgentRunHandle;
 	session: AgentSession;
+	projection: PiNativeAgentProjection | undefined;
 	unsubscribe: () => void;
 	failed: boolean;
 	expectedInterruption: boolean;
@@ -55,7 +62,7 @@ type HeldNativeQueue = {
 	followUp: string[];
 };
 
-type StartSession = () => Promise<AgentSession>;
+type StartSession = () => Promise<StartedAgentRun>;
 export type AgentRunSettlement = "settled" | "failed";
 type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
 export type AgentRunEndCause = "clean" | "failure" | "termination" | "shutdown";
@@ -118,7 +125,9 @@ export class InProcessAgentHost {
 		for (const reason of options.initialRetentionReasons ?? []) {
 			this.#retentionReasons.add(reason);
 		}
-		if (options.initialSession) this.#bindRun(options.initialSession);
+		if (options.initialSession) {
+			this.#bindRun({ session: options.initialSession, projection: undefined });
+		}
 	}
 
 	static bindOwner(runtime: AgentSessionRuntime): InProcessAgentHost {
@@ -204,6 +213,10 @@ export class InProcessAgentHost {
 
 	currentHandle(): AgentRunHandle | undefined {
 		return this.#run?.handle;
+	}
+
+	currentProjection(): PiNativeAgentProjection | undefined {
+		return this.#run?.projection;
 	}
 
 	latestStartedRunSequence(): number {
@@ -379,10 +392,10 @@ export class InProcessAgentHost {
 		this.#notifyStateChanged();
 		try {
 			this.#initializeRequestRelationships();
-			const session = await this.#startSession();
-			this.#bindRun(session);
-			await this.#runStartedHandler?.(session, this.#run!.handle);
-			return session;
+			const startedRun = await this.#startSession();
+			this.#bindRun(startedRun);
+			await this.#runStartedHandler?.(startedRun.session, this.#run!.handle);
+			return startedRun.session;
 		} catch (error) {
 			const cleanupErrors = [error, ...this.#discardFailedStart()];
 			this.#clearRunScopedState();
@@ -494,17 +507,29 @@ export class InProcessAgentHost {
 		}
 		this.#ending = true;
 		this.#notifyStateChanged();
+		const cleanupErrors: unknown[] = [];
+		const attemptCleanup = (cleanup: () => void) => {
+			try {
+				cleanup();
+			} catch (error) {
+				cleanupErrors.push(error);
+			}
+		};
 		try {
-			run.unsubscribe();
-			run.session.dispose();
+			attemptCleanup(() => run.unsubscribe());
+			attemptCleanup(() => run.projection?.dispose());
+			attemptCleanup(() => run.session.dispose());
+		} finally {
 			this.#run = undefined;
 			this.#clearRunScopedState();
+			this.#ending = false;
 			this.#notifyStateChanged();
 			this.#notifyEnded(run.handle, "clean");
-			return "released";
-		} finally {
-			this.#ending = false;
 		}
+		if (cleanupErrors.length > 0) {
+			throw new AggregateError(cleanupErrors, "Agent Run cleanup failed");
+		}
+		return "released";
 	}
 
 	async discardAndEndInLane(
@@ -532,6 +557,7 @@ export class InProcessAgentHost {
 				this.#runEndingHandler?.(run.session, run.handle, cause)
 			);
 			await attemptCleanup(() => run.unsubscribe());
+			await attemptCleanup(() => run.projection?.dispose());
 			await attemptCleanup(() => run.session.clearQueue());
 			if (disposeRun) {
 				await attemptCleanup(() => disposeRun(run.session));
@@ -575,6 +601,11 @@ export class InProcessAgentHost {
 			cleanupErrors.push(error);
 		}
 		try {
+			failedStart.projection?.dispose();
+		} catch (error) {
+			cleanupErrors.push(error);
+		}
+		try {
 			failedStart.session.dispose();
 		} catch (error) {
 			cleanupErrors.push(error);
@@ -590,16 +621,24 @@ export class InProcessAgentHost {
 		this.#notifyStateChanged();
 	}
 
-	#bindRun(session: AgentSession): void {
+	#bindRun(startedRun: {
+		session: AgentSession;
+		projection: PiNativeAgentProjection | undefined;
+	}): void {
+		const { session, projection } = startedRun;
 		this.#runSequence += 1;
 		const handle = Object.freeze({ sequence: this.#runSequence });
 		const run: BoundRun = {
 			handle,
 			session,
+			projection,
 			unsubscribe: () => undefined,
 			failed: false,
 			expectedInterruption: false,
 		};
+		// Publish ownership before the native subscribe call so startup rollback can
+		// still dispose the exact projection and session if subscription itself fails.
+		this.#run = run;
 		run.unsubscribe = session.subscribe((event) => {
 			if (event.type === "agent_start") this.#notifyStateChanged();
 			if (event.type === "agent_end") {
@@ -629,7 +668,6 @@ export class InProcessAgentHost {
 				this.#restoreHeldNativeQueueAfterIsolatedTurn(run, handle, event);
 			}
 		});
-		this.#run = run;
 		this.#ending = false;
 		this.#notifyStateChanged();
 	}
