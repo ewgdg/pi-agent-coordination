@@ -101,9 +101,13 @@ export function bindHumanSessionSelection(
 			restoreNativeExtensionUIState(binding.session, nextExtensionUIState);
 			// A deselected session must not keep the TUI-bound context from its
 			// own presentation: its later UI calls would land in the newly
-			// selected Agent's view. Children fall back to their detached context.
-			// Same-session re-activation keeps its freshly rebound native context.
-			if (previous.session !== binding.session) {
+			// selected Agent's view. Children fall back to their detached context;
+			// the Owner keeps its native one. Same-session re-activation keeps
+			// its freshly rebound native context.
+			if (
+				previous.session !== binding.session &&
+				previous.agentId !== owner.agentId
+			) {
 				reinstallDetachedExtensionUIContext(previous.session);
 			}
 		} catch (activationError) {

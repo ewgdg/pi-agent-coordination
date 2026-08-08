@@ -158,10 +158,16 @@ export function createDetachedExtensionUIContext(
 // native selection: later extension UI calls would land in the newly selected
 // Agent's presentation. Reinstall the child's detached context and refresh the
 // captured snapshot so the next selection restores the child's own registration.
+// Only sessions created by the child session factory bind a detached context;
+// for anything else the missing context is a wiring bug, so fail fast.
 export function reinstallDetachedExtensionUIContext(session: AgentSession): void {
 	const bound = session as unknown as BoundSession;
 	const context = detachedUIContexts.get(session);
-	if (context === undefined) return;
+	if (context === undefined) {
+		throw new Error(
+			"Session has no detached UI context to reinstall; only children created by the session factory bind one",
+		);
+	}
 	bound._extensionUIContext = context;
 	bound._applyExtensionBindings(session.extensionRunner);
 	bound._nativeExtensionUIState = captureNativeExtensionUIState(session);

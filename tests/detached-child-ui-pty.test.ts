@@ -8,7 +8,8 @@ import xtermHeadless from "@xterm/headless";
 
 const SCRIPT = "/usr/bin/script";
 const PTY_WAIT_TIMEOUT_MS = 20_000;
-const SCREEN_POLL_INTERVAL_MS = 10;
+const BANNER_ABSENCE_POLL_ATTEMPTS = 20;
+const BANNER_ABSENCE_POLL_INTERVAL_MS = 25;
 const FIXTURE = fileURLToPath(
 	new URL("./fixtures/detached-child-ui-pty-fixture.ts", import.meta.url),
 );
@@ -34,13 +35,15 @@ test("a child's session_start notify never appears in the Owner's PTY transcript
 
 		// The child's session_start banner must never render: poll the visible
 		// viewport (not the scrollback) across the fixture's settle window.
-		for (let attempt = 0; attempt < 20; attempt += 1) {
+		for (let attempt = 0; attempt < BANNER_ABSENCE_POLL_ATTEMPTS; attempt += 1) {
 			const frame = (await terminal.screen()).join("\n");
 			assert.equal(
 				frame.includes(`__PTY_DETACHED_BANNER_${setup.childId}__`),
 				false,
 			);
-			await new Promise<void>((resolve) => setTimeout(resolve, 25));
+			await new Promise<void>((resolve) =>
+				setTimeout(resolve, BANNER_ABSENCE_POLL_INTERVAL_MS)
+			);
 		}
 		await terminal.waitFor("__PTY_DONE__");
 	} finally {

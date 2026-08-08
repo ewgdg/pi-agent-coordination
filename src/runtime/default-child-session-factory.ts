@@ -387,6 +387,18 @@ export class DefaultChildSessionFactory {
 		};
 	}
 
+	#detachedChildBindings(session: AgentSession) {
+		const bindings = copyExtensionBindings(this.#ownerRuntime.session, session);
+		// Children inherit the Owner's non-UI seams (mode, abort, shutdown,
+		// errors) but never its UI context: session_start must run against the
+		// child's own detached context so its side effects stay per-child.
+		bindings.uiContext = createDetachedExtensionUIContext(
+			session,
+			this.#ownerRuntime.session,
+		);
+		return bindings;
+	}
+
 	async startSession(options: {
 		sessionManager: SessionManager;
 		prepared: PreparedAgentRun;
@@ -412,13 +424,7 @@ export class DefaultChildSessionFactory {
 				this.#automaticGenerationReconciliation,
 			);
 			this.#validateStartedSession(session, prepared.configuration);
-			const bindings = copyExtensionBindings(this.#ownerRuntime.session, session);
-			// Child session_start must run against the child's own detached UI
-			// context so its side effects never land in the Owner's presentation.
-			bindings.uiContext = createDetachedExtensionUIContext(
-				session,
-				this.#ownerRuntime.session,
-			);
+			const bindings = this.#detachedChildBindings(session);
 			const ownerErrorListener = bindings.onError;
 			const startupErrors: string[] = [];
 			bindings.onError = (error) => {
@@ -465,13 +471,7 @@ export class DefaultChildSessionFactory {
 		const session = created.session;
 		try {
 			await session.bindExtensions(
-				{
-					...copyExtensionBindings(this.#ownerRuntime.session, session),
-					uiContext: createDetachedExtensionUIContext(
-						session,
-						this.#ownerRuntime.session,
-					),
-				},
+				this.#detachedChildBindings(session),
 			);
 			// The detached context starts without an editor, and its own
 			// session_start can only register one per-child. Nothing reaches the

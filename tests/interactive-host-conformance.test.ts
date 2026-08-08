@@ -754,6 +754,9 @@ test("same-Agent selection repairs a degraded Dormant binding after selected Run
 		host.runtime.diagnostics.at(-1)?.message ?? "",
 		/Interactive Selection detached from an ending Run.*failure-transition rebind failure/,
 	);
+	// The degraded-but-selected presentation keeps working because the failed
+	// transition falls back to the Owner's native context
+	// (attachNativeExtensionUIContext); without it this surface stays inert.
 	const failedRepair = await openAgentsSurface(host);
 	const failedRepairRendered = failedRepair.surface.render(80).join("\n");
 	assert.match(failedRepairRendered, /Dormant Agents/);
@@ -897,6 +900,63 @@ test("native long-to-short rebinding reconstructs the complete terminal viewport
 	assert.equal(terminal.viewport().some((line) => line.includes("Researcher")), false);
 	await researcherHost.runtime.dispose();
 	researcherSession.dispose();
+});
+
+test("a missing native rebind callback keeps the degraded Dormant presentation interactive", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		settings: { retry: { enabled: false } },
+	});
+	let markGenerationStarted!: () => void;
+	const generationStarted = new Promise<void>((resolve) => {
+		markGenerationStarted = resolve;
+	});
+	let releaseFailure!: () => void;
+	const failureGate = new Promise<void>((resolve) => {
+		releaseFailure = resolve;
+	});
+	host.model.setResponses([
+		async () => {
+			markGenerationStarted();
+			await failureGate;
+			return fauxAssistantMessage("The selected exact Run fails without a rebind seam.", {
+				stopReason: "error",
+				errorMessage: "deterministic no-rebind Run failure",
+			});
+		},
+	]);
+	const childAgentId = await spawnRetainedChild(host);
+	await generationStarted;
+	await selectAgent(host, childAgentId);
+	const failedSession = host.runtime.session;
+	// Simulate a host that never registered the session rebind callback.
+	host.runtime.setRebindSession(undefined);
+
+	releaseFailure();
+	await failedSession.waitForIdle();
+	await waitForCondition(() => host.runtime.session !== failedSession);
+
+	assert.equal(host.runtime.session.sessionId, childAgentId);
+	assert.equal(
+		await observeCurrentRunPhase(
+			host,
+			childAgentId,
+			"observe-selected-agent-after-no-rebind-failure",
+		),
+		"dormant",
+	);
+	assert.match(
+		host.runtime.diagnostics.at(-1)?.message ?? "",
+		/Interactive Selection detached from an ending Run/,
+	);
+	// The degraded presentation still opens its surfaces through the Owner's
+	// native context fallback (attachNativeExtensionUIContext).
+	const degradedSurface = await openAgentsSurface(host);
+	assert.match(degradedSurface.surface.render(80).join("\n"), /Dormant Agents/);
+	degradedSurface.surface.handleInput?.("\x1b");
+	await degradedSurface.command;
+	await bindTestOwnerHost(host, "tui");
+	await host.runtime.dispose();
 });
 
 async function spawnRetainedChild(
