@@ -1,4 +1,5 @@
 import type {
+	AgentSession,
 	AgentSessionRuntime,
 	ExtensionFactory,
 	MessageEndEvent,
@@ -343,6 +344,20 @@ export class WorkflowCoordinator {
 			...this.#agentView(agentId),
 			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
 		});
+	}
+
+	// PROTOTYPE (#62): throwaway accessor for the child-view overlay prototype.
+	// Production surfaces intentionally expose only presentation views; this
+	// bridge to the live child session exists solely to validate the overlay and
+	// must be removed with the prototype.
+	prototypeSelectedChildSession(): AgentSession | undefined {
+		const selection = this.#humanSessionSelection;
+		if (!selection) return undefined;
+		const selectedAgentId = selection.selectedAgentId();
+		if (selectedAgentId === this.#ownerIdentity.agentId) return undefined;
+		const record = this.#agents.get(selectedAgentId);
+		if (!record || !record.host.currentHandle()) return undefined;
+		return record.host.requireLiveSession();
 	}
 
 	forModerator(agentId: string): ModeratorAgentCoordinatorView {

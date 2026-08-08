@@ -9,6 +9,9 @@ import type {
 
 import { WorkflowCoordinator } from "../coordination/workflow-coordinator.ts";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
+import {
+	openChildViewOverlay,
+} from "../presentation/child-view-overlay.ts";
 import { adoptOrValidateOwnerIdentity } from "../protocol/owner-identity.ts";
 import { HumanRequestSurface } from "../presentation/human-request-surface.ts";
 import { OperationalIncidentSurface } from "../presentation/operational-incident-surface.ts";
@@ -47,8 +50,10 @@ export async function initializeOwnerWorkflow(options: {
 	entryModulePath: string;
 	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
 	event: SessionStartEvent;
+	hostModule: { InteractiveMode: { prototype: object } };
 }): Promise<void> {
-	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event } = options;
+	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event, hostModule } = options;
+	const hostPrototype = hostModule.InteractiveMode.prototype;
 	const runtime = await bridge.captureRuntime(
 		ctx.sessionManager as AgentSession["sessionManager"],
 	);
@@ -62,6 +67,11 @@ export async function initializeOwnerWorkflow(options: {
 				runtime.services.diagnostics.push(reloaded.diagnostic);
 			}
 		}
+		registerChildViewPrototypeCommand({
+			pi,
+			hostPrototype,
+			coordinator: existing.coordinator,
+		});
 		bindHiddenOwnerAgentExtension({
 			pi,
 			runtime,
@@ -99,8 +109,22 @@ export async function initializeOwnerWorkflow(options: {
 		humanRequestPresentation: new HumanRequestSurface(ctx.ui),
 		operationalIncidentPresentation: new OperationalIncidentSurface(ctx.ui),
 		selectedAgentStatusPresentation: new SelectedAgentStatusSurface(ctx.ui),
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		childExtensionFactory: (agentId) => {
+			const childExtension = createAgentBoundExtension(
+				() => coordinator.forAgent(agentId),
+			);
+			return (childPi) => {
+				childExtension(childPi);
+				// PROTOTYPE (#62): the overlay command must also be reachable from a
+				// selected child's native editor (the swap path rebinds the child's
+				// UI context to the interactive TUI). Remove with the prototype.
+				registerChildViewPrototypeCommand({
+					pi: childPi,
+					hostPrototype,
+					coordinator,
+				});
+			};
+		},
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		workflowPolicy: policy,
@@ -124,6 +148,11 @@ export async function initializeOwnerWorkflow(options: {
 			resolveView: () => coordinator.forAgent(identity.agentId),
 			prepareOwnerReplacement,
 		});
+		registerChildViewPrototypeCommand({
+			pi,
+			hostPrototype,
+			coordinator,
+		});
 		initializedWorkflows.set(runtime.session, {
 			coordinator,
 			policy,
@@ -133,6 +162,37 @@ export async function initializeOwnerWorkflow(options: {
 		restoreNativeDispose();
 		throw error;
 	}
+}
+
+// PROTOTYPE (#62): `/child-view` opens the full-window overlay for the child
+// the Owner currently has selected. Throwaway trigger for the overlay
+// validation; remove with the prototype.
+function registerChildViewPrototypeCommand(options: {
+	pi: ExtensionAPI;
+	hostPrototype: object;
+	coordinator: WorkflowCoordinator;
+}): void {
+	const { pi, hostPrototype, coordinator } = options;
+	pi.registerCommand("child-view", {
+		description: "[prototype] open the full-window overlay for the selected child Agent",
+		handler: async (_args, commandCtx) => {
+			if (commandCtx.mode !== "tui" || !commandCtx.hasUI) return;
+			const session = coordinator.prototypeSelectedChildSession();
+			if (!session) {
+				commandCtx.ui.notify(
+					"[child-view] select a live child Agent first",
+					"warning",
+				);
+				return;
+			}
+			await openChildViewOverlay({
+				prototype: hostPrototype,
+				ui: commandCtx.ui,
+				session,
+				agentLabel: session.sessionManager.getSessionId(),
+			});
+		},
+	});
 }
 
 function bindExactlyOnceShutdown(

@@ -38,6 +38,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 			entryModulePath: ENTRY_MODULE_PATH,
 			bootstrapHandler: bootstrapOwner,
 			event,
+			hostModule: hostPi,
 		});
 		currentWorkflowOwnerAdmitted = true;
 	};
