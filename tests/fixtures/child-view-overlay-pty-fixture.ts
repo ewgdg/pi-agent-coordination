@@ -69,6 +69,13 @@ host.session.extensionRunner.createContext().ui.setStatus("pty-peer-status", "Na
 // Tab + Enter selects the live child through the native swap path.
 await waitFor(() => host.runtime.session.sessionId === childAgentId);
 process.stdout.write("\n__CV_SELECTED__\n");
+// Let the selector surface close and the rebound editor settle before the
+// overlay opens; then open it through the command handler (typing slash
+// commands through the PTY races the autocomplete popup and is flaky).
+await new Promise<void>((resolve) => setTimeout(resolve, 500));
+const childViewCommand = host.runtime.session.extensionRunner.getCommand("child-view");
+if (!childViewCommand) throw new Error("PTY child-view command is unavailable");
+await childViewCommand.handler("", host.runtime.session.extensionRunner.createCommandContext());
 // Keep the fixture alive for the interactive test.
 await new Promise<void>(() => undefined);
 

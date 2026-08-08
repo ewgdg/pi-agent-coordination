@@ -56,8 +56,6 @@ export const SHADOW_HOST_MEMBERS: ReadonlySet<string> = new Set([
 	"autoCompactionEscapeHandler",
 	// side-effect stubs (methods that would write to the inert instance's
 	// terminal, the Owner's chrome, or uninitialized native surface)
-	"clearStatusIndicator",
-	"showStatusIndicator",
 	"updatePendingMessagesDisplay",
 	"updateTerminalTitle",
 	"updateEditorBorderColor",
@@ -78,6 +76,10 @@ export const SHADOW_HOST_MEMBERS: ReadonlySet<string> = new Set([
 	"addCacheMissNotice",
 	"maybeShowCacheMissNotice",
 	"rebuildChatFromMessages",
+	// real methods, safe on the per-instance state (statusContainer is the
+	// instance's own; the ui facade forwards requestRender)
+	"showStatusIndicator",
+	"clearStatusIndicator",
 	// inherited convenience getters over runtimeHost
 	"session",
 	"sessionManager",
@@ -99,6 +101,7 @@ type StubRuntimeHost = {
 export type ChildViewShadowHost = {
 	runtimeHost: { session: AgentSession };
 	chatContainer: Container;
+	statusContainer: Container;
 	ui: TUI;
 	pendingTools: Map<string, unknown>;
 	streamingComponent: unknown;
@@ -149,8 +152,6 @@ export function createChildViewShadowHost(options: {
 	shadow.isInitialized = true;
 	shadow.ui = createOverlayUiFacade(tui);
 	for (const member of [
-		"clearStatusIndicator",
-		"showStatusIndicator",
 		"updatePendingMessagesDisplay",
 		"updateTerminalTitle",
 		"updateEditorBorderColor",
@@ -173,6 +174,11 @@ function createOverlayUiFacade(tui: TUI): TUI {
 			return typeof value === "function" ? value.bind(target) : value;
 		},
 	});
+	// The real methods (clearStatusIndicator) read this; the headless test TUI
+	// does not provide it, and the overlay must not depend on it anyway.
+	if (typeof facade.getClearOnShrink !== "function") {
+		facade.getClearOnShrink = () => false;
+	}
 	return facade;
 }
 
@@ -208,6 +214,11 @@ export function openChildViewOverlay(options: {
 				if (closed) return;
 				closed = true;
 				unsubscribe();
+				// Escape mid-work must stop the spinner animation timer; otherwise
+				// the Loader interval keeps the shadow alive and renders forever.
+				(shadow as unknown as {
+					activeStatusIndicator?: { dispose(): void };
+				}).activeStatusIndicator?.dispose();
 				done("closed");
 			};
 			return new ChildViewOverlayComponent({
@@ -215,6 +226,7 @@ export function openChildViewOverlay(options: {
 				theme,
 				agentLabel,
 				chat: shadow.chatContainer,
+				status: shadow.statusContainer,
 				close,
 			});
 		},
@@ -234,6 +246,7 @@ export class ChildViewOverlayComponent implements Component {
 	readonly #theme: Theme;
 	readonly #agentLabel: string;
 	readonly #chat: Container;
+	readonly #status: Container;
 	readonly #close: () => void;
 
 	constructor(options: {
@@ -241,12 +254,14 @@ export class ChildViewOverlayComponent implements Component {
 		theme: Theme;
 		agentLabel: string;
 		chat: Container;
+		status: Container;
 		close(): void;
 	}) {
 		this.#tui = options.tui;
 		this.#theme = options.theme;
 		this.#agentLabel = options.agentLabel;
 		this.#chat = options.chat;
+		this.#status = options.status;
 		this.#close = options.close;
 	}
 
@@ -260,6 +275,11 @@ export class ChildViewOverlayComponent implements Component {
 		const pad = Math.max(1, width - visibleWidth(headerText));
 		const lines = [
 			this.#theme.fg("accent", `${headerText}${"─".repeat(pad)}`),
+			// Per-overlay working indicator: the shadow instance's real
+			// statusContainer tracks the child's spinner (agent_start shows it,
+			// agent_end clears it) — each overlay owns its own, so the Owner's
+			// singleton is never shared.
+			...this.#status.render(width),
 			...this.#chat.render(width),
 		];
 		while (lines.length < rows) lines.push("");

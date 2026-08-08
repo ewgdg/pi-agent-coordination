@@ -24,18 +24,25 @@ test("full-window child-view overlay covers the Owner TUI, closes on Escape, edi
 			cwd: string;
 		}>("__CV_SETUP__");
 		// j moves the selector cursor onto the live child; Enter selects it
-		// through the native swap path.
-		terminal.write("j");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Overlay Worker"))
+		// through the native swap path. Keystrokes sent before a surface is
+		// ready are dropped, so each key is retried until its effect is visible.
+		await pressUntil(
+			terminal,
+			() => terminal.write("j"),
+			outputHas("→ Overlay Worker"),
 		);
-		terminal.write("\r");
-		await terminal.waitFor("__CV_SELECTED__");
+		await pressUntil(
+			terminal,
+			() => terminal.write("\r"),
+			outputHas("__CV_SELECTED__"),
+		);
 		// The native swap path shows the child's transcript with the Owner's
-		// native footer (cwd + extension status) before the overlay opens. Wait
-		// for the clean post-selection frame — fixture markers print into the
-		// PTY and can corrupt a half-rendered screen.
+		// native footer (cwd + extension status) before the overlay opens. The
+		// runtime session swap can precede the selector surface closing, so the
+		// clean frame must require the selector to be gone — otherwise typed
+		// input lands in the still-open selector.
 		await terminal.waitForScreen((frame) =>
+			!frame.some((line) => line.includes("Tab views")) &&
 			frame.some((line) => line.includes(setup.cwd)) &&
 			frame.some((line) => line.includes("Native Peer")) &&
 			frame.some((line) => line.includes("Overlay Worker"))
@@ -43,8 +50,9 @@ test("full-window child-view overlay covers the Owner TUI, closes on Escape, edi
 		const nativeFrame = await terminal.screen();
 		assertNativeFooterVisible(nativeFrame, setup.cwd);
 
-		// Open the overlay from the selected child's editor.
-		terminal.write("/child-view\r");
+		// The fixture opens the overlay through the child-view command handler
+		// once the selection settles (typing the slash command through the PTY
+		// races the autocomplete popup and is flaky).
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("CHILD VIEW"))
 		);
@@ -81,9 +89,14 @@ test("full-window child-view overlay covers the Owner TUI, closes on Escape, edi
 		assert.equal(swallowedFrame[0]!.includes("CHILD VIEW"), true);
 
 		// Escape closes the overlay; the native child view and footer return.
-		terminal.write("\x1b");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes(setup.cwd))
+		await pressUntil(
+			terminal,
+			() => terminal.write("\x1b"),
+			screenShows(
+				(frame) =>
+					frame.some((line) => line.includes(setup.cwd)) &&
+					!frame.some((line) => line.includes("CHILD VIEW")),
+			),
 		);
 		const restoredFrame = await terminal.screen();
 		assertNativeFooterVisible(restoredFrame, setup.cwd);
@@ -94,16 +107,46 @@ test("full-window child-view overlay covers the Owner TUI, closes on Escape, edi
 		);
 
 		// The native editor (pi-vim) is untouched: typing echoes normally.
-		terminal.write("still native input");
-		await terminal.waitFor("still native input");
-		terminal.write("\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("still native input"))
+		await pressUntil(
+			terminal,
+			() => terminal.write("still native input"),
+			screenShows((frame) =>
+				frame.some((line) => line.includes("still native input")),
+			),
 		);
 	} finally {
 		terminal.kill();
 	}
 });
+
+// PTY keystrokes sent before a surface is ready are dropped by the TUI;
+// pressUntil retries the key until its effect appears. Effects that scroll
+// into the terminal scrollback (markers, cursor moves) are checked against the
+// accumulated output; visual state (overlay close, editor echo) against the
+// live viewport.
+async function pressUntil(
+	terminal: PtyFixture,
+	press: () => void,
+	effect: (terminal: PtyFixture) => Promise<boolean> | boolean,
+	attempts = 20,
+): Promise<void> {
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
+		if (await effect(terminal)) return;
+		press();
+		await new Promise((resolve) => setTimeout(resolve, 150));
+	}
+	throw new Error(`PTY keystroke effect did not appear; input may be dropped\n${terminal.output()}`);
+}
+
+function outputHas(text: string): (terminal: PtyFixture) => boolean {
+	return (terminal) => terminal.output().includes(text);
+}
+
+function screenShows(
+	predicate: (frame: readonly string[]) => boolean,
+): (terminal: PtyFixture) => Promise<boolean> {
+	return async (terminal) => predicate(await terminal.screen());
+}
 
 function assertNativeFooterVisible(frame: readonly string[], cwd: string): void {
 	const cwdLine = frame.findIndex((line) => line.includes(cwd));

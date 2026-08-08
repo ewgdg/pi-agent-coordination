@@ -144,6 +144,50 @@ test("overlay opens full-window, renders the transcript, Escape closes", async (
 	assert.equal(host.ui.customSurfaces.length, 0);
 });
 
+test("overlay shows the child's own spinner while it works, clears after (no shared singleton)", async () => {
+	const host = await createTestOwnerHost(piAgentCoordination);
+	await scriptTextOnlyTranscript(host);
+	const { surface, opened } = await openSurface(host);
+
+	// Gate the child's next generation so the working window is observable.
+	let releaseGeneration!: () => void;
+	const generationGate = new Promise<void>((resolve) => {
+		releaseGeneration = resolve;
+	});
+	host.model.setResponses([
+		async () => {
+			await generationGate;
+			return fauxAssistantMessage("The gated reply finishes.");
+		},
+	]);
+	const prompt = host.session.prompt("Fourth scripted question.");
+
+	await waitForCondition(() => {
+		const lines = surface.render(80);
+		return lines.some((line) => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/.test(line));
+	});
+	const working = surface.render(80);
+	assert.ok(
+		working.some((line) => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/.test(line)),
+		"child's working spinner renders inside the overlay",
+	);
+
+	releaseGeneration();
+	await prompt;
+	await host.session.waitForIdle();
+	await waitForCondition(() => {
+		const lines = surface.render(80);
+		return !lines.some((line) => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/.test(line));
+	});
+	const settled = surface.render(80);
+	assert.ok(
+		!settled.some((line) => /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/.test(line)),
+		"spinner clears after agent_end",
+	);
+	surface.handleInput("\x1b");
+	assert.equal(await opened, "closed");
+});
+
 test("overlay render height is constant across content growth (no redraw artifacts)", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination);
 	await scriptTextOnlyTranscript(host);
