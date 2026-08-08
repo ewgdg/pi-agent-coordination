@@ -57,7 +57,14 @@ async function scriptTextOnlyTranscript(host: TestOwnerHost): Promise<void> {
 test("shadow host renders the same transcript as the native InteractiveMode (parity diff)", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination);
 	await scriptTextOnlyTranscript(host);
-	const prototype = InteractiveMode.prototype;
+	// Mermaid parity probe: the shadow runs the real ctor, so the real mermaid
+	// transformer must render the same ASCII diagram as native.
+	host.model.setResponses([
+		fauxAssistantMessage(
+			"Third reply with a diagram:\n```mermaid\ngraph TD\nA[Start] --> B[End]\n```",
+		),
+	]);
+	await host.session.prompt("Third scripted user question.");
 
 	const native = new InteractiveMode(host.runtime, { verbose: false });
 	// The constructed-but-unmounted mode must not write to the test terminal;
@@ -70,7 +77,7 @@ test("shadow host renders the same transcript as the native InteractiveMode (par
 		renderSessionEntries(entries: readonly unknown[]): void;
 	}).renderSessionEntries(entries);
 	const shadow = createChildViewShadowHost({
-		prototype,
+		interactiveModeClass: InteractiveMode,
 		session: host.session,
 		tui: quietTui(nativeUi),
 	});
@@ -81,6 +88,11 @@ test("shadow host renders the same transcript as the native InteractiveMode (par
 	const shadowLines = shadow.chatContainer.render(RENDER_WIDTH);
 
 	assert.ok(nativeLines.length > 0, "scripted transcript rendered natively");
+	assert.ok(
+		nativeLines.some((line) => line.includes("Start")) &&
+			nativeLines.some((line) => line.includes("End")),
+		"mermaid block rendered as a diagram by the native transformer",
+	);
 	assert.deepEqual(
 		shadowLines,
 		nativeLines,
@@ -92,7 +104,7 @@ async function openSurface(
 	host: TestOwnerHost,
 ): Promise<{ surface: ChildViewOverlayComponent; opened: Promise<"closed"> }> {
 	const opened = openChildViewOverlay({
-		prototype: InteractiveMode.prototype,
+		interactiveModeClass: InteractiveMode,
 		ui: host.ui,
 		session: host.session,
 		agentLabel: "test-child",

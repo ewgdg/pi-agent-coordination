@@ -50,10 +50,10 @@ export async function initializeOwnerWorkflow(options: {
 	entryModulePath: string;
 	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
 	event: SessionStartEvent;
-	hostModule: { InteractiveMode: { prototype: object } };
+	hostModule: { InteractiveMode: unknown };
 }): Promise<void> {
 	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event, hostModule } = options;
-	const hostPrototype = hostModule.InteractiveMode.prototype;
+	const interactiveModeClass = hostModule.InteractiveMode;
 	const runtime = await bridge.captureRuntime(
 		ctx.sessionManager as AgentSession["sessionManager"],
 	);
@@ -69,7 +69,7 @@ export async function initializeOwnerWorkflow(options: {
 		}
 		registerChildViewPrototypeCommand({
 			pi,
-			hostPrototype,
+			interactiveModeClass,
 			coordinator: existing.coordinator,
 		});
 		bindHiddenOwnerAgentExtension({
@@ -120,7 +120,7 @@ export async function initializeOwnerWorkflow(options: {
 				// UI context to the interactive TUI). Remove with the prototype.
 				registerChildViewPrototypeCommand({
 					pi: childPi,
-					hostPrototype,
+					interactiveModeClass,
 					coordinator,
 				});
 			};
@@ -150,7 +150,7 @@ export async function initializeOwnerWorkflow(options: {
 		});
 		registerChildViewPrototypeCommand({
 			pi,
-			hostPrototype,
+			interactiveModeClass,
 			coordinator,
 		});
 		initializedWorkflows.set(runtime.session, {
@@ -169,10 +169,10 @@ export async function initializeOwnerWorkflow(options: {
 // validation; remove with the prototype.
 function registerChildViewPrototypeCommand(options: {
 	pi: ExtensionAPI;
-	hostPrototype: object;
+	interactiveModeClass: unknown;
 	coordinator: WorkflowCoordinator;
 }): void {
-	const { pi, hostPrototype, coordinator } = options;
+	const { pi, interactiveModeClass, coordinator } = options;
 	pi.registerCommand("child-view", {
 		description: "[prototype] open the full-window overlay for the selected child Agent",
 		handler: async (_args, commandCtx) => {
@@ -186,7 +186,7 @@ function registerChildViewPrototypeCommand(options: {
 				return;
 			}
 			await openChildViewOverlay({
-				prototype: hostPrototype,
+				interactiveModeClass,
 				ui: commandCtx.ui,
 				session,
 				agentLabel: session.sessionManager.getSessionId(),

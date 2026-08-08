@@ -1,20 +1,24 @@
 // PROTOTYPE (#62): throwaway validation of the full-window child-view overlay
-// presentation design. It borrows Pi's private InteractiveMode rendering methods
-// (`renderSessionEntries` / `addMessageToChat` / `addCustomEntryToChat` /
-// `handleEvent`) and runs them against a shadow host whose chat container is a
-// fresh component tree — the Owner's live chat container, editor, and terminal
-// chrome are never touched. Remove this module with the prototype verdict.
+// presentation design. Each overlay runs Pi's REAL InteractiveMode constructor
+// against a stub runtime (session + absorbed callbacks), so every field the
+// borrowed private rendering methods touch is Pi's own initialization — per
+// child, per overlay, zero shared state. The instance's render pump is
+// redirected at the overlay TUI (Owner chrome neutered), its chat container is
+// a fresh component tree, and the Owner's live chat container, editor, and
+// terminal are never touched. Remove this module with the prototype verdict.
 import type {
 	AgentSession,
 	ExtensionUIContext,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
-	Container,
+	getKeybindings,
 	Key,
 	matchesKey,
+	setKeybindings,
 	visibleWidth,
 	type Component,
+	type Container,
 	type TUI,
 } from "@earendil-works/pi-tui";
 
@@ -28,7 +32,7 @@ import {
 // private-method spans in Pi's dist and fails mechanically when a new member
 // appears outside this set — per-release breakage becomes a test failure.
 export const SHADOW_HOST_MEMBERS: ReadonlySet<string> = new Set([
-	// fields
+	// ctor-initialized fields (real InteractiveMode constructor)
 	"runtimeHost",
 	"isInitialized",
 	"chatContainer",
@@ -50,7 +54,8 @@ export const SHADOW_HOST_MEMBERS: ReadonlySet<string> = new Set([
 	"workingIndicatorOptions",
 	"retryEscapeHandler",
 	"autoCompactionEscapeHandler",
-	// side-effect stubs (native members these write to are not shadowed)
+	// side-effect stubs (methods that would write to the inert instance's
+	// terminal, the Owner's chrome, or uninitialized native surface)
 	"clearStatusIndicator",
 	"showStatusIndicator",
 	"updatePendingMessagesDisplay",
@@ -83,6 +88,14 @@ export const SHADOW_HOST_MEMBERS: ReadonlySet<string> = new Set([
 
 type SessionEvent = Parameters<Parameters<AgentSession["subscribe"]>[0]>[0];
 
+// The InteractiveMode constructor only uses the runtime to read the session
+// (via getters) and to register two callbacks the shadow never triggers.
+type StubRuntimeHost = {
+	session: AgentSession;
+	setBeforeSessionInvalidate(callback: () => void): void;
+	setRebindSession(callback: () => Promise<void>): void;
+};
+
 export type ChildViewShadowHost = {
 	runtimeHost: { session: AgentSession };
 	chatContainer: Container;
@@ -94,9 +107,7 @@ export type ChildViewShadowHost = {
 	hideThinkingBlock: boolean;
 	outputPad: number;
 	hiddenThinkingLabel: string;
-	mermaidMarkdownTransformer: {
-		transform(markdown: string, availableWidth: number): string;
-	};
+	mermaidMarkdownTransformer: unknown;
 	footer: { invalidate(): void };
 	defaultEditor: { onEscape: unknown };
 	editor: { addToHistory?: unknown };
@@ -111,37 +122,31 @@ export type ChildViewShadowHost = {
 };
 
 export function createChildViewShadowHost(options: {
-	prototype: object;
+	interactiveModeClass: unknown;
 	session: AgentSession;
 	tui: TUI;
 }): ChildViewShadowHost {
-	const { prototype, session, tui } = options;
-	const shadow = Object.create(prototype) as unknown as ChildViewShadowHost;
-	// The prototype's `session`/`sessionManager`/`settingsManager`/`agent`
-	// getters read `runtimeHost` — a single-session runtime is all they need.
-	shadow.runtimeHost = { session };
-	shadow.isInitialized = true;
-	shadow.chatContainer = new Container();
-	shadow.pendingTools = new Map();
-	shadow.streamingComponent = undefined;
-	shadow.streamingMessage = undefined;
-	shadow.toolOutputExpanded = false;
-	shadow.hideThinkingBlock = shadow.settingsManager.getHideThinkingBlock();
-	shadow.outputPad = shadow.settingsManager.getOutputPad();
-	shadow.hiddenThinkingLabel = "Thinking…";
-	// Known prototype gap: the native mermaid transformer lives module-private
-	// in interactive-mode.js and is not borrowable; a pass-through keeps the
-	// shadow renderable. Measured in the parity test and reported in the verdict.
-	shadow.mermaidMarkdownTransformer = {
-		transform: (markdown) => markdown,
+	const { interactiveModeClass, session, tui } = options;
+	const InteractiveModeClass = interactiveModeClass as new (
+		runtimeHost: StubRuntimeHost,
+		options?: { verbose?: boolean },
+	) => ChildViewShadowHost;
+	const stubRuntime: StubRuntimeHost = {
+		session,
+		setBeforeSessionInvalidate() {},
+		setRebindSession() {},
 	};
-	shadow.footer = { invalidate() {} };
-	shadow.defaultEditor = { onEscape: undefined };
-	// `addMessageToChat` only touches `editor` under `populateHistory`, which
-	// the read-only view never requests; kept for the upgrade guard surface.
-	shadow.editor = { addToHistory: undefined };
-	// Read-only child view: the owner's terminal progress indicator is chrome
-	// the overlay must not touch, so the facade no-ops it and forwards the rest.
+	// The constructor writes two module-global registries. Keybindings are
+	// restored so the Owner's live components keep the instance they already
+	// use; themes are re-registered from the same session sources (idempotent
+	// same-name writes).
+	const previousKeybindings = getKeybindings();
+	const shadow = new InteractiveModeClass(stubRuntime, { verbose: false });
+	setKeybindings(previousKeybindings);
+	// Real ctor state, redirected: the render pump points at the overlay TUI
+	// (Owner-chrome side effects neutered), and init() is skipped because the
+	// shadow chat container is already usable.
+	shadow.isInitialized = true;
 	shadow.ui = createOverlayUiFacade(tui);
 	for (const member of [
 		"clearStatusIndicator",
@@ -176,15 +181,19 @@ function createOverlayUiFacade(tui: TUI): TUI {
 // ---------------------------------------------------------------------------
 
 export function openChildViewOverlay(options: {
-	prototype: object;
+	interactiveModeClass: unknown;
 	ui: ExtensionUIContext;
 	session: AgentSession;
 	agentLabel: string;
 }): Promise<"closed"> {
-	const { prototype, ui, session, agentLabel } = options;
+	const { interactiveModeClass, ui, session, agentLabel } = options;
 	return ui.custom<"closed">(
 		(tui, theme, _keybindings, done) => {
-			const shadow = createChildViewShadowHost({ prototype, session, tui });
+			const shadow = createChildViewShadowHost({
+				interactiveModeClass,
+				session,
+				tui,
+			});
 			const unsubscribe = session.subscribe((event) => {
 				void shadow.handleEvent(event).catch((error: unknown) => {
 					ui.notify(
