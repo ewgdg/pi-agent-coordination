@@ -33,6 +33,25 @@ type AgentCoordinatorView =
 	| ModeratorAgentCoordinatorView;
 type ViewResolver = () => AgentCoordinatorView;
 
+const OWNER_AGENT_TOOL_NAMES = new Set([
+	"agent_message",
+	"agent_spawn",
+	"agent_observe",
+	"agent_control",
+]);
+
+export function activateOwnerAgentTools(pi: ExtensionAPI): void {
+	pi.setActiveTools([
+		...new Set([...pi.getActiveTools(), ...OWNER_AGENT_TOOL_NAMES]),
+	]);
+}
+
+export function deactivateOwnerAgentTools(pi: ExtensionAPI): void {
+	pi.setActiveTools(
+		pi.getActiveTools().filter((toolName) => !OWNER_AGENT_TOOL_NAMES.has(toolName)),
+	);
+}
+
 export function registerAgentsCommand(
 	pi: ExtensionAPI,
 	resolveView: () => HumanPresentationCoordinatorView,
@@ -82,18 +101,19 @@ export function registerOrdinaryAgentSurfaces(
 	pi: ExtensionAPI,
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): void {
-	registerAgentSurfaces(pi, resolveView, {
+	registerAgentTools(pi, resolveView, {
 		spawn: true,
 		moderatorControl: false,
 		humanRequest: true,
 	});
+	registerAgentsCommand(pi, resolveView);
 }
 
-export function registerOwnerAgentSurfaces(
+export function registerOwnerAgentTools(
 	pi: ExtensionAPI,
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): void {
-	registerAgentSurfaces(pi, resolveView, {
+	registerAgentTools(pi, resolveView, {
 		spawn: true,
 		moderatorControl: false,
 		humanRequest: false,
@@ -104,14 +124,15 @@ export function registerModeratorAgentSurfaces(
 	pi: ExtensionAPI,
 	resolveView: () => ModeratorAgentCoordinatorView,
 ): void {
-	registerAgentSurfaces(pi, resolveView, {
+	registerAgentTools(pi, resolveView, {
 		spawn: false,
 		moderatorControl: true,
 		humanRequest: true,
 	});
+	registerAgentsCommand(pi, resolveView);
 }
 
-function registerAgentSurfaces(
+function registerAgentTools(
 	pi: ExtensionAPI,
 	resolveView: ViewResolver,
 	role: Readonly<{
@@ -510,8 +531,6 @@ function registerAgentSurfaces(
 			},
 		});
 	}
-
-	registerAgentsCommand(pi, resolveView);
 }
 
 function objectRootUnion<T extends TSchema>(schema: T): T {

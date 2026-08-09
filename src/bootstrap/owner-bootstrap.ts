@@ -7,7 +7,10 @@ import type {
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 
-import { WorkflowCoordinator } from "../coordination/workflow-coordinator.ts";
+import {
+	type OrdinaryAgentCoordinatorView,
+	WorkflowCoordinator,
+} from "../coordination/workflow-coordinator.ts";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { adoptOrValidateOwnerIdentity } from "../protocol/owner-identity.ts";
 import { HumanRequestSurface } from "../presentation/human-request-surface.ts";
@@ -45,7 +48,7 @@ export async function initializeOwnerWorkflow(options: {
 	entryModulePath: string;
 	bootstrapHandler: ExtensionHandler<SessionStartEvent>;
 	event: SessionStartEvent;
-}): Promise<void> {
+}): Promise<() => OrdinaryAgentCoordinatorView> {
 	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event } = options;
 	const { runtime, projectionHost } = await bridge.capture(
 		ctx.sessionManager as AgentSession["sessionManager"],
@@ -60,14 +63,15 @@ export async function initializeOwnerWorkflow(options: {
 				runtime.services.diagnostics.push(reloaded.diagnostic);
 			}
 		}
+		const resolveView = () => existing.coordinator.forAgent(runtime.session.sessionId);
 		bindHiddenOwnerAgentExtension({
 			pi,
 			runtime,
 			bootstrapHandler,
-			resolveView: () => existing.coordinator.forAgent(runtime.session.sessionId),
+			resolveView,
 			prepareOwnerReplacement: existing.prepareOwnerReplacement,
 		});
-		return;
+		return resolveView;
 	}
 	assertOwnerAgentExtensionBindingReady({ runtime, bootstrapHandler });
 
@@ -113,12 +117,13 @@ export async function initializeOwnerWorkflow(options: {
 		ownerReplacementPreparation = coordinator.shutdown(async () => undefined);
 		return ownerReplacementPreparation;
 	};
+	const resolveView = () => coordinator.forAgent(identity.agentId);
 	try {
 		bindHiddenOwnerAgentExtension({
 			pi,
 			runtime,
 			bootstrapHandler,
-			resolveView: () => coordinator.forAgent(identity.agentId),
+			resolveView,
 			prepareOwnerReplacement,
 		});
 		initializedWorkflows.set(runtime.session, {
@@ -126,6 +131,7 @@ export async function initializeOwnerWorkflow(options: {
 			policy,
 			prepareOwnerReplacement,
 		});
+		return resolveView;
 	} catch (error) {
 		restoreNativeDispose();
 		throw error;

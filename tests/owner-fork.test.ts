@@ -133,7 +133,11 @@ test("offline fork preparation cannot reclassify copied child evidence as Owner"
 	});
 	await bindTestOwnerHost(prepared, "tui");
 	try {
-		assert.equal(prepared.session.getToolDefinition("agent_observe"), undefined);
+		assert.equal(
+			typeof prepared.session.getToolDefinition("agent_observe")?.renderResult,
+			"function",
+		);
+		assert.equal(prepared.session.getActiveToolNames().includes("agent_observe"), false);
 		assert.equal(
 			prepared.session.sessionManager.getEntries().some(
 				(entry) =>

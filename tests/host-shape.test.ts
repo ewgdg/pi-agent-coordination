@@ -615,8 +615,17 @@ test("extension preflight rejects every required registration seam", () => {
 		registerTool() {},
 		registerCommand() {},
 		appendEntry() {},
+		getActiveTools() {},
+		setActiveTools() {},
 	};
-	for (const member of ["on", "registerTool", "registerCommand", "appendEntry"] as const) {
+	for (const member of [
+		"on",
+		"registerTool",
+		"registerCommand",
+		"appendEntry",
+		"getActiveTools",
+		"setActiveTools",
+	] as const) {
 		assert.throws(
 			() => assertExtensionApiShape(withoutMemberAtPath(api, [member])),
 			(error: unknown) =>
@@ -747,7 +756,10 @@ test("runtime capture rejects a malformed inline factory registry before Owner b
 		),
 		false,
 	);
-	assert.equal(host.session.getToolDefinition("agent_spawn"), undefined);
+	assert.equal(
+		typeof host.session.getToolDefinition("agent_spawn")?.renderResult,
+		"function",
+	);
 	loader.extensionFactories = original;
 	await host.runtime.dispose();
 });

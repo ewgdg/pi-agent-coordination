@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import xtermHeadless from "@xterm/headless";
+import {
+	fauxAssistantMessage,
+	fauxToolCall,
+} from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 const SCRIPT = "/usr/bin/script";
 const PTY_WAIT_TIMEOUT_MS = 20_000;
@@ -16,6 +24,15 @@ const FAILURE_FIXTURE = fileURLToPath(
 	new URL("./fixtures/agent-view-failure-pty-fixture.ts", import.meta.url),
 );
 const DIRECT_AGENT_INPUT = "direct input through child editor";
+const PI_CLI = fileURLToPath(
+	new URL(
+		"../node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
+		import.meta.url,
+	),
+);
+const COORDINATION_EXTENSION = fileURLToPath(
+	new URL("../src/index.ts", import.meta.url),
+);
 
 test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Owner", {
 	skip: !existsSync(SCRIPT),
@@ -400,6 +417,130 @@ test("real fullscreen PTY reflows the complete Agent view at 100x30", {
 		terminal.kill();
 	}
 });
+
+test("interactive /resume retains the compact historical agent_spawn renderer", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-agent-coordination-resume-"));
+	const agentDir = join(root, "agent");
+	const sessionDir = join(root, "sessions");
+	const target = SessionManager.create(process.cwd(), sessionDir);
+	const toolCallId = "resumed-agent-spawn";
+	const expandedMarker = "EXPANDED_ONLY_RESUMED_AGENT_SPAWN";
+	const input = {
+		request: "Verify historical Agent Spawn rendering after interactive resume.",
+		label: "Resumed Spawn Widget",
+	};
+	const receipt = {
+		disposition: "pending" as const,
+		agentId: "resumed-spawn-agent",
+		requestId: "resumed-spawn-request",
+		effectiveConfiguration: {
+			cwd: process.cwd(),
+			model: { provider: "openai", modelId: "gpt-4o-mini" },
+			thinking: "off" as const,
+			tools: ["read", "agent_message"],
+			skills: [],
+			extensions: [],
+			projectContext: { mode: "append" as const, body: expandedMarker },
+		},
+	};
+	target.appendSessionInfo("Resumed Spawn Widget Session");
+	target.appendMessage({
+		...fauxAssistantMessage(
+			fauxToolCall("agent_spawn", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+		provider: "openai",
+		model: "gpt-4o-mini",
+	});
+	target.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_spawn",
+		content: [{ type: "text", text: JSON.stringify(receipt) }],
+		details: receipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	const terminal = launchPiCli({ agentDir, sessionDir });
+	try {
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("pi-agent-coordination")) &&
+			frame.some((line) => line.includes("gpt-4o-mini"))
+		);
+		terminal.write("/resume\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Resumed Spawn Widget Session"))
+		);
+		for (const character of "Resumed Spawn Widget Session") {
+			terminal.write(character);
+		}
+		terminal.write("\r");
+
+		const collapsed = await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("spawn Resumed Spawn Widget")) &&
+			frame.some((line) => line.includes("pending")) &&
+			!frame.some((line) => line.includes(expandedMarker))
+		);
+		assert.equal(collapsed.some((line) => line.includes(expandedMarker)), false);
+
+		terminal.write("\x0f");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes(expandedMarker))
+		);
+		terminal.write("\x0f");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("spawn Resumed Spawn Widget")) &&
+			!frame.some((line) => line.includes(expandedMarker))
+		);
+
+		terminal.write("/quit\r");
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+	}
+});
+
+function launchPiCli(options: { agentDir: string; sessionDir: string }): PtyFixture {
+	const command = [
+		process.execPath,
+		PI_CLI,
+		"--no-extensions",
+		"--no-skills",
+		"--no-prompt-templates",
+		"--no-themes",
+		"--no-context-files",
+		"--extension",
+		COORDINATION_EXTENSION,
+		"--approve",
+		"--tui-mode",
+		"fullscreen",
+		"--session-dir",
+		options.sessionDir,
+		"--provider",
+		"openai",
+		"--model",
+		"gpt-4o-mini",
+	].map(quoteShell).join(" ");
+	const child = spawn(
+		SCRIPT,
+		["-q", "-e", "-f", "-c", command, "/dev/null"],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				OPENAI_API_KEY: "test",
+				PI_CODING_AGENT_DIR: options.agentDir,
+				PI_OFFLINE: "1",
+				TERM: "xterm-256color",
+			},
+			stdio: ["pipe", "pipe", "pipe"],
+		},
+	);
+	return new PtyFixture(child, 80, 24);
+}
 
 function launchFixture(
 	fixture = FIXTURE,

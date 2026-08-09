@@ -20,7 +20,7 @@ Owner `/new`, `/resume`, fork, and clone replacement exhaustively end the source
 
 ## Coordination surface
 
-After Owner Identity validation, the package binds the ordinary tools through a hidden extension closed over that Agent identity. Caller identity and role configuration are never model-supplied tool arguments.
+The package registers the Owner tool definitions through Pi's `registerTool()` API when the extension loads, before `session_start`. Pi can therefore reconstruct historical custom tool calls with their native compact renderers during interactive `/resume`. Owner admission then binds those definitions to the identity-scoped coordinator through the hidden extension and activates them. Caller identity and role configuration are never model-supplied tool arguments.
 
 - `agent_spawn` creates one fresh configured child, optionally resolving a named Agent Template, and delivers its initial Creation Request.
 - `agent_message` sends Messages, creates correlated Requests, Answers, retrieves, and cancels.
@@ -37,7 +37,7 @@ See [Human Requests](human-requests.md) for the Question and Answer shapes, inte
 
 ## Activation modes
 
-Coordination activates only when Pi reports interactive TUI mode with UI support. Print, JSON, and RPC sessions register no coordination tool or command and create no coordinator.
+Coordination activates only when Pi reports interactive TUI mode with UI support. Print, JSON, RPC, and rejected interactive sessions retain the registered tool definitions for transcript rendering but keep them inactive; they register no coordination command and create no coordinator. During interactive admission, the Owner tools remain inactive while the immutable runtime baseline is captured, then become active only after the identity-bound coordinator is ready. A factory-time `before_agent_start` gate holds any model turn launched by an earlier extension's `session_start` handler until that admission outcome settles, so the turn sees either the complete Owner coordination surface or inactive Owner tools.
 
 ## Host compatibility
 

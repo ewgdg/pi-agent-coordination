@@ -9,7 +9,7 @@ import {
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
 
-test("print, JSON, and RPC modes expose no coordination runtime surface", async (t) => {
+test("print, JSON, and RPC modes keep coordination tools inactive", async (t) => {
 	const nativeSetRebindSession = hostPi.AgentSessionRuntime.prototype.setRebindSession;
 	for (const mode of ["print", "json", "rpc"] as const) {
 		await t.test(mode, async () => {
@@ -31,7 +31,11 @@ test("print, JSON, and RPC modes expose no coordination runtime surface", async 
 					),
 				false,
 			);
-			assert.equal(host.session.getToolDefinition("agent_observe"), undefined);
+			assert.equal(
+				typeof host.session.getToolDefinition("agent_observe")?.renderResult,
+				"function",
+			);
+			assert.equal(host.session.getActiveToolNames().includes("agent_observe"), false);
 			assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
 			await host.runtime.dispose();
 		});
@@ -49,7 +53,11 @@ test("headless startup never admits or inspects a malformed interactive runtime"
 	host.runtime.setRebindSession(async () => undefined);
 	await bindTestOwnerHost(host, "print");
 
-	assert.equal(host.session.getToolDefinition("agent_observe"), undefined);
+	assert.equal(
+		typeof host.session.getToolDefinition("agent_observe")?.renderResult,
+		"function",
+	);
+	assert.equal(host.session.getActiveToolNames().includes("agent_observe"), false);
 	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
 	Object.defineProperty(host.session, "sendCustomMessage", {
 		configurable: true,

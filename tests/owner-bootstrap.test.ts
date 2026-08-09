@@ -14,6 +14,88 @@ import {
 	type TestOwnerHost,
 } from "./support/pi-host.ts";
 
+test("Owner tool renderers are registered before session_start", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+
+	for (const toolName of [
+		"agent_spawn",
+		"agent_message",
+		"agent_observe",
+		"agent_control",
+	] as const) {
+		const tool = host.session.getToolDefinition(toolName);
+		assert.ok(tool, toolName);
+		assert.equal(typeof tool.renderCall, "function", toolName);
+		assert.equal(typeof tool.renderResult, "function", toolName);
+	}
+	assert.equal(
+		host.session.sessionManager
+			.getEntries()
+			.some(
+				(entry) =>
+					entry.type === "custom" &&
+					entry.customType === "agent-coordination.identity",
+			),
+		false,
+	);
+	await host.runtime.dispose();
+});
+
+test("startup-triggered Owner work waits for coordination admission", async () => {
+	const startupBlock = createVoidDeferred();
+	const startupBlockEntered = createVoidDeferred();
+	const promptReachedStartBoundary = createVoidDeferred();
+	const agentStarted = createVoidDeferred();
+	let identityPresentAtAgentStart = false;
+	let agentStartedBeforeOwnerAdmission = false;
+	let ownerAdmissionReleased = false;
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+		additionalExtensionFactories: [
+			{
+				name: "startup-user-message",
+				hidden: true,
+				factory(pi) {
+					pi.on("session_start", () => {
+						pi.sendUserMessage("Start work after every extension is ready.");
+					});
+					pi.on("session_start", async () => {
+						startupBlockEntered.resolve();
+						await startupBlock.promise;
+					});
+					pi.on("before_agent_start", () => {
+						promptReachedStartBoundary.resolve();
+					});
+					pi.on("agent_start", (_event, ctx) => {
+						agentStartedBeforeOwnerAdmission = !ownerAdmissionReleased;
+						identityPresentAtAgentStart = ctx.sessionManager
+							.getEntries()
+							.some(
+								(entry) =>
+									entry.type === "custom" &&
+									entry.customType === "agent-coordination.identity",
+							);
+						agentStarted.resolve();
+					});
+				},
+			},
+		],
+	});
+
+	const binding = bindTestOwnerHost(host, "tui");
+	await startupBlockEntered.promise;
+	await promptReachedStartBoundary.promise;
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	ownerAdmissionReleased = true;
+	startupBlock.resolve();
+	await binding;
+	await agentStarted.promise;
+	await host.session.waitForIdle();
+
+	assert.equal(agentStartedBeforeOwnerAdmission, false);
+	assert.equal(identityPresentAtAgentStart, true);
+	await host.runtime.dispose();
+});
+
 test("an existing exact Owner Identity is validated without duplication", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination);
 	host.session.sessionManager.appendCustomEntry(
@@ -133,7 +215,7 @@ test("an invalid initial Workflow Policy prevents coordination runtime creation"
 			),
 		false,
 	);
-	assert.equal(host.session.getToolDefinition("agent_spawn"), undefined);
+	assertOwnerToolsRegisteredButInactive(host);
 	assert.deepEqual(host.services.diagnostics, [
 		{
 			type: "error",
@@ -165,7 +247,7 @@ test("an ambiguous public Owner extension fails before Identity commitment", asy
 			),
 		false,
 	);
-	assert.equal(host.session.getToolDefinition("agent_spawn"), undefined);
+	assertOwnerToolsRegisteredButInactive(host);
 	assert.equal(
 		host.ui.notifications.some(
 			({ message, type }) =>
@@ -279,7 +361,7 @@ test("a child bootstrap cannot be reclassified as Workflow Owner", async () => {
 		),
 		true,
 	);
-	assert.equal(host.session.getToolDefinition("agent_observe"), undefined);
+	assertOwnerToolsRegisteredButInactive(host);
 	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
 	await host.runtime.dispose();
 });
@@ -309,10 +391,33 @@ test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async () 
 		),
 		true,
 	);
-	assert.equal(host.session.getToolDefinition("agent_observe"), undefined);
+	assertOwnerToolsRegisteredButInactive(host);
 	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
 	await host.runtime.dispose();
 });
+
+function createVoidDeferred(): Readonly<{
+	promise: Promise<void>;
+	resolve(): void;
+}> {
+	let resolvePromise: () => void = () => {};
+	const promise = new Promise<void>((resolve) => {
+		resolvePromise = resolve;
+	});
+	return { promise, resolve: resolvePromise };
+}
+
+function assertOwnerToolsRegisteredButInactive(host: TestOwnerHost): void {
+	for (const toolName of [
+		"agent_spawn",
+		"agent_message",
+		"agent_observe",
+		"agent_control",
+	] as const) {
+		assert.equal(typeof host.session.getToolDefinition(toolName)?.renderResult, "function");
+		assert.equal(host.session.getActiveToolNames().includes(toolName), false);
+	}
+}
 
 function ownerIdentityFor(host: TestOwnerHost) {
 	return {

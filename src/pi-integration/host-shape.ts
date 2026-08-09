@@ -21,7 +21,14 @@ export class IncompatiblePiHostError extends Error {
 
 export function assertExtensionApiShape(value: unknown): asserts value is ExtensionAPI {
 	const api = requireRecord(value, "ExtensionAPI");
-	for (const member of ["on", "registerTool", "registerCommand", "appendEntry"] as const) {
+	for (const member of [
+		"on",
+		"registerTool",
+		"registerCommand",
+		"appendEntry",
+		"getActiveTools",
+		"setActiveTools",
+	] as const) {
 		requireFunction(api, member, `ExtensionAPI.${member}`);
 	}
 }
