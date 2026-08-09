@@ -1,36 +1,50 @@
-# Agent selector
+# Agent selector and view
 
-`/agents` opens a centered custom overlay without replacing the native editor viewport. The fully framed surface is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` owns focus movement, wrapping, and scrolling.
+`/agents` first opens a centered roster overlay. The framed selector is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` owns focus movement, wrapping, and scrolling.
 
-## Live
+Selecting a non-Owner row opens that durable Agent's full-window interactive view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. Selecting Owner returns to that exact existing Owner presentation.
+
+Agent selection prepares the target mode before dismissing the roster. The selector retains input focus during asynchronous preparation, so typing, paste, Enter, or Escape cannot fall through to the Owner editor between selection and child attachment.
+
+## Live roster
 
 Live uses one continuous list across three adjacent sections:
 
 - **Attention Inbox** contains Owner-visible Human `DECIDE` items and exhausted Operational `ATTENTION` items. The first attention item receives initial focus. `DECIDE` opens its exact Human Request; Operational `ATTENTION` remains passive.
 - **Owner** remains fixed in every Live scope.
-- **Agents** contains the current scope's direct ordinary children with current Runs, in creation order.
+- **Agents** contains the current scope's direct ordinary children in creation order. Live Moderators appear at the Owner scope as standalone participants.
 
-Right Arrow or `l` enters the focused Agent's child scope. Left Arrow or `h` returns to its parent and refocuses that Agent. Breadcrumbs omit Owner, retain the newest three Agent scopes, and tighten to the available width. Reopening starts in the selected Agent's parent scope so the selected row remains visible.
+Right Arrow or `l` enters the focused ordinary Agent's child scope. Left Arrow or `h` returns to its parent and refocuses that Agent. Breadcrumbs omit Owner, retain the newest three Agent scopes, and tighten to the available width.
 
-Enter submits the focused Live Agent to the native session-selection boundary. Selection belongs to the durable Agent; its current Run session is only the replaceable presentation binding. Selecting a live Agent rebinds Pi's transcript and editor without changing Workflow authority and retains that exact Run. Enter on `DECIDE` opens its Human Request. Enter on Operational `ATTENTION` does nothing.
+Opening a live Agent view attaches the exact Run's complete Pi mode. The Run gains `interactive_selection` retention while selected. Returning to Owner or switching Agents removes that retention and permits ordinary release when no other Retention Reason remains. View attachment never owns or disposes a live projection; exact Run teardown retains that responsibility.
 
-While a non-Owner Agent is selected, Pi's native footer keeps one extension-status slot with the Agent label, compact identity, and current semantic Run state. The selected Agent label is accented and bold for non-failed states; an active Run prefixes it with `●`, while a Dormant Agent uses `○`. Compact identity and ordinary states remain dim, `waiting (human)` is the only warning state, and a currently observable failed Run uses error emphasis. Selecting Owner clears the slot. This footer projection is independent of the scoped activity panel.
-
-Native session replacement remains Owner-only while a non-Owner Agent is selected. A switch or fork request is cancelled before Pi invalidates the selected Agent's presentation binding, and the editor reports that the native session must be replaced or forked from Owner.
-
-## Dormant
+## Dormant roster
 
 Dormant is a flat list of every verified ordinary Agent and Moderator without a current Run. It follows Pi resume recency: latest user or assistant activity, then native session creation time. Moderator rows include their role and compact trigger description.
 
-Moving focus is passive: it does not start a Run, invoke a model, append transcript evidence, or change native selection. Enter selects the durable Agent and binds a presentation-only session to its existing transcript and native editor. That binding registers only `/agents` and the native input router; other prompt sources are handled without model invocation, and no coordination tools are present. It is neither a Run nor a coordination writer.
+Opening a Dormant Agent creates a complete presentation over persisted evidence, including its native editor and footer. Opening alone does not start a Run, invoke a model, expose active tools, or append evidence.
 
-The first native editor Message starts one successor in the selected Agent's serialized lane, replaces the presentation binding with the fresh Run session, and commits the exact input once before execution. An ordinary Message that starts a selected Agent also replaces the binding automatically. Terminal Run failure preserves selection by returning to a Dormant presentation without replaying work; later editor input or ordinary Message may start the successor.
+The first editor submission starts one successor, replaces the Dormant mode with the successor's already-subscribed live mode, and commits the submitted input once. Ordinary Message Delivery can also start and attach a successor before Delivery execution. Closing or replacing a Dormant attachment disposes only its view-owned passive mode and session.
 
-Selecting the same Agent is a no-op only while Pi already holds its current presentation binding. Enter repairs a stale session incarnation while preserving the Agent selection.
+## Full-window Agent view
 
-## Focused details and keys
+The fixed one-row outer header identifies the durable Agent by label, compact identity, and Live or Dormant phase. The remaining rows contain the child mode's complete Pi fullscreen frame: transcript, pending and working state, tool rendering, widgets, editor, footer, notifications, selectors, dialogs, and child-local extension overlays.
 
-The focused row always reserves four detail lines:
+All input is routed through the child TUI's detached terminal. Printable text, paste, completion, commands, extension shortcuts, custom editors, and focused child overlays behave as they do in native Pi. The outer view does not steal Escape; custom editors such as pi-vim keep their normal Escape semantics.
+
+`/agents` remains available inside the child mode:
+
+- select Owner to return to the exact mounted Owner presentation;
+- select another Agent to retarget the same full-window attachment without exposing the Owner editor; or
+- select the current Agent to keep the existing mode.
+
+Pi's fullscreen transcript viewport and editor dock coexist. Page Up/Page Down, Home/End, configured prompt navigation, and mouse scrolling move the transcript while the editor remains available. At the tail, new output follows automatically. Scrolling away preserves the inspected region until the native end action restores tail following. Resize updates the detached terminal and reflows the complete child frame within the available rows.
+
+A terminally failed selected Run transitions to a complete Dormant presentation without closing the overlay. A later successor replaces that mode in the same durable attachment. Switching or Workflow-driven disposal settles the attachment once, releases live selection retention, disposes view-owned Dormant resources, and restores the untouched Owner when appropriate.
+
+## Focused roster details and keys
+
+The focused roster row reserves four detail lines:
 
 1. optional description;
 2. full Agent identity;
@@ -41,6 +55,6 @@ An absent description leaves its line empty, keeping the overlay height stable a
 
 - Tab or Shift-Tab: switch Live and Dormant
 - Up/Down or `k`/`j`: move focus
-- Right/Left or `l`/`h`: enter or leave a Live Agent scope
+- Right/Left or `l`/`h`: enter or leave a Live ordinary-Agent scope
 - Enter: perform the focused row's action
-- Escape: close
+- Escape: close the selector

@@ -12,7 +12,7 @@ import {
 
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
-import { selectAgent } from "./support/agent-session.ts";
+import { openLiveAgentView } from "./support/agent-session.ts";
 
 const MAX_SESSION_DISCOVERY_ATTEMPTS = 1_000;
 
@@ -69,7 +69,6 @@ test("interactive Pi boots one observable Owner while preserving native interact
 			attention: "none",
 			retentionReasons: [
 				{ reason: "owner_host_binding", count: 1 },
-				{ reason: "interactive_selection", count: 1 },
 			],
 		},
 	});
@@ -139,24 +138,24 @@ test("native Owner replacement closes every retained source Workflow session", a
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 
-	await selectAgent(host, childAgentId);
-	const childSession = host.runtime.session;
-	const nativeChildDispose = childSession.dispose.bind(childSession);
 	let childDisposeCalls = 0;
-	childSession.dispose = () => {
-		childDisposeCalls += 1;
-		nativeChildDispose();
+	const nativeDispose = AgentSession.prototype.dispose;
+	AgentSession.prototype.dispose = function countReplacedWorkflowChildDisposal() {
+		if (this.sessionId === childAgentId) childDisposeCalls += 1;
+		return nativeDispose.call(this);
 	};
-	await selectAgent(host, host.session.sessionId);
-
-	await host.runtime.newSession();
+	try {
+		await host.runtime.newSession();
+	} finally {
+		AgentSession.prototype.dispose = nativeDispose;
+	}
 
 	assert.equal(childDisposeCalls, 1);
 	assert.ok(host.runtime.session.getToolDefinition("agent_spawn"));
 	await host.runtime.dispose();
 });
 
-test("shutdown from a selected child restores Owner disposal without rebinding stopped interactive UI", async () => {
+test("shutdown with an open Agent view closes it without rebinding stopped interactive UI", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained while shutdown begins from this selection."),
@@ -179,7 +178,7 @@ test("shutdown from a selected child restores Owner disposal without rebinding s
 		host.session.extensionRunner.createContext(),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
-	await selectAgent(host, childAgentId);
+	const opened = await openLiveAgentView(host, childAgentId);
 
 	let shutdownRebindCalls = 0;
 	host.runtime.setRebindSession(async () => {
@@ -187,9 +186,11 @@ test("shutdown from a selected child restores Owner disposal without rebinding s
 	});
 
 	await host.runtime.dispose();
+	await opened.command;
 
 	assert.equal(shutdownRebindCalls, 0);
 	assert.equal(host.runtime.session, host.session);
+	assert.equal(host.ui.customSurfaces.length, 0);
 });
 
 test("orderly shutdown disposes retained child, Moderator, and Owner sessions exactly once", async () => {
@@ -274,18 +275,18 @@ test("orderly shutdown disposes child and Owner sessions even when child abort f
 		host.session.extensionRunner.createContext(),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
-	await selectAgent(host, childAgentId);
-	const childSession = host.runtime.session;
-	await selectAgent(host, host.session.sessionId);
-
-	childSession.abort = async () => {
-		throw new Error("injected child abort failure");
-	};
-	const nativeChildDispose = childSession.dispose.bind(childSession);
+	const nativeAbort = AgentSession.prototype.abort;
+	const nativeDispose = AgentSession.prototype.dispose;
 	let childDisposeCalls = 0;
-	childSession.dispose = () => {
-		childDisposeCalls += 1;
-		nativeChildDispose();
+	AgentSession.prototype.abort = async function failChildAbort() {
+		if (this.sessionId === childAgentId) {
+			throw new Error("injected child abort failure");
+		}
+		return nativeAbort.call(this);
+	};
+	AgentSession.prototype.dispose = function countFailedChildDisposal() {
+		if (this.sessionId === childAgentId) childDisposeCalls += 1;
+		return nativeDispose.call(this);
 	};
 	const nativeOwnerDispose = host.session.dispose.bind(host.session);
 	let ownerDisposeCalls = 0;
@@ -294,18 +295,23 @@ test("orderly shutdown disposes child and Owner sessions even when child abort f
 		nativeOwnerDispose();
 	};
 
-	await assert.rejects(
-		() => host.runtime.dispose(),
-		(error: unknown) =>
-			error instanceof AggregateError &&
-			error.errors.some(
-				(candidate) =>
-					candidate instanceof Error &&
-					candidate.message === "injected child abort failure",
-			),
-	);
-	assert.equal(childDisposeCalls, 1);
-	assert.equal(ownerDisposeCalls, 1);
+	try {
+		await assert.rejects(
+			() => host.runtime.dispose(),
+			(error: unknown) =>
+				error instanceof AggregateError &&
+				error.errors.some(
+					(candidate) =>
+						candidate instanceof Error &&
+						candidate.message === "injected child abort failure",
+				),
+		);
+		assert.equal(childDisposeCalls, 1);
+		assert.equal(ownerDisposeCalls, 1);
+	} finally {
+		AgentSession.prototype.abort = nativeAbort;
+		AgentSession.prototype.dispose = nativeDispose;
+	}
 });
 
 async function waitForModeratorAgentId(

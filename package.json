@@ -27,8 +27,8 @@
     ]
   },
   "scripts": {
-    "test": "node --test --test-reporter=dot tests/*.test.ts",
-		"test:conformance": "node --test --test-reporter=spec tests/host-shape.test.ts tests/host-module-world.test.ts tests/pi-host-behavior-conformance.test.ts tests/interactive-host-conformance.test.ts tests/extension-conformance.test.ts tests/agent-selector-surface.test.ts tests/human-request.test.ts tests/owner-workflow.test.ts tests/coordinated-workflow-pty.test.ts",
+    "test": "node --test --test-concurrency=4 --test-reporter=dot tests/*.test.ts",
+    "test:conformance": "node --test --test-concurrency=4 --test-reporter=spec tests/host-shape.test.ts tests/host-module-world.test.ts tests/pi-host-behavior-conformance.test.ts tests/interactive-host-conformance.test.ts tests/extension-conformance.test.ts tests/agent-selector-surface.test.ts tests/human-request.test.ts tests/owner-workflow.test.ts tests/coordinated-workflow-pty.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {

@@ -8,6 +8,7 @@ import type {
 } from "../coordination/workflow-coordinator.ts";
 import type { RunControlReceipt } from "../protocol/run-control.ts";
 import { openAgentSelectorSurface } from "../presentation/agent-selector-surface.ts";
+import { openAgentViewSurface } from "../presentation/agent-view-surface.ts";
 import {
 	renderAgentControlCall,
 	renderAgentControlResult,
@@ -43,14 +44,33 @@ export function registerAgentsCommand(
 			const roster = view.selectionRoster();
 			const selectedAgent = view.status();
 			const ownerVisible = selectedAgent.agentId === selectedAgent.workflowId;
+			let preparedAgentView:
+				| Awaited<ReturnType<typeof view.openAgentView>>
+				| undefined;
 			const action = await openAgentSelectorSurface(ctx.ui, {
 				...roster,
 				selectedAgentId: selectedAgent.agentId,
 				humanAttention: ownerVisible ? view.humanAttention() : [],
 				operationalAttention: ownerVisible ? view.operationalAttention() : [],
+				prepareSelection(selection) {
+					if (selection.kind !== "select_agent") return;
+					return view.openAgentView(selection.agentId).then((agentView) => {
+						preparedAgentView = agentView;
+					});
+				},
+				onSelectionError(error) {
+					ctx.ui.notify(
+						`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+				},
 			});
 			if (action?.kind === "select_agent") {
-				await view.selectForHuman(action.agentId);
+				if (preparedAgentView) {
+					await openAgentViewSurface(ctx.ui, preparedAgentView, {
+						requestShutdown: () => ctx.shutdown(),
+					});
+				}
 			} else if (action?.kind === "focus_human_request") {
 				await view.focusHumanRequest(action.requestId);
 			}

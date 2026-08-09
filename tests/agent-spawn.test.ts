@@ -36,10 +36,9 @@ import {
 } from "./support/pi-host.ts";
 import {
 	executeAndCommitRegisteredTool as executeRegisteredTool,
-	selectAgent,
 } from "./support/agent-session.ts";
 
-const MAX_CONDITION_POLL_ATTEMPTS = 100;
+const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
 const FILE_EXTENSION_FIXTURE = fileURLToPath(
 	new URL("./fixtures/inherited-extension-fixture.ts", import.meta.url),
 );
@@ -564,9 +563,21 @@ test("named inline and file-backed extensions are inherited with fresh state thr
 		additionalExtensionFactories: [namedExtension],
 	});
 	host.model.setResponses([
+		fauxAssistantMessage([
+			fauxToolCall("inline_extension_probe", {}, { id: "probe-inline-child" }),
+			fauxToolCall("file_extension_probe", {}, { id: "probe-file-child" }),
+			fauxToolCall(
+				"agent_spawn",
+				{ request: "Inherit both extension kinds one generation deeper." },
+				{ id: "spawn-inline-grandchild" },
+			),
+		], { stopReason: "toolUse" }),
+		fauxAssistantMessage([
+			fauxToolCall("inline_extension_probe", {}, { id: "probe-inline-grandchild" }),
+			fauxToolCall("file_extension_probe", {}, { id: "probe-file-grandchild" }),
+		], { stopReason: "toolUse" }),
 		fauxAssistantMessage("The child inherited fresh extension state."),
 		fauxAssistantMessage("The grandchild inherited another fresh extension state."),
-		fauxAssistantMessage("The extension-free child started without inherited extensions."),
 	]);
 
 	const ownerProbe = await executeRegisteredTool(
@@ -591,50 +602,55 @@ test("named inline and file-backed extensions are inherited with fresh state thr
 		new Set(childReceipt.effectiveConfiguration.extensions),
 		new Set([FILE_EXTENSION_FIXTURE, "<inline:stateful-inheritance-probe>"]),
 	);
-	await waitForCondition(() => startedInstances.includes(2));
-	await selectAgent(host, childReceipt.agentId);
-	assert.ok(host.runtime.session.getToolDefinition("file_extension_probe"));
-	const childProbe = await executeRegisteredTool(
-		host.runtime.session,
-		"inline_extension_probe",
+	const childProbe = await waitForAgentToolResult(
+		host,
+		childReceipt.agentId,
 		"probe-inline-child",
-		{},
 	);
-	const childProbeDetails = childProbe.details as {
+	assert.deepEqual(
+		await waitForAgentToolResult(host, childReceipt.agentId, "probe-file-child"),
+		{ loaded: true },
+	);
+	const childProbeDetails = childProbe as {
 		instanceId: number;
 		sessionStarts: number;
 	};
 	assert.equal(childProbeDetails.sessionStarts, 1);
 	assert.notEqual(childProbeDetails.instanceId, ownerInstanceId);
-
-	const grandchild = await executeRegisteredTool(
-		host.runtime.session,
-		"agent_spawn",
+	const grandchildSpawn = await waitForAgentToolResult(
+		host,
+		childReceipt.agentId,
 		"spawn-inline-grandchild",
-		{ request: "Inherit both extension kinds one generation deeper." },
-	);
-	const grandchildReceipt = grandchild.details as AgentSpawnReceipt;
-	assert.equal(grandchildReceipt.disposition, "pending");
-	assert.ok("agentId" in grandchildReceipt);
-	await waitForCondition(() => startedInstances.includes(3));
-	await selectAgent(host, grandchildReceipt.agentId);
-	assert.ok(host.runtime.session.getToolDefinition("file_extension_probe"));
-	const grandchildProbe = await executeRegisteredTool(
-		host.runtime.session,
-		"inline_extension_probe",
+	) as AgentSpawnReceipt;
+	assert.equal(grandchildSpawn.disposition, "pending");
+	assert.ok("agentId" in grandchildSpawn);
+	const grandchildProbe = await waitForAgentToolResult(
+		host,
+		grandchildSpawn.agentId,
 		"probe-inline-grandchild",
-		{},
+	) as { instanceId: number; sessionStarts: number };
+	assert.deepEqual(
+		await waitForAgentToolResult(
+			host,
+			grandchildSpawn.agentId,
+			"probe-file-grandchild",
+		),
+		{ loaded: true },
 	);
-	const grandchildProbeDetails = grandchildProbe.details as {
-		instanceId: number;
-		sessionStarts: number;
-	};
-	assert.equal(grandchildProbeDetails.sessionStarts, 1);
-	assert.notEqual(grandchildProbeDetails.instanceId, ownerInstanceId);
-	assert.notEqual(grandchildProbeDetails.instanceId, childProbeDetails.instanceId);
+	assert.equal(grandchildProbe.sessionStarts, 1);
+	assert.notEqual(grandchildProbe.instanceId, ownerInstanceId);
+	assert.notEqual(grandchildProbe.instanceId, childProbeDetails.instanceId);
+	assert.deepEqual(startedInstances.sort((left, right) => left - right), [1, 2, 3]);
 
-	await selectAgent(host, host.session.sessionId);
-	const instanceCountBeforeExtensionFreeChild = nextInstanceId;
+	let extensionFreeTools: string[] | undefined;
+	host.model.setResponses([
+		(context) => {
+			extensionFreeTools = context.tools?.map(({ name }) => name) ?? [];
+			return fauxAssistantMessage(
+				"The extension-free child started without inherited extensions.",
+			);
+		},
+	]);
 	const extensionFree = await executeRegisteredTool(
 		host.session,
 		"agent_spawn",
@@ -648,10 +664,9 @@ test("named inline and file-backed extensions are inherited with fresh state thr
 	assert.equal(extensionFreeReceipt.disposition, "pending");
 	assert.ok("agentId" in extensionFreeReceipt);
 	assert.deepEqual(extensionFreeReceipt.effectiveConfiguration.extensions, []);
-	await selectAgent(host, extensionFreeReceipt.agentId);
-	assert.equal(host.runtime.session.getToolDefinition("inline_extension_probe"), undefined);
-	assert.equal(host.runtime.session.getToolDefinition("file_extension_probe"), undefined);
-	assert.equal(nextInstanceId, instanceCountBeforeExtensionFreeChild);
+	await waitForCondition(() => extensionFreeTools !== undefined);
+	assert.equal(extensionFreeTools?.includes("inline_extension_probe"), false);
+	assert.equal(extensionFreeTools?.includes("file_extension_probe"), false);
 
 	await host.runtime.dispose();
 });
@@ -748,6 +763,10 @@ test("successor Runs re-resolve the current named inline factory and stay dorman
 	});
 	host.model.setResponses([
 		fauxAssistantMessage("The first Run loaded the original factory."),
+		fauxAssistantMessage(
+			fauxToolCall("successor_inline_probe", {}, { id: "probe-replacement-inline-run" }),
+			{ stopReason: "toolUse" },
+		),
 		fauxAssistantMessage("The successor Run loaded the replacement factory."),
 	]);
 
@@ -761,6 +780,11 @@ test("successor Runs re-resolve the current named inline factory and stay dorman
 	assert.equal(receipt.disposition, "pending");
 	assert.ok("agentId" in receipt);
 	await waitForCondition(() => originalInvocations === 2);
+	await waitForAgentTranscriptText(
+		host,
+		receipt.agentId,
+		"The first Run loaded the original factory.",
+	);
 	await executeRegisteredTool(
 		host.session,
 		"agent_control",
@@ -781,16 +805,15 @@ test("successor Runs re-resolve the current named inline factory and stay dorman
 	);
 	assert.equal((successor.details as { delivery: string }).delivery, "pending");
 	await waitForCondition(() => replacementInvocations === 1);
-	await selectAgent(host, receipt.agentId);
-	const replacementProbe = await executeRegisteredTool(
-		host.runtime.session,
-		"successor_inline_probe",
-		"probe-replacement-inline-run",
-		{},
+	assert.deepEqual(
+		await waitForAgentToolResult(
+			host,
+			receipt.agentId,
+			"probe-replacement-inline-run",
+		),
+		{ generation: "replacement" },
 	);
-	assert.deepEqual(replacementProbe.details, { generation: "replacement" });
 
-	await selectAgent(host, host.session.sessionId);
 	await executeRegisteredTool(
 		host.session,
 		"agent_control",
@@ -1265,7 +1288,7 @@ async function waitForChildSessionFile(
 		const sessions = await SessionManager.list(cwd, sessionDirectory);
 		const child = sessions.find((session) => session.id === agentId);
 		if (child) return child.path;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error(`Child Pi session ${agentId} was not created`);
 }
@@ -1277,15 +1300,71 @@ async function waitForEntry(
 	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		const entries = SessionManager.open(sessionFile).getEntries();
 		if (entries.some(predicate)) return entries;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error("Expected child transcript entry did not commit");
+}
+
+async function waitForAgentTranscriptText(
+	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
+	agentId: string,
+	expected: string,
+): Promise<void> {
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
+		const entries = await agentTranscriptEntries(host, agentId, attempt);
+		if (entries && JSON.stringify(entries).includes(expected)) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
+	}
+	throw new Error(`Agent ${agentId} transcript did not include ${expected}`);
+}
+
+async function waitForAgentToolResult(
+	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
+	agentId: string,
+	toolCallId: string,
+): Promise<unknown> {
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
+		const entries = await agentTranscriptEntries(host, agentId, attempt);
+		const result = entries?.find(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === toolCallId,
+		);
+		if (result?.type === "message" && result.message.role === "toolResult") {
+			return result.message.details;
+		}
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
+	}
+	throw new Error(`Agent ${agentId} did not commit tool result ${toolCallId}`);
+}
+
+async function agentTranscriptEntries(
+	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
+	agentId: string,
+	attempt: number,
+): Promise<ReturnType<SessionManager["getEntries"]> | undefined> {
+	const observe = host.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const status = await observe.execute(
+		`locate-agent-transcript-${agentId}-${attempt}`,
+		{ operation: "status", agentId },
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	const transcriptPath = (status.details as {
+		primaryEvidence: { transcriptPath: string | null };
+	}).primaryEvidence.transcriptPath;
+	return transcriptPath
+		? SessionManager.open(transcriptPath).getEntries()
+		: undefined;
 }
 
 async function waitForCondition(predicate: () => boolean): Promise<void> {
 	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		if (predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error("Expected condition did not become true");
 }

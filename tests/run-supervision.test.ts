@@ -16,7 +16,6 @@ import {
 	type AgentMessageInput,
 } from "../src/coordination/workflow-coordinator.ts";
 import { HumanRequestSurface } from "../src/presentation/human-request-surface.ts";
-import { readDetachedChildUIState } from "../src/pi-integration/extension-bindings.ts";
 import piAgentCoordination from "../src/index.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -28,7 +27,10 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
-import { selectAgent } from "./support/agent-session.ts";
+import {
+	openLiveAgentView,
+	returnAgentViewToOwner,
+} from "./support/agent-session.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 100;
 
@@ -481,16 +483,15 @@ test("a failed native human resume dispatch leaves its exact Hold retryable", as
 		return nativeSendUserMessage.call(child.session, content, options);
 	};
 	await child.session.prompt("This human resume fails before commitment.");
-	// The backgrounded child's input failure is recorded in its own detached UI
-	// context; it never reaches the Owner's TUI (#59).
-	const childUIState = readDetachedChildUIState(child.session);
-	assert.equal(
-		childUIState?.notifications.some(
-			({ message, type }) =>
-				type === "error" && message.includes("human resume dispatch failed"),
-		),
-		true,
+	// The backgrounded child's input failure renders in its own complete native
+	// mode; it never reaches the Owner's TUI (#59).
+	const agentView = await harness.ownerView.openAgentView(child.agentId);
+	assert.ok(agentView);
+	await waitForCondition(() =>
+		agentView.projection().presentation.render(120).join("\n")
+			.includes("human resume dispatch failed")
 	);
+	await agentView.close();
 	assert.equal(
 		harness.host.ui.notifications.some(({ message }) =>
 			message.includes("human resume dispatch failed")
@@ -946,18 +947,18 @@ test("the registered agent_control tool authenticates structural committed input
 	await host.runtime.dispose();
 });
 
-test("/agents selects live sessions, returns to Owner, and restores Owner for shutdown", async () => {
+test("/agents retains only the viewed exact Run and keeps Owner bound through close", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
 	host.model.setResponses([
-		fauxAssistantMessage("The selectable child remains live."),
+		fauxAssistantMessage("The viewed child remains available."),
 	]);
-	const spawnInput = { request: "Remain live for native interactive selection." };
-	const spawnToolCallId = "spawn-selectable-child";
+	const spawnInput = { request: "Remain live for durable Agent view retention." };
+	const spawnToolCallId = "spawn-view-retained-child";
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_spawn", spawnInput, { id: spawnToolCallId }),
 			{ stopReason: "toolUse" },
-	),
+		),
 	);
 	const spawn = host.session.getToolDefinition("agent_spawn");
 	assert.ok(spawn);
@@ -969,32 +970,34 @@ test("/agents selects live sessions, returns to Owner, and restores Owner for sh
 		host.session.extensionRunner.createContext(),
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
-
-	await selectAgent(host, childAgentId);
-	assert.equal(host.runtime.session.sessionId, childAgentId);
-	const observe = host.runtime.session.getToolDefinition("agent_observe");
+	const ownerSession = host.runtime.session;
+	const opened = await openLiveAgentView(host, childAgentId);
+	assert.equal(host.runtime.session, ownerSession);
+	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
-	const childStatus = await observe.execute(
-		"observe-selected-child",
-		{ operation: "status" },
+	const status = async (toolCallId: string) => observe.execute(
+		toolCallId,
+		{ operation: "status", agentId: childAgentId },
 		undefined,
 		undefined,
-		host.runtime.session.extensionRunner.createContext(),
+		host.session.extensionRunner.createContext(),
 	);
 	assert.equal(
-		(childStatus.details as {
+		((await status("observe-open-agent-view")).details as {
 			run: { retentionReasons: Array<{ reason: string }> };
 		}).run.retentionReasons.some(({ reason }) => reason === "interactive_selection"),
 		true,
 	);
 
-	await selectAgent(host, host.session.sessionId);
-	assert.equal(host.runtime.session.sessionId, host.session.sessionId);
-
-	await selectAgent(host, childAgentId);
-	assert.equal(host.runtime.session.sessionId, childAgentId);
+	await returnAgentViewToOwner(host, opened);
+	assert.equal(host.runtime.session, ownerSession);
+	assert.equal(
+		((await status("observe-closed-agent-view")).details as {
+			run: { retentionReasons: Array<{ reason: string }> };
+		}).run.retentionReasons.some(({ reason }) => reason === "interactive_selection"),
+		false,
+	);
 	await host.runtime.dispose();
-	assert.equal(host.runtime.session.sessionId, host.session.sessionId);
 });
 
 test("shutdown fences Run, tool, control, and Human Request admission", async () => {

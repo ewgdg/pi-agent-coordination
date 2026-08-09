@@ -51,6 +51,7 @@ import {
 	InProcessAgentHost,
 	type StartedAgentRun,
 } from "./in-process-agent-host.ts";
+import { SerialLane } from "./serial-lane.ts";
 import { discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
 import {
 	selectAgentTemplateForRun,
@@ -59,6 +60,7 @@ import {
 } from "../templates/agent-templates.ts";
 import { workflowSessionDirectory } from "./workflow-session-directory.ts";
 import {
+	applyCoordinatedSessionRuntimePolicy,
 	configureCoordinatedSession,
 	type AutomaticGenerationReconciliationAdapter,
 } from "../pi-integration/automatic-reconciliation.ts";
@@ -83,6 +85,7 @@ const BUILT_IN_TOOL_NAMES = new Set(["bash", "edit", "find", "grep", "ls", "read
 const CHILD_EXTENSION_PREFIX = "<inline:pi-agent-coordination-agent:";
 const MODERATOR_EXTENSION_PREFIX = "<inline:pi-agent-coordination-moderator:";
 const INLINE_PUBLIC_EXTENSION_PATH = "<inline:pi-agent-coordination>";
+const modelRuntimeServiceLanes = new WeakMap<object, SerialLane>();
 
 export type ChildRunBlueprint = Readonly<{
 	baseline: RuntimeConfigurationBaseline;
@@ -92,6 +95,11 @@ export type ChildRunBlueprint = Readonly<{
 export type PreparedAgentRun = Readonly<{
 	services: AgentSessionServices;
 	configuration: EffectiveAgentRunConfiguration;
+}>;
+
+export type DormantAgentProjection = Readonly<{
+	projection: PiNativeAgentProjection;
+	dispose(): Promise<void>;
 }>;
 
 export class DefaultChildSessionFactory {
@@ -104,6 +112,7 @@ export class DefaultChildSessionFactory {
 	readonly #moderatorExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #presentationExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #projectionHost: PiNativeProjectionHost;
+	readonly #modelRuntimeServiceLane: SerialLane;
 	readonly #automaticGenerationReconciliation:
 		| AutomaticGenerationReconciliationAdapter
 		| undefined;
@@ -123,9 +132,8 @@ export class DefaultChildSessionFactory {
 		templateRoots?(baselineCwd: string, projectTrusted: boolean): readonly AgentTemplateRoot[];
 	}) {
 		this.#ownerRuntime = options.ownerRuntime;
-		// Interactive selection temporarily rebinds ownerRuntime.services to a
-		// presentation-only loader. Successor Runs still resolve inherited named
-		// factories against the host registry admitted with the Workflow.
+		// Successor Runs resolve inherited named factories against the resource
+		// registry admitted with the continuously bound Owner Workflow.
 		this.#hostResourceLoader = options.ownerRuntime.services.resourceLoader;
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#entryModulePath = options.entryModulePath;
@@ -136,6 +144,9 @@ export class DefaultChildSessionFactory {
 		this.#projectionHost = options.projectionHost ?? createPiNativeProjectionHost({
 			ownerRuntime: options.ownerRuntime,
 		});
+		this.#modelRuntimeServiceLane = modelRuntimeServiceLane(
+			options.ownerRuntime.services.modelRuntime,
+		);
 		this.#automaticGenerationReconciliation =
 			options.automaticGenerationReconciliation;
 		this.#templateRoots = options.templateRoots;
@@ -304,60 +315,61 @@ export class DefaultChildSessionFactory {
 			hasTrustRequiringProjectResources(configuration.cwd);
 		const projectTrusted = cachedProjectTrust ?? !trustResolutionRequired;
 		const projectTrustDiagnostics: string[] = [];
-		const services = await createAgentSessionServices({
-			cwd: configuration.cwd,
-			agentDir: this.#ownerRuntime.services.agentDir,
-			modelRuntime: this.#ownerRuntime.services.modelRuntime,
-			settingsManager: SettingsManager.create(
-				configuration.cwd,
-				this.#ownerRuntime.services.agentDir,
-				{ projectTrusted },
-			),
-			...(trustResolutionRequired
-				? {
-					resourceLoaderReloadOptions: {
-						resolveProjectTrust: async ({ extensionsResult }) => {
-							const resolution = await resolveAgentRunProjectTrust({
-								cwd: configuration.cwd,
-								agentDir: this.#ownerRuntime.services.agentDir,
-								defaultProjectTrust: this.#ownerRuntime.services.settingsManager
-									.getDefaultProjectTrust(),
-								extensionsResult,
-							});
-							this.#projectTrustByCwd.set(configuration.cwd, resolution.trusted);
-							projectTrustDiagnostics.push(...resolution.diagnostics);
-							return resolution.trusted;
+		const services = await this.#modelRuntimeServiceLane.run(() =>
+			createAgentSessionServices({
+				cwd: configuration.cwd,
+				agentDir: this.#ownerRuntime.services.agentDir,
+				modelRuntime: this.#ownerRuntime.services.modelRuntime,
+				settingsManager: this.#createIsolatedSettingsManager(
+					configuration.cwd,
+					projectTrusted,
+				),
+				...(trustResolutionRequired
+					? {
+						resourceLoaderReloadOptions: {
+							resolveProjectTrust: async ({ extensionsResult }) => {
+								const resolution = await resolveAgentRunProjectTrust({
+									cwd: configuration.cwd,
+									agentDir: this.#ownerRuntime.services.agentDir,
+									defaultProjectTrust: this.#ownerRuntime.services.settingsManager
+										.getDefaultProjectTrust(),
+									extensionsResult,
+								});
+								this.#projectTrustByCwd.set(configuration.cwd, resolution.trusted);
+								projectTrustDiagnostics.push(...resolution.diagnostics);
+								return resolution.trusted;
+							},
 						},
-					},
-				}
-				: {}),
-			resourceLoaderOptions: {
-				noExtensions: true,
-				additionalExtensionPaths: [...runExtensions.filePaths],
-				extensionFactories: [
-					...runExtensions.inlineFactories,
-					{
-						name: options.extensionName,
-						hidden: true,
-						factory: options.extensionFactory,
-					},
-				],
-				skillsOverride: (loaded) => ({
-					skills: configuration.skills.flatMap((name) => {
-						const skill = loaded.skills.find((candidate) => candidate.name === name);
-						return skill ? [skill] : [];
+					}
+					: {}),
+				resourceLoaderOptions: {
+					noExtensions: true,
+					additionalExtensionPaths: [...runExtensions.filePaths],
+					extensionFactories: [
+						...runExtensions.inlineFactories,
+						{
+							name: options.extensionName,
+							hidden: true,
+							factory: options.extensionFactory,
+						},
+					],
+					skillsOverride: (loaded) => ({
+						skills: configuration.skills.flatMap((name) => {
+							const skill = loaded.skills.find((candidate) => candidate.name === name);
+							return skill ? [skill] : [];
+						}),
+						diagnostics: loaded.diagnostics,
 					}),
-					diagnostics: loaded.diagnostics,
-				}),
-				agentsFilesOverride: (loaded) => ({
-					agentsFiles: this.#applyProjectContext(
-						loaded.agentsFiles,
-						configuration,
-						options.agentId,
-					),
-				}),
-			},
-		});
+					agentsFilesOverride: (loaded) => ({
+						agentsFiles: this.#applyProjectContext(
+							loaded.agentsFiles,
+							configuration,
+							options.agentId,
+						),
+					}),
+				},
+			}),
+		);
 		services.diagnostics.push(
 			...projectTrustDiagnostics.map((message) => ({ type: "warning" as const, message })),
 		);
@@ -437,36 +449,41 @@ export class DefaultChildSessionFactory {
 		const session = created.session;
 		let projection: PiNativeAgentProjection | undefined;
 		let modelRunAdmission: ModelRunAdmission | undefined;
+		let ready: Promise<void> | undefined;
 		try {
 			configureCoordinatedSession(
 				session,
 				this.#automaticGenerationReconciliation,
 			);
 			this.#validateStartedSession(session, prepared.configuration);
-			const bindings = this.#detachedChildBindings(session);
-			const ownerErrorListener = bindings.onError;
-			const startupErrors: string[] = [];
-			bindings.onError = (error) => {
-				startupErrors.push(error.error);
-				ownerErrorListener?.(error);
-			};
 			modelRunAdmission = holdModelRunsUntilProjectionAdmission(session);
-			await session.bindExtensions(bindings);
-			if (startupErrors.length > 0) {
-				throw new Error(`Agent extension startup failed: ${startupErrors[0]}`);
-			}
-			rememberNativeExtensionUIState(session);
+			// The exact Run's InteractiveMode owns initial extension binding. This
+			// gives every child one complete native editor/footer/UI lifecycle and
+			// emits session_start once, while model work remains behind the gate.
 			projection = await this.#projectionHost.createProjection({
 				kind: "live",
 				session,
 				services: prepared.services,
+				exposeWhileInitializing: true,
 			});
-			modelRunAdmission.admit();
+			ready = projection.ready().then(
+				() => {
+					// Pi may persist an auto-detected theme during InteractiveMode init;
+					// SettingsManager.save() rebuilds effective settings and drops process-local
+					// overrides, so reassert policy immediately before model admission.
+					applyCoordinatedSessionRuntimePolicy(session);
+					modelRunAdmission!.admit();
+				},
+				(error) => {
+					modelRunAdmission!.cancel(error);
+					throw error;
+				},
+			);
 		} catch (error) {
 			modelRunAdmission?.cancel(error);
 			const cleanupErrors: unknown[] = [error];
 			try {
-				projection?.dispose();
+				await projection?.dispose();
 			} catch (cleanupError) {
 				cleanupErrors.push(cleanupError);
 			}
@@ -480,29 +497,110 @@ export class DefaultChildSessionFactory {
 			}
 			throw error;
 		}
-		return { session, projection };
+		return { session, projection, ready };
+	}
+
+	async createDormantProjection(record: AgentRecord): Promise<DormantAgentProjection> {
+		const cwd = record.host.sessionManager.getCwd();
+		const services = await this.#modelRuntimeServiceLane.run(() =>
+			createAgentSessionServices({
+				cwd,
+				agentDir: this.#ownerRuntime.services.agentDir,
+				modelRuntime: this.#ownerRuntime.services.modelRuntime,
+				settingsManager: this.#createIsolatedSettingsManager(cwd),
+				resourceLoaderOptions: {
+					noContextFiles: true,
+					noPromptTemplates: true,
+					noSkills: true,
+					noThemes: true,
+					noExtensions: true,
+					extensionFactories: [{
+						name: `pi-agent-coordination-presentation:${record.identity.agentId}`,
+						hidden: true,
+						factory: this.#presentationExtensionFactory(record.identity.agentId),
+					}],
+				},
+			}),
+		);
+		const created = await createAgentSessionFromServices({
+			services,
+			sessionManager: record.host.sessionManager,
+			noTools: "all",
+		});
+		const session = created.session;
+		let projection: PiNativeAgentProjection | undefined;
+		try {
+			session.setActiveToolsByName([]);
+			projection = await this.#projectionHost.createProjection({
+				kind: "dormant",
+				session,
+				services,
+			});
+			await projection.ready();
+		} catch (error) {
+			const cleanupErrors: unknown[] = [error];
+			try {
+				await projection?.dispose();
+			} catch (cleanupError) {
+				cleanupErrors.push(cleanupError);
+			}
+			try {
+				session.dispose();
+			} catch (cleanupError) {
+				cleanupErrors.push(cleanupError);
+			}
+			if (cleanupErrors.length > 1) {
+				throw new AggregateError(cleanupErrors, "Dormant Agent projection startup cleanup failed");
+			}
+			throw error;
+		}
+		let disposed = false;
+		return Object.freeze({
+			projection,
+			async dispose() {
+				if (disposed) return;
+				disposed = true;
+				const cleanupErrors: unknown[] = [];
+				try {
+					await projection.dispose();
+				} catch (error) {
+					cleanupErrors.push(error);
+				}
+				try {
+					session.dispose();
+				} catch (error) {
+					cleanupErrors.push(error);
+				}
+				if (cleanupErrors.length > 0) {
+					throw new AggregateError(cleanupErrors, "Dormant Agent projection cleanup failed");
+				}
+			},
+		});
 	}
 
 	async createPresentationBinding(record: AgentRecord): Promise<HumanPresentationBinding> {
 		const agentId = record.identity.agentId;
-		const services = await createAgentSessionServices({
-			cwd: record.host.sessionManager.getCwd(),
-			agentDir: this.#ownerRuntime.services.agentDir,
-			modelRuntime: this.#ownerRuntime.services.modelRuntime,
-			settingsManager: this.#ownerRuntime.services.settingsManager,
-			resourceLoaderOptions: {
-				noContextFiles: true,
-				noPromptTemplates: true,
-				noSkills: true,
-				noThemes: true,
-				noExtensions: true,
-				extensionFactories: [{
-					name: `pi-agent-coordination-presentation:${agentId}`,
-					hidden: true,
-					factory: this.#presentationExtensionFactory(agentId),
-				}],
-			},
-		});
+		const cwd = record.host.sessionManager.getCwd();
+		const services = await this.#modelRuntimeServiceLane.run(() =>
+			createAgentSessionServices({
+				cwd,
+				agentDir: this.#ownerRuntime.services.agentDir,
+				modelRuntime: this.#ownerRuntime.services.modelRuntime,
+				settingsManager: this.#createIsolatedSettingsManager(cwd),
+				resourceLoaderOptions: {
+					noContextFiles: true,
+					noPromptTemplates: true,
+					noSkills: true,
+					noThemes: true,
+					noExtensions: true,
+					extensionFactories: [{
+						name: `pi-agent-coordination-presentation:${agentId}`,
+						hidden: true,
+						factory: this.#presentationExtensionFactory(agentId),
+					}],
+				},
+			}),
+		);
 		const created = await createAgentSessionFromServices({
 			services,
 			sessionManager: record.host.sessionManager,
@@ -524,10 +622,11 @@ export class DefaultChildSessionFactory {
 				session,
 				services,
 			});
+			await projection.ready();
 		} catch (error) {
 			const cleanupErrors: unknown[] = [error];
 			try {
-				projection?.dispose();
+				await projection?.dispose();
 			} catch (cleanupError) {
 				cleanupErrors.push(cleanupError);
 			}
@@ -548,12 +647,12 @@ export class DefaultChildSessionFactory {
 			services,
 			diagnostics: services.diagnostics,
 			projection,
-			release: () => {
+			release: async () => {
 				if (released) return;
 				released = true;
 				const cleanupErrors: unknown[] = [];
 				try {
-					projection.dispose();
+					await projection.dispose();
 				} catch (error) {
 					cleanupErrors.push(error);
 				}
@@ -641,6 +740,24 @@ export class DefaultChildSessionFactory {
 		}
 	}
 
+	#createIsolatedSettingsManager(
+		cwd: string,
+		projectTrusted = this.#projectTrustByCwd.get(cwd) ??
+			this.#ownerRuntime.services.settingsManager.isProjectTrusted(),
+	): SettingsManager {
+		const source = SettingsManager.create(
+			cwd,
+			this.#ownerRuntime.services.agentDir,
+			{ projectTrusted },
+		);
+		const isolated = SettingsManager.inMemory(
+			source.getGlobalSettings(),
+			{ projectTrusted: source.isProjectTrusted() },
+		);
+		isolated.applyOverrides(source.getProjectSettings());
+		return isolated;
+	}
+
 	#hasInvalidSelectedSkill(
 		diagnostics: ReturnType<AgentSessionServices["resourceLoader"]["getSkills"]>["diagnostics"],
 		selectedSkills: readonly string[],
@@ -662,4 +779,13 @@ export class DefaultChildSessionFactory {
 			path.startsWith(CHILD_EXTENSION_PREFIX) ||
 			path.startsWith(MODERATOR_EXTENSION_PREFIX);
 	}
+}
+
+function modelRuntimeServiceLane(modelRuntime: object): SerialLane {
+	let lane = modelRuntimeServiceLanes.get(modelRuntime);
+	if (!lane) {
+		lane = new SerialLane();
+		modelRuntimeServiceLanes.set(modelRuntime, lane);
+	}
+	return lane;
 }

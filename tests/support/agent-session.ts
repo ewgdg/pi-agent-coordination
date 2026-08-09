@@ -8,9 +8,15 @@ import type {
 	AgentSession,
 	AgentToolResult,
 } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import {
+	stripTerminalSequences,
+	type Component,
+} from "@earendil-works/pi-tui";
 
 import type { TestOwnerHost } from "./pi-host.ts";
+
+const SURFACE_WAIT_TIMEOUT_MS = 5_000;
+const MAX_SELECTOR_NAVIGATION_STEPS = 1_000;
 
 export async function executeRegisteredTool(
 	session: AgentSession,
@@ -54,46 +60,49 @@ export async function executeAndCommitRegisteredTool(
 	return result;
 }
 
-export async function selectAgent(
+export async function openLiveAgentView(
 	host: TestOwnerHost,
 	agentId: string,
-): Promise<void> {
-	const { command, surface } = await openAgentsSurface(host);
-	if (surface.render(80).some((line) => line.includes("Dormant Agents"))) {
-		surface.handleInput?.("\t");
+): Promise<Readonly<{ command: Promise<void>; view: Component }>> {
+	const { command, surface: selector } = await openAgentsSurface(host);
+	if (selector.render(80).some((line) => line.includes("Dormant Agents"))) {
+		selector.handleInput?.("\t");
 	}
-	while (surface.render(80).some((line) => line.includes("Agents / "))) {
-		surface.handleInput?.("h");
+	while (selector.render(80).some((line) => line.includes("Agents / "))) {
+		selector.handleInput?.("h");
 	}
-	if (!selectAgentInCurrentTree(surface, agentId, host.session.sessionId)) {
-		surface.handleInput?.("\x1b");
+	if (!selectAgentInCurrentTree(selector, agentId, host.session.sessionId)) {
+		selector.handleInput?.("\x1b");
 		await command;
 		assert.fail(`Agent ${agentId} is absent from the Live selector hierarchy`);
 	}
-	await command;
-	assert.equal(host.runtime.session.sessionId, agentId);
+	await waitForCondition(() =>
+		host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
+	);
+	return { command, view: host.ui.customSurfaces[0]! };
 }
 
-export async function selectDormantAgent(
+export async function openDormantAgentView(
 	host: TestOwnerHost,
 	agentId: string,
-): Promise<void> {
-	const { command, surface } = await openAgentsSurface(host);
-	surface.handleInput?.("\t");
-	const firstRender = surface.render(80).join("\n");
+): Promise<Readonly<{ command: Promise<void>; view: Component }>> {
+	const { command, surface: selector } = await openAgentsSurface(host);
+	selector.handleInput?.("\t");
+	const firstRender = selector.render(80).join("\n");
 	let currentRender = firstRender;
 	for (let attempt = 0; attempt < 1_000; attempt += 1) {
-		if (focusedDetailsShowAgent(surface, agentId)) {
-			surface.handleInput?.("\r");
-			await command;
-			assert.equal(host.runtime.session.sessionId, agentId);
-			return;
+		if (focusedDetailsShowAgent(selector, agentId)) {
+			selector.handleInput?.("\r");
+			await waitForCondition(() =>
+				host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
+			);
+			return { command, view: host.ui.customSurfaces[0]! };
 		}
-		surface.handleInput?.("j");
-		currentRender = surface.render(80).join("\n");
+		selector.handleInput?.("j");
+		currentRender = selector.render(80).join("\n");
 		if (currentRender === firstRender) break;
 	}
-	surface.handleInput?.("\x1b");
+	selector.handleInput?.("\x1b");
 	await command;
 	assert.fail(`Dormant Agent ${agentId} is absent from the selector`);
 }
@@ -104,6 +113,32 @@ export async function openAgentsSurface(
 	const command = host.runtime.session.prompt("/agents");
 	await waitForCondition(() => host.ui.customSurfaces.length === 1);
 	return { command, surface: host.ui.customSurfaces[0]! };
+}
+
+export async function returnAgentViewToOwner(
+	host: TestOwnerHost,
+	opened: Readonly<{ command: Promise<void>; view: Component }>,
+): Promise<void> {
+	for (const character of "/agents") opened.view.handleInput?.(character);
+	opened.view.handleInput?.("\r");
+	await waitForCondition(() =>
+		stripTerminalSequences(opened.view.render(80).join("\n")).includes("Tab views")
+	);
+	const ownerPattern = new RegExp(`→ owner[\\s\\S]*${host.session.sessionId}`);
+	for (let tab = 0; tab < 2; tab += 1) {
+		const firstFrame = stripTerminalSequences(opened.view.render(80).join("\n"));
+		for (let step = 0; step < MAX_SELECTOR_NAVIGATION_STEPS; step += 1) {
+			if (ownerPattern.test(stripTerminalSequences(opened.view.render(80).join("\n")))) {
+				opened.view.handleInput?.("\r");
+				await opened.command;
+				return;
+			}
+			opened.view.handleInput?.("k");
+			if (stripTerminalSequences(opened.view.render(80).join("\n")) === firstFrame) break;
+		}
+		opened.view.handleInput?.("\t");
+	}
+	throw new Error("Owner is absent from the child /agents selector");
 }
 
 function selectAgentInCurrentTree(
@@ -146,9 +181,10 @@ function focusedDetailsShowAgent(
 }
 
 async function waitForCondition(predicate: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 1_000; attempt += 1) {
+	const deadline = Date.now() + SURFACE_WAIT_TIMEOUT_MS;
+	while (Date.now() < deadline) {
 		if (predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error("Timed out waiting for the /agents custom surface");
 }

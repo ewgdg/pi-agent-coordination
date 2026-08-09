@@ -279,14 +279,106 @@ export function assertProjectionInteractiveModeInstanceShape(
 	version?: unknown,
 ): void {
 	const interactiveMode = requireRecord(value, "Projection InteractiveMode", version);
-	for (const member of ["chatContainer", "statusContainer"] as const) {
-		const component = requireRecord(
-			interactiveMode[member],
+	if (typeof interactiveMode.isInitialized !== "boolean") {
+		throw new IncompatiblePiHostError("InteractiveMode.isInitialized", version);
+	}
+	const renderer = requireRecord(
+		interactiveMode.renderer,
+		"InteractiveMode.renderer",
+		version,
+	);
+	for (const member of [
+		"compositeOverlays",
+		"doRender",
+		"render",
+		"renderNow",
+		"invalidate",
+	] as const) {
+		requireFunction(renderer, member, `InteractiveMode.renderer.${member}`, version);
+	}
+	if (
+		!Array.isArray(renderer.previousScreen) ||
+		renderer.previousScreen.some((line) => typeof line !== "string")
+	) {
+		throw new IncompatiblePiHostError(
+			"InteractiveMode.renderer.previousScreen",
+			version,
+		);
+	}
+	for (const member of ["doRender", "terminal", "requestRender"] as const) {
+		if (member === "requestRender") {
+			requireFunction(
+				renderer,
+				member,
+				"InteractiveMode.renderer.requestRender",
+				version,
+			);
+		}
+		requireWritableMember(
+			renderer,
+			member,
+			`InteractiveMode.renderer.${member}`,
+			version,
+		);
+	}
+	const themeController = requireRecord(
+		interactiveMode.themeController,
+		"InteractiveMode.themeController",
+		version,
+	);
+	requireFunction(
+		themeController,
+		"applyFromSettings",
+		"InteractiveMode.themeController.applyFromSettings",
+		version,
+	);
+	requireWritableMember(
+		themeController,
+		"applyFromSettings",
+		"InteractiveMode.themeController.applyFromSettings",
+		version,
+	);
+	if (
+		themeController.terminalColorSchemeUnsubscribe !== undefined &&
+		typeof themeController.terminalColorSchemeUnsubscribe !== "function"
+	) {
+		throw new IncompatiblePiHostError(
+			"InteractiveMode.themeController.terminalColorSchemeUnsubscribe",
+			version,
+		);
+	}
+	requireWritableMember(
+		themeController,
+		"terminalColorSchemeUnsubscribe",
+		"InteractiveMode.themeController.terminalColorSchemeUnsubscribe",
+		version,
+	);
+	for (const member of [
+		"getUserInput",
+		"handleFatalRuntimeError",
+		"init",
+		"registerSignalHandlers",
+		"resetExtensionUI",
+		"shutdown",
+		"showError",
+		"stop",
+		"subscribeToAgent",
+		"unregisterSignalHandlers",
+	] as const) {
+		requireFunction(interactiveMode, member, `InteractiveMode.${member}`, version);
+	}
+	for (const member of [
+		"handleFatalRuntimeError",
+		"registerSignalHandlers",
+		"shutdown",
+		"unregisterSignalHandlers",
+	] as const) {
+		requireWritableMember(
+			interactiveMode,
+			member,
 			`InteractiveMode.${member}`,
 			version,
 		);
-		requireFunction(component, "render", `InteractiveMode.${member}.render`, version);
-		requireFunction(component, "invalidate", `InteractiveMode.${member}.invalidate`, version);
 	}
 	const footerDataProvider = requireRecord(
 		interactiveMode.footerDataProvider,
@@ -295,37 +387,34 @@ export function assertProjectionInteractiveModeInstanceShape(
 	);
 	requireFunction(
 		footerDataProvider,
-		"dispose",
-		"InteractiveMode.footerDataProvider.dispose",
+		"setupGitWatcher",
+		"InteractiveMode.footerDataProvider.setupGitWatcher",
 		version,
 	);
-	if (typeof interactiveMode.isInitialized !== "boolean") {
-		throw new IncompatiblePiHostError("InteractiveMode.isInitialized", version);
+	if (typeof interactiveMode.shutdownRequested !== "boolean") {
+		throw new IncompatiblePiHostError(
+			"InteractiveMode.shutdownRequested",
+			version,
+		);
 	}
-	requireWritableMember(
-		interactiveMode,
-		"isInitialized",
-		"InteractiveMode.isInitialized",
-		version,
-	);
-	const renderer = requireRecord(
-		interactiveMode.renderer,
-		"InteractiveMode.renderer",
-		version,
-	);
-	requireWritableMember(
-		renderer,
-		"terminal",
-		"InteractiveMode.renderer.terminal",
-		version,
-	);
-	requireRecord(
-		interactiveMode.themeController,
-		"InteractiveMode.themeController",
-		version,
-	);
-	for (const member of ["renderInitialMessages", "subscribeToAgent", "stop"] as const) {
-		requireFunction(interactiveMode, member, `InteractiveMode.${member}`, version);
+	for (const editorName of ["defaultEditor", "editor"] as const) {
+		const editor = requireRecord(
+			interactiveMode[editorName],
+			`InteractiveMode.${editorName}`,
+			version,
+		);
+		requireFunction(
+			editor,
+			"setText",
+			`InteractiveMode.${editorName}.setText`,
+			version,
+		);
+		requireWritableMember(
+			editor,
+			"onSubmit",
+			`InteractiveMode.${editorName}.onSubmit`,
+			version,
+		);
 	}
 }
 
@@ -338,7 +427,38 @@ export function assertInteractiveModeInstanceShape(value: unknown, version?: unk
 	);
 	requireRecord(runtimeHost.session, "InteractiveMode.runtimeHost.session", version);
 	const ui = requireRecord(interactiveMode.ui, "InteractiveMode.ui", version);
-	requireFunction(ui, "requestRender", "InteractiveMode.ui.requestRender", version);
+	assertPrioritizedTuiInputListenerShape(ui, version);
+	for (const member of ["invalidate", "requestRender"] as const) {
+		requireFunction(ui, member, `InteractiveMode.ui.${member}`, version);
+	}
+	const renderer = requireRecord(
+		interactiveMode.renderer,
+		"InteractiveMode.renderer",
+		version,
+	);
+	const terminal = requireRecord(
+		renderer.terminal,
+		"InteractiveMode.renderer.terminal",
+		version,
+	);
+	for (const dimension of ["columns", "rows"] as const) {
+		if (
+			typeof terminal[dimension] !== "number" ||
+			!Number.isFinite(terminal[dimension]) ||
+			terminal[dimension] <= 0
+		) {
+			throw new IncompatiblePiHostError(
+				`InteractiveMode.renderer.terminal.${dimension}`,
+				version,
+			);
+		}
+	}
+	if (typeof terminal.kittyProtocolActive !== "boolean") {
+		throw new IncompatiblePiHostError(
+			"InteractiveMode.renderer.terminal.kittyProtocolActive",
+			version,
+		);
+	}
 	for (const member of [
 		"bindCurrentSessionExtensions",
 		"rebindCurrentSession",
@@ -346,8 +466,23 @@ export function assertInteractiveModeInstanceShape(value: unknown, version?: unk
 		"setWorkingVisible",
 		"clearStatusIndicator",
 		"showError",
+		"updateEditorBorderColor",
 	] as const) {
 		requireFunction(interactiveMode, member, `InteractiveMode.${member}`, version);
+	}
+}
+
+export function assertPrioritizedTuiInputListenerShape(
+	value: unknown,
+	version?: unknown,
+): asserts value is {
+	addInputListener(listener: unknown): () => void;
+	inputListeners: Set<unknown>;
+} {
+	const tui = requireRecord(value, "TUI", version);
+	requireFunction(tui, "addInputListener", "TUI.addInputListener", version);
+	if (!(tui.inputListeners instanceof Set)) {
+		throw new IncompatiblePiHostError("TUI.inputListeners", version);
 	}
 }
 

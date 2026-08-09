@@ -52,6 +52,18 @@ export function configureCoordinatedSession(
 	session: AgentSession,
 	adapter?: AutomaticGenerationReconciliationAdapter,
 ): void {
+	applyCoordinatedSessionRuntimePolicy(session);
+	if (adapter) {
+		session.agent.streamFunction = createAutomaticReconciliationStream(
+			session.agent.streamFunction,
+			adapter,
+		);
+	}
+}
+
+export function applyCoordinatedSessionRuntimePolicy(
+	session: AgentSession,
+): void {
 	const settings = session.settingsManager;
 	const providerRetry = settings.getProviderRetrySettings();
 	const configuredTransport = settings.getTransport();
@@ -73,12 +85,6 @@ export function configureCoordinatedSession(
 		transport,
 	});
 	session.agent.transport = transport;
-	if (adapter) {
-		session.agent.streamFunction = createAutomaticReconciliationStream(
-			session.agent.streamFunction,
-			adapter,
-		);
-	}
 }
 
 export function createAutomaticReconciliationStream(

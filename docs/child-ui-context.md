@@ -1,70 +1,44 @@
 # Child UI context
 
-Every child session binds extensions with its own detached UI context instead of
-the Owner's TUI context. A child's `session_start` side effects — notifications,
-editor registration, status, and widget writes — are stored per-child and never
-reach the Owner's transcript, editor slot, footer, or widgets.
+Every exact live ordinary Agent or Moderator Run owns one complete Pi `InteractiveMode`. The mode is constructed and published before extension binding and model admission, so the child session's extensions bind to that mode's own UI context and emit `session_start` exactly once. Publishing the initializing mode lets `/agents` display and operate a dialog opened by `session_start`; model work remains gated until that startup UI settles.
 
-## Per-child state
+## Per-child presentation
 
-`createDetachedExtensionUIContext` builds an `ExtensionUIContext` whose four
-stateful members write into per-child storage (`DetachedChildUIState`, kept in a
-WeakMap keyed by the child session):
+A child mode owns its own transcript components, pending and working state, widgets, editor, footer, statuses, notifications, selectors, dialogs, extension commands, shortcuts, and focused overlays. Extension UI calls always target that child mode, whether or not it is currently selected. They do not mutate the Owner editor, footer, statuses, widgets, notifications, focus, or transcript, and they do not affect another child mode.
 
-- `notify` → `notifications`
-- `setEditorComponent` / `getEditorComponent` → `editorComponent`
-- `setStatus` → `statuses`
-- `setWidget` → `widgets`
+Opening an Agent view attaches the existing mode. It does not rebind extensions, replay `session_start`, recreate the editor, or copy child UI state into the Owner TUI. Repeated view cycles therefore preserve the exact mode's editor and extension presentation until its Run ends.
 
-All remaining members settle inert (prompts resolve as dismissed) so child
-extensions neither touch the Owner's presentation nor hang on unanswerable
-prompts. Read-only theme access is delegated to the Owner's TUI context captured
-at binding time. `readDetachedChildUIState(session)` exposes the state so a
-child's own view can later instantiate its editor and replay its notifications.
+## Detached terminal
 
-## Context switching on selection
+Each child mode renders against a detached terminal. The terminal proxies the available dimensions, retains Pi's normal input and resize callbacks, and discards physical writes, title changes, progress updates, cursor operations, and screen-control output.
 
-A child's extension context follows the selected presentation:
+The full-window Owner overlay renders the child renderer's complete fullscreen frame. Input is forwarded through the detached terminal callback, not sent directly to the editor. Pi therefore retains normal focus routing for custom editors, extension overlays, autocomplete, commands, shortcuts, mouse input, and transcript navigation.
 
-- **Created** with the detached context; `session_start` runs against it.
-- **Selected** in the interactive host: Pi's native rebind replaces the context
-  with a fresh TUI-bound one (binding-only refresh, no `session_start` replay).
-  The captured per-child editor factory is restored into the TUI from
-  `NativeExtensionUIState`, so the child's own registration — never the
-  Owner's — is presented.
-- **Deselected**: `reinstallDetachedExtensionUIContext` swaps the session back
-  to its detached context, so later extension UI calls stay per-child instead of
-  reaching the newly selected Agent's presentation. The captured snapshot is
-  refreshed from the detached state for the next selection.
-- **Degraded** (native rebind failed while the presentation stays selected):
-  `attachNativeExtensionUIContext` falls back to the Owner's TUI context — the
-  session IS the presented one, so its surfaces must keep working, and the
-  detached context would leave them inert.
+The Owner's original runtime, session, services, diagnostics, component tree, editor implementation and text, footer, extension context, and physical terminal remain mounted throughout attachment.
 
-Owner behavior is unchanged: the Owner's session keeps its native TUI context
-throughout, and the editor-preservation seam (`capture`/`restore`) is the same
-for every session.
+An embedded child mode is a component, not a process owner. It installs no process signal handlers, never calls `process.exit()`, and cannot independently dispose its runtime. `/quit`, Ctrl-D, and repeated Ctrl-C forward shutdown intent to the continuously bound Owner, which performs Pi's normal graceful process shutdown. Child render, editor-input, and input-acquisition failures close the exact view, restore Owner input routing, and report one Owner diagnostic. Projection initialization is serialized because Pi themes, theme callbacks, registered themes, and keybindings are process-global. Incidental child constructor/settings application is restored before extension startup, while explicit child or Owner theme changes remain shared across the Workflow. Footer git-watcher startup is deferred until mode construction succeeds so a late constructor failure has no unreachable watcher to clean up.
 
-## Pi-native Run projections
+## Pi-native Run projection
 
-Every exact live non-Owner Run also owns a real Pi `InteractiveMode` projection.
-It is constructed after that Run binds extensions and before coordination admits
-model-visible work. Model work scheduled by `session_start` is held at Pi's Run
-entry point until projection subscription completes. The projection therefore
-receives the Run's complete event sequence and exposes only two native components:
-transcript presentation
-and Run-status presentation. Its detached terminal cannot write progress, title,
-input, or frames into the Owner terminal.
+The projection adapter concentrates the private Pi seams needed to:
 
-Projection ownership follows the exact Run rather than Interactive Selection.
-Clean release, failure, termination, startup rollback, and Workflow shutdown
-dispose the projection with its session. Termination keeps the projection
-subscribed through abort and final Run settlement, then stops it before normal
-session disposal. Closing or opening a
-presentation surface is therefore not part of live projection ownership.
+- initialize one complete child `InteractiveMode`;
+- expose its already-laid-out fullscreen frame;
+- update detached terminal dimensions;
+- dispatch terminal input;
+- notify the attached Owner overlay about native render requests; and
+- dispose the exact mode with its session.
 
-Dormant inspection uses the same component seam over a separate passive session
-opened on the Agent's durable `SessionManager`. The passive session has no active
-tools and the seam exposes no editor or input method; releasing it disposes both
-the Dormant projection and that passive session without starting a successor Run
-or appending transcript evidence.
+Model work remains behind the Run-admission gate until mode initialization, extension startup, transcript subscription, and coordination runtime policy are complete. This ensures the mode observes the Run's first model-visible event without permitting Pi startup behavior to restore generic retries or mutate the Owner presentation.
+
+Projection ownership follows the exact Run, not view attachment. Clean release, failure, termination, startup rollback, and Workflow shutdown emit `session_shutdown`, release extension-owned UI, and dispose the live mode with its session exactly once. Closing or switching a view only removes `interactive_selection`; it never directly disposes a live projection retained by the Run.
+
+## Dormant presentation
+
+Dormant selection creates a view-owned, presentation-only session over the durable `SessionManager`. It uses the same complete mode and fullscreen editor but exposes no active model or coordination tools and appends no evidence merely by opening.
+
+The first submitted editor input is intercepted by coordination. It starts one successor in the Agent lane, attaches the successor's complete live mode before model-visible work proceeds, and commits the input once. Closing or replacing a Dormant attachment disposes its presentation mode and passive session.
+
+Before that first message, Dormant slash commands and shell submissions are rejected because they would mutate the passive presentation session instead of starting the Agent. `/agents` remains available for switching or returning to the Owner. Dormant and live child settings are isolated from the Owner settings manager.
+
+If a selected live Run fails, the durable view receives a complete Dormant mode before the failed exact-Run projection is disposed. If ordinary Message Delivery starts a successor, the same view receives the successor mode before Delivery execution continues.

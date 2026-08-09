@@ -32,7 +32,10 @@ import {
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import { InProcessAgentHost } from "../runtime/in-process-agent-host.ts";
-import { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
+import {
+	DefaultChildSessionFactory,
+	type DormantAgentProjection,
+} from "../runtime/default-child-session-factory.ts";
 import {
 	HumanRequestCoordinator,
 	type HumanAttentionItem,
@@ -82,7 +85,12 @@ import type {
 	SelectedAgentPhase,
 	SelectedAgentStatusPresentation,
 } from "../presentation/selected-agent-status.ts";
-import type { PiNativeProjectionHost } from "../pi-integration/native-agent-projection.ts";
+import type {
+	PiNativeAgentProjection,
+	PiNativeProjectionHost,
+} from "../pi-integration/native-agent-projection.ts";
+import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
+import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
 export type AgentRosterStatus = AgentStatus & Readonly<{
@@ -111,11 +119,18 @@ export type HumanPresentationCoordinatorView = Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
 	}>;
+	openAgentView(agentId: string): Promise<DurableAgentView | undefined>;
 	selectForHuman(agentId: string): Promise<"selected" | "dormant">;
 	humanAttention(): readonly HumanAttentionItem[];
 	operationalAttention(): readonly OperationalIncidentAttention[];
 	focusHumanRequest(requestId: string): Promise<void>;
 }>;
+
+type ActiveDurableAgentView = {
+	record: AgentRecord;
+	attachment: DurableAgentViewAttachment;
+	dormantProjection?: DormantAgentProjection;
+};
 
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	children(agentId?: string): readonly AgentStatus[];
@@ -161,7 +176,9 @@ export class WorkflowCoordinator {
 	readonly #humanSessionSelection: HumanSessionSelection | undefined;
 	readonly #selectedAgentStatusPresentation: SelectedAgentStatusPresentation | undefined;
 	readonly #selectionLane = new SerialLane();
+	readonly #agentViewLane = new SerialLane();
 	readonly #dormantPresentations = new Map<string, HumanPresentationBinding>();
+	#activeAgentView: ActiveDurableAgentView | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
 	readonly #executionScheduler: WorkflowExecutionScheduler;
 	readonly #executionPermits = new Map<string, WorkflowExecutionPermit>();
@@ -282,8 +299,7 @@ export class WorkflowCoordinator {
 			ownerIdentity: identity,
 			presentation: options.humanRequestPresentation,
 			boundaryHooks: options.humanRequestBoundaryHooks,
-			isInteractivelySelected: (agentId) =>
-				this.#humanSessionSelection?.selectedAgentId() === agentId,
+			isInteractivelySelected: (agentId) => this.#isInteractivelySelected(agentId),
 			interruptRun: (record) => {
 				record.host.prepareInterruption();
 				void record.host.lane.run(async () => {
@@ -306,8 +322,7 @@ export class WorkflowCoordinator {
 			quarantinedAgentIds: this.#quarantinedAgentIds,
 			ownerAgentId: identity.agentId,
 			messages: this.#messages,
-			isInteractivelySelected: (agentId) =>
-				this.#humanSessionSelection?.selectedAgentId() === agentId,
+			isInteractivelySelected: (agentId) => this.#isInteractivelySelected(agentId),
 		});
 		this.#operationalIncidents = new OperationalIncidentCoordinator({
 			agents: this.#agents,
@@ -377,6 +392,10 @@ export class WorkflowCoordinator {
 				return this.#handleHumanInput(agentId, text, images);
 			},
 			selectionRoster: () => this.#selectionRoster(),
+			openAgentView: (targetAgentId) => {
+				this.#assertAdmissionOpen();
+				return this.#openAgentView(targetAgentId);
+			},
 			selectForHuman: (targetAgentId) => {
 				this.#assertAdmissionOpen();
 				return this.#selectForHuman(targetAgentId);
@@ -479,9 +498,7 @@ export class WorkflowCoordinator {
 		for (const [order, record] of authorityOrder.entries()) {
 			const status = this.#rosterStatus(record);
 			if (status.run.phase !== "dormant") {
-				// Moderators are standalone participants rather than members of the
-				// ordinary creation hierarchy rendered by the Live tab.
-				if (!this.#isModerator(status.agentId)) live.push(status);
+				live.push(status);
 				continue;
 			}
 			const header = record.host.sessionManager.getHeader();
@@ -555,12 +572,14 @@ export class WorkflowCoordinator {
 	#integrateAgent(record: AgentRecord): void {
 		record.host.addStateChangeHandler(() => this.#refreshSelectedAgentStatus());
 		record.host.addSettledHandler(() => this.#refreshSelectedAgentStatus());
-		record.host.setRunStartedHandler((session) =>
-			this.#bindSelectedRunInLane(record, session)
-		);
-		record.host.setRunEndingHandler((session, _handle, cause) =>
-			this.#replaceSelectedFailedRunInLane(record, session, cause)
-		);
+		record.host.setRunStartedHandler(async (session) => {
+			await this.#bindSelectedRunInLane(record, session);
+			await this.#bindViewedRunInLane(record);
+		});
+		record.host.setRunEndingHandler(async (session, _handle, cause) => {
+			await this.#replaceSelectedFailedRunInLane(record, session, cause);
+			await this.#replaceViewedFailedRunInLane(record, session, cause);
+		});
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
 	}
@@ -598,6 +617,243 @@ export class WorkflowCoordinator {
 				previousBindingDisposition: "disposing",
 			},
 		);
+	}
+
+	#openAgentView(agentId: string): Promise<DurableAgentView | undefined> {
+		return this.#agentViewLane.run(async () => {
+			if (agentId === this.#ownerIdentity.agentId) {
+				const active = this.#activeAgentView;
+				if (active) await this.#closeActiveAgentViewInLane(active);
+				return undefined;
+			}
+			const active = this.#activeAgentView;
+			if (active?.record.identity.agentId === agentId) return undefined;
+			const record = this.#requireAgent(agentId);
+			if (active) {
+				await this.#switchActiveAgentViewInLane(active, record);
+				return undefined;
+			}
+			const target = await this.#acquireAgentViewTarget(record);
+			let attachment!: DurableAgentViewAttachment;
+			attachment = new DurableAgentViewAttachment({
+				agentId,
+				label: record.identity.configuration.label,
+				projection: target.projection,
+				requestClose: () => this.#closeAgentView(attachment),
+				reportFailure: (error) => this.#reportAgentViewError(error),
+			});
+			this.#activeAgentView = {
+				record,
+				attachment,
+				dormantProjection: target.dormantProjection,
+			};
+			return attachment;
+		});
+	}
+
+	async #acquireAgentViewTarget(record: AgentRecord): Promise<Readonly<{
+		projection: PiNativeAgentProjection;
+		dormantProjection?: DormantAgentProjection;
+	}>> {
+		if (record.host.observe().phase === "starting") {
+			const initializingProjection = await waitForInitializingProjection(record);
+			if (initializingProjection) {
+				// Run startup deliberately waits for session_start UI. Entering its lane
+				// here would deadlock the only human surface that can settle a startup
+				// modal. The exact bound Run cannot change during these synchronous steps.
+				record.host.addRetentionReason("interactive_selection");
+				return { projection: initializingProjection };
+			}
+		}
+		return record.host.lane.run(() => this.#acquireAgentViewTargetInLane(record));
+	}
+
+	async #acquireAgentViewTargetInLane(record: AgentRecord): Promise<Readonly<{
+		projection: PiNativeAgentProjection;
+		dormantProjection?: DormantAgentProjection;
+	}>> {
+		if (!record.host.currentHandle()) {
+			const dormantProjection = await this.#sessionFactory
+				.createDormantProjection(record);
+			return {
+				projection: dormantProjection.projection,
+				dormantProjection,
+			};
+		}
+		record.host.addRetentionReason("interactive_selection");
+		const projection = record.host.currentProjection();
+		if (projection) return { projection };
+		record.host.removeRetentionReason("interactive_selection");
+		throw new Error(
+			`invariant_violation: live Agent ${record.identity.agentId} has no presentation projection`,
+		);
+	}
+
+	async #switchActiveAgentViewInLane(
+		active: ActiveDurableAgentView,
+		record: AgentRecord,
+	): Promise<void> {
+		while (true) {
+			const target = await this.#acquireAgentViewTarget(record);
+			const previousRecord = active.record;
+			let previousDormantProjection: DormantAgentProjection | undefined;
+			let requestPreviousRunRelease = false;
+			let targetChanged = false;
+			await previousRecord.host.lane.run(() => {
+				targetChanged = target.dormantProjection
+					? record.host.currentHandle() !== undefined
+					: record.host.currentProjection() !== target.projection;
+				if (targetChanged) return;
+				previousDormantProjection = active.dormantProjection;
+				if (
+					active.attachment.projection().kind === "live" &&
+					previousRecord.host.currentProjection() === active.attachment.projection()
+				) {
+					previousRecord.host.removeRetentionReason("interactive_selection");
+					requestPreviousRunRelease = true;
+				}
+				active.record = record;
+				active.dormantProjection = target.dormantProjection;
+				active.attachment.retarget({
+					agentId: record.identity.agentId,
+					label: record.identity.configuration.label,
+					projection: target.projection,
+				});
+			});
+			if (targetChanged) {
+				await this.#releaseUnpublishedAgentViewTarget(record, target);
+				continue;
+			}
+			try {
+				await previousDormantProjection?.dispose();
+			} catch (error) {
+				this.#reportAgentViewError(error);
+			}
+			if (requestPreviousRunRelease) {
+				try {
+					await this.#messages.requestRelease(previousRecord);
+				} catch (error) {
+					this.#reportAgentViewError(error);
+				}
+			}
+			return;
+		}
+	}
+
+	async #releaseUnpublishedAgentViewTarget(
+		record: AgentRecord,
+		target: Readonly<{
+			projection: PiNativeAgentProjection;
+			dormantProjection?: DormantAgentProjection;
+		}>,
+	): Promise<void> {
+		if (target.dormantProjection) {
+			await target.dormantProjection.dispose();
+			return;
+		}
+		await record.host.lane.run(() => {
+			record.host.removeRetentionReason("interactive_selection");
+		});
+	}
+
+	#closeAgentView(attachment: DurableAgentViewAttachment): Promise<void> {
+		return this.#agentViewLane.run(async () => {
+			const active = this.#activeAgentView;
+			if (!active || active.attachment !== attachment) {
+				attachment.settleClosed();
+				return;
+			}
+			await this.#closeActiveAgentViewInLane(active);
+		});
+	}
+
+	async #closeActiveAgentViewInLane(active: ActiveDurableAgentView): Promise<void> {
+		const cleanupErrors: unknown[] = [];
+		let requestRunRelease = false;
+		await active.record.host.lane.run(async () => {
+			if (this.#activeAgentView !== active) return;
+			this.#activeAgentView = undefined;
+			if (
+				active.attachment.projection().kind === "live" &&
+				active.record.host.currentProjection() === active.attachment.projection()
+			) {
+				active.record.host.removeRetentionReason("interactive_selection");
+				requestRunRelease = true;
+			}
+			active.attachment.settleClosed();
+			try {
+				await active.dormantProjection?.dispose();
+			} catch (error) {
+				cleanupErrors.push(error);
+			}
+		});
+		if (requestRunRelease) {
+			try {
+				await this.#messages.requestRelease(active.record);
+			} catch (error) {
+				cleanupErrors.push(error);
+			}
+		}
+		if (cleanupErrors.length > 0) {
+			throw new AggregateError(cleanupErrors, "Agent view cleanup failed");
+		}
+	}
+
+	async #bindViewedRunInLane(record: AgentRecord): Promise<void> {
+		const active = this.#activeAgentView;
+		if (!active || active.record !== record) return;
+		const projection = record.host.currentProjection();
+		if (!projection) {
+			throw new Error(
+				`invariant_violation: viewed Agent ${record.identity.agentId} started without a projection`,
+			);
+		}
+		record.host.addRetentionReason("interactive_selection");
+		const dormantProjection = active.dormantProjection;
+		active.dormantProjection = undefined;
+		active.attachment.replaceProjection(projection);
+		if (!dormantProjection) return;
+		try {
+			await dormantProjection.dispose();
+		} catch (error) {
+			this.#reportAgentViewError(error);
+		}
+	}
+
+	async #replaceViewedFailedRunInLane(
+		record: AgentRecord,
+		session: AgentSessionRuntime["session"],
+		cause: "failure" | "termination" | "shutdown",
+	): Promise<void> {
+		const active = this.#activeAgentView;
+		if (
+			cause !== "failure" ||
+			!active ||
+			active.record !== record ||
+			record.host.requireLiveSession() !== session ||
+			record.host.currentProjection() !== active.attachment.projection()
+		) return;
+		try {
+			const dormantProjection = await this.#sessionFactory.createDormantProjection(record);
+			if (this.#activeAgentView !== active) {
+				await dormantProjection.dispose();
+				return;
+			}
+			active.dormantProjection = dormantProjection;
+			active.attachment.replaceProjection(dormantProjection.projection);
+		} catch (error) {
+			if (this.#activeAgentView === active) this.#activeAgentView = undefined;
+			active.attachment.settleClosed();
+			this.#reportAgentViewError(error);
+		}
+	}
+
+	#reportAgentViewError(error: unknown): void {
+		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
+		requireLiveServices(owner).diagnostics.push({
+			type: "error",
+			message: `Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
+		});
 	}
 
 	#refreshSelectedAgentStatus(): void {
@@ -638,6 +894,11 @@ export class WorkflowCoordinator {
 			return "held";
 		}
 		return run.work === "active" ? "active" : "settled";
+	}
+
+	#isInteractivelySelected(agentId: string): boolean {
+		return this.#activeAgentView?.record.identity.agentId === agentId ||
+			this.#humanSessionSelection?.selectedAgentId() === agentId;
 	}
 
 	async #beginExecution(agentId: string): Promise<void> {
@@ -684,7 +945,36 @@ export class WorkflowCoordinator {
 	): Promise<boolean> {
 		const selection = this.#humanSessionSelection;
 		if (!selection) {
-			return this.#runSupervisor.resumeFromHuman(agentId, text, images);
+			return this.#agentViewLane.run(async () => {
+				const active = this.#activeAgentView;
+				if (!active || active.record.identity.agentId !== agentId) {
+					return this.#runSupervisor.resumeFromHuman(agentId, text, images);
+				}
+				return active.record.host.lane.run(async () => {
+					if (this.#activeAgentView !== active) return true;
+					const currentSession = active.record.host.currentHandle()
+						? active.record.host.requireLiveSession()
+						: undefined;
+					if (
+						currentSession &&
+						active.attachment.projection() === active.record.host.currentProjection()
+					) {
+						if (active.record.host.currentInterruptionHold()) {
+							return this.#runSupervisor.resumeFromHumanInLane(
+								active.record,
+								text,
+								images,
+							);
+						}
+						return false;
+					}
+					if (!currentSession) {
+						await active.record.host.startInLane(["interactive_selection"]);
+					}
+					await this.#runSupervisor.submitFromHumanInLane(active.record, text, images);
+					return true;
+				});
+			});
 		}
 		if (selection.selectedAgentId() !== agentId) return Promise.resolve(true);
 		const record = this.#requireAgent(agentId);
@@ -734,6 +1024,10 @@ export class WorkflowCoordinator {
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
 		const cleanupErrors: unknown[] = [];
 		const selection = this.#humanSessionSelection;
+		await collectCleanupFailure(
+			cleanupErrors,
+			() => this.#activeAgentView?.attachment.close(),
+		);
 		await collectCleanupFailure(
 			cleanupErrors,
 			() => this.#operationalIncidents.shutdown(),
@@ -865,6 +1159,23 @@ export class WorkflowCoordinator {
 		this.#dormantPresentations.set(agentId, tracked);
 		return tracked;
 	}
+}
+
+function waitForInitializingProjection(
+	record: AgentRecord,
+): Promise<PiNativeAgentProjection | undefined> {
+	const current = record.host.currentProjection();
+	if (current || record.host.observe().phase !== "starting") {
+		return Promise.resolve(current);
+	}
+	return new Promise((resolve) => {
+		const removeHandler = record.host.addStateChangeHandler(() => {
+			const projection = record.host.currentProjection();
+			if (!projection && record.host.observe().phase === "starting") return;
+			removeHandler();
+			resolve(projection);
+		});
+	});
 }
 
 async function collectCleanupFailure(

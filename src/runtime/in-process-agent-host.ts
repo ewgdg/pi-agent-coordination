@@ -45,6 +45,7 @@ export type InterruptionHoldHandle = Readonly<{
 export type StartedAgentRun = Readonly<{
 	session: AgentSession;
 	projection: PiNativeAgentProjection;
+	ready?: Promise<void>;
 }>;
 
 type BoundRun = {
@@ -395,17 +396,20 @@ export class InProcessAgentHost {
 			const startedRun = await this.#startSession();
 			this.#bindRun(startedRun);
 			await this.#runStartedHandler?.(startedRun.session, this.#run!.handle);
+			await startedRun.ready;
 			return startedRun.session;
 		} catch (error) {
-			const cleanupErrors = [error, ...this.#discardFailedStart()];
+			const cleanupErrors = [error, ...await this.#discardFailedStart()];
 			this.#clearRunScopedState();
 			if (cleanupErrors.length > 1) {
 				throw new AggregateError(cleanupErrors, "Agent Run startup cleanup failed");
 			}
 			throw error;
 		} finally {
-			this.#starting = false;
-			this.#notifyStateChanged();
+			if (this.#starting) {
+				this.#starting = false;
+				this.#notifyStateChanged();
+			}
 		}
 	}
 
@@ -493,7 +497,9 @@ export class InProcessAgentHost {
 		void tracked.finally(() => this.#trackedOperations.delete(tracked));
 	}
 
-	releaseIfEligibleInLane(handle: AgentRunHandle): "released" | "retained" | "stale" {
+	async releaseIfEligibleInLane(
+		handle: AgentRunHandle,
+	): Promise<"released" | "retained" | "stale"> {
 		const run = this.#run;
 		if (!run || run.handle !== handle) return "stale";
 		if (this.#starting || this.#ending || !run.session.isIdle) return "retained";
@@ -508,17 +514,17 @@ export class InProcessAgentHost {
 		this.#ending = true;
 		this.#notifyStateChanged();
 		const cleanupErrors: unknown[] = [];
-		const attemptCleanup = (cleanup: () => void) => {
+		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
 			try {
-				cleanup();
+				await cleanup();
 			} catch (error) {
 				cleanupErrors.push(error);
 			}
 		};
 		try {
-			attemptCleanup(() => run.unsubscribe());
-			attemptCleanup(() => run.projection?.dispose());
-			attemptCleanup(() => run.session.dispose());
+			await attemptCleanup(() => run.unsubscribe());
+			await attemptCleanup(() => run.projection?.dispose());
+			await attemptCleanup(() => run.session.dispose());
 		} finally {
 			this.#run = undefined;
 			this.#clearRunScopedState();
@@ -595,26 +601,39 @@ export class InProcessAgentHost {
 		this.#heldNativeQueue = undefined;
 	}
 
-	#discardFailedStart(): unknown[] {
+	async #discardFailedStart(): Promise<unknown[]> {
 		const failedStart = this.#run;
 		if (!failedStart) return [];
 		const cleanupErrors: unknown[] = [];
+		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
+			try {
+				await cleanup();
+			} catch (error) {
+				cleanupErrors.push(error);
+			}
+		};
+		this.#runFenceHandler?.(failedStart.handle);
 		try {
-			failedStart.unsubscribe();
-		} catch (error) {
-			cleanupErrors.push(error);
+			// An initializing projection may already be the human's active view.
+			// Publish terminal failure before disposing it so presentation owners can
+			// atomically replace or close that exact attachment.
+			await attemptCleanup(() =>
+				this.#runEndingHandler?.(
+					failedStart.session,
+					failedStart.handle,
+					"failure",
+				)
+			);
+			await attemptCleanup(() => failedStart.unsubscribe());
+			await attemptCleanup(() => failedStart.projection?.dispose());
+			await attemptCleanup(() => failedStart.session.dispose());
+		} finally {
+			this.#run = undefined;
+			this.#clearRunScopedState();
+			this.#starting = false;
+			this.#notifyStateChanged();
+			this.#notifyEnded(failedStart.handle, "failure");
 		}
-		try {
-			failedStart.projection?.dispose();
-		} catch (error) {
-			cleanupErrors.push(error);
-		}
-		try {
-			failedStart.session.dispose();
-		} catch (error) {
-			cleanupErrors.push(error);
-		}
-		this.#run = undefined;
 		return cleanupErrors;
 	}
 

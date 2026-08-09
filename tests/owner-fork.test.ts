@@ -1,21 +1,17 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import test from "node:test";
 
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
-import {
-	type AgentSession,
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
 
 import piAgentCoordination from "../src/index.ts";
 import {
 	executeAndCommitRegisteredTool,
-	selectAgent,
+	openLiveAgentView,
 } from "./support/agent-session.ts";
 import {
 	bindTestOwnerHost,
@@ -24,30 +20,31 @@ import {
 	type TestOwnerHost,
 } from "./support/pi-host.ts";
 
-test("native clone is cancelled while an ordinary child is selected", async () => {
+const OWNER_FORK_WAIT_TIMEOUT_MS = 5_000;
+const OWNER_FORK_POLL_INTERVAL_MS = 1;
+
+test("native Owner clone closes an open Agent view and creates the replacement Workflow", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
 	try {
 		host.model.setResponses([
-			fauxAssistantMessage("The child remains available for native clone gating."),
+			fauxAssistantMessage("The child remains available while Owner clone begins."),
 		]);
-		const spawn = await executeTool(host, "agent_spawn", "spawn-clone-gated-child", {
-			request: "Remain available while native clone authorization is checked.",
+		const spawn = await executeTool(host, "agent_spawn", "spawn-clone-viewed-child", {
+			request: "Remain available while the Owner clones from behind the Agent view.",
 		});
 		const childAgentId = (spawn as { agentId: string }).agentId;
-		await selectAgent(host, childAgentId);
-		const selectedChild = host.runtime.session;
-		assert.equal(selectedChild.sessionId, childAgentId);
-		await selectedChild.waitForIdle();
-		const childSessionFile = selectedChild.sessionManager.getSessionFile();
-		assert.ok(childSessionFile);
-		assert.equal(existsSync(childSessionFile), true, childSessionFile);
-		const leafId = selectedChild.sessionManager.getLeafId();
+		const sourceOwner = host.runtime.session;
+		const opened = await openLiveAgentView(host, childAgentId);
+		assert.equal(host.runtime.session, sourceOwner);
+		const leafId = sourceOwner.sessionManager.getLeafId();
 		assert.ok(leafId);
 
 		const result = await host.runtime.fork(leafId, { position: "at" });
+		await opened.command;
 
-		assert.deepEqual(result, { cancelled: true });
-		assert.equal(host.runtime.session, selectedChild);
+		assert.deepEqual(result, { cancelled: false, selectedText: undefined });
+		assert.notEqual(host.runtime.session, sourceOwner);
+		assert.equal(host.ui.customSurfaces.length, 0);
 	} finally {
 		await host.runtime.dispose();
 	}
@@ -163,7 +160,16 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 	assert.ok(sourceFile);
 	try {
 		host.model.setResponses([
-			fauxAssistantMessage("The direct child is ready for nested coordination."),
+			fauxAssistantMessage(
+				fauxToolCall(
+					"agent_spawn",
+					{ request: "Remain as a nested source Agent." },
+					{ id: "spawn-source-nested-child" },
+				),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("The nested child is ready in the source Workflow."),
+			fauxAssistantMessage("The direct child completed nested coordination."),
 		]);
 		const directSpawn = await executeTool(
 			host,
@@ -172,27 +178,17 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			{ request: "Create a nested source Workflow for clone coverage." },
 		);
 		const directChildId = (directSpawn as { agentId: string }).agentId;
-		await selectAgent(host, directChildId);
-		const directChild = host.runtime.session;
-		await directChild.waitForIdle();
-
-		host.model.setResponses([
-			fauxAssistantMessage("The nested child is ready in the source Workflow."),
-		]);
-		const nestedSpawn = await executeTool(
+		const nestedChildId = await waitForOnlyChild(host, directChildId);
+		await waitForAgentTranscript(
 			host,
-			"agent_spawn",
-			"spawn-source-nested-child",
-			{ request: "Remain as a nested source Agent." },
+			directChildId,
+			"The direct child completed nested coordination.",
 		);
-		const nestedChildId = (nestedSpawn as { agentId: string }).agentId;
-		await selectAgent(host, nestedChildId);
-		const nestedChild = host.runtime.session;
-		await nestedChild.waitForIdle();
-		const directChildDisposals = countDisposals(directChild);
-		const nestedChildDisposals = countDisposals(nestedChild);
-
-		await selectAgent(host, sourceOwnerId);
+		await waitForAgentTranscript(
+			host,
+			nestedChildId,
+			"The nested child is ready in the source Workflow.",
+		);
 		assert.equal(host.runtime.session, sourceOwner);
 		host.model.setResponses([
 			fauxAssistantMessage("Keep the delivered Request unresolved in the source Workflow."),
@@ -208,14 +204,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			},
 		);
 		const sourceRequestId = (request as { requestId: string }).requestId;
-		await directChild.waitForIdle();
-		const delivered = await executeTool(
-			host,
-			"agent_message",
-			"poll-delivered-source-request-before-clone",
-			{ operation: "poll", messageId: sourceRequestId },
-		) as { disposition: string };
-		assert.equal(delivered.disposition, "delivered");
+		await waitForMessageDelivery(host, directChildId, sourceRequestId);
 		host.model.setResponses([
 			fauxAssistantMessage("Copied conversation remains useful model context."),
 		]);
@@ -228,8 +217,6 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 		const clone = await host.runtime.fork(sourceLeafId, { position: "at" });
 
 		assert.deepEqual(clone, { cancelled: false, selectedText: undefined });
-		assert.equal(directChildDisposals(), 1);
-		assert.equal(nestedChildDisposals(), 1);
 		assert.deepEqual(sourceOwner.sessionManager.getEntries(), sourceEntries);
 		const forkOwner = host.runtime.session;
 		assert.notEqual(forkOwner.sessionId, sourceOwnerId);
@@ -339,9 +326,12 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 			{ request: "Remain available in the source Workflow after its Owner forks." },
 		);
 		const sourceChildId = (spawn as { agentId: string }).agentId;
-		await selectAgent(host, sourceChildId);
-		await host.runtime.session.waitForIdle();
-		await selectAgent(host, sourceOwnerId);
+		await waitForAgentTranscript(
+			host,
+			sourceChildId,
+			"The source child is durable across branch selection.",
+		);
+		assert.equal(host.runtime.session, sourceOwner);
 
 		const sourceIdentity = sourceOwner.sessionManager.getEntries().find(
 			(entry) =>
@@ -431,14 +421,79 @@ async function executeTool(
 	return result.details;
 }
 
-function countDisposals(session: AgentSession): () => number {
-	const nativeDispose = session.dispose.bind(session);
-	let calls = 0;
-	session.dispose = () => {
-		calls += 1;
-		nativeDispose();
-	};
-	return () => calls;
+async function waitForOnlyChild(
+	host: TestOwnerHost,
+	agentId: string,
+): Promise<string> {
+	const deadline = Date.now() + OWNER_FORK_WAIT_TIMEOUT_MS;
+	let attempt = 0;
+	while (Date.now() < deadline) {
+		const observe = host.session.getToolDefinition("agent_observe");
+		assert.ok(observe);
+		const result = await observe.execute(
+			`wait-for-nested-child-${attempt}`,
+			{ operation: "children", agentId },
+			undefined,
+			undefined,
+			host.session.extensionRunner.createContext(),
+		);
+		const children = (result.details as { children: Array<{ agentId: string }> }).children;
+		if (children.length === 1) return children[0]!.agentId;
+		attempt += 1;
+		await waitForOwnerForkPoll();
+	}
+	throw new Error(`Agent ${agentId} did not create one nested child`);
+}
+
+async function waitForAgentTranscript(
+	host: TestOwnerHost,
+	agentId: string,
+	expected: string,
+): Promise<void> {
+	const deadline = Date.now() + OWNER_FORK_WAIT_TIMEOUT_MS;
+	let attempt = 0;
+	while (Date.now() < deadline) {
+		const observe = host.session.getToolDefinition("agent_observe");
+		assert.ok(observe);
+		const result = await observe.execute(
+			`wait-for-agent-transcript-${agentId}-${attempt}`,
+			{ operation: "status", agentId },
+			undefined,
+			undefined,
+			host.session.extensionRunner.createContext(),
+		);
+		const transcriptPath = (result.details as {
+			primaryEvidence: { transcriptPath: string | null };
+		}).primaryEvidence.transcriptPath;
+		if (
+			transcriptPath &&
+			JSON.stringify(SessionManager.open(transcriptPath).getEntries()).includes(expected)
+		) return;
+		attempt += 1;
+		await waitForOwnerForkPoll();
+	}
+	throw new Error(`Agent ${agentId} transcript did not include ${expected}`);
+}
+
+async function waitForOwnerForkPoll(): Promise<void> {
+	await new Promise<void>((resolve) =>
+		setTimeout(resolve, OWNER_FORK_POLL_INTERVAL_MS)
+	);
+}
+
+async function waitForMessageDelivery(
+	host: TestOwnerHost,
+	targetAgentId: string,
+	messageId: string,
+): Promise<void> {
+	await waitForAgentTranscript(host, targetAgentId, messageId);
+	const delivered = await executeTool(
+		host,
+		"agent_message",
+		"poll-delivered-source-request-before-clone",
+		{ operation: "poll", messageId },
+	) as { disposition: string };
+	assert.equal(delivered.disposition, "delivered");
 }
 
 async function assertSourceIdentityIsUnavailable(

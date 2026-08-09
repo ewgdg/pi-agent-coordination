@@ -144,6 +144,45 @@ test("a short terminal keeps both frame edges inside Pi's overlay height", async
 	assert.equal(await selection, undefined);
 });
 
+test("Agent selection keeps the selector focused until view preparation completes", async () => {
+	const harness = surfaceHarness(24);
+	let releasePreparation!: () => void;
+	const preparation = new Promise<void>((resolve) => {
+		releasePreparation = resolve;
+	});
+	let preparedAgentId: string | undefined;
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [
+			agentStatus("owner", "Owner", null),
+			agentStatus("agent", "Agent", "owner"),
+		],
+		dormant: [],
+		selectedAgentId: "agent",
+		async prepareSelection(action) {
+			assert.equal(action.kind, "select_agent");
+			if (action.kind !== "select_agent") return;
+			preparedAgentId = action.agentId;
+			await preparation;
+		},
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+
+	harness.component.handleInput?.("\r");
+	await Promise.resolve();
+	assert.equal(preparedAgentId, "agent");
+	assert.equal(harness.resolved, false);
+	// Input remains captured by the selector during the asynchronous handoff.
+	harness.component.handleInput?.("escape");
+	assert.equal(harness.resolved, false);
+
+	releasePreparation();
+	assert.deepEqual(await selection, {
+		kind: "select_agent",
+		agentId: "agent",
+	});
+});
+
 test("Live and Dormant are explicit keyboard-accessible tabs", async () => {
 	const harness = surfaceHarness(30);
 	const selection = openAgentSelectorSurface(harness.ui, {

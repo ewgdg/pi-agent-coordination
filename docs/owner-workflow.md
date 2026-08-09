@@ -27,13 +27,13 @@ After Owner Identity validation, the package binds the ordinary tools through a 
 - `ask_user_question` blocks the caller's exact Run on one or more structured Questions. Its matching successful native tool result is the sole Human Answer.
 - `agent_observe` returns an authorized Agent's durable identity, structural relationship, bounded primary transcript evidence, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
 - `agent_control` interrupts, explicitly resumes, or terminates one authorized exact child Run.
-- `/agents` opens the framed [Agent selector](agent-selector.md), with Owner-only Human and Operational attention plus separate Live and Dormant Agent views.
+- `/agents` opens the framed [Agent selector and full-window view](agent-selector.md), with Owner-only Human and Operational attention plus Live and Dormant Agent rosters.
 
-These projections are read-only. Pi remains authoritative for the transcript, editor, history, queued input, tool rendering, and footer. A selected non-Owner Agent's label, compact identity, and concise Run state use Pi's native extension-status footer slot; Owner selection clears it.
+Agent views attach a selected Agent's complete Pi mode and forward input through that mode's native terminal path. The selected Agent retains its transcript, editor, footer, widgets, commands, shortcuts, and extension UI while the Owner's native transcript, editor, history, queued input, services, diagnostics, footer, and extension context stay mounted and continuously bound underneath. `/agents` switches the durable attachment or returns to the exact Owner presentation without native runtime rebinding.
 
 Coordination roles are trusted protocol participants, not a security boundary. Role-scoped tools constrain the intended workflow and keep caller identity out of model-supplied arguments; they do not isolate mutually hostile code or users.
 
-See [Human Requests](human-requests.md) for the Question and Answer shapes, interaction keys, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and session selection.
+See [Human Requests](human-requests.md) for the Question and Answer shapes, interaction keys, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and Agent-view retention.
 
 ## Activation modes
 
@@ -43,7 +43,7 @@ Coordination activates only when Pi reports interactive TUI mode with UI support
 
 Compatibility is determined jointly by the running Pi host's integration shape and native behavioral conformance. Before bootstrapping a Workflow, the package verifies the required runtime, interactive-mode, session, transcript, resource, extension, TUI, schema, and disposal seams from host-provided peer modules. A missing or malformed seam is reported by its canonical member name, and incompatible startup appends no Owner Identity or partial runtime.
 
-The conformance gate then exercises transcript ordering and branches, model-visible Delivery, sequential Human Questions, retained-session rebinding and input, viewport reconstruction, role-bound extensions, and coordinated disposal against the concrete installed Pi graph. Run it with `npm run test:conformance`; `npm test` remains the complete regression gate.
+The conformance gate then exercises transcript ordering and branches, model-visible Delivery, sequential Human Questions, Pi-native Agent projections, full-window Owner-preserving views, role-bound extensions, and coordinated disposal against the concrete installed Pi graph. Run it with `npm run test:conformance`; `npm test` remains the complete regression gate.
 
 Pi's version is diagnostic information, not an allowlist. Package builds use a pinned Pi development cohort only to make conformance tests reproducible; installed Pi packages are runtime peers supplied by the host.
 
@@ -51,8 +51,8 @@ Pi's version is diagnostic information, not an allowlist. Package builds use a p
 
 Pi transcripts are the durable authority for Agent identity, authored Messages and Requests, committed Deliveries and Answers, and recovery evidence. Agent Templates and Workflow Policy are resolved from current trusted resources; policy reload publishes complete snapshots but does not write them to transcripts.
 
-Delivery scheduling, execution permits, Human Request surfaces and drafts, Operational Attention, exact Run handles, Holds, and native selected-session state are volatile and bounded where their owning feature specifies a limit. They are not replayed as durable work after process loss. Polling, explicit retry, and transcript-based cold recovery are the supported recovery paths.
+Delivery scheduling, execution permits, Human Request surfaces and drafts, Operational Attention, exact Run handles, Holds, and the open Agent-view attachment are volatile and bounded where their owning feature specifies a limit. They are not replayed as durable work after process loss. Polling, explicit retry, and transcript-based cold recovery are the supported recovery paths.
 
 ## Shutdown
 
-Orderly Pi shutdown fences spawn, Run-control, Human Request, Moderator, and delivery admission; closes pending Human and Operational Attention UI; and clears review timers and volatile scheduling. For native disposal, coordinated teardown restores only the Owner runtime state; it does not reactivate interactive selection or render UI being stopped. It then exhaustively ends every retained ordinary child and Moderator before ending the Owner through one memoized native runtime path. Cleanup continues after individual failures and reports them together. Every selected or retained session is disposed exactly once, including during Owner `/new`, `/resume`, fork, and clone replacement. Abrupt process loss records no graceful-end claim.
+Orderly Pi shutdown fences spawn, Run-control, Human Request, Moderator, and delivery admission; closes pending Human and Operational Attention UI plus any open Agent view; and clears review timers and volatile scheduling. It then exhaustively ends every retained ordinary child and Moderator before ending the continuously bound Owner through one memoized native runtime path. Cleanup continues after individual failures and reports them together. Every live projection and retained session is disposed exactly once, including during Owner `/new`, `/resume`, fork, and clone replacement. Abrupt process loss records no graceful-end claim.

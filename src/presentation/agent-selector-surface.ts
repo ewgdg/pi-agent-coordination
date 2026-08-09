@@ -56,6 +56,8 @@ export type AgentSelectorOptions = Readonly<{
 	selectedAgentId: string;
 	humanAttention?: readonly HumanAttentionItem[];
 	operationalAttention?: readonly OperationalIncidentAttention[];
+	prepareSelection?(action: AgentSelectorAction): Promise<void> | void;
+	onSelectionError?(error: unknown): void;
 }>;
 
 type AgentSelectorItem = SelectItem & Readonly<{
@@ -96,6 +98,7 @@ class AgentSelectorSurface implements Component {
 	#selectedIndex = 0;
 	#visibleRows = 1;
 	#list: SelectList;
+	#selectionPending = false;
 
 	constructor(
 		tui: TUI,
@@ -126,6 +129,7 @@ class AgentSelectorSurface implements Component {
 	}
 
 	handleInput(data: string): void {
+		if (this.#selectionPending) return;
 		if (matchesKey(data, Key.escape)) {
 			this.#done(undefined);
 			return;
@@ -230,13 +234,27 @@ class AgentSelectorSurface implements Component {
 		list.onSelect = ({ value }) => {
 			const selected = this.#items.find((item) => item.value === value);
 			if (!selected || selected.kind === "attention") return;
-			this.#done(selected.action ?? {
+			void this.#completeSelection(selected.action ?? {
 				kind: "select_agent",
 				agentId: value,
 			});
 		};
 		list.onCancel = () => this.#done(undefined);
 		return list;
+	}
+
+	async #completeSelection(action: AgentSelectorAction): Promise<void> {
+		if (this.#selectionPending) return;
+		this.#selectionPending = true;
+		try {
+			const preparation = this.#options.prepareSelection?.(action);
+			if (preparation) await preparation;
+			this.#done(action);
+		} catch (error) {
+			this.#selectionPending = false;
+			this.#options.onSelectionError?.(error);
+			this.#tui.requestRender();
+		}
 	}
 
 	#maximumOverlayRows(): number {
@@ -255,8 +273,14 @@ class AgentSelectorSurface implements Component {
 			this.#agentItem(owner, "owner"),
 			...this.#options.live
 				.filter((status) =>
-					status.directSpawnerAgentId === this.#scopeAgentId &&
-					status.agentId !== owner.agentId
+					status.agentId !== owner.agentId &&
+					(
+						status.directSpawnerAgentId === this.#scopeAgentId ||
+						(
+							this.#scopeAgentId === owner.agentId &&
+							status.directSpawnerAgentId === null
+						)
+					)
 				)
 				.map((status) => this.#agentItem(status)),
 		];

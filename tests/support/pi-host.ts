@@ -81,6 +81,7 @@ export type TestOwnerHostOptions = {
 	agentDir?: string;
 	sessionFile?: string;
 	implicitModeratorResponses?: boolean;
+	fauxTokensPerSecond?: number;
 	settings?: Parameters<typeof SettingsManager.inMemory>[0];
 };
 
@@ -101,7 +102,10 @@ export async function createPiCliTestOwnerHost(
 		extension,
 		options,
 		await loadPiBuiltInExtensionFactories(),
-		true,
+		// Avoid an unrelated public-catalog refresh during local-provider conformance.
+		// The runtime remains network-enabled, so the named provider can explicitly
+		// refresh and infer against the test's loopback router.
+		false,
 	);
 	await bindTestOwnerHost(host, "tui");
 	return host;
@@ -128,6 +132,7 @@ async function createUnboundTestOwnerHostWithRuntime(
 	const { modelRuntime, faux } = await createTestModelRuntime({
 		implicitModeratorResponses: options?.implicitModeratorResponses ?? true,
 		allowModelNetwork,
+		fauxTokensPerSecond: options?.fauxTokensPerSecond,
 	});
 	const sessionManager = options?.sessionFile
 		? SessionManager.open(options.sessionFile)
@@ -228,13 +233,26 @@ export async function bindTestOwnerHost(
 async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
 	type InteractiveBindingHarness = {
 		runtimeHost: AgentSessionRuntime;
-		ui: { requestRender(): void };
+		ui: {
+			inputListeners: Set<unknown>;
+			addInputListener(listener: unknown): () => void;
+			invalidate(): void;
+			requestRender(): void;
+		};
+		renderer: {
+			terminal: {
+				columns: number;
+				rows: number;
+				kittyProtocolActive: boolean;
+			};
+		};
 		createExtensionUIContext(): ExtensionUIContext;
 		setupAutocompleteProvider(): void;
 		setupExtensionShortcuts(): void;
 		showLoadedResources(): void;
 		showStartupNoticesIfNeeded(): void;
 		showExtensionError(_extensionPath: string, error: string): void;
+		updateEditorBorderColor(): void;
 	};
 	type InteractiveBindingPrototype = {
 		bindCurrentSessionExtensions(this: InteractiveBindingHarness): Promise<void>;
@@ -242,14 +260,31 @@ async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
 
 	// Exercise Pi's real TUI-only binding seam without starting a terminal. The
 	// post-bind rendering hooks are irrelevant to extension startup in this harness.
+	const inputListeners = new Set<unknown>();
 	const interactiveMode = Object.assign(Object.create(InteractiveMode.prototype), {
 		runtimeHost: host.runtime,
-		ui: { requestRender() {} },
+		ui: {
+			inputListeners,
+			addInputListener(listener: unknown) {
+				inputListeners.add(listener);
+				return () => { inputListeners.delete(listener); };
+			},
+			invalidate() {},
+			requestRender() {},
+		},
+		renderer: {
+			terminal: {
+				columns: 80,
+				rows: 24,
+				kittyProtocolActive: false,
+			},
+		},
 		createExtensionUIContext: () => host.ui,
 		setupAutocompleteProvider() {},
 		setupExtensionShortcuts() {},
 		showLoadedResources() {},
 		showStartupNoticesIfNeeded() {},
+		updateEditorBorderColor() {},
 		showExtensionError(_extensionPath: string, error: string) {
 			host.ui.notify(error, "error");
 		},
@@ -270,8 +305,15 @@ function createTestUi(): TestUi {
 	const widgets: TestUi["widgets"] = new Map();
 	let editorComponent: ReturnType<ExtensionUIContext["getEditorComponent"]>;
 	let editorText = "";
+	const inputListeners = new Set<unknown>();
 	const testTui = {
-		terminal: { columns: 80, rows: 24 },
+		mode: "regular",
+		terminal: { columns: 80, rows: 24, write() {} },
+		inputListeners,
+		addInputListener(listener: unknown) {
+			inputListeners.add(listener);
+			return () => { inputListeners.delete(listener); };
+		},
 		requestRender() {},
 	} as unknown as TUI;
 	const testTheme = {
@@ -312,7 +354,10 @@ function createTestUi(): TestUi {
 			).then((created) => {
 				component = created;
 				customSurfaces.push(created);
-				options?.onHandle?.(createTestOverlayHandle());
+				options?.onHandle?.(createTestOverlayHandle(() => {
+					const index = customSurfaces.indexOf(created);
+					if (index >= 0) customSurfaces.splice(index, 1);
+				}));
 			}, reject);
 		});
 	};
@@ -374,13 +419,15 @@ function createTestUi(): TestUi {
 	} as unknown as TestUi;
 }
 
-function createTestOverlayHandle(): OverlayHandle {
+function createTestOverlayHandle(onHide?: () => void): OverlayHandle {
 	let hidden = false;
 	let focused = true;
 	return {
 		hide() {
+			if (hidden) return;
 			hidden = true;
 			focused = false;
+			onHide?.();
 		},
 		setHidden(value) {
 			hidden = value;
@@ -404,6 +451,7 @@ function createTestOverlayHandle(): OverlayHandle {
 async function createTestModelRuntime(options: {
 	implicitModeratorResponses: boolean;
 	allowModelNetwork: boolean;
+	fauxTokensPerSecond?: number;
 }): Promise<{
 	modelRuntime: ModelRuntime;
 	faux: { setResponses(responses: FauxResponseStep[]): void };
@@ -415,6 +463,7 @@ async function createTestModelRuntime(options: {
 	const faux = createFauxCore({
 		api: PROVIDER_ID,
 		provider: PROVIDER_ID,
+		tokensPerSecond: options.fauxTokensPerSecond,
 		models: [
 			{
 				id: MODEL_ID,

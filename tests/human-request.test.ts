@@ -528,11 +528,19 @@ test("two Agents wait independently while Steer follows Answer commit and Deferr
 		view.humanAttention().map(({ agentId }) => agentId).sort(),
 		[first.agentId, second.agentId].sort(),
 	);
+	const detachedAgentView = await view.openAgentView(first.agentId);
+	assert.ok(detachedAgentView);
 	const childAgentsCommand = first.session.prompt("/agents");
-	await childAgentsCommand;
-	// A backgrounded child's command surface stays in its own detached context;
+	await waitForCondition(() =>
+		detachedAgentView.projection().presentation.render(80).join("\n")
+			.includes("Tab views")
+	);
+	// A backgrounded child's command surface stays in its own detached mode;
 	// it must not open a modal in the Owner's TUI (#59).
 	assert.equal(host.ui.customSurfaces.length, 0);
+	detachedAgentView.projection().dispatchInput("\x1b");
+	await childAgentsCommand;
+	await detachedAgentView.close();
 	const agentsCommand = host.session.prompt("/agents");
 	await waitForCondition(() => host.ui.customSurfaces.length === 1);
 	assert.deepEqual(host.ui.genericSelectCalls, []);

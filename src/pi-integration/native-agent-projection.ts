@@ -13,12 +13,15 @@ import {
 	type Component,
 	type KeybindingsManager,
 	type Terminal,
+	type TUI,
+	type TuiInputListener,
 } from "@earendil-works/pi-tui";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
 	assertProjectionInteractiveModeInstanceShape,
+	assertPrioritizedTuiInputListenerShape,
 	IncompatiblePiHostError,
 } from "./host-shape.ts";
 
@@ -31,9 +34,14 @@ type ProjectionKind = "live" | "dormant";
 export type PiNativeAgentProjection = Readonly<{
 	kind: ProjectionKind;
 	sessionId: string;
-	transcript: Component;
-	runStatus: Component;
-	dispose(): void;
+	presentation: Component;
+	resize(columns: number, rows: number): void;
+	dispatchInput(data: string): void;
+	addChangeHandler(handler: () => void): () => void;
+	addFailureHandler(handler: (error: unknown) => void): () => void;
+	addExitRequestHandler(handler: () => void): () => void;
+	ready(): Promise<void>;
+	dispose(): Promise<void>;
 }>;
 
 export type PiNativeProjectionHost = Readonly<{
@@ -41,29 +49,61 @@ export type PiNativeProjectionHost = Readonly<{
 		kind: ProjectionKind;
 		session: AgentSession;
 		services: AgentSessionServices;
+		exposeWhileInitializing?: boolean;
 	}): Promise<PiNativeAgentProjection>;
 }>;
 
 type ProjectionInteractiveMode = {
-	renderer: { terminal: Terminal };
-	chatContainer: Component;
-	statusContainer: Component;
-	footerDataProvider: { dispose(): void };
+	defaultEditor: ProjectionEditor;
+	editor: ProjectionEditor;
+	footerDataProvider: {
+		setupGitWatcher(): void;
+	};
+	renderer: TUI & {
+		compositeOverlays(
+			lines: string[],
+			termWidth: number,
+			termHeight: number,
+		): string[];
+		previousScreen: string[];
+		doRender(): void;
+		renderNow(force?: boolean): void;
+	};
 	isInitialized: boolean;
-	renderInitialMessages(): void;
-	subscribeToAgent(): void;
+	init(): Promise<void>;
+	getUserInput(): Promise<string>;
+	handleFatalRuntimeError(prefix: string, error: unknown): Promise<void>;
+	registerSignalHandlers(): void;
+	resetExtensionUI(): void;
+	shutdownRequested: boolean;
+	shutdown(): Promise<void>;
+	showError(message: string): void;
 	stop(): void;
+	unregisterSignalHandlers(): void;
 	themeController: {
 		activeThemeName?: string;
+		applyFromSettings(): Promise<void>;
 		terminalColorSchemeUnsubscribe?: () => void;
 	};
 };
 
+type ProjectionEditor = {
+	onSubmit?: (text: string) => void | Promise<void>;
+	setText(text: string): void;
+};
+
 type ThemeInternals = {
+	onThemeChange(callback: () => void): void;
 	setRegisteredThemes(themes: readonly unknown[]): void;
 	setThemeInstance(theme: unknown): void;
 	stopThemeWatcher(): void;
 };
+
+type FooterDataProviderConstructor = Function & Readonly<{
+	prototype: {
+		setupGitWatcher(): void;
+	};
+}>;
 
 type GlobalPresentationSnapshot = {
 	keybindings: KeybindingsManager;
@@ -71,77 +111,309 @@ type GlobalPresentationSnapshot = {
 	activeThemeName: string | undefined;
 };
 
+type ProjectionTerminalState = Readonly<{
+	columns: number;
+	rows: number;
+	kittyProtocolActive: boolean;
+}>;
+
 let themeInternalsPromise: Promise<ThemeInternals> | undefined;
+let footerDataProviderConstructorPromise: Promise<FooterDataProviderConstructor> | undefined;
+let projectionInitializationTail = Promise.resolve();
+
+export function addPrioritizedTuiInputListener(
+	tui: TUI,
+	listener: TuiInputListener,
+): () => void {
+	assertPrioritizedTuiInputListenerShape(tui, VERSION);
+	const listeners = tui.inputListeners as Set<TuiInputListener>;
+	const removeListener = tui.addInputListener(listener);
+	if (!listeners.delete(listener)) {
+		removeListener();
+		throw new IncompatiblePiHostError("TUI.inputListeners registration", VERSION);
+	}
+	const existingListeners = [...listeners];
+	listeners.clear();
+	listeners.add(listener);
+	for (const existingListener of existingListeners) {
+		listeners.add(existingListener);
+	}
+	let removed = false;
+	return () => {
+		if (removed) return;
+		removed = true;
+		removeListener();
+		listeners.delete(listener);
+	};
+}
 
 export function createPiNativeProjectionHost(options: {
 	ownerRuntime: AgentSessionRuntime;
 	ownerInteractiveMode?: unknown;
 }): PiNativeProjectionHost {
-	// Interactive Selection can temporarily rebind the runtime's mutable services;
-	// projection construction always restores the actual Owner resource world.
+	// InteractiveMode construction mutates process-global presentation state;
+	// every projection restores the continuously bound Owner resource world.
 	const ownerServices = options.ownerRuntime.services;
+	const terminalState = createProjectionTerminalStateReader(
+		options.ownerInteractiveMode,
+	);
 	return Object.freeze({
-		createProjection: async ({ kind, session, services }) => {
-			if (kind === "dormant") assertDormantSession(session);
-			const themeInternals = await loadThemeInternals();
-			const globalSnapshot = captureGlobalPresentation(
-				options.ownerInteractiveMode,
-			);
-			const projectionRuntime = new AgentSessionRuntime(
-				session,
-				services,
-				async () => {
-					throw new Error("Presentation projection cannot replace its exact session");
-				},
-				services.diagnostics,
-			);
-			let mode: ProjectionInteractiveMode | undefined;
-			try {
-				mode = new InteractiveMode(projectionRuntime, {
-					migratedProviders: [],
-					initialImages: [],
-					initialMessages: [],
-					verbose: false,
-				}) as unknown as ProjectionInteractiveMode;
-				restoreGlobalPresentation(
-					globalSnapshot,
-					themeInternals,
-					ownerServices,
+		createProjection: ({ kind, session, services, exposeWhileInitializing }) => {
+			let publish!: (projection: PiNativeAgentProjection) => void;
+			let rejectPublication!: (error: unknown) => void;
+			const publication = new Promise<PiNativeAgentProjection>((resolve, reject) => {
+				publish = resolve;
+				rejectPublication = reject;
+			});
+			let published = false;
+			void serializeProjectionInitialization(async () => {
+				if (kind === "dormant") assertDormantSession(session);
+				const [themeInternals, FooterDataProvider] = await Promise.all([
+					loadThemeInternals(),
+					loadFooterDataProviderConstructor(),
+				]);
+				const globalSnapshot = captureGlobalPresentation(
+					options.ownerInteractiveMode,
 				);
-				assertProjectionInteractiveModeInstanceShape(mode);
-				// Keep Pi's concrete renderer allocation, but detach its process terminal
-				// before any Run event can write progress, title, or frame output.
-				mode.renderer.terminal = new ProjectionTerminal();
-				// Transcript and Run-status projection does not expose Pi's footer. Close
-				// its per-mode git watcher now; the allocated provider remains mode-owned
-				// and its native disposal is idempotent.
-				mode.footerDataProvider.dispose();
-				// Native event handling lazily calls init(). Projection presentation owns
-				// no terminal input loop, so mark the fully constructed detached mode ready
-				// before subscribing and reconstructing its durable transcript.
-				mode.isInitialized = true;
-				mode.renderInitialMessages();
-				mode.subscribeToAgent();
-				return createProjectionResource(kind, session.sessionId, mode, projectionRuntime);
-			} catch (error) {
+				const projectionRuntime = new AgentSessionRuntime(
+					session,
+					services,
+					async () => {
+						throw new Error("Presentation projection cannot replace its exact session");
+					},
+					services.diagnostics,
+				);
+				let mode: ProjectionInteractiveMode | undefined;
+				let initialPresentationApplied = false;
+				let resolveReady!: () => void;
+				let rejectReady!: (error: unknown) => void;
+				const ready = new Promise<void>((resolve, reject) => {
+					resolveReady = resolve;
+					rejectReady = reject;
+				});
+				void ready.catch(() => undefined);
 				try {
+					const restoreFooterWatcherConstruction = suppressFooterWatcherConstruction(
+						FooterDataProvider,
+					);
+					try {
+						// Pi currently starts the footer's git watcher before its constructor's
+						// final fallible theme/resource work. Defer that watcher until the whole
+						// mode is reachable so every later failure can use normal mode disposal.
+						mode = new InteractiveMode(projectionRuntime, {
+							migratedProviders: [],
+							initialImages: [],
+							initialMessages: [],
+							verbose: false,
+							tuiMode: "fullscreen",
+						}) as unknown as ProjectionInteractiveMode;
+					} finally {
+						restoreFooterWatcherConstruction();
+					}
+					const changes = new ProjectionChanges();
+					const failures = new ProjectionFailures();
+					const exitRequests = new ProjectionExitRequests();
+					let renderFailure: Readonly<{ error: unknown }> | undefined;
+					const terminal = new ProjectionTerminal(terminalState);
+					// Detach before structural validation: compatibility cleanup invokes native
+					// UI reset/stop paths that must never write through ProcessTerminal.
+					mode.renderer.terminal = terminal;
+					assertProjectionInteractiveModeInstanceShape(mode);
+					mode.footerDataProvider.setupGitWatcher();
+					// Construction installs the child's process-global theme resources and
+					// keybindings. Restore the continuously bound Owner before initialization;
+					// the child retains its own managers through direct instance references.
 					restoreGlobalPresentation(
 						globalSnapshot,
 						themeInternals,
 						ownerServices,
+						options.ownerInteractiveMode,
 					);
-				} catch (restoreError) {
-					if (mode) disposeMode(mode, projectionRuntime);
-					throw new AggregateError(
-						[error, restoreError],
-						"Pi-native projection construction and Owner presentation restoration failed",
+					const applyProjectionPresentation =
+						mode.themeController.applyFromSettings.bind(mode.themeController);
+					mode.themeController.applyFromSettings = async () => {
+						try {
+							await applyProjectionPresentation();
+						} finally {
+							// applyFromSettings is Pi's last incidental theme application before
+							// session_start. Restore here so explicit extension or Owner changes
+							// made during session_start remain Workflow-global.
+							restoreGlobalPresentation(
+								globalSnapshot,
+								themeInternals,
+								ownerServices,
+								options.ownerInteractiveMode,
+							);
+							initialPresentationApplied = true;
+						}
+					};
+					installEmbeddedRenderFailurePolicy(mode, (error) => {
+						renderFailure ??= { error };
+						failures.notify(error);
+					});
+					installEmbeddedLifecyclePolicy(mode, () => exitRequests.notify());
+					// Keep the child renderer's own layout loop active against the inert
+					// terminal, then notify any attached Owner overlay from the same native
+					// render signal. Replacing the render loop would lose fullscreen layout.
+					const requestNativeRender = mode.renderer.requestRender.bind(mode.renderer);
+					mode.renderer.requestRender = (force) => {
+						requestNativeRender(force);
+						changes.notify();
+					};
+					const resource = createProjectionResource(
+						kind,
+						session.sessionId,
+						mode,
+						projectionRuntime,
+						terminal,
+						changes,
+						failures,
+						exitRequests,
+						ready,
+						() => mode!.isInitialized,
+						() => renderFailure,
 					);
+					if (exposeWhileInitializing) {
+						published = true;
+						publish(resource);
+					}
+					await mode.init();
+					if (kind === "dormant") installDormantSubmissionPolicy(mode);
+					// Validate one complete frame before model admission. The renderer's own
+					// scheduled loop is guarded below, so asynchronous component failures are
+					// retained and become exact Run startup failure rather than process failure.
+					mode.renderer.renderNow(true);
+					if (renderFailure) throw renderFailure.error;
+					restoreOwnerPresentationOwnership(
+						themeInternals,
+						ownerServices,
+						options.ownerInteractiveMode,
+					);
+					resource.setInputLoop(startProjectionInputLoop(
+						mode,
+						session,
+						(error) => failures.notify(error),
+					));
+					resolveReady();
+					if (!published) {
+						published = true;
+						publish(resource);
+					}
+				} catch (error) {
+					if (!mode) {
+						projectionRuntime.setBeforeSessionInvalidate(undefined);
+						projectionRuntime.setRebindSession(undefined);
+					}
+					try {
+						if (initialPresentationApplied) {
+							restoreOwnerPresentationOwnership(
+								themeInternals,
+								ownerServices,
+								options.ownerInteractiveMode,
+							);
+						} else {
+							restoreGlobalPresentation(
+								globalSnapshot,
+								themeInternals,
+								ownerServices,
+								options.ownerInteractiveMode,
+							);
+						}
+					} catch (restoreError) {
+						const aggregate = new AggregateError(
+							[error, restoreError],
+							"Pi-native projection construction and Owner presentation restoration failed",
+						);
+						if (published) rejectReady(aggregate);
+						else {
+							if (mode) await disposeMode(mode, projectionRuntime);
+							rejectPublication(aggregate);
+						}
+						return;
+					}
+					if (published) rejectReady(error);
+					else {
+						if (mode) await disposeMode(mode, projectionRuntime);
+						rejectPublication(error);
+					}
 				}
-				if (mode) disposeMode(mode, projectionRuntime);
-				throw error;
-			}
+			}).catch(rejectPublication);
+			return publication;
 		},
 	});
+}
+
+async function serializeProjectionInitialization<T>(
+	operation: () => Promise<T>,
+): Promise<T> {
+	const previous = projectionInitializationTail;
+	let release!: () => void;
+	projectionInitializationTail = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	await previous;
+	try {
+		return await operation();
+	} finally {
+		release();
+	}
+}
+
+function installEmbeddedLifecyclePolicy(
+	mode: ProjectionInteractiveMode,
+	requestOwnerShutdown: () => void,
+): void {
+	// Embedded modes are Run-owned components, not process owners. Pi's normal
+	// signal and shutdown paths call process.exit() and dispose the runtime.
+	mode.registerSignalHandlers = () => undefined;
+	mode.unregisterSignalHandlers = () => undefined;
+	mode.shutdown = async () => {
+		mode.shutdownRequested = false;
+		requestOwnerShutdown();
+	};
+	mode.handleFatalRuntimeError = async (prefix, error) => {
+		mode.showError(
+			`${prefix}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	};
+}
+
+function installEmbeddedRenderFailurePolicy(
+	mode: ProjectionInteractiveMode,
+	reportFailure: (error: unknown) => void,
+): void {
+	const nativeRender = mode.renderer.doRender.bind(mode.renderer);
+	mode.renderer.doRender = () => {
+		try {
+			nativeRender();
+		} catch (error) {
+			reportFailure(error);
+		}
+	};
+}
+
+function installDormantSubmissionPolicy(mode: ProjectionInteractiveMode): void {
+	const nativeSubmit = mode.defaultEditor.onSubmit;
+	if (typeof nativeSubmit !== "function") {
+		throw new IncompatiblePiHostError("InteractiveMode.defaultEditor.onSubmit", VERSION);
+	}
+	const submit = async (text: string) => {
+		const normalized = text.trim();
+		if (normalized === "/agents" || normalized === "/quit") {
+			await nativeSubmit(normalized);
+			return;
+		}
+		if (normalized.startsWith("/") || normalized.startsWith("!")) {
+			mode.editor.setText("");
+			mode.showError(
+				"Start the Agent with a message before running commands in a Dormant view.",
+			);
+			return;
+		}
+		await nativeSubmit(text);
+	};
+	mode.defaultEditor.onSubmit = submit;
+	mode.editor.onSubmit = submit;
 }
 
 function createProjectionResource(
@@ -149,25 +421,123 @@ function createProjectionResource(
 	sessionId: string,
 	mode: ProjectionInteractiveMode,
 	runtime: AgentSessionRuntime,
-): PiNativeAgentProjection {
-	let disposed = false;
+	terminal: ProjectionTerminal,
+	changes: ProjectionChanges,
+	failures: ProjectionFailures,
+	exitRequests: ProjectionExitRequests,
+	ready: Promise<void>,
+	isInitialized: () => boolean,
+	readRenderFailure: () => Readonly<{ error: unknown }> | undefined,
+): PiNativeAgentProjection & { setInputLoop(loop: ProjectionInputLoop): void } {
+	let disposal: Promise<void> | undefined;
+	let inputLoop: ProjectionInputLoop | undefined;
 	return Object.freeze({
 		kind,
 		sessionId,
-		transcript: mode.chatContainer,
-		runStatus: mode.statusContainer,
+		presentation: {
+			render(width) {
+				terminal.resize(width, terminal.rows);
+				if (!isInitialized()) return ["Initializing Agent UI…"];
+				mode.renderer.renderNow(true);
+				const renderFailure = readRenderFailure();
+				if (renderFailure) throw renderFailure.error;
+				return [...mode.renderer.previousScreen];
+			},
+			invalidate: () => mode.renderer.invalidate(),
+		},
+		resize: (columns, rows) => terminal.resize(columns, rows),
+		dispatchInput: (data) => terminal.dispatchInput(data),
+		addChangeHandler: (handler) => changes.addHandler(handler),
+		addFailureHandler: (handler) => failures.addHandler(handler),
+		addExitRequestHandler: (handler) => exitRequests.addHandler(handler),
+		ready: () => ready,
+		setInputLoop(loop) {
+			if (disposal) loop.stop();
+			else inputLoop = loop;
+		},
 		dispose() {
-			if (disposed) return;
-			disposed = true;
-			disposeMode(mode, runtime);
+			disposal ??= (async () => {
+				inputLoop?.stop();
+				changes.dispose();
+				failures.dispose();
+				exitRequests.dispose();
+				await disposeMode(mode, runtime);
+			})();
+			return disposal;
 		},
 	});
 }
 
-function disposeMode(
+class ProjectionChanges {
+	readonly #handlers = new Set<() => void>();
+	#disposed = false;
+
+	addHandler(handler: () => void): () => void {
+		if (this.#disposed) return () => undefined;
+		this.#handlers.add(handler);
+		return () => this.#handlers.delete(handler);
+	}
+
+	notify(): void {
+		if (this.#disposed) return;
+		for (const handler of this.#handlers) handler();
+	}
+
+	dispose(): void {
+		if (this.#disposed) return;
+		this.#disposed = true;
+		this.#handlers.clear();
+	}
+}
+
+class ProjectionFailures {
+	readonly #handlers = new Set<(error: unknown) => void>();
+	#disposed = false;
+
+	addHandler(handler: (error: unknown) => void): () => void {
+		if (this.#disposed) return () => undefined;
+		this.#handlers.add(handler);
+		return () => this.#handlers.delete(handler);
+	}
+
+	notify(error: unknown): void {
+		if (this.#disposed) return;
+		for (const handler of this.#handlers) handler(error);
+	}
+
+	dispose(): void {
+		if (this.#disposed) return;
+		this.#disposed = true;
+		this.#handlers.clear();
+	}
+}
+
+class ProjectionExitRequests {
+	readonly #handlers = new Set<() => void>();
+	#disposed = false;
+
+	addHandler(handler: () => void): () => void {
+		if (this.#disposed) return () => undefined;
+		this.#handlers.add(handler);
+		return () => this.#handlers.delete(handler);
+	}
+
+	notify(): void {
+		if (this.#disposed) return;
+		for (const handler of this.#handlers) handler();
+	}
+
+	dispose(): void {
+		if (this.#disposed) return;
+		this.#disposed = true;
+		this.#handlers.clear();
+	}
+}
+
+async function disposeMode(
 	mode: ProjectionInteractiveMode,
 	runtime: AgentSessionRuntime,
-): void {
+): Promise<void> {
 	const cleanupErrors: unknown[] = [];
 	const attempt = (cleanup: () => void) => {
 		try {
@@ -176,8 +546,17 @@ function disposeMode(
 			cleanupErrors.push(error);
 		}
 	};
+	try {
+		const runner = runtime.session.extensionRunner;
+		if (runner.hasHandlers("session_shutdown")) {
+			await runner.emit({ type: "session_shutdown", reason: "quit" });
+		}
+	} catch (error) {
+		cleanupErrors.push(error);
+	}
 	attempt(() => mode.themeController.terminalColorSchemeUnsubscribe?.());
 	mode.themeController.terminalColorSchemeUnsubscribe = undefined;
+	attempt(() => mode.resetExtensionUI());
 	attempt(() => mode.stop());
 	attempt(() => runtime.setBeforeSessionInvalidate(undefined));
 	attempt(() => runtime.setRebindSession(undefined));
@@ -199,25 +578,69 @@ function captureGlobalPresentation(
 	ownerInteractiveMode: unknown,
 ): GlobalPresentationSnapshot {
 	const globals = globalThis as Record<PropertyKey, unknown>;
+	const globalTheme = globals[THEME_KEY];
+	const globalThemeName = (
+		globalTheme && typeof globalTheme === "object"
+			? (globalTheme as { name?: unknown }).name
+			: undefined
+	);
 	const ownerMode = ownerInteractiveMode as {
 		themeController?: { activeThemeName?: unknown };
 	};
 	const activeThemeName = ownerMode?.themeController?.activeThemeName;
 	return {
 		keybindings: getKeybindings(),
-		theme: globals[THEME_KEY],
-		activeThemeName: typeof activeThemeName === "string"
-			? activeThemeName
-			: undefined,
+		theme: globalTheme,
+		activeThemeName: typeof activeThemeName !== "string"
+			? undefined
+			: activeThemeName === "<in-memory>"
+				? activeThemeName
+				: typeof globalThemeName === "string" && globalThemeName !== activeThemeName
+					? globalThemeName
+					: activeThemeName,
 	};
+}
+
+type ProjectionInputLoop = Readonly<{ stop(): void }>;
+
+function startProjectionInputLoop(
+	mode: ProjectionInteractiveMode,
+	session: AgentSession,
+	reportFailure: (error: unknown) => void,
+): ProjectionInputLoop {
+	let stopped = false;
+	void (async () => {
+		while (!stopped) {
+			let input: string;
+			try {
+				input = await mode.getUserInput();
+			} catch (error) {
+				if (!stopped) reportFailure(error);
+				return;
+			}
+			if (stopped) return;
+			try {
+				await session.prompt(input);
+			} catch (error) {
+				mode.showError(
+					error instanceof Error ? error.message : "Unknown error occurred",
+				);
+			}
+		}
+	})();
+	return { stop: () => { stopped = true; } };
 }
 
 function restoreGlobalPresentation(
 	snapshot: GlobalPresentationSnapshot,
 	themeInternals: ThemeInternals,
 	ownerServices: AgentSessionServices,
+	ownerInteractiveMode: unknown,
 ): void {
 	try {
+		themeInternals.onThemeChange(
+			createOwnerThemeChangeHandler(ownerInteractiveMode),
+		);
 		themeInternals.setRegisteredThemes(
 			ownerServices.resourceLoader.getThemes().themes,
 		);
@@ -242,6 +665,37 @@ function restoreGlobalPresentation(
 	}
 }
 
+function restoreOwnerPresentationOwnership(
+	themeInternals: ThemeInternals,
+	ownerServices: AgentSessionServices,
+	ownerInteractiveMode: unknown,
+): void {
+	themeInternals.onThemeChange(
+		createOwnerThemeChangeHandler(ownerInteractiveMode),
+	);
+	themeInternals.setRegisteredThemes(
+		ownerServices.resourceLoader.getThemes().themes,
+	);
+}
+
+function createOwnerThemeChangeHandler(ownerInteractiveMode: unknown): () => void {
+	const ownerMode = ownerInteractiveMode as {
+		ui?: { invalidate(): void; requestRender(): void };
+		updateEditorBorderColor?(): void;
+	} | undefined;
+	if (
+		!ownerMode?.ui ||
+		typeof ownerMode.ui.invalidate !== "function" ||
+		typeof ownerMode.ui.requestRender !== "function" ||
+		typeof ownerMode.updateEditorBorderColor !== "function"
+	) return () => undefined;
+	return () => {
+		ownerMode.ui!.invalidate();
+		ownerMode.updateEditorBorderColor!();
+		ownerMode.ui!.requestRender();
+	};
+}
+
 
 async function loadThemeInternals(): Promise<ThemeInternals> {
 	themeInternalsPromise ??= import(
@@ -257,6 +711,7 @@ async function loadThemeInternals(): Promise<ThemeInternals> {
 		).href
 	).then((moduleValue: Record<PropertyKey, unknown>) => {
 		for (const member of [
+			"onThemeChange",
 			"setRegisteredThemes",
 			"setThemeInstance",
 			"stopThemeWatcher",
@@ -270,13 +725,122 @@ async function loadThemeInternals(): Promise<ThemeInternals> {
 	return themeInternalsPromise;
 }
 
-class ProjectionTerminal implements Terminal {
-	readonly columns = process.stdout.columns ?? FALLBACK_TERMINAL_COLUMNS;
-	readonly rows = process.stdout.rows ?? FALLBACK_TERMINAL_ROWS;
-	readonly kittyProtocolActive = false;
+async function loadFooterDataProviderConstructor(): Promise<FooterDataProviderConstructor> {
+	footerDataProviderConstructorPromise ??= import(
+		pathToFileURL(
+			join(getPackageDir(), "dist", "core", "footer-data-provider.js"),
+		).href
+	).then((moduleValue: Record<PropertyKey, unknown>) => {
+		const constructor = moduleValue.FooterDataProvider as
+			| FooterDataProviderConstructor
+			| undefined;
+		const setupDescriptor = constructor && typeof constructor === "function"
+			? Object.getOwnPropertyDescriptor(
+				constructor.prototype,
+				"setupGitWatcher",
+			)
+			: undefined;
+		if (
+			typeof constructor !== "function" ||
+			typeof constructor.prototype?.setupGitWatcher !== "function" ||
+			setupDescriptor?.writable === false ||
+			(setupDescriptor?.set === undefined && setupDescriptor?.value === undefined)
+		) {
+			throw new IncompatiblePiHostError(
+				"FooterDataProvider.prototype.setupGitWatcher",
+				VERSION,
+			);
+		}
+		return constructor;
+	});
+	return footerDataProviderConstructorPromise;
+}
 
-	start(): void {}
-	stop(): void {}
+function suppressFooterWatcherConstruction(
+	FooterDataProvider: FooterDataProviderConstructor,
+): () => void {
+	const prototype = FooterDataProvider.prototype;
+	const setupGitWatcher = prototype.setupGitWatcher;
+	prototype.setupGitWatcher = () => undefined;
+	return () => {
+		prototype.setupGitWatcher = setupGitWatcher;
+	};
+}
+
+function createProjectionTerminalStateReader(
+	ownerInteractiveMode: unknown,
+): () => ProjectionTerminalState {
+	const ownerTerminal = (
+		ownerInteractiveMode as {
+			renderer?: { terminal?: Partial<Terminal> };
+		} | undefined
+	)?.renderer?.terminal;
+	return () => ({
+		columns: positiveTerminalDimension(
+			ownerTerminal?.columns ?? process.stdout.columns,
+			FALLBACK_TERMINAL_COLUMNS,
+		),
+		rows: positiveTerminalDimension(
+			ownerTerminal?.rows ?? process.stdout.rows,
+			FALLBACK_TERMINAL_ROWS,
+		),
+		kittyProtocolActive: ownerTerminal?.kittyProtocolActive ?? false,
+	});
+}
+
+function positiveTerminalDimension(value: unknown, fallback: number): number {
+	return typeof value === "number" && Number.isFinite(value) && value > 0
+		? Math.floor(value)
+		: fallback;
+}
+
+class ProjectionTerminal implements Terminal {
+	readonly #readState: () => ProjectionTerminalState;
+	#dimensions: Readonly<{ columns: number; rows: number }> | undefined;
+	#onInput: ((data: string) => void) | undefined;
+	#onResize: (() => void) | undefined;
+
+	constructor(readState: () => ProjectionTerminalState) {
+		this.#readState = readState;
+	}
+
+	get columns(): number {
+		return this.#dimensions?.columns ?? this.#readState().columns;
+	}
+
+	get rows(): number {
+		return this.#dimensions?.rows ?? this.#readState().rows;
+	}
+
+	get kittyProtocolActive(): boolean {
+		return this.#readState().kittyProtocolActive;
+	}
+
+	start(onInput: (data: string) => void, onResize: () => void): void {
+		this.#onInput = onInput;
+		this.#onResize = onResize;
+	}
+	stop(): void {
+		this.#onInput = undefined;
+		this.#onResize = undefined;
+	}
+	dispatchInput(data: string): void {
+		this.#onInput?.(data);
+	}
+	resize(columns: number, rows: number): void {
+		if (!Number.isInteger(columns) || columns <= 0) {
+			throw new Error(`Projection terminal columns must be positive: ${columns}`);
+		}
+		if (!Number.isInteger(rows) || rows <= 0) {
+			throw new Error(`Projection terminal rows must be positive: ${rows}`);
+		}
+		if (
+			this.#dimensions?.columns === columns &&
+			this.#dimensions.rows === rows
+		) return;
+		this.#dimensions = { columns, rows };
+		this.#onResize?.();
+	}
 	async drainInput(): Promise<void> {}
 	write(): void {}
 	moveBy(): void {}

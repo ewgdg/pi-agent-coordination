@@ -89,6 +89,37 @@ test("failed startup after Run binding rolls back the projection and session onc
 	assert.equal(host.observe().phase, "dormant");
 });
 
+test("failed startup emits the exact Run terminal lifecycle before disposal", async () => {
+	const resource = createRunResource();
+	const events: string[] = [];
+	const host = InProcessAgentHost.createChild({
+		sessionManager: SessionManager.inMemory(),
+		startSession: async () => ({
+			...resource.startedRun,
+			ready: Promise.reject(new Error("session_start rejected")),
+		}),
+	});
+	host.setRunEndingHandler((_session, _handle, cause) => {
+		events.push(`ending:${cause}`);
+		assert.equal(resource.counts().projectionDisposals, 0);
+	});
+	host.addEndedHandler((_handle, cause) => {
+		events.push(`ended:${cause}`);
+		assert.equal(host.observe().phase, "dormant");
+	});
+
+	await assert.rejects(
+		() => host.lane.run(() => host.startInLane()),
+		/session_start rejected/,
+	);
+	assert.deepEqual(events, ["ending:failure", "ended:failure"]);
+	assert.deepEqual(resource.counts(), {
+		projectionDisposals: 1,
+		sessionDisposals: 1,
+		unsubscriptions: 1,
+	});
+});
+
 test("native subscription failure rolls back the already-created projection and session", async () => {
 	const resource = createRunResource({
 		subscribeError: new Error("native subscription unavailable"),
@@ -155,17 +186,17 @@ test("termination keeps the projection subscribed through final Run settlement",
 	});
 	const projection: PiNativeAgentProjection = {
 		...nativeProjection,
-		dispose() {
+		async dispose() {
 			projectionDisposals += 1;
 			eventsAtProjectionDisposal = [...events];
 			statusAtProjectionDisposal = stripTerminalSequences(
-				nativeProjection.runStatus.render(PROJECTION_RENDER_WIDTH).join("\n"),
+				nativeProjection.presentation.render(PROJECTION_RENDER_WIDTH).join("\n"),
 			);
 			transcriptAtProjectionDisposal = stripTerminalSequences(
-				nativeProjection.transcript.render(PROJECTION_RENDER_WIDTH).join("\n"),
+				nativeProjection.presentation.render(PROJECTION_RENDER_WIDTH).join("\n"),
 			);
 			unsubscribeEventProbe();
-			nativeProjection.dispose();
+			await nativeProjection.dispose();
 		},
 	};
 	const agentHost = InProcessAgentHost.createChild({
@@ -239,9 +270,14 @@ function createRunResource(options?: {
 	const projection: PiNativeAgentProjection = {
 		kind: "live",
 		sessionId: "projected-run",
-		transcript: component,
-		runStatus: component,
-		dispose() {
+		presentation: component,
+		resize() {},
+		dispatchInput() {},
+		addChangeHandler: () => () => undefined,
+		addFailureHandler: () => () => undefined,
+		addExitRequestHandler: () => () => undefined,
+		async ready() {},
+		async dispose() {
 			projectionDisposals += 1;
 			if (options?.projectionDisposeError) throw options.projectionDisposeError;
 		},

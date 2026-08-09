@@ -23,6 +23,8 @@ import {
 	type TestOwnerHost,
 } from "./support/pi-host.ts";
 
+const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
+
 test("a fresh Owner host rediscovers one dormant child without starting its Run", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
@@ -843,8 +845,11 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 	);
 	const moderatorAgents = await openAgentsSurface(reopened);
 	moderatorAgents.surface.handleInput?.("\t");
-	moderatorAgents.surface.handleInput?.("j");
-	const dormantModerator = moderatorAgents.surface.render(80).join("\n");
+	let dormantModerator = moderatorAgents.surface.render(80).join("\n");
+	for (let step = 0; step < 2 && !dormantModerator.includes(moderator.agentId); step += 1) {
+		moderatorAgents.surface.handleInput?.("j");
+		dormantModerator = moderatorAgents.surface.render(80).join("\n");
+	}
 	assert.match(dormantModerator, /moderator.*Moderator.*obligation stall/i);
 	assert.match(dormantModerator, new RegExp(moderator.agentId));
 	moderatorAgents.surface.handleInput?.("\x1b");
@@ -1045,7 +1050,7 @@ async function reopenOwner(
 async function waitForModeratorSession(
 	directory: string,
 ): Promise<{ agentId: string; path: string }> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		for (const filename of await readdir(directory)) {
 			if (!filename.endsWith(".jsonl")) continue;
 			const path = join(directory, filename);
@@ -1057,7 +1062,7 @@ async function waitForModeratorSession(
 				)
 			) return { agentId: sessionManager.getSessionId(), path };
 		}
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error("Expected persisted Moderator session");
 }
@@ -1089,13 +1094,13 @@ async function waitForSessionFile(
 	directory: string,
 	agentId: string,
 ): Promise<string> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		for (const filename of await readdir(directory)) {
 			if (!filename.endsWith(".jsonl")) continue;
 			const path = join(directory, filename);
 			if (SessionManager.open(path).getSessionId() === agentId) return path;
 		}
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error(`Expected persisted session ${agentId}`);
 }
@@ -1104,9 +1109,9 @@ async function waitForTranscriptEntry(
 	sessionFile: string,
 	predicate: (entry: ReturnType<SessionManager["getEntries"]>[number]) => boolean,
 ): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		if (SessionManager.open(sessionFile).getEntries().some(predicate)) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error("Expected transcript evidence to commit");
 }
@@ -1127,9 +1132,9 @@ function retentionCount(
 }
 
 async function waitForCondition(predicate: () => Promise<boolean>): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		if (await predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error("Expected condition was not reached");
 }

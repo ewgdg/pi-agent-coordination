@@ -37,12 +37,14 @@ import {
 } from "./support/pi-host.ts";
 import {
 	executeAndCommitRegisteredTool,
-	selectAgent,
-	selectDormantAgent,
+	openDormantAgentView,
+	openLiveAgentView,
+	returnAgentViewToOwner,
 } from "./support/agent-session.ts";
 import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
 
-const MAX_CONDITION_POLL_ATTEMPTS = 1_000;
+const CONDITION_WAIT_TIMEOUT_MS = 5_000;
+const CONDITION_POLL_INTERVAL_MS = 1;
 const PROJECTION_RENDER_WIDTH = 240;
 
 test("a settled answer-obligated Agent creates one atomic Obligation Stall Moderator", async () => {
@@ -129,6 +131,7 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 			entryId: await transcriptTailFor(host, input.trigger.agentId),
 		},
 	]);
+	await waitForCondition(() => moderatorTools.length > 0);
 	assert.deepEqual(moderatorTools, [
 		"agent_control",
 		"agent_message",
@@ -159,31 +162,44 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.equal((await findModerators(host)).length, 1);
+	const ownerSession = host.runtime.session;
+	const liveView = await openLiveAgentView(host, moderator.id);
+	const liveRendered = stripTerminalSequences(liveView.view.render(80).join("\n"));
+	assert.match(liveRendered, /moderator.*Live/);
+	assert.match(liveRendered, new RegExp(moderator.id.slice(-8)));
+	assert.match(liveRendered, /\(coordination-test\) deterministic-owner/);
+	assert.equal(host.runtime.session, ownerSession);
+	host.model.setResponses([
+		fauxAssistantMessage("The Moderator received direct native editor input."),
+	]);
+	for (const character of "Inspect this Moderator directly from its view.") {
+		liveView.view.handleInput?.(character);
+	}
+	liveView.view.handleInput?.("\r");
+	await waitForTranscriptEntry(
+		moderator.path,
+		(entry) => entry.type === "message" && entry.message.role === "user" &&
+			JSON.stringify(entry.message.content).includes(
+				"Inspect this Moderator directly from its view.",
+			),
+	);
+	await returnAgentViewToOwner(host, liveView);
 
 	const termination = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-moderator-for-footer-status",
+		"terminate-moderator-before-dormant-view",
 		{ operation: "terminate", agentId: moderator.id },
 	);
 	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
-	await selectDormantAgent(host, moderator.id);
-	const moderatorStatus = [...host.ui.statuses.values()].find((value) =>
-		value.startsWith("○ moderator · ") && value.endsWith(" · Dormant")
+	const dormantView = await openDormantAgentView(host, moderator.id);
+	const dormantRendered = stripTerminalSequences(
+		dormantView.view.render(80).join("\n"),
 	);
-	assert.ok(moderatorStatus);
-	const compactModeratorIdentity = moderatorStatus.slice(
-		"○ moderator · ".length,
-		-" · Dormant".length,
-	);
-	assert.ok(moderator.id.endsWith(compactModeratorIdentity));
-	host.ui.statuses.set("third-party-status", "keep me");
-	await selectAgent(host, host.session.sessionId);
-	assert.equal(
-		[...host.ui.statuses.values()].some((value) => value.startsWith("○ moderator · ")),
-		false,
-	);
-	assert.equal(host.ui.statuses.get("third-party-status"), "keep me");
+	assert.match(dormantRendered, /moderator.*Dormant/);
+	assert.match(dormantRendered, new RegExp(moderator.id.slice(-8)));
+	assert.equal(host.runtime.session, ownerSession);
+	await returnAgentViewToOwner(host, dormantView);
 
 	await host.runtime.dispose();
 });
@@ -199,6 +215,11 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 		releaseTool = resolve;
 	});
 	t.after(() => releaseTool());
+	let releaseModerator!: () => void;
+	const moderatorGate = new Promise<void>((resolve) => {
+		releaseModerator = resolve;
+	});
+	t.after(() => releaseModerator());
 	(globalThis as Record<PropertyKey, unknown>)[registryKey] = {
 		async execute() {
 			toolStarted();
@@ -250,7 +271,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 			fauxToolCall("execution_gate", {}, { id: "overdue-root-call" }),
 			{ stopReason: "toolUse" },
 		),
-		(context) => {
+		async (context) => {
 			const content = context.messages.flatMap((message) => {
 				if (message.role !== "user") return [];
 				if (typeof message.content === "string") return [message.content];
@@ -264,6 +285,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 					toolCall: { agentId: string; entryId: string; toolCallId: string };
 				};
 			}).trigger;
+			await moderatorGate;
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"moderator_control",
@@ -299,16 +321,17 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	assert.equal(moderatorProjection?.kind, "live");
 	assert.match(
 		stripTerminalSequences(
-			ordinaryProjection.transcript.render(PROJECTION_RENDER_WIDTH).join("\n"),
+			ordinaryProjection.presentation.render(PROJECTION_RENDER_WIDTH).join("\n"),
 		),
 		/Keep the Creation Request open/,
 	);
 	assert.match(
 		stripTerminalSequences(
-			moderatorProjection.transcript.render(PROJECTION_RENDER_WIDTH).join("\n"),
+			moderatorProjection.presentation.render(PROJECTION_RENDER_WIDTH).join("\n"),
 		),
 		/operation_review/,
 	);
+	releaseModerator();
 	const inputEntry = SessionManager.open(moderator.path).getEntries().find(
 		(entry) =>
 			entry.type === "custom_message" &&
@@ -1078,6 +1101,14 @@ test("external Answer clearance releases Moderator handling", async () => {
 	await host.session.prompt("Create an externally cleared Stall.");
 	await host.session.waitForIdle();
 	const moderator = await waitForModerator(host);
+	await waitForTranscriptEntry(
+		moderator.path,
+		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "text" &&
+					part.text === "I am inspecting while the obligation remains.",
+			),
+	);
 	const moderatorInput = SessionManager.open(moderator.path).getEntries().find(
 		(entry) =>
 			entry.type === "custom_message" &&
@@ -1217,6 +1248,14 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 	await host.session.prompt("Create a recurring Obligation Stall.");
 	await host.session.waitForIdle();
 	const firstModerator = await waitForModerator(host);
+	await waitForTranscriptEntry(
+		firstModerator.path,
+		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "text" &&
+					part.text === "I am handling the first continuous Stall.",
+			),
+	);
 	const affectedAgentId = moderatorAffectedAgentId(firstModerator.path);
 
 	await controlAsOwner(host, "interrupt-recurring-stall", {
@@ -1998,8 +2037,14 @@ test("a post-commit Moderator startup failure creates one linked replacement", a
 	);
 	await waitForCondition(async () => (await findModerators(harness.host)).length === 2);
 	const moderators = await findModerators(harness.host);
-	const first = moderators[0]!;
-	const replacement = moderators[1]!;
+	const first = moderators.find(({ path }) =>
+		moderatorPreviousAttempt(path) === undefined
+	);
+	const replacement = moderators.find(({ path }) =>
+		moderatorPreviousAttempt(path) !== undefined
+	);
+	assert.ok(first);
+	assert.ok(replacement);
 	assert.deepEqual(harness.owner.status(first.id).run, {
 		phase: "dormant",
 		retentionReasons: [],
@@ -2189,10 +2234,11 @@ test("orderly shutdown closes exhausted Operational Attention", async () => {
 async function waitForModerator(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
 ): Promise<{ id: string; path: string }> {
-	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
+	const deadline = Date.now() + CONDITION_WAIT_TIMEOUT_MS;
+	while (Date.now() < deadline) {
 		const moderators = await findModerators(host);
 		if (moderators[0]) return moderators[0];
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await waitForConditionPoll();
 	}
 	throw new Error("Expected an Obligation Stall Moderator");
 }
@@ -2201,11 +2247,12 @@ async function waitForModeratorKind(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
 	kind: string,
 ): Promise<{ id: string; path: string }> {
-	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
+	const deadline = Date.now() + CONDITION_WAIT_TIMEOUT_MS;
+	while (Date.now() < deadline) {
 		for (const moderator of await findModerators(host)) {
 			if (moderatorTriggerKind(moderator.path) === kind) return moderator;
 		}
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await waitForConditionPoll();
 	}
 	throw new Error(`Expected a ${kind} Moderator`);
 }
@@ -2228,7 +2275,8 @@ async function waitForModeratorForAgent(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
 	agentId: string,
 ): Promise<{ id: string; path: string }> {
-	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
+	const deadline = Date.now() + CONDITION_WAIT_TIMEOUT_MS;
+	while (Date.now() < deadline) {
 		for (const moderator of await findModerators(host)) {
 			const input = SessionManager.open(moderator.path).getEntries().find(
 				(entry) =>
@@ -2242,7 +2290,7 @@ async function waitForModeratorForAgent(
 					?.agentId === agentId
 			) return moderator;
 		}
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await waitForConditionPoll();
 	}
 	throw new Error(`Expected an Obligation Stall Moderator for Agent ${agentId}`);
 }
@@ -2422,10 +2470,11 @@ async function waitForTranscriptEntry(
 		entry: ReturnType<SessionManager["getEntries"]>[number],
 	) => boolean,
 ) {
-	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
+	const deadline = Date.now() + CONDITION_WAIT_TIMEOUT_MS;
+	while (Date.now() < deadline) {
 		const entry = SessionManager.open(sessionFile).getEntries().find(predicate);
 		if (entry) return entry;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await waitForConditionPoll();
 	}
 	throw new Error("Expected Moderator transcript entry did not commit");
 }
@@ -2497,6 +2546,22 @@ function moderatorAffectedAgentId(sessionFile: string): string {
 	return (JSON.parse(input.content) as { trigger: { agentId: string } }).trigger.agentId;
 }
 
+function moderatorPreviousAttempt(
+	sessionFile: string,
+): { agentId: string; entryId: string } | undefined {
+	const input = SessionManager.open(sessionFile).getEntries().find(
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.moderator-input",
+	);
+	assert.ok(
+		input?.type === "custom_message" && typeof input.content === "string",
+	);
+	return (JSON.parse(input.content) as {
+		previousAttempt?: { agentId: string; entryId: string };
+	}).previousAttempt;
+}
+
 function moderatorTriggerKind(sessionFile: string): string {
 	const input = SessionManager.open(sessionFile).getEntries().find(
 		(entry) =>
@@ -2566,9 +2631,16 @@ async function observeStatus(
 async function waitForCondition(
 	predicate: () => boolean | Promise<boolean>,
 ): Promise<void> {
-	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
+	const deadline = Date.now() + CONDITION_WAIT_TIMEOUT_MS;
+	while (Date.now() < deadline) {
 		if (await predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await waitForConditionPoll();
 	}
 	throw new Error("Expected incident condition did not become true");
+}
+
+async function waitForConditionPoll(): Promise<void> {
+	await new Promise<void>((resolve) =>
+		setTimeout(resolve, CONDITION_POLL_INTERVAL_MS)
+	);
 }

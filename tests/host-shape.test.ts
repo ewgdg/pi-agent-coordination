@@ -400,20 +400,41 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 	const host = await createUnboundTestOwnerHost(() => undefined);
 	const mode = {
 		runtimeHost: host.runtime,
-		ui: { requestRender() {} },
+		ui: {
+			inputListeners: new Set(),
+			addInputListener() { return () => undefined; },
+			invalidate() {},
+			requestRender() {},
+		},
+		renderer: {
+			terminal: {
+				columns: 80,
+				rows: 24,
+				kittyProtocolActive: false,
+			},
+		},
 		bindCurrentSessionExtensions() {},
 		rebindCurrentSession() {},
 		getUserInput() {},
 		setWorkingVisible() {},
 		clearStatusIndicator() {},
 		showError() {},
+		updateEditorBorderColor() {},
 	};
 	const requirements = [
 		[["runtimeHost"], "InteractiveMode.runtimeHost"],
 		[["runtimeHost", "session"], "InteractiveMode.runtimeHost.session"],
 		[["ui"], "InteractiveMode.ui"],
+		[["ui", "addInputListener"], "TUI.addInputListener"],
+		[["ui", "inputListeners"], "TUI.inputListeners"],
+		[["ui", "invalidate"], "InteractiveMode.ui.invalidate"],
 		[["ui", "requestRender"], "InteractiveMode.ui.requestRender"],
-		...["bindCurrentSessionExtensions", "rebindCurrentSession", "getUserInput", "setWorkingVisible", "clearStatusIndicator", "showError"]
+		[["renderer"], "InteractiveMode.renderer"],
+		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
+		[["renderer", "terminal", "columns"], "InteractiveMode.renderer.terminal.columns"],
+		[["renderer", "terminal", "rows"], "InteractiveMode.renderer.terminal.rows"],
+		[["renderer", "terminal", "kittyProtocolActive"], "InteractiveMode.renderer.terminal.kittyProtocolActive"],
+		...["bindCurrentSessionExtensions", "rebindCurrentSession", "getUserInput", "setWorkingVisible", "clearStatusIndicator", "showError", "updateEditorBorderColor"]
 			.map((member) => [[member], `InteractiveMode.${member}`] as const),
 	] as const;
 	for (const [path, expected] of requirements) {
@@ -430,34 +451,70 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 
 test("live preflight rejects every projection-owned InteractiveMode seam", async () => {
 	const host = await createUnboundTestOwnerHost(() => undefined);
-	const component = { render: () => [], invalidate() {} };
 	const mode = {
-		chatContainer: component,
-		statusContainer: component,
-		footerDataProvider: { dispose() {} },
 		isInitialized: false,
-		renderer: { terminal: {} },
-		themeController: {},
-		renderInitialMessages() {},
-		subscribeToAgent() {},
+		renderer: {
+			compositeOverlays: (lines: string[]) => lines,
+			doRender() {},
+			invalidate() {},
+			render: () => [],
+			renderNow() {},
+			previousScreen: [],
+			terminal: {},
+			requestRender() {},
+		},
+		themeController: {
+			async applyFromSettings() {},
+			terminalColorSchemeUnsubscribe: undefined,
+		},
+		footerDataProvider: { setupGitWatcher() {} },
+		defaultEditor: { onSubmit() {}, setText() {} },
+		editor: { onSubmit() {}, setText() {} },
+		shutdownRequested: false,
+		async getUserInput() { return ""; },
+		async handleFatalRuntimeError() {},
+		async init() {},
+		registerSignalHandlers() {},
+		resetExtensionUI() {},
+		async shutdown() {},
+		showError() {},
 		stop() {},
+		subscribeToAgent() {},
+		unregisterSignalHandlers() {},
 	};
 	const requirements = [
-		[["chatContainer"], "InteractiveMode.chatContainer"],
-		[["chatContainer", "render"], "InteractiveMode.chatContainer.render"],
-		[["chatContainer", "invalidate"], "InteractiveMode.chatContainer.invalidate"],
-		[["statusContainer"], "InteractiveMode.statusContainer"],
-		[["statusContainer", "render"], "InteractiveMode.statusContainer.render"],
-		[["statusContainer", "invalidate"], "InteractiveMode.statusContainer.invalidate"],
-		[["footerDataProvider"], "InteractiveMode.footerDataProvider"],
-		[["footerDataProvider", "dispose"], "InteractiveMode.footerDataProvider.dispose"],
 		[["isInitialized"], "InteractiveMode.isInitialized"],
 		[["renderer"], "InteractiveMode.renderer"],
+		[["renderer", "compositeOverlays"], "InteractiveMode.renderer.compositeOverlays"],
+		[["renderer", "doRender"], "InteractiveMode.renderer.doRender"],
+		[["renderer", "invalidate"], "InteractiveMode.renderer.invalidate"],
+		[["renderer", "render"], "InteractiveMode.renderer.render"],
+		[["renderer", "renderNow"], "InteractiveMode.renderer.renderNow"],
+		[["renderer", "previousScreen"], "InteractiveMode.renderer.previousScreen"],
 		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
+		[["renderer", "requestRender"], "InteractiveMode.renderer.requestRender"],
 		[["themeController"], "InteractiveMode.themeController"],
-		[["renderInitialMessages"], "InteractiveMode.renderInitialMessages"],
-		[["subscribeToAgent"], "InteractiveMode.subscribeToAgent"],
+		[["themeController", "applyFromSettings"], "InteractiveMode.themeController.applyFromSettings"],
+		[["themeController", "terminalColorSchemeUnsubscribe"], "InteractiveMode.themeController.terminalColorSchemeUnsubscribe"],
+		[["footerDataProvider"], "InteractiveMode.footerDataProvider"],
+		[["footerDataProvider", "setupGitWatcher"], "InteractiveMode.footerDataProvider.setupGitWatcher"],
+		[["defaultEditor"], "InteractiveMode.defaultEditor"],
+		[["defaultEditor", "setText"], "InteractiveMode.defaultEditor.setText"],
+		[["defaultEditor", "onSubmit"], "InteractiveMode.defaultEditor.onSubmit"],
+		[["editor"], "InteractiveMode.editor"],
+		[["editor", "setText"], "InteractiveMode.editor.setText"],
+		[["editor", "onSubmit"], "InteractiveMode.editor.onSubmit"],
+		[["shutdownRequested"], "InteractiveMode.shutdownRequested"],
+		[["getUserInput"], "InteractiveMode.getUserInput"],
+		[["handleFatalRuntimeError"], "InteractiveMode.handleFatalRuntimeError"],
+		[["init"], "InteractiveMode.init"],
+		[["registerSignalHandlers"], "InteractiveMode.registerSignalHandlers"],
+		[["resetExtensionUI"], "InteractiveMode.resetExtensionUI"],
+		[["shutdown"], "InteractiveMode.shutdown"],
+		[["showError"], "InteractiveMode.showError"],
 		[["stop"], "InteractiveMode.stop"],
+		[["subscribeToAgent"], "InteractiveMode.subscribeToAgent"],
+		[["unregisterSignalHandlers"], "InteractiveMode.unregisterSignalHandlers"],
 	] as const;
 	for (const [path, expected] of requirements) {
 		assert.throws(
@@ -468,8 +525,17 @@ test("live preflight rejects every projection-owned InteractiveMode seam", async
 		);
 	}
 	for (const [path, expected] of [
-		[["isInitialized"], "InteractiveMode.isInitialized"],
+		[["renderer", "doRender"], "InteractiveMode.renderer.doRender"],
 		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
+		[["renderer", "requestRender"], "InteractiveMode.renderer.requestRender"],
+		[["themeController", "applyFromSettings"], "InteractiveMode.themeController.applyFromSettings"],
+		[["themeController", "terminalColorSchemeUnsubscribe"], "InteractiveMode.themeController.terminalColorSchemeUnsubscribe"],
+		[["defaultEditor", "onSubmit"], "InteractiveMode.defaultEditor.onSubmit"],
+		[["editor", "onSubmit"], "InteractiveMode.editor.onSubmit"],
+		[["handleFatalRuntimeError"], "InteractiveMode.handleFatalRuntimeError"],
+		[["registerSignalHandlers"], "InteractiveMode.registerSignalHandlers"],
+		[["shutdown"], "InteractiveMode.shutdown"],
+		[["unregisterSignalHandlers"], "InteractiveMode.unregisterSignalHandlers"],
 	] as const) {
 		assert.throws(
 			() => assertProjectionInteractiveModeInstanceShape(

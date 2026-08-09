@@ -12,163 +12,431 @@ const SCREEN_POLL_INTERVAL_MS = 10;
 const FIXTURE = fileURLToPath(
 	new URL("./fixtures/coordinated-workflow-pty-fixture.ts", import.meta.url),
 );
+const FAILURE_FIXTURE = fileURLToPath(
+	new URL("./fixtures/agent-view-failure-pty-fixture.ts", import.meta.url),
+);
+const DIRECT_AGENT_INPUT = "direct input through child editor";
 
-test("one native PTY spans the coordinated Workflow and containing-process shutdown", {
+test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Owner", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
 	const terminal = launchFixture();
 	try {
 		const setup = await terminal.marker<{
 			ownerId: string;
-			liveAgentId: string;
-			dormantAgentId: string;
+			childAgentId: string;
 			cwd: string;
-		}>("__PTY_SETUP__");
-		await terminal.waitFor("Worker Live");
-		const liveFrame = await terminal.screen();
-		assert.equal(liveFrame.some((line) => /^┌─+┐$/.test(line)), true);
-		assert.equal(
-			liveFrame.some((line) => /^│.*Live.*Dormant.*│$/.test(line)),
-			true,
-		);
-		assert.equal(
-			liveFrame.some((line) => /^│.*children.*parent.*│$/.test(line)),
-			true,
-		);
-		assert.equal(liveFrame.some((line) => /^└─+┘$/.test(line)), true);
-		terminal.write("\t");
-		await terminal.waitFor("Worker Dormant");
-		terminal.write("\r");
-		await terminal.waitFor("__PTY_SELECTED_DORMANT__");
+			ownerEditorText: string;
+		}>("__PTY_AGENT_VIEW_SETUP__");
 		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Worker Dormant · "))
+			frame.some((line) => line.includes("PTY Viewed Worker")) &&
+			frame.some((line) => line.includes("Tab views"))
 		);
-		const selectedDormantFrame = await terminal.screen();
-		assertSelectedAgentFooterStatus(
-			selectedDormantFrame,
-			"Worker Dormant",
-			setup.dormantAgentId,
-			"Dormant",
-		);
-		assertNativeFooterPreserved(selectedDormantFrame, setup.cwd);
-		terminal.write("selected dormant native input");
-		await terminal.waitFor("selected dormant native input");
+		terminal.write("j");
 		terminal.write("\r");
-		await terminal.waitFor("__PTY_SELECTED_RUN_FAILED__");
-		assertSelectedAgentFooterStatus(
-			await terminal.screen(),
-			"Worker Dormant",
-			setup.dormantAgentId,
-			"Dormant",
-		);
-		terminal.write("native input after selected Run failure");
-		await terminal.waitFor("native input after selected Run failure");
-		terminal.write("\r");
-		await terminal.waitFor("__PTY_DORMANT_INPUT_COMMITTED__");
-		await terminal.waitFor("Worker Dormant");
-		terminal.write("k");
-		terminal.write("\r");
-		await terminal.waitFor("__PTY_SELECTED_LIVE__");
 		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Worker Live · "))
+			frame.some((line) =>
+				line.includes("PTY Viewed Worker") &&
+				line.includes(setup.childAgentId.slice(-8)) &&
+				line.includes("Live")
+			) && frame.some((line) => line.includes("Viewed child transcript line 59"))
 		);
-		const selectedLiveFrame = await terminal.screen();
-		assertSelectedAgentFooterStatus(
-			selectedLiveFrame,
-			"Worker Live",
-			setup.liveAgentId,
-			"active",
+		const agentViewFrame = await terminal.screen();
+		assert.equal(agentViewFrame.length, 24);
+		assert.equal(
+			agentViewFrame.some((line) => line.includes(setup.ownerEditorText)),
+			false,
 		);
-		terminal.write("selected native input");
-		await terminal.waitFor("selected native input");
-		terminal.write("\r");
-		await terminal.waitFor("Escape checkpoint");
-		terminal.write("\x1b");
-		await terminal.waitFor("__PTY_HUMAN_ESCAPED__");
+		assert.equal(agentViewFrame.some((line) => line.includes("deterministic-owner")), true);
+		for (let notch = 0; notch < 6; notch += 1) {
+			terminal.write("\x1b[<64;10;8M");
+		}
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Viewed child transcript line 3")) &&
+			!frame.some((line) => line.includes("Viewed child transcript line 59"))
+		);
+		terminal.write("\x1b[F");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Viewed child transcript line 59"))
+		);
+		terminal.write("\x1b[<0;80;17M");
+		terminal.write("\x1b[<32;80;3M");
+		terminal.write("\x1b[<0;80;3m");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("pi v0.84.0")) &&
+			!frame.some((line) => line.includes("Viewed child transcript line 59"))
+		);
+		terminal.write("\x1b[F");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Viewed child transcript line 59"))
+		);
 
+		for (const character of DIRECT_AGENT_INPUT) terminal.write(character);
 		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Tab views")) &&
-			frame.some((line) => line.includes("→ Worker Live"))
-		);
-		assertSelectedAgentFooterStatus(
-			await terminal.screen(),
-			"Worker Live",
-			setup.liveAgentId,
-			"held",
-		);
-		terminal.write("k");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("→ owner"))
+			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
 		);
 		terminal.write("\r");
-		await terminal.waitFor("__PTY_ROUND_TRIPS__");
-		await terminal.waitFor("__PTY_ATTENTION_READY__");
-		await terminal.waitFor("ATTENTION 1");
-		terminal.write("\x1b");
-		await terminal.waitFor("Operational Attention · 1");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Streaming child update 00")) &&
+			frame.some((line) => line.includes("Working"))
+		);
+		for (let notch = 0; notch < 6; notch += 1) {
+			terminal.write("\x1b[<64;10;8M");
+		}
+		const inspectedStreamingFrame = await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Viewed child transcript line")) &&
+			!frame.some((line) => line.includes("Streaming child update 39"))
+		);
+		const inspectedStreamingAnchor = inspectedStreamingFrame.find((line) =>
+			line.includes("Viewed child transcript line")
+		)?.trim();
+		assert.ok(inspectedStreamingAnchor);
+		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
+		const settledAwayFromTail = await terminal.screen();
+		assert.equal(
+			settledAwayFromTail.some((line) => line.trim() === inspectedStreamingAnchor),
+			true,
+		);
+		assert.equal(
+			settledAwayFromTail.some((line) => line.includes("Streaming child update 39")),
+			false,
+		);
+		terminal.write("\x1b[F");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Streaming child update 39"))
+		);
+		terminal.write("/agents");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("/agents"))
+		);
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("k");
+		terminal.write("\r");
+		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
+		const ownerFrame = await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
+			frame.some((line) => line.includes(setup.ownerEditorText))
+		);
+		assert.equal(
+			ownerFrame.some((line) => line.includes("PTY Viewed Worker") && line.includes("Live")),
+			false,
+		);
+		assert.equal(ownerFrame.some((line) => line.includes(setup.cwd)), true);
+		assert.equal(
+			ownerFrame.some((line) =>
+				line.includes("/16k") && line.includes("deterministic-owner")
+			),
+			true,
+		);
 
 		await terminal.closed();
-		assert.match(terminal.output(), /__PTY_ROUND_TRIPS__/);
-		assert.match(terminal.output(), /__PTY_ATTENTION_READY__/);
+		assert.match(terminal.output(), /__PTY_AGENT_VIEW_CLOSED__/);
 	} finally {
 		terminal.kill();
 	}
 });
 
-function assertSelectedAgentFooterStatus(
-	frame: readonly string[],
-	label: string,
-	agentId: string,
-	phase: string,
-): void {
-	const marker = phase === "active" ? "● " : phase === "Dormant" ? "○ " : "";
-	const prefix = `${marker}${label} · `;
-	const suffix = ` · ${phase}`;
-	const matchingLines = frame.filter((line) =>
-		line.startsWith(prefix) && line.includes(suffix)
-	);
-	assert.equal(matchingLines.length, 1);
-	const statusLine = matchingLines[0]!;
-	const phaseIndex = statusLine.indexOf(suffix, prefix.length);
-	const compactIdentity = statusLine.slice(prefix.length, phaseIndex);
-	assert.ok(compactIdentity.length < agentId.length);
-	assert.ok(agentId.endsWith(compactIdentity));
-	assert.ok(frame.indexOf(statusLine) >= frame.length - 3);
+for (const failureKind of ["input", "render"] as const) {
+	test(`real fullscreen PTY returns to Owner after child ${failureKind} failure`, {
+		skip: !existsSync(SCRIPT),
+	}, async () => {
+		const terminal = launchFixture(FAILURE_FIXTURE, {
+			PTY_AGENT_VIEW_FAILURE: failureKind,
+		});
+		try {
+			const setup = await terminal.marker<{
+				childAgentId: string;
+				ownerEditorText: string;
+			}>("__PTY_AGENT_VIEW_FAILURE_SETUP__");
+			await terminal.waitForScreen((frame) =>
+				frame.some((line) => line.includes("PTY Failure Worker")) &&
+				frame.some((line) => line.includes("Tab views"))
+			);
+			terminal.write("j");
+			terminal.write("\r");
+			await terminal.waitForScreen((frame) =>
+				frame.some((line) =>
+					line.includes("PTY Failure Worker") &&
+					line.includes(setup.childAgentId.slice(-8)) &&
+					line.includes("Live")
+				)
+			);
+			terminal.write("x");
+			await terminal.waitFor(`__PTY_AGENT_VIEW_FAILURE_RESTORED__${failureKind}`);
+			const ownerFrame = await terminal.waitForScreen((frame) =>
+				frame.some((line) => line.includes("Owner failure baseline remains mounted")) &&
+				frame.some((line) => line.includes(setup.ownerEditorText))
+			);
+			assert.equal(
+				ownerFrame.some((line) => line.includes("PTY Failure Worker")),
+				false,
+			);
+			await terminal.closed();
+		} finally {
+			terminal.kill();
+		}
+	});
 }
 
-function assertNativeFooterPreserved(frame: readonly string[], cwd: string): void {
-	const cwdLine = frame.findIndex((line) => line.includes(cwd));
-	const nativeStatsLine = frame.findIndex((line) =>
-		line.includes("/16k") && line.includes("deterministic-owner")
-	);
-	const extensionStatusLine = frame.find((line) => line.includes("Native Peer"));
-	assert.ok(cwdLine >= 0, JSON.stringify(frame));
-	assert.ok(nativeStatsLine > cwdLine, JSON.stringify(frame));
-	assert.ok(extensionStatusLine, JSON.stringify(frame));
-	assert.ok(frame.indexOf(extensionStatusLine) > nativeStatsLine);
-	assert.ok(extensionStatusLine.indexOf("Native Peer") > extensionStatusLine.indexOf("Dormant"));
-}
+test("real fullscreen PTY replaces selected initialization failure with Dormant", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const terminal = launchFixture(FAILURE_FIXTURE, {
+		PTY_AGENT_VIEW_FAILURE: "initialization",
+	});
+	try {
+		const setup = await terminal.marker<{ ownerEditorText: string }>(
+			"__PTY_AGENT_VIEW_FAILURE_SETUP__",
+		);
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("PTY Failure Worker")) &&
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("j");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				line.includes("PTY Failure Worker") && line.includes("Live")
+			)
+		);
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				line.includes("PTY Failure Worker") && line.includes("Dormant")
+			)
+		);
+		terminal.write("/agents");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("\t");
+		terminal.write("\r");
+		await terminal.waitFor("__PTY_AGENT_VIEW_FAILURE_RESTORED__initialization");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Owner failure baseline remains mounted")) &&
+			frame.some((line) => line.includes(setup.ownerEditorText))
+		);
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+	}
+});
 
-function launchFixture() {
-	const command = `${quoteShell(process.execPath)} ${quoteShell(FIXTURE)}`;
+test("real fullscreen PTY replaces a terminally failed selected Run with Dormant", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const terminal = launchFixture(FAILURE_FIXTURE, {
+		PTY_AGENT_VIEW_FAILURE: "run",
+	});
+	try {
+		const setup = await terminal.marker<{
+			childAgentId: string;
+			ownerEditorText: string;
+		}>("__PTY_AGENT_VIEW_FAILURE_SETUP__");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("PTY Failure Worker")) &&
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("j");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				line.includes("PTY Failure Worker") &&
+				line.includes(setup.childAgentId.slice(-8)) &&
+				line.includes("Live")
+			)
+		);
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				line.includes("PTY Failure Worker") && line.includes("Dormant")
+			) && frame.some((line) => line.includes("Deterministic PTY terminal Run failure"))
+		);
+		terminal.write("/agents");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("\t");
+		terminal.write("\r");
+		await terminal.waitFor("__PTY_AGENT_VIEW_FAILURE_RESTORED__run");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Owner failure baseline remains mounted")) &&
+			frame.some((line) => line.includes(setup.ownerEditorText))
+		);
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+	}
+});
+
+test("real fullscreen PTY disposes an unviewed child mode exactly once", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const terminal = launchFixture(FAILURE_FIXTURE, {
+		PTY_AGENT_VIEW_FAILURE: "noninteractive",
+	});
+	try {
+		await terminal.waitFor("__PTY_NONINTERACTIVE_DISPOSAL_COMPLETE__");
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+	}
+});
+
+test("real fullscreen PTY switches one mounted view between two Agent modes", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const terminal = launchFixture();
+	try {
+		const setup = await terminal.marker<{
+			childAgentId: string;
+			secondChildAgentId: string;
+			ownerEditorText: string;
+		}>("__PTY_AGENT_VIEW_SETUP__");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("PTY Viewed Worker")) &&
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("j");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				line.includes("PTY Viewed Worker") &&
+				line.includes(setup.childAgentId.slice(-8))
+			)
+		);
+		for (const character of DIRECT_AGENT_INPUT) terminal.write(character);
+		terminal.write("\r");
+		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
+
+		terminal.write("/agents");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("j");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				line.includes("PTY Second Worker") &&
+				line.includes(setup.secondChildAgentId.slice(-8)) &&
+				line.includes("Live")
+			) && frame.some((line) =>
+				line.includes("Second PTY child remains independently interactive")
+			)
+		);
+
+		terminal.write("/agents");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("k");
+		terminal.write("k");
+		terminal.write("\r");
+		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
+			frame.some((line) => line.includes(setup.ownerEditorText))
+		);
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+	}
+});
+
+test("real fullscreen PTY reflows the complete Agent view at 100x30", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const terminal = launchFixture(FIXTURE, {
+		PTY_TEST_COLUMNS: "100",
+		PTY_TEST_ROWS: "30",
+	});
+	try {
+		const setup = await terminal.marker<{
+			childAgentId: string;
+			ownerEditorText: string;
+			terminalColumns: number;
+			terminalRows: number;
+		}>("__PTY_AGENT_VIEW_SETUP__");
+		assert.deepEqual(
+			{ columns: setup.terminalColumns, rows: setup.terminalRows },
+			{ columns: 100, rows: 30 },
+		);
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("PTY Viewed Worker")) &&
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("j");
+		terminal.write("\r");
+		const agentFrame = await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				line.includes("PTY Viewed Worker") &&
+				line.includes(setup.childAgentId.slice(-8))
+			) && frame.some((line) => line.includes("Viewed child transcript line 59"))
+		);
+		assert.equal(agentFrame.length, 30);
+		for (const character of DIRECT_AGENT_INPUT) terminal.write(character);
+		terminal.write("\r");
+		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
+		terminal.write("/agents");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("k");
+		terminal.write("\r");
+		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
+		const ownerFrame = await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
+			frame.some((line) => line.includes(setup.ownerEditorText))
+		);
+		assert.equal(ownerFrame.length, 30);
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+	}
+});
+
+function launchFixture(
+	fixture = FIXTURE,
+	environment: Readonly<Record<string, string>> = {},
+) {
+	const command = `${quoteShell(process.execPath)} ${quoteShell(fixture)}`;
 	const child = spawn(
 		SCRIPT,
 		["-q", "-e", "-f", "-c", command, "/dev/null"],
 		{
-			env: { ...process.env, PI_OFFLINE: "1", TERM: "xterm-256color" },
+			env: {
+				...process.env,
+				PI_OFFLINE: "1",
+				TERM: "xterm-256color",
+				...environment,
+			},
 			stdio: ["pipe", "pipe", "pipe"],
 		},
 	);
-	return new PtyFixture(child);
+	return new PtyFixture(
+		child,
+		Number(environment.PTY_TEST_COLUMNS) || 80,
+		Number(environment.PTY_TEST_ROWS) || 24,
+	);
 }
 
 class PtyFixture {
 	readonly #child: ChildProcessWithoutNullStreams;
+	readonly #columns: number;
+	readonly #rows: number;
 	#output = "";
 	readonly #closed: Promise<void>;
 
-	constructor(child: ChildProcessWithoutNullStreams) {
+	constructor(child: ChildProcessWithoutNullStreams, columns: number, rows: number) {
 		this.#child = child;
+		this.#columns = columns;
+		this.#rows = rows;
 		child.stdout.on("data", (chunk) => {
 			this.#output += chunk.toString();
 		});
@@ -198,13 +466,13 @@ class PtyFixture {
 	async screen(): Promise<string[]> {
 		const terminal = new xtermHeadless.Terminal({
 			allowProposedApi: true,
-			cols: 80,
-			rows: 24,
+			cols: this.#columns,
+			rows: this.#rows,
 			scrollback: 1_000,
 		});
 		await new Promise<void>((resolve) => terminal.write(this.#output, resolve));
 		const buffer = terminal.buffer.active;
-		return Array.from({ length: 24 }, (_value, index) =>
+		return Array.from({ length: this.#rows }, (_value, index) =>
 			buffer.getLine(buffer.viewportY + index)?.translateToString(true).trim() ?? ""
 		);
 	}
@@ -220,9 +488,10 @@ class PtyFixture {
 		return JSON.parse(match[1]!) as T;
 	}
 
-	async waitForScreen(predicate: (frame: readonly string[]) => boolean): Promise<void> {
-		if (predicate(await this.screen())) return;
-		await new Promise<void>((resolve, reject) => {
+	async waitForScreen(predicate: (frame: readonly string[]) => boolean): Promise<string[]> {
+		const initialFrame = await this.screen();
+		if (predicate(initialFrame)) return initialFrame;
+		return new Promise<string[]>((resolve, reject) => {
 			let checking = false;
 			let poll: ReturnType<typeof setInterval> | undefined;
 			const timeout = setTimeout(() => {
@@ -236,7 +505,7 @@ class PtyFixture {
 					checking = false;
 					if (!predicate(frame)) return;
 					cleanup();
-					resolve();
+					resolve(frame);
 				}).catch((error: unknown) => {
 					checking = false;
 					cleanup();
