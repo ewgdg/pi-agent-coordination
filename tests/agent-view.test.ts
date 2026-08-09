@@ -571,8 +571,24 @@ test("a selected Agent whose session_start fails transitions to Dormant before l
 	await returnAgentViewToOwner(host, view, command);
 });
 
-test("a Dormant Agent editor starts one successor and keeps the durable view attached", async (t) => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+test("selecting a Dormant Agent starts one command-capable successor without prompting the model", async (t) => {
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "selected-successor-command-probe",
+			hidden: true,
+			factory(pi) {
+				pi.registerCommand("mark-selected-successor", {
+					description: "Prove the selected successor accepts normal commands",
+					async handler(_args, ctx) {
+						ctx.ui.setWidget("selected-successor-command", [
+							"Selected successor command executed",
+						]);
+					},
+				});
+			},
+		}],
+	});
 	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Persist this response for interactive Dormant inspection."),
@@ -611,13 +627,29 @@ test("a Dormant Agent editor starts one successor and keeps the durable view att
 	]);
 
 	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForCondition(async () =>
+		await currentRunPhase(host, agentId) === "live" &&
+		stripTerminalSequences(view.render(80).join("\n"))
+			.replace(/\s+/g, "")
+			.includes("PersistthisresponseforinteractiveDormantinspection")
+	);
 	const rendered = stripTerminalSequences(view.render(80).join("\n"));
 	assert.match(rendered, /Dormant Worker/);
-	assert.match(rendered, /Dormant/);
+	assert.match(rendered, /Live/);
 	assert.match(rendered.replace(/\s+/g, ""), /PersistthisresponseforinteractiveDormantinspection/);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
-	assert.equal(await currentRunPhase(host, agentId), "dormant");
+	assert.equal(await currentRunPhase(host, agentId), "live");
+	assert.equal(successorModelRequests, 0);
+
+	for (const character of "/mark-selected-successor") view.handleInput?.(character);
+	view.handleInput?.("\r");
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Selected successor command executed",
+		)
+	);
+	assert.equal(successorModelRequests, 0);
 
 	for (const character of "Direction submitted from the Dormant Agent editor.") {
 		view.handleInput?.(character);
@@ -647,6 +679,69 @@ test("a Dormant Agent editor starts one successor and keeps the durable view att
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
+});
+
+test("a Dormant selection exposes successor session_start UI before startup settles", async (t) => {
+	let childSessionStarts = 0;
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "selected-successor-startup-modal",
+			hidden: true,
+			factory(pi) {
+				pi.on("session_start", async (_event, ctx) => {
+					if (!ctx.sessionManager.getEntries().some((entry) =>
+						entry.type === "custom" &&
+						entry.customType === "agent-coordination.identity"
+					)) return;
+					childSessionStarts += 1;
+					if (childSessionStarts !== 2) return;
+					await ctx.ui.confirm(
+						"Selected successor startup",
+						"Finish starting the selected Dormant Agent?",
+					);
+				});
+			},
+		}],
+	});
+	t.after(async () => host.runtime.dispose());
+	host.model.setResponses([
+		fauxAssistantMessage("Initial Run settles before selection-started activation."),
+	]);
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-selected-successor-modal",
+		{
+			request: "Settle before the Owner selects this Dormant Agent.",
+			label: "Selected Successor Modal Worker",
+		},
+	);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"Initial Run settles before selection-started activation.",
+		)
+	);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-selected-successor-modal",
+		{ operation: "terminate", agentId },
+	);
+
+	const opening = openDormantAgentView(host, agentId);
+	const { command, view } = await opening;
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Selected successor startup",
+		)
+	);
+	assert.equal(await currentRunPhase(host, agentId), "starting");
+	view.handleInput?.("\r");
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "live");
+	assert.equal(childSessionStarts, 2);
+	await returnAgentViewToOwner(host, view, command);
 });
 
 test("/agents switches the mounted durable view between independent child modes", async (t) => {
@@ -996,51 +1091,46 @@ test("repeated successor Runs own and dispose one complete mode per exact sessio
 
 test("an ordinary Message-started successor attaches to the already-open durable Agent view before execution", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	let releaseInitialFailure!: () => void;
+	const initialFailureGate = new Promise<void>((resolve) => {
+		releaseInitialFailure = resolve;
+	});
+	let markInitialFailureStarted!: () => void;
+	const initialFailureStarted = new Promise<void>((resolve) => {
+		markInitialFailureStarted = resolve;
+	});
 	let releaseSuccessor!: () => void;
 	const successorGate = new Promise<void>((resolve) => {
 		releaseSuccessor = resolve;
 	});
 	t.after(async () => {
+		releaseInitialFailure();
 		releaseSuccessor();
 		await host.runtime.dispose();
 	});
-	host.model.setResponses([
-		fauxAssistantMessage("Initial Run settles before Dormant successor inspection."),
-	]);
-	const spawn = await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-message-successor-view",
-		{
-			request: "Settle so the Owner can terminate this initial Run.",
-			label: "Successor Worker",
-		},
-	);
-	const agentId = (spawn.details as { agentId: string }).agentId;
-	await waitForCondition(async () =>
-		JSON.stringify(await childEntries(host, agentId)).includes(
-			"Initial Run settles before Dormant successor inspection.",
-		)
-	);
-	await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_control",
-		"terminate-before-message-successor-view",
-		{ operation: "terminate", agentId },
-	);
-
-	const ownerSession = host.runtime.session;
-	const opened = await openDormantAgentView(host, agentId);
-	const view = opened.view;
+	let view!: Component;
 	let markSuccessorExecutionStarted!: () => void;
 	const successorExecutionStarted = new Promise<void>((resolve) => {
 		markSuccessorExecutionStarted = resolve;
 	});
 	let attachedBeforeExecution = false;
+	let initialFailureProduced = false;
 	const routeSuccessor = async (context: { messages: unknown; tools?: Array<{ name: string }> }) => {
 		const messages = JSON.stringify(context.messages);
 		if (context.tools?.some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("Moderator background work remains independent.");
+		}
+		if (
+			!initialFailureProduced &&
+			messages.includes("Fail while selected before ordinary Message delivery.")
+		) {
+			initialFailureProduced = true;
+			markInitialFailureStarted();
+			await initialFailureGate;
+			return fauxAssistantMessage("The initially selected Run failed.", {
+				stopReason: "error",
+				errorMessage: "deterministic failure before Message successor",
+			});
 		}
 		if (messages.includes("Start the successor through ordinary Message delivery.")) {
 			const rendered = stripTerminalSequences(view.render(80).join("\n"))
@@ -1056,7 +1146,26 @@ test("an ordinary Message-started successor attaches to the already-open durable
 		}
 		return fauxAssistantMessage("Unrelated Owner work remained on the Owner session.");
 	};
-	host.model.setResponses(Array.from({ length: 12 }, () => routeSuccessor));
+	host.model.setResponses(Array.from({ length: 16 }, () => routeSuccessor));
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-message-successor-view",
+		{
+			request: "Fail while selected before ordinary Message delivery.",
+			label: "Successor Worker",
+		},
+	);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await initialFailureStarted;
+	const ownerSession = host.runtime.session;
+	const opened = await openSelectedAgentView(host, agentId);
+	view = opened.view;
+	releaseInitialFailure();
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes("Dormant")
+	);
 
 	const sent = await executeAndCommitRegisteredTool(
 		host.session,
@@ -1167,35 +1276,34 @@ test("Workflow shutdown continues through a throwing Dormant view while another 
 			),
 		);
 	};
-	host.model.setResponses([
-		fauxAssistantMessage("First shutdown Agent settles before becoming Dormant."),
-	]);
+	let markFailureStarted!: () => void;
+	const failureStarted = new Promise<void>((resolve) => {
+		markFailureStarted = resolve;
+	});
+	let releaseFailure!: () => void;
+	const failureGate = new Promise<void>((resolve) => {
+		releaseFailure = resolve;
+	});
+	host.model.setResponses([async () => {
+		markFailureStarted();
+		await failureGate;
+		return fauxAssistantMessage("First shutdown Agent fails while selected.", {
+			stopReason: "error",
+			errorMessage: "deterministic selected Run failure before shutdown",
+		});
+	}]);
 	const firstInput = {
-		request: "Settle, become Dormant, and keep a presentation open for shutdown.",
+		request: "Fail while selected so shutdown owns a Dormant failure presentation.",
 		label: "Shutdown Dormant Worker",
 	};
 	appendToolSource("agent_spawn", "spawn-shutdown-dormant-worker", firstInput);
 	const firstSpawn = await owner.spawn("spawn-shutdown-dormant-worker", firstInput);
 	assert.equal(firstSpawn.disposition, "pending");
-	await waitForCondition(() => {
-		const run = owner.status(firstSpawn.agentId).run;
-		return run.phase === "live" && run.work === "settled";
-	});
-	const terminateInput = {
-		operation: "terminate" as const,
-		agentId: firstSpawn.agentId,
-	};
-	appendToolSource("agent_control", "terminate-shutdown-dormant-worker", terminateInput);
-	const terminated = await owner.control(
-		"terminate-shutdown-dormant-worker",
-		terminateInput,
-	);
-	assert.equal(
-		"disposition" in terminated ? terminated.disposition : undefined,
-		"terminated",
-	);
+	await failureStarted;
 	const dormantView = await owner.openAgentView(firstSpawn.agentId);
 	assert.ok(dormantView);
+	releaseFailure();
+	await waitForCondition(() => owner.status(firstSpawn.agentId).run.phase === "dormant");
 
 	host.model.setResponses([
 		fauxAssistantMessage("Second shutdown Agent remains live and retained."),

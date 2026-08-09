@@ -7,8 +7,8 @@ This matrix maps the acceptance criteria for issues #63–#68 to production path
 - `src/pi-integration/native-agent-projection.ts` — complete child `InteractiveMode`, detached terminal, native frame/input, lifecycle policy, process-global initialization boundary, failure and exit-request seams.
 - `src/presentation/agent-view-surface.ts` — full-window presentation, one-row identity chrome, input prioritization, mouse translation, failure boundary, and Owner shutdown delegation.
 - `src/coordination/durable-agent-view.ts` — one retargetable attachment per selected durable Agent view.
-- `src/coordination/workflow-coordinator.ts` — live/Dormant acquisition, retention, transitions, successor handoff, switching, and shutdown.
-- `src/runtime/default-child-session-factory.ts` — exact live and passive Dormant session/projection construction.
+- `src/coordination/workflow-coordinator.ts` — live acquisition, selection-started successor admission, retention, failure transitions, switching, and shutdown.
+- `src/runtime/default-child-session-factory.ts` — exact live and Dormant failure-presentation session/projection construction.
 - `src/runtime/in-process-agent-host.ts` — exact Run startup, terminal lifecycle ordering, failure, and disposal.
 
 Pi theme configuration is intentionally Workflow-global. The projection boundary restores incidental child initialization changes and Owner callback ownership; explicit theme changes remain shared.
@@ -20,8 +20,8 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 1. Live ordinary and Moderator complete modes; Owner stays bound | `tests/agent-view.test.ts` — “complete interactive mode while Owner stays bound”; `tests/operational-incidents.test.ts` Moderator view coverage |
 | 2. Per-session extensions and one startup | `tests/interactive-host-conformance.test.ts` — child startup isolation and repeated attachment |
 | 3. Detached terminal with no physical writes | `ProjectionTerminal`; `tests/native-agent-projection.test.ts` complete projection and compatibility cleanup; PTY Owner-state checks |
-| 4. Passive Dormant evidence and one first-input successor | `tests/agent-view.test.ts` — Dormant editor successor test |
-| 5. Durable live/failure/Dormant/successor transitions | selected startup failure, terminal failure, Dormant successor, and Message successor tests in `tests/agent-view.test.ts` |
+| 4. Dormant selection starts one no-prompt, command-capable successor | `tests/agent-view.test.ts` — selection-started successor and startup-modal tests |
+| 5. Durable live/failure/Dormant/successor transitions | selected startup failure, terminal failure, selection-started successor, and Message successor tests in `tests/agent-view.test.ts` |
 | 6. Agent-local UI and input features | complete-mode, independent-mode, shortcut/autocomplete, retained drafts/overlays, and child-startup isolation tests |
 | 7. Native rendering parity | rich rendering and differential native fullscreen tests in `tests/native-agent-projection.test.ts`, including Markdown, Mermaid, pending/completed tools, custom Messages, and custom entries |
 | 8. Long transcript navigation during streaming/resize | streaming-anchor and fullscreen viewport tests plus real PTY scroll/resize tests |
@@ -29,7 +29,7 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 10. Real PTY interaction and untouched Owner return | `tests/coordinated-workflow-pty.test.ts` main fullscreen flow; fixture asserts Owner runtime, transcript, editor factory/text/cursor, footer, services, and diagnostics |
 | 11. Mechanical private-host compatibility | `tests/host-shape.test.ts`, host module/conformance suites |
 
-## #64 — Exact Run and Dormant projection ownership
+## #64 — Exact Run and Dormant failure-projection ownership
 
 | Criterion | Evidence |
 |---|---|
@@ -39,7 +39,7 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 4. Complete native frame | fullscreen viewport, rich rendering, retry/compaction, and retained-mode state tests |
 | 5. Native input/focus/custom editor/shortcut path | complete-mode custom editor test; shortcut/autocomplete test; streaming custom-editor test |
 | 6. Inert detached terminal with live dimensions/callbacks | `ProjectionTerminal`; resize and PTY tests |
-| 7. Passive Dormant mode | Dormant native projection and Dormant successor tests |
+| 7. Dormant activation and failure presentation | selection-started successor, native Dormant failure projection, and terminal-failure tests |
 | 8. Exact clean/failure/termination/replacement/shutdown disposal | `tests/run-projection-lifecycle.test.ts`, constructor watcher rollback, and `tests/agent-view.test.ts` lifecycle tests |
 | 9. Owner presentation/global consistency | Owner binding assertions, explicit shared-theme tests, process listener/keybinding/theme baselines |
 | 10. No partial startup resource | constructor watcher rollback, compatibility failure, initial render failure, selected initialization failure, and PTY failure tests |
@@ -52,8 +52,8 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 1. Complete view without Owner mutation | complete-mode Owner-binding test |
 | 2. Native child interaction features | direct input, custom editor, shortcut, autocomplete, commands, overlays, and footer tests |
 | 3. Escape to child; `/agents` return/switch | custom-editor Escape and Agent-to-Agent switching tests |
-| 4. Dormant open is passive | Dormant open and native Dormant projection tests |
-| 5. First Dormant input starts/attaches/commits once | Dormant successor test |
+| 4. Dormant selection starts a successor without model input | selection-started successor test |
+| 5. Selected successor exposes normal commands and startup UI | command-capable successor and startup-modal tests |
 | 6. Durable identity independent of exact session | one-row identity surface and failure/successor retarget tests |
 | 7. Exact `interactive_selection` retention | attachment, return, and release conformance tests |
 | 8. Other retention preserves live mode | multiply retained switching and retained resource-reload tests |
@@ -85,7 +85,7 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 
 | Criterion | Evidence |
 |---|---|
-| 1. Initial newest content with editor/footer | complete fullscreen viewport and Dormant view tests |
+| 1. Initial newest content with editor/footer | complete fullscreen viewport and selection-started successor tests |
 | 2. Bounded wheel/drag/page/end navigation plus text entry | native viewport test, Agent-view surface routing, and main PTY flow |
 | 3. Tail-only partial/completed follow | streaming-anchor test and PTY chunked stream |
 | 4. Scrolled logical anchor survives append | streaming-anchor test and PTY anchor assertion |
@@ -106,7 +106,7 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 3. No selector handoff input leak | selector preparation-focus test and prioritized input routing tests |
 | 4. Idempotent switch/dispose/duplicate close/teardown/shutdown | durable attachment and surface tests; shutdown tests |
 | 5. Selected failure replaces before disposal | selected startup and terminal failure unit/PTY tests |
-| 6. Dormant and Message successor attach before work, once | Dormant first-input and Message successor tests |
+| 6. Selection-started and Message successors attach before work, once | selected successor, startup-modal, and Message successor tests |
 | 7. Sole view release once | exact retention conformance test |
 | 8. Other retention prevents premature disposal | retained switching and resource-reload tests |
 | 9. Repeated attachment does not recreate/start/grow resources | repeated attachment conformance, repeated projection resource baseline |
@@ -114,4 +114,4 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 11. Shutdown continues after one cleanup throws | throwing Dormant cleanup test |
 | 12. Failure/switch/noninteractive PTY matrix | input, render, initialization, terminal Run, switching, and unviewed disposal PTYs |
 | 13. Stable interfaces/process observations | lifecycle tests use projection/host interfaces; resource tests use process listeners and `process.getActiveResourcesInfo()` |
-| 14. Release gates | full test, conformance, typecheck, package dry-run, audit, and diff-check commands documented in the active plan |
+| 14. Release gates | full test, conformance, typecheck, package dry-run, audit, and diff-check commands documented in the completed plan |

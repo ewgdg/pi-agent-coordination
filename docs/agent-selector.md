@@ -22,9 +22,9 @@ Opening a live Agent view attaches the exact Run's complete Pi mode. The Run gai
 
 Dormant is a flat list of every verified ordinary Agent and Moderator without a current Run. It follows Pi resume recency: latest user or assistant activity, then native session creation time. Moderator rows include their role and compact trigger description.
 
-Opening a Dormant Agent creates a complete presentation over persisted evidence, including its native editor and footer. Opening alone does not start a Run, invoke a model, expose active tools, or append evidence.
+Selecting a Dormant Agent starts exactly one successor Run with `interactive_selection` retention and attaches its complete live mode. Selection submits no model input and appends no user evidence; it only activates the normal session, coordination tools, commands, shell input, custom extensions, editor, and footer that the selected Agent needs for interaction.
 
-The first editor submission starts one successor, replaces the Dormant mode with the successor's already-subscribed live mode, and commits the submitted input once. Ordinary Message Delivery can also start and attach a successor before Delivery execution. Closing or replacing a Dormant attachment disposes only its view-owned passive mode and session.
+The selector keeps focus while the successor starts. Its initializing mode is attached before `session_start` UI settles, so a startup dialog remains operable without admitting model work. A concurrent ordinary Message uses the same serialized successor rather than starting another Run. Returning to Owner or switching Agents removes selection retention and permits ordinary release when no other Retention Reason remains.
 
 ## Full-window Agent view
 
@@ -40,7 +40,7 @@ All input is routed through the child TUI's detached terminal. Printable text, p
 
 Pi's fullscreen transcript viewport and editor dock coexist. Page Up/Page Down, Home/End, configured prompt navigation, and mouse scrolling move the transcript while the editor remains available. At the tail, new output follows automatically. Scrolling away preserves the inspected region until the native end action restores tail following. Resize updates the detached terminal and reflows the complete child frame within the available rows.
 
-A terminally failed selected Run transitions to a complete Dormant presentation without closing the overlay. A later successor replaces that mode in the same durable attachment. Switching or Workflow-driven disposal settles the attachment once, releases live selection retention, disposes view-owned Dormant resources, and restores the untouched Owner when appropriate.
+A terminally failed selected Run transitions to a complete Dormant failure presentation without closing the overlay. Explicit human input or ordinary coordination may start a later successor and replace that fallback mode in the same durable attachment. Switching or Workflow-driven disposal settles the attachment once, releases live selection retention, disposes view-owned failure-presentation resources, and restores the untouched Owner when appropriate.
 
 ## Focused roster details and keys
 

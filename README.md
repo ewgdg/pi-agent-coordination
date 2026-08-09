@@ -11,7 +11,7 @@ Durable Pi agents that collaborate asynchronously under explicit Owner and Spawn
 - **Run supervision:** Workflow Owners and Direct Spawners can inspect authorized Agents with `agent_observe`, then interrupt, explicitly resume, or terminate exact Runs with `agent_control`.
 - **Operational incident handling:** isolated Moderators handle overdue answer obligations, Obligation Stalls, answer-obligated Run Failures, and closed live Dependency Deadlocks. Review renewal, Run control, Owner escalation, and Resolution are policy-bounded and mechanically gated.
 - **Durable recovery:** a fresh host reconstructs verified authority, standalone Moderators, and residual Request retention from complete Pi transcripts without replaying volatile work.
-- **Interactive Agent views:** `/agents` presents attention plus live and dormant Agents, then attaches the selected Agent's complete Pi transcript, editor, footer, commands, and extension UI without rebinding the Owner runtime.
+- **Interactive Agent views:** `/agents` presents attention plus live and dormant Agents, starts one no-prompt successor when a Dormant Agent is selected, then attaches the selected Agent's complete Pi transcript, editor, footer, commands, and extension UI without rebinding the Owner runtime.
 
 Coordinated model generations never use generic regenerated-prompt retry. Only adapter-proven continuation of the same generation is eligible. One failed Moderator may be replaced once; a second failure creates passive, Owner-only Operational Attention.
 

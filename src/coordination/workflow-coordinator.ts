@@ -655,7 +655,8 @@ export class WorkflowCoordinator {
 		projection: PiNativeAgentProjection;
 		dormantProjection?: DormantAgentProjection;
 	}>> {
-		if (record.host.observe().phase === "starting") {
+		const phase = record.host.observe().phase;
+		if (phase === "starting") {
 			const initializingProjection = await waitForInitializingProjection(record);
 			if (initializingProjection) {
 				// Run startup deliberately waits for session_start UI. Entering its lane
@@ -665,21 +666,32 @@ export class WorkflowCoordinator {
 				return { projection: initializingProjection };
 			}
 		}
+		if (phase === "dormant") return this.#startAgentViewTarget(record);
 		return record.host.lane.run(() => this.#acquireAgentViewTargetInLane(record));
+	}
+
+	async #startAgentViewTarget(record: AgentRecord): Promise<Readonly<{
+		projection: PiNativeAgentProjection;
+	}>> {
+		const startup = record.host.lane.run(() => {
+			if (record.host.currentHandle()) {
+				record.host.addRetentionReason("interactive_selection");
+				return record.host.requireLiveSession();
+			}
+			return record.host.startInLane(["interactive_selection"]);
+		});
+		// Observe projection publication independently of the queued lane operation.
+		// An earlier Message may win the lane and pause in session_start UI; selection
+		// must attach that same mode to settle the startup instead of waiting behind it.
+		const projection = await waitForStartupProjection(record, startup);
+		record.host.addRetentionReason("interactive_selection");
+		return { projection };
 	}
 
 	async #acquireAgentViewTargetInLane(record: AgentRecord): Promise<Readonly<{
 		projection: PiNativeAgentProjection;
 		dormantProjection?: DormantAgentProjection;
 	}>> {
-		if (!record.host.currentHandle()) {
-			const dormantProjection = await this.#sessionFactory
-				.createDormantProjection(record);
-			return {
-				projection: dormantProjection.projection,
-				dormantProjection,
-			};
-		}
 		record.host.addRetentionReason("interactive_selection");
 		const projection = record.host.currentProjection();
 		if (projection) return { projection };
@@ -1175,6 +1187,47 @@ function waitForInitializingProjection(
 			removeHandler();
 			resolve(projection);
 		});
+	});
+}
+
+function waitForStartupProjection(
+	record: AgentRecord,
+	startup: Promise<unknown>,
+): Promise<PiNativeAgentProjection> {
+	const current = record.host.currentProjection();
+	if (current) return Promise.resolve(current);
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		let removeHandler: () => void = () => undefined;
+		const settle = (
+			result: { projection: PiNativeAgentProjection } | { error: unknown },
+		) => {
+			if (settled) return;
+			settled = true;
+			removeHandler();
+			if ("projection" in result) resolve(result.projection);
+			else reject(result.error);
+		};
+		const inspectProjection = () => {
+			const projection = record.host.currentProjection();
+			if (projection) settle({ projection });
+		};
+		removeHandler = record.host.addStateChangeHandler(inspectProjection);
+		inspectProjection();
+		void startup.then(
+			() => {
+				const projection = record.host.currentProjection();
+				if (projection) settle({ projection });
+				else {
+					settle({
+						error: new Error(
+							`invariant_violation: selected Agent ${record.identity.agentId} started without a presentation projection`,
+						),
+					});
+				}
+			},
+			(error) => settle({ error }),
+		);
 	});
 }
 

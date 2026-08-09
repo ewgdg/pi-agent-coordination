@@ -33,12 +33,10 @@ Model work remains behind the Run-admission gate until mode initialization, exte
 
 Projection ownership follows the exact Run, not view attachment. Clean release, failure, termination, startup rollback, and Workflow shutdown emit `session_shutdown`, release extension-owned UI, and dispose the live mode with its session exactly once. Closing or switching a view only removes `interactive_selection`; it never directly disposes a live projection retained by the Run.
 
-## Dormant presentation
+## Dormant activation and failure presentation
 
-Dormant selection creates a view-owned, presentation-only session over the durable `SessionManager`. It uses the same complete mode and fullscreen editor but exposes no active model or coordination tools and appends no evidence merely by opening.
+Selecting a Dormant Agent starts exactly one successor Run in the Agent lane with `interactive_selection` retention. Selection itself submits no model input. The successor's complete live mode supplies normal coordination tools, commands, shell input, custom extensions, editor, and footer immediately after startup, while its initializing projection remains available for `session_start` UI before readiness settles.
 
-The first submitted editor input is intercepted by coordination. It starts one successor in the Agent lane, attaches the successor's complete live mode before model-visible work proceeds, and commits the input once. Closing or replacing a Dormant attachment disposes its presentation mode and passive session.
+Concurrent selection and Message Delivery converge on the same serialized successor. Closing or replacing the selected live attachment removes `interactive_selection`; ordinary Run release decides whether the Agent becomes Dormant again.
 
-Before that first message, Dormant slash commands and shell submissions are rejected because they would mutate the passive presentation session instead of starting the Agent. `/agents` remains available for switching or returning to the Owner. Dormant and live child settings are isolated from the Owner settings manager.
-
-If a selected live Run fails, the durable view receives a complete Dormant mode before the failed exact-Run projection is disposed. If ordinary Message Delivery starts a successor, the same view receives the successor mode before Delivery execution continues.
+If a selected live Run fails, the durable view first receives a view-owned Dormant failure presentation before the failed exact-Run projection is disposed. Explicit human input or ordinary Message Delivery can start a successor, and the same durable attachment receives its complete live mode before model-visible work proceeds. Failure-presentation and live child settings remain isolated from the Owner settings manager.

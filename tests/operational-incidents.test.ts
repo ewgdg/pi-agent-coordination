@@ -196,7 +196,7 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	const dormantRendered = stripTerminalSequences(
 		dormantView.view.render(80).join("\n"),
 	);
-	assert.match(dormantRendered, /moderator.*Dormant/);
+	assert.match(dormantRendered, /moderator.*Live/);
 	assert.match(dormantRendered, new RegExp(moderator.id.slice(-8)));
 	assert.equal(host.runtime.session, ownerSession);
 	await returnAgentViewToOwner(host, dormantView);

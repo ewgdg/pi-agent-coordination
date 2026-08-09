@@ -4,7 +4,7 @@ Preserve the complete Interactive Selection experience while removing Owner runt
 
 # Intention
 
-Treat every exact live child or Moderator Run as the owner of one complete embedded `InteractiveMode`. Its detached terminal owns dimensions and input callbacks but cannot write to the physical terminal. `/agents` attaches the full child renderer to a durable Agent view and forwards terminal input into that renderer. Dormant presentation remains interactive and starts one successor from its first submitted input.
+Treat every exact live child or Moderator Run as the owner of one complete embedded `InteractiveMode`. Its detached terminal owns dimensions and input callbacks but cannot write to the physical terminal. `/agents` attaches the full child renderer to a durable Agent view and forwards terminal input into that renderer. Selecting a Dormant Agent starts one no-prompt successor so the selected view has normal commands and extensions.
 
 # Scope & Constraints
 
@@ -12,7 +12,7 @@ Treat every exact live child or Moderator Run as the owner of one complete embed
 - The Owner runtime session, services, diagnostics, transcript, editor, footer, extension context, and physical terminal remain continuously bound and mounted.
 - Each exact child session binds its own extensions and emits `session_start` exactly once. View attachment never replays session lifecycle.
 - Use Pi's complete native renderer and terminal input path. Do not reconstruct transcript/editor/footer rows in coordination code.
-- A live mode remains exact-Run-owned. A Dormant presentation remains view-owned and model/tool inert until editor submission.
+- A live mode remains exact-Run-owned. Selecting a Dormant Agent starts one exact successor without submitting model input; only a post-failure Dormant presentation remains view-owned.
 - Durable selection follows Agent identity across live failure, Dormant presentation, and successor startup.
 - The outer view must not steal Escape or ordinary editor keys. `/agents` is the canonical selection and return path.
 - Keep Pi private coupling behind one deep adapter and fail mechanically on host drift.
@@ -31,7 +31,7 @@ Treat every exact live child or Moderator Run as the owner of one complete embed
 1. Add one failing real-session tracer test: `/agents` displays the live child's native editor/footer, native terminal input reaches that child, and Owner state remains unchanged.
 2. Deepen the projection adapter to own a complete initialized child `InteractiveMode`, detached terminal input/dimensions, renderer changes, and exact disposal. Let the mode bind child extensions and emit `session_start` once.
 3. Replace the manual Agent-view transcript/status compositor with the complete child renderer and terminal input forwarding. Make selector-to-view focus transfer atomic.
-4. Restore Dormant first-input successor behavior through the durable attachment without duplicate input or lifecycle events.
+4. Start one no-prompt successor during Dormant selection so the attached complete mode immediately owns normal commands, extensions, and later input.
 5. Restore `/agents` switching from child views, including return to Owner, while preserving child editor keys and unfinished text.
 6. Expand parity/isolation coverage for custom editors, footer, widgets, statuses, notifications, child overlays, concurrent modes, and resource reload.
 7. Complete streaming/scroll/resize PTY behavior through the native child layout.
@@ -46,13 +46,13 @@ Treat every exact live child or Moderator Run as the owner of one complete embed
 - [x] Confirmed test seams through the accepted issue hierarchy.
 - [x] Completed exact live-mode initialization, detached terminal ownership, one-time extension startup, model admission, and exact disposal.
 - [x] Completed full native rendering and terminal input through a fullscreen child layout with transcript navigation and resize.
-- [x] Completed durable live, Dormant-first-input, failure, Message-successor, Owner-return, and Agent-to-Agent switching behavior.
+- [x] Completed durable live, Dormant-selection successor, failure, Message-successor, Owner-return, and Agent-to-Agent switching behavior.
 - [x] Made selector preparation retain focus until the target mode is ready.
 - [x] Covered child custom editors, footer, widgets, commands, overlays, ordinary/Moderator input, Owner isolation, and repeated startup lifecycle.
 - [x] Rewrote repository documentation around complete interactive Agent modes.
 - [x] Hardened embedded lifecycle ownership: no child process listeners, exits, runtime disposal, or fatal process path; exact shutdown and extension UI cleanup occur once.
 - [x] Serialized global projection initialization and child service preparation, restored Owner theme callbacks/keybindings, isolated settings, and detached compatibility cleanup from the physical terminal.
-- [x] Covered startup dialogs before Run admission, Dormant command rejection, mouse coordinate translation, process listener stability, `/quit`, Ctrl-D, repeated Ctrl-C, and `session_shutdown`.
+- [x] Covered startup dialogs before Run admission, command-capable Dormant activation, post-failure presentation policy, mouse coordinate translation, process listener stability, `/quit`, Ctrl-D, repeated Ctrl-C, and `session_shutdown`.
 - [x] Hardened switch acquisition against starting and replaced target projections and stale Dormant resources.
 - [x] Completed full regression, conformance, typecheck, real PTY, package dry-run, production audit, diff hygiene, and repeated-suite validation.
 - [x] Fixed regular-Owner mouse reporting and prioritized complete Agent-view input ahead of fullscreen Owner viewport interception, including wheel, scrollbar drag, navigation keys, and SGR/X10 header translation.
@@ -72,6 +72,7 @@ Treat every exact live child or Moderator Run as the owner of one complete embed
 - Terminal dimensions remain renderer-owned. The overlay does not introduce a parallel layout contract.
 - The child mode owns its normal editor submission semantics through `getUserInput()`; the adapter runs only that native input pump rather than Pi's process-level `run()` startup checks.
 - Selecting Owner from the child mode's `/agents` surface closes the active durable attachment in the existing Agent-view lane.
+- Selecting a Dormant roster entry is a Run-start trigger, not a passive presentation action. It starts one successor with selection retention and no model input so commands and extensions belong to a normal exact Run.
 
 # Surprises & Discoveries
 
