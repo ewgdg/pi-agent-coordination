@@ -120,6 +120,158 @@ test("failed startup emits the exact Run terminal lifecycle before disposal", as
 	});
 });
 
+test("post-binding startup failure cancels and observes pending exact readiness", async () => {
+	const resource = createRunResource();
+	const handlerFailure = new Error("post-binding handler failed before readiness");
+	let rejectReady!: (error: unknown) => void;
+	const ready = new Promise<void>((_resolve, reject) => {
+		rejectReady = reject;
+	});
+	const nativeProjection = resource.startedRun.projection;
+	const projection: PiNativeAgentProjection = {
+		...nativeProjection,
+		ready: () => ready,
+		cancelInitialization(error) {
+			rejectReady(error);
+			return Promise.resolve();
+		},
+	};
+	const host = InProcessAgentHost.createChild({
+		sessionManager: SessionManager.inMemory(),
+		startSession: async () => ({
+			session: resource.session,
+			projection,
+			ready,
+		}),
+	});
+	const lifecycle: string[] = [];
+	host.setRunStartedHandler(() => {
+		throw handlerFailure;
+	});
+	host.setRunEndingHandler((_session, _handle, cause) => {
+		lifecycle.push(`ending:${cause}`);
+	});
+	host.addEndedHandler((_handle, cause) => lifecycle.push(`ended:${cause}`));
+
+	await assert.rejects(
+		() => host.lane.run(() => host.startInLane()),
+		handlerFailure,
+	);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(lifecycle, ["ending:failure", "ended:failure"]);
+	assert.deepEqual(resource.counts(), {
+		projectionDisposals: 1,
+		sessionDisposals: 1,
+		unsubscriptions: 1,
+	});
+	assert.equal(host.observe().phase, "dormant");
+});
+
+test("shutdown fenced before projection binding observes accepted startup cancellation", async () => {
+	const resource = createRunResource();
+	let markPreparationStarted!: () => void;
+	const preparationStarted = new Promise<void>((resolve) => {
+		markPreparationStarted = resolve;
+	});
+	let releasePreparation!: () => void;
+	const preparationGate = new Promise<void>((resolve) => {
+		releasePreparation = resolve;
+	});
+	let rejectReady!: (error: unknown) => void;
+	const ready = new Promise<void>((_resolve, reject) => {
+		rejectReady = reject;
+	});
+	let disposal: Promise<void> | undefined;
+	const nativeProjection = resource.startedRun.projection;
+	const projection: PiNativeAgentProjection = {
+		...nativeProjection,
+		ready: () => ready,
+		cancelInitialization(error) {
+			rejectReady(error);
+			disposal ??= nativeProjection.dispose();
+			return disposal;
+		},
+		dispose() {
+			disposal ??= nativeProjection.dispose();
+			return disposal;
+		},
+	};
+	const host = InProcessAgentHost.createChild({
+		sessionManager: SessionManager.inMemory(),
+		startSession: async () => {
+			markPreparationStarted();
+			await preparationGate;
+			return { session: resource.session, projection, ready };
+		},
+	});
+	const endedCauses: string[] = [];
+	host.addEndedHandler((_handle, cause) => endedCauses.push(cause));
+	const startup = host.lane.run(() => host.startInLane());
+	await preparationStarted;
+	assert.equal(await host.beginShutdown(), false);
+	releasePreparation();
+
+	await assert.rejects(startup, /Workflow shutdown during Agent Run initialization/);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(endedCauses, ["termination"]);
+	assert.deepEqual(resource.counts(), {
+		projectionDisposals: 1,
+		sessionDisposals: 1,
+		unsubscriptions: 1,
+	});
+	assert.equal(host.observe().phase, "dormant");
+});
+
+test("a naturally rejected startup remains Run Failure after a pre-binding shutdown fence", async () => {
+	const resource = createRunResource();
+	let markPreparationStarted!: () => void;
+	const preparationStarted = new Promise<void>((resolve) => {
+		markPreparationStarted = resolve;
+	});
+	let releasePreparation!: () => void;
+	const preparationGate = new Promise<void>((resolve) => {
+		releasePreparation = resolve;
+	});
+	const naturalFailure = new Error("natural startup failure won before shutdown cancellation");
+	let rejectReady!: (error: unknown) => void;
+	const ready = new Promise<void>((_resolve, reject) => {
+		rejectReady = reject;
+	});
+	const nativeProjection = resource.startedRun.projection;
+	const projection: PiNativeAgentProjection = {
+		...nativeProjection,
+		ready: () => ready,
+		cancelInitialization() {
+			rejectReady(naturalFailure);
+			return undefined;
+		},
+	};
+	const host = InProcessAgentHost.createChild({
+		sessionManager: SessionManager.inMemory(),
+		startSession: async () => {
+			markPreparationStarted();
+			await preparationGate;
+			return { session: resource.session, projection, ready };
+		},
+	});
+	const endedCauses: string[] = [];
+	host.addEndedHandler((_handle, cause) => endedCauses.push(cause));
+	const startup = host.lane.run(() => host.startInLane());
+	await preparationStarted;
+	assert.equal(await host.beginShutdown(), false);
+	releasePreparation();
+
+	await assert.rejects(startup, naturalFailure);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(endedCauses, ["failure"]);
+	assert.deepEqual(resource.counts(), {
+		projectionDisposals: 1,
+		sessionDisposals: 1,
+		unsubscriptions: 1,
+	});
+	assert.equal(host.observe().phase, "dormant");
+});
+
 test("native subscription failure rolls back the already-created projection and session", async () => {
 	const resource = createRunResource({
 		subscribeError: new Error("native subscription unavailable"),
@@ -277,6 +429,9 @@ function createRunResource(options?: {
 		addFailureHandler: () => () => undefined,
 		addExitRequestHandler: () => () => undefined,
 		async ready() {},
+		cancelInitialization() {
+			return undefined;
+		},
 		async dispose() {
 			projectionDisposals += 1;
 			if (options?.projectionDisposeError) throw options.projectionDisposeError;

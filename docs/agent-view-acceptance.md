@@ -104,9 +104,9 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 1. Constructor/init/bind/startup/render/compatibility failure cleanup | footer watcher construction rollback, native projection failure tests, lifecycle rollback tests, and selected initialization PTY |
 | 2. Bounded async render/input failure | Agent-view surface tests, real child failure tests, and failure PTYs |
 | 3. No selector handoff input leak | selector preparation-focus test and prioritized input routing tests |
-| 4. Idempotent switch/dispose/duplicate close/teardown/shutdown | durable attachment and surface tests; shutdown tests |
+| 4. Idempotent switch/dispose/duplicate close/teardown/shutdown | durable attachment and surface tests; selected and unselected startup custom-UI cancellation/shutdown tests |
 | 5. Selected failure replaces before disposal | selected startup and terminal failure unit/PTY tests |
-| 6. Selection-started and Message successors attach before work, once | selected successor, startup-modal, and Message successor tests |
+| 6. Selection-started and Message successors attach before work, once | selected successor, startup-modal, stale-target no-restart, and Message successor tests |
 | 7. Sole view release once | exact retention conformance test |
 | 8. Other retention prevents premature disposal | retained switching and resource-reload tests |
 | 9. Repeated attachment does not recreate/start/grow resources | repeated attachment conformance, repeated projection resource baseline |

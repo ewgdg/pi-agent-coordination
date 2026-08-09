@@ -41,6 +41,7 @@ export type PiNativeAgentProjection = Readonly<{
 	addFailureHandler(handler: (error: unknown) => void): () => void;
 	addExitRequestHandler(handler: () => void): () => void;
 	ready(): Promise<void>;
+	cancelInitialization(error: unknown): Promise<void> | undefined;
 	dispose(): Promise<void>;
 }>;
 
@@ -78,6 +79,11 @@ type ProjectionInteractiveMode = {
 	shutdownRequested: boolean;
 	shutdown(): Promise<void>;
 	showError(message: string): void;
+	showExtensionConfirm(...args: unknown[]): Promise<unknown>;
+	showExtensionCustom(...args: unknown[]): Promise<unknown>;
+	showExtensionEditor(...args: unknown[]): Promise<unknown>;
+	showExtensionInput(...args: unknown[]): Promise<unknown>;
+	showExtensionSelector(...args: unknown[]): Promise<unknown>;
 	stop(): void;
 	unregisterSignalHandlers(): void;
 	themeController: {
@@ -165,6 +171,10 @@ export function createPiNativeProjectionHost(options: {
 				publish = resolve;
 				rejectPublication = reject;
 			});
+			let finishInitialization!: () => void;
+			const initializationFinished = new Promise<void>((resolve) => {
+				finishInitialization = resolve;
+			});
 			let published = false;
 			void serializeProjectionInitialization(async () => {
 				if (kind === "dormant") assertDormantSession(session);
@@ -185,12 +195,26 @@ export function createPiNativeProjectionHost(options: {
 				);
 				let mode: ProjectionInteractiveMode | undefined;
 				let initialPresentationApplied = false;
-				let resolveReady!: () => void;
-				let rejectReady!: (error: unknown) => void;
+				let initializationState: "pending" | "resolved" | "rejected" = "pending";
+				let initializationCancellation: Readonly<{ error: unknown }> | undefined;
+				let resolveReadyPromise!: () => void;
+				let rejectReadyPromise!: (error: unknown) => void;
 				const ready = new Promise<void>((resolve, reject) => {
-					resolveReady = resolve;
-					rejectReady = reject;
+					resolveReadyPromise = resolve;
+					rejectReadyPromise = reject;
 				});
+				const resolveReady = () => {
+					if (initializationState !== "pending") return false;
+					initializationState = "resolved";
+					resolveReadyPromise();
+					return true;
+				};
+				const rejectReady = (error: unknown) => {
+					if (initializationState !== "pending") return false;
+					initializationState = "rejected";
+					rejectReadyPromise(error);
+					return true;
+				};
 				void ready.catch(() => undefined);
 				try {
 					const restoreFooterWatcherConstruction = suppressFooterWatcherConstruction(
@@ -219,6 +243,7 @@ export function createPiNativeProjectionHost(options: {
 					// UI reset/stop paths that must never write through ProcessTerminal.
 					mode.renderer.terminal = terminal;
 					assertProjectionInteractiveModeInstanceShape(mode);
+					const startupUICancellation = installEmbeddedInitializationCancellation(mode);
 					mode.footerDataProvider.setupGitWatcher();
 					// Construction installs the child's process-global theme resources and
 					// keybindings. Restore the continuously bound Owner before initialization;
@@ -270,6 +295,13 @@ export function createPiNativeProjectionHost(options: {
 						failures,
 						exitRequests,
 						ready,
+						initializationFinished,
+						(error) => {
+							if (!rejectReady(error)) return false;
+							initializationCancellation = { error };
+							startupUICancellation.cancel();
+							return true;
+						},
 						() => mode!.isInitialized,
 						() => renderFailure,
 					);
@@ -278,6 +310,7 @@ export function createPiNativeProjectionHost(options: {
 						publish(resource);
 					}
 					await mode.init();
+					if (initializationCancellation) throw initializationCancellation.error;
 					if (kind === "dormant") installDormantSubmissionPolicy(mode);
 					// Validate one complete frame before model admission. The renderer's own
 					// scheduled loop is guarded below, so asynchronous component failures are
@@ -289,6 +322,7 @@ export function createPiNativeProjectionHost(options: {
 						ownerServices,
 						options.ownerInteractiveMode,
 					);
+					startupUICancellation.restore();
 					resource.setInputLoop(startProjectionInputLoop(
 						mode,
 						session,
@@ -337,7 +371,7 @@ export function createPiNativeProjectionHost(options: {
 						rejectPublication(error);
 					}
 				}
-			}).catch(rejectPublication);
+			}).catch(rejectPublication).finally(finishInitialization);
 			return publication;
 		},
 	});
@@ -357,6 +391,73 @@ async function serializeProjectionInitialization<T>(
 	} finally {
 		release();
 	}
+}
+
+function installEmbeddedInitializationCancellation(
+	mode: ProjectionInteractiveMode,
+): Readonly<{ cancel(): void; restore(): void }> {
+	let resolveCancellation!: () => void;
+	const cancellation = new Promise<undefined>((resolve) => {
+		resolveCancellation = () => resolve(undefined);
+	});
+	let canceled = false;
+	const standardMembers = [
+		"showExtensionSelector",
+		"showExtensionConfirm",
+		"showExtensionInput",
+		"showExtensionEditor",
+	] as const;
+	const members = [...standardMembers, "showExtensionCustom"] as const;
+	const nativeMethods = new Map<
+		(typeof members)[number],
+		(...args: unknown[]) => Promise<unknown>
+	>();
+	for (const member of members) nativeMethods.set(member, mode[member]);
+	for (const member of standardMembers) {
+		const nativeShow = nativeMethods.get(member)!.bind(mode);
+		mode[member] = (...args: unknown[]) => canceled
+			? Promise.resolve(undefined)
+			: Promise.race([nativeShow(...args), cancellation]);
+	}
+	const nativeShowCustom = nativeMethods.get("showExtensionCustom")!.bind(mode);
+	const closeCustomOperations = new Set<() => void>();
+	mode.showExtensionCustom = (factory: unknown, ...args: unknown[]) => {
+		if (canceled || typeof factory !== "function") return Promise.resolve(undefined);
+		let closeNativeOperation = () => undefined;
+		const close = () => closeNativeOperation();
+		const wrappedFactory = async (...factoryArgs: unknown[]) => {
+			const done = factoryArgs[3];
+			if (typeof done === "function") {
+				closeNativeOperation = () => done(undefined);
+				if (canceled) closeNativeOperation();
+			}
+			const component = await factory(...factoryArgs);
+			if (canceled && component && typeof component === "object") {
+				try {
+					(component as { dispose?: () => void }).dispose?.();
+				} catch {
+					// Pi's native custom close also treats component disposal as best effort.
+				}
+			}
+			return component;
+		};
+		closeCustomOperations.add(close);
+		return Promise.race([
+			nativeShowCustom(wrappedFactory, ...args),
+			cancellation,
+		]).finally(() => closeCustomOperations.delete(close));
+	};
+	return {
+		cancel() {
+			if (canceled) return;
+			canceled = true;
+			for (const close of closeCustomOperations) close();
+			resolveCancellation();
+		},
+		restore() {
+			for (const member of members) mode[member] = nativeMethods.get(member)!;
+		},
+	};
 }
 
 function installEmbeddedLifecyclePolicy(
@@ -426,11 +527,26 @@ function createProjectionResource(
 	failures: ProjectionFailures,
 	exitRequests: ProjectionExitRequests,
 	ready: Promise<void>,
+	initializationFinished: Promise<void>,
+	cancelReady: (error: unknown) => boolean,
 	isInitialized: () => boolean,
 	readRenderFailure: () => Readonly<{ error: unknown }> | undefined,
 ): PiNativeAgentProjection & { setInputLoop(loop: ProjectionInputLoop): void } {
 	let disposal: Promise<void> | undefined;
 	let inputLoop: ProjectionInputLoop | undefined;
+	const dispose = () => {
+		disposal ??= (async () => {
+			// Startup cancellation first settles extension UI, then lets init unwind and
+			// restore Owner-global presentation ownership before shutdown tears down mode state.
+			await initializationFinished;
+			inputLoop?.stop();
+			changes.dispose();
+			failures.dispose();
+			exitRequests.dispose();
+			await disposeMode(mode, runtime);
+		})();
+		return disposal;
+	};
 	return Object.freeze({
 		kind,
 		sessionId,
@@ -451,20 +567,15 @@ function createProjectionResource(
 		addFailureHandler: (handler) => failures.addHandler(handler),
 		addExitRequestHandler: (handler) => exitRequests.addHandler(handler),
 		ready: () => ready,
+		cancelInitialization(error) {
+			if (!cancelReady(error)) return undefined;
+			return initializationFinished;
+		},
 		setInputLoop(loop) {
 			if (disposal) loop.stop();
 			else inputLoop = loop;
 		},
-		dispose() {
-			disposal ??= (async () => {
-				inputLoop?.stop();
-				changes.dispose();
-				failures.dispose();
-				exitRequests.dispose();
-				await disposeMode(mode, runtime);
-			})();
-			return disposal;
-		},
+		dispose,
 	});
 }
 

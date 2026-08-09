@@ -744,6 +744,423 @@ test("a Dormant selection exposes successor session_start UI before startup sett
 	await returnAgentViewToOwner(host, view, command);
 });
 
+test("a failed selection target is not restarted while switching waits on the previous Agent lane", async (t) => {
+	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	const identity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	const nativeProjectionHost = createPiNativeProjectionHost({
+		ownerRuntime: host.runtime,
+	});
+	const projectionStarts = new Map<string, number>();
+	const startupBehavior = new Map<string, "hold" | "fail_once">();
+	let markPreviousStartupHeld!: () => void;
+	const previousStartupHeld = new Promise<void>((resolve) => {
+		markPreviousStartupHeld = resolve;
+	});
+	let releasePreviousStartup!: () => void;
+	const previousStartupGate = new Promise<void>((resolve) => {
+		releasePreviousStartup = resolve;
+	});
+	let markTargetStartupFailed!: () => void;
+	const targetStartupFailed = new Promise<void>((resolve) => {
+		markTargetStartupFailed = resolve;
+	});
+	let coordinator!: WorkflowCoordinator;
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		projectionHost: {
+			async createProjection(options) {
+				const projection = await nativeProjectionHost.createProjection(options);
+				if (options.kind !== "live") return projection;
+				const sessionId = options.session.sessionId;
+				const start = (projectionStarts.get(sessionId) ?? 0) + 1;
+				projectionStarts.set(sessionId, start);
+				const behavior = startupBehavior.get(sessionId);
+				if (behavior === "hold" && start === 2) {
+					return {
+						...projection,
+						async ready() {
+							await projection.ready();
+							markPreviousStartupHeld();
+							await previousStartupGate;
+						},
+					};
+				}
+				if (behavior === "fail_once" && start === 2) {
+					return {
+						...projection,
+						async ready() {
+							await projection.ready();
+							markTargetStartupFailed();
+							throw new Error("deterministic stale selection target failure");
+						},
+					};
+				}
+				return projection;
+			},
+		},
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+	});
+	await bindTestOwnerHost(host, "tui");
+	const owner = coordinator.forAgent(identity.agentId);
+	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
+	t.after(async () => {
+		releasePreviousStartup();
+		await activeView?.close();
+		await coordinator.shutdown(async () => host.runtime.dispose());
+	});
+	const appendToolSource = (
+		toolName: string,
+		toolCallId: string,
+		input: Record<string, unknown>,
+	) => {
+		host.session.sessionManager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(toolName, input, { id: toolCallId }),
+				{ stopReason: "toolUse" },
+			),
+		);
+	};
+	host.model.setResponses([
+		fauxAssistantMessage("First switch-race Agent becomes Dormant."),
+		fauxAssistantMessage("Second switch-race Agent becomes Dormant."),
+	]);
+	const spawnAgent = async (toolCallId: string, label: string) => {
+		const input = { request: `Prepare ${label} for the switch race.`, label };
+		appendToolSource("agent_spawn", toolCallId, input);
+		const receipt = await owner.spawn(toolCallId, input);
+		assert.ok("agentId" in receipt && receipt.agentId);
+		const agentId = receipt.agentId;
+		await waitForCondition(() => owner.status(agentId).run.phase === "live");
+		await waitForCondition(() => {
+			const run = owner.status(agentId).run;
+			return run.phase === "live" && run.work === "settled";
+		});
+		const terminateInput = {
+			operation: "terminate" as const,
+			agentId,
+		};
+		appendToolSource("agent_control", `terminate-${toolCallId}`, terminateInput);
+		await owner.control(`terminate-${toolCallId}`, terminateInput);
+		return agentId;
+	};
+	const previousAgentId = await spawnAgent(
+		"spawn-switch-race-previous",
+		"Switch Race Previous",
+	);
+	const targetAgentId = await spawnAgent(
+		"spawn-switch-race-target",
+		"Switch Race Target",
+	);
+	startupBehavior.set(previousAgentId, "hold");
+	startupBehavior.set(targetAgentId, "fail_once");
+
+	activeView = await owner.openAgentView(previousAgentId);
+	assert.ok(activeView);
+	await previousStartupHeld;
+	const switching = owner.openAgentView(targetAgentId);
+	await targetStartupFailed;
+	await waitForCondition(() => owner.status(targetAgentId).run.phase === "dormant");
+	releasePreviousStartup();
+	const switchResult = await switching.then(
+		() => ({ disposition: "resolved" as const }),
+		(error: unknown) => ({ disposition: "rejected" as const, error }),
+	);
+
+	assert.equal(
+		switchResult.disposition,
+		"rejected",
+		"a failed exact target must not be replaced by another selection-started Run",
+	);
+	assert.equal(projectionStarts.get(targetAgentId), 2);
+	assert.equal(owner.status(targetAgentId).run.phase, "dormant");
+});
+
+test("closing a selection-started session_start modal cancels initialization without modal input", async (t) => {
+	let selectedAgentId = "";
+	let childSessionStarts = 0;
+	let childSessionShutdowns = 0;
+	const selectedStartupLifecycle: string[] = [];
+	let releaseSelectedStartupUI: () => void = () => undefined;
+	let releaseCustomFactory!: () => void;
+	const customFactoryGate = new Promise<void>((resolve) => {
+		releaseCustomFactory = resolve;
+	});
+	let customComponentDisposals = 0;
+	let markSelectedStartupModal!: () => void;
+	const selectedStartupModal = new Promise<void>((resolve) => {
+		markSelectedStartupModal = resolve;
+	});
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "selection-startup-close-probe",
+			hidden: true,
+			factory(pi) {
+				pi.on("session_start", async (_event, ctx) => {
+					if (ctx.sessionManager.getSessionId() !== selectedAgentId) return;
+					childSessionStarts += 1;
+					if (childSessionStarts !== 2) return;
+					markSelectedStartupModal();
+					await ctx.ui.custom<void>(
+						async (_tui, _theme, _keybindings, done) => {
+							releaseSelectedStartupUI = done;
+							await customFactoryGate;
+							return {
+								render: () => ["Selection startup close gate"],
+								invalidate() {},
+								handleInput() {},
+								dispose() {
+									customComponentDisposals += 1;
+								},
+							};
+						},
+						{ overlay: true },
+					);
+					selectedStartupLifecycle.push("session_start_after_ui");
+					ctx.ui.setWidget("late-startup-state", ["Must be cleared after startup finishes"]);
+				});
+				pi.on("session_shutdown", (_event, ctx) => {
+					if (ctx.sessionManager.getSessionId() !== selectedAgentId) return;
+					childSessionShutdowns += 1;
+					if (childSessionShutdowns === 2) {
+						selectedStartupLifecycle.push("session_shutdown");
+					}
+				});
+			},
+		}],
+	});
+	const identity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	let coordinator!: WorkflowCoordinator;
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		spawnBoundaryHooks: {
+			afterIdentityCommit: ({ identity: childIdentity }) => {
+				selectedAgentId = childIdentity.agentId;
+			},
+		},
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+	});
+	await bindTestOwnerHost(host, "tui");
+	const owner = coordinator.forAgent(identity.agentId);
+	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
+	t.after(async () => {
+		releaseSelectedStartupUI();
+		releaseCustomFactory();
+		await activeView?.close();
+		await coordinator.shutdown(async () => host.runtime.dispose());
+	});
+	const spawnInput = {
+		request: "Become Dormant before testing startup cancellation.",
+		label: "Startup Close Worker",
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, { id: "spawn-startup-close-worker" }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	host.model.setResponses([
+		fauxAssistantMessage("The initial startup-close Run settles."),
+	]);
+	const spawn = await owner.spawn("spawn-startup-close-worker", spawnInput);
+	assert.ok("agentId" in spawn && spawn.agentId);
+	const agentId = spawn.agentId;
+	selectedAgentId = agentId;
+	await waitForCondition(() => {
+		const run = owner.status(agentId).run;
+		return run.phase === "live" && run.work === "settled";
+	});
+	const terminateInput = {
+		operation: "terminate" as const,
+		agentId,
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_control", terminateInput, {
+				id: "terminate-startup-close-worker",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	await owner.control("terminate-startup-close-worker", terminateInput);
+
+	activeView = await owner.openAgentView(agentId);
+	assert.ok(activeView);
+	await selectedStartupModal;
+	const closing = activeView.close();
+	const closeOutcome = await Promise.race([
+		closing.then(() => "closed" as const),
+		new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 500)),
+	]);
+	if (closeOutcome === "blocked") {
+		releaseSelectedStartupUI();
+		await closing;
+	}
+	assert.equal(
+		closeOutcome,
+		"closed",
+		"view closure must not wait for hidden startup UI input",
+	);
+	assert.equal(owner.status(agentId).run.phase, "dormant");
+	assert.equal(childSessionStarts, 2);
+	assert.equal(childSessionShutdowns, 2);
+	assert.deepEqual(selectedStartupLifecycle, [
+		"session_start_after_ui",
+		"session_shutdown",
+	]);
+	releaseCustomFactory();
+	await waitForCondition(() => customComponentDisposals === 1);
+	assert.equal(
+		owner.status(agentId).run.retentionReasons.some(
+			({ reason }) => reason === "interactive_selection",
+		),
+		false,
+	);
+});
+
+test("Workflow shutdown cancels unselected Message-started session_start UI before Agent lanes", async (t) => {
+	let childAgentId = "";
+	let childSessionStarts = 0;
+	let childSessionShutdowns = 0;
+	const startupLifecycle: string[] = [];
+	let releaseStartupUI: () => void = () => undefined;
+	let markStartupUI!: () => void;
+	const startupUI = new Promise<void>((resolve) => {
+		markStartupUI = resolve;
+	});
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "unselected-startup-shutdown-probe",
+			hidden: true,
+			factory(pi) {
+				pi.on("session_start", async (_event, ctx) => {
+					if (ctx.sessionManager.getSessionId() !== childAgentId) return;
+					childSessionStarts += 1;
+					if (childSessionStarts !== 2) return;
+					markStartupUI();
+					await ctx.ui.custom<void>(
+						(_tui, _theme, _keybindings, done) => {
+							releaseStartupUI = done;
+							return {
+								render: () => ["Unselected Message startup gate"],
+								invalidate() {},
+								handleInput() {},
+							};
+						},
+						{ overlay: true },
+					);
+					startupLifecycle.push("session_start_after_ui");
+				});
+				pi.on("session_shutdown", (_event, ctx) => {
+					if (ctx.sessionManager.getSessionId() !== childAgentId) return;
+					childSessionShutdowns += 1;
+					if (childSessionShutdowns === 2) startupLifecycle.push("session_shutdown");
+				});
+			},
+		}],
+	});
+	const identity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	let coordinator!: WorkflowCoordinator;
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		spawnBoundaryHooks: {
+			afterIdentityCommit: ({ identity: childIdentity }) => {
+				childAgentId = childIdentity.agentId;
+			},
+		},
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+	});
+	await bindTestOwnerHost(host, "tui");
+	const owner = coordinator.forAgent(identity.agentId);
+	let shutdown: Promise<void> | undefined;
+	t.after(async () => {
+		releaseStartupUI();
+		await shutdown;
+		if (!shutdown) await coordinator.shutdown(async () => host.runtime.dispose());
+	});
+	const appendToolSource = (
+		toolName: string,
+		toolCallId: string,
+		input: Record<string, unknown>,
+	) => {
+		host.session.sessionManager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(toolName, input, { id: toolCallId }),
+				{ stopReason: "toolUse" },
+			),
+		);
+	};
+	host.model.setResponses([
+		fauxAssistantMessage("Initial unselected-shutdown Run settles."),
+		fauxAssistantMessage("Cleanup Delivery completes if startup is not canceled."),
+	]);
+	const spawnInput = {
+		request: "Become Dormant before unselected Message startup.",
+		label: "Unselected Startup Worker",
+	};
+	appendToolSource("agent_spawn", "spawn-unselected-startup-worker", spawnInput);
+	const spawn = await owner.spawn("spawn-unselected-startup-worker", spawnInput);
+	assert.ok("agentId" in spawn && spawn.agentId);
+	const agentId = spawn.agentId;
+	await waitForCondition(() => {
+		const run = owner.status(agentId).run;
+		return run.phase === "live" && run.work === "settled";
+	});
+	const terminateInput = { operation: "terminate" as const, agentId };
+	appendToolSource(
+		"agent_control",
+		"terminate-unselected-startup-worker",
+		terminateInput,
+	);
+	await owner.control("terminate-unselected-startup-worker", terminateInput);
+	const messageInput = {
+		operation: "send" as const,
+		targetAgentId: agentId,
+		content: "Start an unselected successor and wait in startup UI.",
+	};
+	appendToolSource("agent_message", "message-starts-unselected-ui", messageInput);
+	const messaging = owner.message("message-starts-unselected-ui", messageInput);
+	await startupUI;
+
+	shutdown = coordinator.shutdown(async () => host.runtime.dispose());
+	const shutdownOutcome = await Promise.race([
+		shutdown.then(() => "closed" as const),
+		new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 500)),
+	]);
+	if (shutdownOutcome === "blocked") {
+		releaseStartupUI();
+		await Promise.allSettled([messaging, shutdown]);
+	}
+	assert.equal(
+		shutdownOutcome,
+		"closed",
+		"Workflow shutdown must cancel startup UI before waiting for an unselected Agent lane",
+	);
+	await messaging;
+	assert.equal(childSessionStarts, 2);
+	assert.equal(childSessionShutdowns, 2);
+	assert.deepEqual(startupLifecycle, ["session_start_after_ui", "session_shutdown"]);
+});
+
 test("/agents switches the mounted durable view between independent child modes", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,

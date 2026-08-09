@@ -132,6 +132,12 @@ type ActiveDurableAgentView = {
 	dormantProjection?: DormantAgentProjection;
 };
 
+type AgentViewTarget = Readonly<{
+	projection: PiNativeAgentProjection;
+	dormantProjection?: DormantAgentProjection;
+	retryIfChanged: boolean;
+}>;
+
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	children(agentId?: string): readonly AgentStatus[];
 	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
@@ -651,10 +657,7 @@ export class WorkflowCoordinator {
 		});
 	}
 
-	async #acquireAgentViewTarget(record: AgentRecord): Promise<Readonly<{
-		projection: PiNativeAgentProjection;
-		dormantProjection?: DormantAgentProjection;
-	}>> {
+	async #acquireAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
 		const phase = record.host.observe().phase;
 		if (phase === "starting") {
 			const initializingProjection = await waitForInitializingProjection(record);
@@ -663,20 +666,24 @@ export class WorkflowCoordinator {
 				// here would deadlock the only human surface that can settle a startup
 				// modal. The exact bound Run cannot change during these synchronous steps.
 				record.host.addRetentionReason("interactive_selection");
-				return { projection: initializingProjection };
+				return { projection: initializingProjection, retryIfChanged: false };
 			}
 		}
 		if (phase === "dormant") return this.#startAgentViewTarget(record);
 		return record.host.lane.run(() => this.#acquireAgentViewTargetInLane(record));
 	}
 
-	async #startAgentViewTarget(record: AgentRecord): Promise<Readonly<{
-		projection: PiNativeAgentProjection;
-	}>> {
+	async #startAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
+		const observedRunSequence = record.host.latestStartedRunSequence();
 		const startup = record.host.lane.run(() => {
 			if (record.host.currentHandle()) {
 				record.host.addRetentionReason("interactive_selection");
 				return record.host.requireLiveSession();
+			}
+			if (record.host.latestStartedRunSequence() !== observedRunSequence) {
+				throw new Error(
+					`stale_run: selected Agent ${record.identity.agentId} startup already ended`,
+				);
 			}
 			return record.host.startInLane(["interactive_selection"]);
 		});
@@ -685,16 +692,13 @@ export class WorkflowCoordinator {
 		// must attach that same mode to settle the startup instead of waiting behind it.
 		const projection = await waitForStartupProjection(record, startup);
 		record.host.addRetentionReason("interactive_selection");
-		return { projection };
+		return { projection, retryIfChanged: false };
 	}
 
-	async #acquireAgentViewTargetInLane(record: AgentRecord): Promise<Readonly<{
-		projection: PiNativeAgentProjection;
-		dormantProjection?: DormantAgentProjection;
-	}>> {
+	async #acquireAgentViewTargetInLane(record: AgentRecord): Promise<AgentViewTarget> {
 		record.host.addRetentionReason("interactive_selection");
 		const projection = record.host.currentProjection();
-		if (projection) return { projection };
+		if (projection) return { projection, retryIfChanged: true };
 		record.host.removeRetentionReason("interactive_selection");
 		throw new Error(
 			`invariant_violation: live Agent ${record.identity.agentId} has no presentation projection`,
@@ -734,6 +738,11 @@ export class WorkflowCoordinator {
 			});
 			if (targetChanged) {
 				await this.#releaseUnpublishedAgentViewTarget(record, target);
+				if (!target.retryIfChanged) {
+					throw new Error(
+						`stale_run: selected Agent ${record.identity.agentId} changed during view preparation`,
+					);
+				}
 				continue;
 			}
 			try {
@@ -754,10 +763,7 @@ export class WorkflowCoordinator {
 
 	async #releaseUnpublishedAgentViewTarget(
 		record: AgentRecord,
-		target: Readonly<{
-			projection: PiNativeAgentProjection;
-			dormantProjection?: DormantAgentProjection;
-		}>,
+		target: AgentViewTarget,
 	): Promise<void> {
 		if (target.dormantProjection) {
 			await target.dormantProjection.dispose();
@@ -782,6 +788,13 @@ export class WorkflowCoordinator {
 	async #closeActiveAgentViewInLane(active: ActiveDurableAgentView): Promise<void> {
 		const cleanupErrors: unknown[] = [];
 		let requestRunRelease = false;
+		await collectCleanupFailure(
+			cleanupErrors,
+			() => active.record.host.cancelStartingRun(
+				active.attachment.projection(),
+				new Error("Agent view closed during Run initialization"),
+			),
+		);
 		await active.record.host.lane.run(async () => {
 			if (this.#activeAgentView !== active) return;
 			this.#activeAgentView = undefined;
@@ -1036,6 +1049,14 @@ export class WorkflowCoordinator {
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
 		const cleanupErrors: unknown[] = [];
 		const selection = this.#humanSessionSelection;
+		const children = [...this.#agents.values()].filter(
+			(record) => record.identity.agentId !== this.#ownerIdentity.agentId,
+		);
+		// Fence queued starts before awaiting any lane. A start already preparing its
+		// projection observes the same fence immediately after binding and cancels there.
+		collectSettledCleanupFailures(cleanupErrors, await Promise.allSettled(
+			children.map((record) => record.host.beginShutdown()),
+		));
 		await collectCleanupFailure(
 			cleanupErrors,
 			() => this.#activeAgentView?.attachment.close(),
@@ -1055,9 +1076,6 @@ export class WorkflowCoordinator {
 				),
 			);
 		}
-		const children = [...this.#agents.values()].filter(
-			(record) => record.identity.agentId !== this.#ownerIdentity.agentId,
-		);
 		collectSettledCleanupFailures(cleanupErrors, await Promise.allSettled(
 			children.map((record) =>
 				record.host.lane.run(() => this.#shutdownAgentInLane(record)),

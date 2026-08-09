@@ -294,6 +294,9 @@ function projectionWithFrame(
 			inputs.push(data);
 		},
 		async ready() {},
+		cancelInitialization() {
+			return undefined;
+		},
 		addChangeHandler(handler) {
 			handlers.add(handler);
 			return () => handlers.delete(handler);

@@ -63,6 +63,7 @@ Treat every exact live child or Moderator Run as the owner of one complete embed
 - [x] Completed the criterion-to-evidence matrix in `docs/agent-view-acceptance.md`, including native differential rendering, retry/compaction, shortcuts/autocomplete, concurrent drafts/overlays/pending state, resource reload, streaming custom-editor behavior, Owner cursor restoration, repeated successors, and process-resource baselines.
 - [x] Bounded incidental presentation restoration before `session_start`; explicit child or Owner theme changes during startup remain Workflow-global.
 - [x] Deferred Pi footer git-watcher startup until complete mode construction succeeds, closing the final constructor-failure resource leak with a real `FSEventWrap` rollback/recovery regression.
+- [x] Bound Dormant selection to one observed startup sequence, canceled pending startup UI before disposal, and fenced every child start before shutdown enters Agent lanes, preventing stale-target retries and selected or unselected startup deadlocks.
 
 # Decisions
 

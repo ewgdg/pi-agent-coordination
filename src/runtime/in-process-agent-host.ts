@@ -97,6 +97,8 @@ export class InProcessAgentHost {
 	readonly #trackedOperations = new Set<Promise<void>>();
 	#run: BoundRun | undefined;
 	#starting = false;
+	#startingCancellationRequested = false;
+	#runStartsClosed = false;
 	#ending = false;
 	#interrupting = false;
 	#runSequence = 0;
@@ -218,6 +220,30 @@ export class InProcessAgentHost {
 
 	currentProjection(): PiNativeAgentProjection | undefined {
 		return this.#run?.projection;
+	}
+
+	async beginShutdown(): Promise<boolean> {
+		this.#runStartsClosed = true;
+		const projection = this.#run?.projection;
+		return projection
+			? this.cancelStartingRun(
+				projection,
+				new Error("Workflow shutdown during Agent Run initialization"),
+			)
+			: false;
+	}
+
+	async cancelStartingRun(
+		projection: PiNativeAgentProjection,
+		error: unknown,
+	): Promise<boolean> {
+		const run = this.#run;
+		if (!this.#starting || !run || run.projection !== projection) return false;
+		const cancellation = projection.cancelInitialization(error);
+		if (!cancellation) return false;
+		this.#startingCancellationRequested = true;
+		await cancellation;
+		return true;
 	}
 
 	latestStartedRunSequence(): number {
@@ -385,21 +411,71 @@ export class InProcessAgentHost {
 		initialRetentionReasons: readonly RunRetentionReason[] = [],
 	): Promise<AgentSession> {
 		if (this.#run) return this.#run.session;
+		if (this.#runStartsClosed) {
+			throw new Error("host_shutting_down: Agent Run startup is closed");
+		}
 		if (!this.#startSession) {
 			throw new Error(`Agent Run cannot restart: ${this.sessionManager.getSessionId()}`);
 		}
 		this.#starting = true;
 		for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
 		this.#notifyStateChanged();
+		let startedRun: StartedAgentRun | undefined;
+		let readiness: Promise<void> | undefined;
+		let readinessObserved = false;
 		try {
 			this.#initializeRequestRelationships();
-			const startedRun = await this.#startSession();
+			startedRun = await this.#startSession();
+			readiness = startedRun.ready ?? Promise.resolve();
 			this.#bindRun(startedRun);
+			if (this.#runStartsClosed) {
+				const shutdownError = new Error(
+					"Workflow shutdown during Agent Run initialization",
+				);
+				const cancellation = startedRun.projection.cancelInitialization(shutdownError);
+				if (cancellation) {
+					this.#startingCancellationRequested = true;
+					const [cancellationResult] = await Promise.allSettled([
+						cancellation,
+						readiness,
+					]);
+					readinessObserved = true;
+					if (cancellationResult.status === "rejected") {
+						throw cancellationResult.reason;
+					}
+					throw shutdownError;
+				}
+				// Cancellation can lose to readiness or natural failure. Observe that exact
+				// result before choosing termination versus Run Failure classification.
+				await readiness;
+				readinessObserved = true;
+				this.#startingCancellationRequested = true;
+				throw shutdownError;
+			}
 			await this.#runStartedHandler?.(startedRun.session, this.#run!.handle);
-			await startedRun.ready;
+			await readiness;
+			readinessObserved = true;
 			return startedRun.session;
 		} catch (error) {
-			const cleanupErrors = [error, ...await this.#discardFailedStart()];
+			const cleanupErrors: unknown[] = [error];
+			if (startedRun && readiness && !readinessObserved) {
+				const cancellation = startedRun.projection.cancelInitialization(error);
+				const results = await Promise.allSettled([
+					...(cancellation ? [cancellation] : []),
+					readiness,
+				]);
+				readinessObserved = true;
+				for (const result of results) {
+					if (
+						result.status === "rejected" &&
+						!cleanupErrors.includes(result.reason)
+					) cleanupErrors.push(result.reason);
+				}
+			}
+			const endCause = this.#startingCancellationRequested
+				? "termination" as const
+				: "failure" as const;
+			cleanupErrors.push(...await this.#discardFailedStart(endCause));
 			this.#clearRunScopedState();
 			if (cleanupErrors.length > 1) {
 				throw new AggregateError(cleanupErrors, "Agent Run startup cleanup failed");
@@ -594,6 +670,7 @@ export class InProcessAgentHost {
 	#clearRunScopedState(): void {
 		this.#retentionReasons.clear();
 		this.#requestRelationships.clear();
+		this.#startingCancellationRequested = false;
 		this.#inputRequired = undefined;
 		this.#interruptionHold = undefined;
 		this.#isolatedResumption = undefined;
@@ -601,7 +678,9 @@ export class InProcessAgentHost {
 		this.#heldNativeQueue = undefined;
 	}
 
-	async #discardFailedStart(): Promise<unknown[]> {
+	async #discardFailedStart(
+		cause: Extract<AgentRunEndCause, "failure" | "termination">,
+	): Promise<unknown[]> {
 		const failedStart = this.#run;
 		if (!failedStart) return [];
 		const cleanupErrors: unknown[] = [];
@@ -621,7 +700,7 @@ export class InProcessAgentHost {
 				this.#runEndingHandler?.(
 					failedStart.session,
 					failedStart.handle,
-					"failure",
+					cause,
 				)
 			);
 			await attemptCleanup(() => failedStart.unsubscribe());
@@ -632,7 +711,7 @@ export class InProcessAgentHost {
 			this.#clearRunScopedState();
 			this.#starting = false;
 			this.#notifyStateChanged();
-			this.#notifyEnded(failedStart.handle, "failure");
+			this.#notifyEnded(failedStart.handle, cause);
 		}
 		return cleanupErrors;
 	}

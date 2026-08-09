@@ -361,6 +361,11 @@ export function assertProjectionInteractiveModeInstanceShape(
 		"resetExtensionUI",
 		"shutdown",
 		"showError",
+		"showExtensionConfirm",
+		"showExtensionCustom",
+		"showExtensionEditor",
+		"showExtensionInput",
+		"showExtensionSelector",
 		"stop",
 		"subscribeToAgent",
 		"unregisterSignalHandlers",
@@ -370,6 +375,11 @@ export function assertProjectionInteractiveModeInstanceShape(
 	for (const member of [
 		"handleFatalRuntimeError",
 		"registerSignalHandlers",
+		"showExtensionConfirm",
+		"showExtensionCustom",
+		"showExtensionEditor",
+		"showExtensionInput",
+		"showExtensionSelector",
 		"shutdown",
 		"unregisterSignalHandlers",
 	] as const) {

@@ -24,7 +24,7 @@ Dormant is a flat list of every verified ordinary Agent and Moderator without a 
 
 Selecting a Dormant Agent starts exactly one successor Run with `interactive_selection` retention and attaches its complete live mode. Selection submits no model input and appends no user evidence; it only activates the normal session, coordination tools, commands, shell input, custom extensions, editor, and footer that the selected Agent needs for interaction.
 
-The selector keeps focus while the successor starts. Its initializing mode is attached before `session_start` UI settles, so a startup dialog remains operable without admitting model work. A concurrent ordinary Message uses the same serialized successor rather than starting another Run. Returning to Owner or switching Agents removes selection retention and permits ordinary release when no other Retention Reason remains.
+The selector keeps focus while the successor starts. Its initializing mode is attached before `session_start` UI settles, so a startup dialog remains operable without admitting model work. A concurrent ordinary Message uses the same serialized exact startup attempt rather than starting another Run; if that attempt ends during handoff, stale selection work cannot start a replacement. Closing or Workflow shutdown cancels pending startup UI before waiting for the Agent lane. Returning to Owner or switching Agents removes selection retention and permits ordinary release when no other Retention Reason remains.
 
 ## Full-window Agent view
 
