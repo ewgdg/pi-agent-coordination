@@ -535,6 +535,11 @@ test("two Agents wait independently while Steer follows Answer commit and Deferr
 		detachedAgentView.projection().presentation.render(80).join("\n")
 			.includes("Tab views")
 	);
+	const childAgentsRoster = detachedAgentView.projection().presentation
+		.render(80).join("\n");
+	assert.match(childAgentsRoster, /Attention Inbox/);
+	assert.match(childAgentsRoster, /→ DECIDE 1 · agent/);
+	assert.match(childAgentsRoster, /DECIDE 2 · agent/);
 	// A backgrounded child's command surface stays in its own detached mode;
 	// it must not open a modal in the Owner's TUI (#59).
 	assert.equal(host.ui.customSurfaces.length, 0);

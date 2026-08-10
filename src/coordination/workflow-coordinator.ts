@@ -400,11 +400,15 @@ export class WorkflowCoordinator {
 				this.#humanRequests.guardResultCommit(agentId, message),
 			reconcileHumanToolResults: () =>
 				this.#humanRequests.reconcileCommittedResults(agentId),
-			humanAttention: () => this.#humanRequests.attentionItems(agentId),
-			operationalAttention: () => this.#operationalIncidents.attentionItems(agentId),
+			// These surfaces belong to the human Workflow Owner even while a child
+			// Runtime supplies the selected interactive mode.
+			humanAttention: () =>
+				this.#humanRequests.attentionItems(this.#ownerIdentity.agentId),
+			operationalAttention: () =>
+				this.#operationalIncidents.attentionItems(this.#ownerIdentity.agentId),
 			focusHumanRequest: (requestId) => {
 				this.#assertAdmissionOpen();
-				return this.#humanRequests.focus(agentId, requestId);
+				return this.#humanRequests.focus(this.#ownerIdentity.agentId, requestId);
 			},
 			reachSafeBoundary: async () => {
 				this.#operationalIncidents.reconcileCommittedToolResults(agentId);

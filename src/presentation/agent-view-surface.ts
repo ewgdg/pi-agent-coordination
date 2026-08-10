@@ -53,6 +53,7 @@ export async function openAgentViewSurface(
 				component = new AgentViewSurface(
 					tui,
 					view,
+					() => handle?.isFocused() ?? true,
 					closeFromHost,
 					options.requestShutdown,
 					(error) => {
@@ -93,6 +94,7 @@ class AgentViewSurface implements Component {
 	readonly #removeChangeHandler: () => void;
 	readonly #removeCloseHandler: () => void;
 	readonly #removePrioritizedInputListener: () => void;
+	readonly #ownsInput: () => boolean;
 	readonly #ownsMouseReporting: boolean;
 	readonly #failFromSurface: (error: unknown) => void;
 	#observedFailureProjection: PiNativeAgentProjection | undefined;
@@ -106,12 +108,14 @@ class AgentViewSurface implements Component {
 	constructor(
 		tui: TUI,
 		view: DurableAgentView,
+		ownsInput: () => boolean,
 		closeFromHost: () => void,
 		requestShutdown: () => void,
 		failFromSurface: (error: unknown) => void,
 	) {
 		this.#tui = tui;
 		this.#view = view;
+		this.#ownsInput = ownsInput;
 		this.#failFromSurface = failFromSurface;
 		this.#removeChangeHandler = view.addChangeHandler(() => {
 			this.#observeProjectionEvents(requestShutdown);
@@ -122,6 +126,9 @@ class AgentViewSurface implements Component {
 		this.#removePrioritizedInputListener = addPrioritizedTuiInputListener(
 			tui,
 			(data) => {
+				// A newer Owner overlay must keep the focus it acquired above this
+				// fullscreen child instead of having its input stolen by the child.
+				if (!this.#ownsInput()) return undefined;
 				try {
 					this.#view.projection().dispatchInput(data);
 					this.#tui.requestRender();

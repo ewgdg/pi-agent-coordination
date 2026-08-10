@@ -62,15 +62,14 @@ export function registerAgentsCommand(
 			const view = resolveView();
 			const roster = view.selectionRoster();
 			const selectedAgent = view.status();
-			const ownerVisible = selectedAgent.agentId === selectedAgent.workflowId;
 			let preparedAgentView:
 				| Awaited<ReturnType<typeof view.openAgentView>>
 				| undefined;
 			const action = await openAgentSelectorSurface(ctx.ui, {
 				...roster,
 				selectedAgentId: selectedAgent.agentId,
-				humanAttention: ownerVisible ? view.humanAttention() : [],
-				operationalAttention: ownerVisible ? view.operationalAttention() : [],
+				humanAttention: view.humanAttention(),
+				operationalAttention: view.operationalAttention(),
 				prepareSelection(selection) {
 					if (selection.kind !== "select_agent") return;
 					return view.openAgentView(selection.agentId).then((agentView) => {

@@ -2208,7 +2208,7 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 	);
 	assert.deepEqual(
 		harness.coordinator.forAgent(affected.agentId).operationalAttention(),
-		[],
+		[attention],
 	);
 	await harness.owner.reachSafeBoundary();
 	assert.equal((await findModerators(harness.host)).length, 2);

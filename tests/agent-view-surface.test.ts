@@ -150,6 +150,33 @@ test("a fullscreen Owner routes mouse input to the Agent before its own viewport
 	assert.equal(ui.ownerViewportMouseEvents(), 1);
 });
 
+test("a focused Owner overlay receives input above the selected Agent view", async () => {
+	const projection = projectionWithFrame("live", ["child frame"]);
+	const view = createViewHarness(projection);
+	const ui = createSurfaceHarness(8);
+	const opened = openAgentViewSurface(ui.ui, view.view);
+	await ui.ready;
+	const ownerOverlayInputs: string[] = [];
+	const ownerOverlay: Component = {
+		render: () => ["Owner overlay"],
+		handleInput: (data) => ownerOverlayInputs.push(data),
+		invalidate() {},
+	};
+
+	ui.handle.unfocus({ target: ownerOverlay });
+	ui.dispatchTerminalInput("Human Answer");
+	ui.dispatchTerminalInput("\r");
+	assert.deepEqual(ownerOverlayInputs, ["Human Answer", "\r"]);
+	assert.deepEqual(projection.inputs(), []);
+
+	ui.handle.focus();
+	ui.dispatchTerminalInput("child input");
+	assert.deepEqual(projection.inputs(), ["child input"]);
+
+	await view.closeFromHost();
+	await opened;
+});
+
 test("a child render failure closes the exact view and returns a bounded frame", async () => {
 	const projection = projectionWithFrame("live", ["unreachable child frame"]);
 	projection.presentation.render = () => {
@@ -397,6 +424,7 @@ function createSurfaceHarness(
 	backgroundWidths(): readonly number[];
 } {
 	let component: Component | undefined;
+	let focusedComponent: Component | undefined;
 	let options: unknown;
 	let renderRequests = 0;
 	let doneCalls = 0;
@@ -423,6 +451,7 @@ function createSurfaceHarness(
 		hide() {
 			hidden = true;
 			focused = false;
+			if (focusedComponent === component) focusedComponent = undefined;
 		},
 		setHidden(value) {
 			hidden = value;
@@ -431,9 +460,11 @@ function createSurfaceHarness(
 		focus() {
 			focused = true;
 			hidden = false;
+			focusedComponent = component;
 		},
-		unfocus() {
+		unfocus(unfocusOptions) {
 			focused = false;
+			focusedComponent = unfocusOptions?.target ?? undefined;
 		},
 		isFocused: () => focused,
 	};
@@ -482,6 +513,7 @@ function createSurfaceHarness(
 				resolve(result);
 			};
 			component = factory(tui, theme, {} as KeybindingsManager, done);
+			focusedComponent = component;
 			(customOptions as { onHandle?: (handle: OverlayHandle) => void } | undefined)
 				?.onHandle?.(handle);
 			markReady();
@@ -511,7 +543,7 @@ function createSurfaceHarness(
 				if (result?.consume) return;
 				if (result?.data !== undefined) current = result.data;
 			}
-			component?.handleInput?.(current);
+			focusedComponent?.handleInput?.(current);
 		},
 		ownerViewportMouseEvents: () => ownerViewportMouseEvents,
 		backgroundWidths: () => backgroundWidths,
