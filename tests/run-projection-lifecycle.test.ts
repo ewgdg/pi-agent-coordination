@@ -526,6 +526,8 @@ function createRunResource(options?: {
 		addChangeHandler: () => () => undefined,
 		addFailureHandler: () => () => undefined,
 		addExitRequestHandler: () => () => undefined,
+		isProcessingInput: () => false,
+		whenInputIdle: async () => undefined,
 		async ready() {},
 		cancelInitialization() {
 			return undefined;

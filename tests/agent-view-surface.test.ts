@@ -339,6 +339,8 @@ function projectionWithFrame(
 			exitRequestHandlers.add(handler);
 			return () => exitRequestHandlers.delete(handler);
 		},
+		isProcessingInput: () => false,
+		whenInputIdle: async () => undefined,
 		setFrame(lines) {
 			frame = [...lines];
 			for (const handler of handlers) handler();

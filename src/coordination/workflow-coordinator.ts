@@ -597,6 +597,11 @@ export class WorkflowCoordinator {
 	#integrateAgent(record: AgentRecord): void {
 		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged());
 		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged());
+		record.host.setProjectionInputSettledHandler(() => {
+			void this.#messages.requestRelease(record).catch((error) =>
+				this.#reportAgentRuntimeReleaseError(error)
+			);
+		});
 		record.host.setRunStartedHandler(async () => {
 			await this.#bindViewedRunInLane(record);
 		});
@@ -846,6 +851,14 @@ export class WorkflowCoordinator {
 		requireLiveServices(owner).diagnostics.push({
 			type: "error",
 			message: `Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
+		});
+	}
+
+	#reportAgentRuntimeReleaseError(error: unknown): void {
+		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
+		requireLiveServices(owner).diagnostics.push({
+			type: "error",
+			message: `Agent runtime release failed: ${error instanceof Error ? error.message : String(error)}`,
 		});
 	}
 

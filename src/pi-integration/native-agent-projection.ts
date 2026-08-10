@@ -38,6 +38,8 @@ export type PiNativeAgentProjection = Readonly<{
 	addChangeHandler(handler: () => void): () => void;
 	addFailureHandler(handler: (error: unknown) => void): () => void;
 	addExitRequestHandler(handler: () => void): () => void;
+	isProcessingInput(): boolean;
+	whenInputIdle(): Promise<void>;
 	ready(): Promise<void>;
 	cancelInitialization(error: unknown): Promise<void> | undefined;
 	dispose(): Promise<void>;
@@ -549,6 +551,8 @@ function createProjectionResource(
 		addChangeHandler: (handler) => changes.addHandler(handler),
 		addFailureHandler: (handler) => failures.addHandler(handler),
 		addExitRequestHandler: (handler) => exitRequests.addHandler(handler),
+		isProcessingInput: () => inputLoop?.isProcessingInput() ?? false,
+		whenInputIdle: () => inputLoop?.whenIdle() ?? Promise.resolve(),
 		ready: () => ready,
 		cancelInitialization(error) {
 			if (!cancelReady(error)) return undefined;
@@ -686,7 +690,11 @@ function captureGlobalPresentation(
 	};
 }
 
-type ProjectionInputLoop = Readonly<{ stop(): void }>;
+type ProjectionInputLoop = Readonly<{
+	isProcessingInput(): boolean;
+	whenIdle(): Promise<void>;
+	stop(): void;
+}>;
 
 function startProjectionInputLoop(
 	mode: ProjectionInteractiveMode,
@@ -694,6 +702,9 @@ function startProjectionInputLoop(
 	reportFailure: (error: unknown) => void,
 ): ProjectionInputLoop {
 	let stopped = false;
+	let processingInput = false;
+	let inputIdle = Promise.resolve();
+	let markInputIdle: (() => void) | undefined;
 	void (async () => {
 		while (!stopped) {
 			let input: string;
@@ -704,16 +715,28 @@ function startProjectionInputLoop(
 				return;
 			}
 			if (stopped) return;
+			processingInput = true;
+			inputIdle = new Promise<void>((resolve) => {
+				markInputIdle = resolve;
+			});
 			try {
 				await session.prompt(input);
 			} catch (error) {
 				mode.showError(
 					error instanceof Error ? error.message : "Unknown error occurred",
 				);
+			} finally {
+				processingInput = false;
+				markInputIdle?.();
+				markInputIdle = undefined;
 			}
 		}
 	})();
-	return { stop: () => { stopped = true; } };
+	return {
+		isProcessingInput: () => processingInput,
+		whenIdle: () => inputIdle,
+		stop: () => { stopped = true; },
+	};
 }
 
 function restoreGlobalPresentation(

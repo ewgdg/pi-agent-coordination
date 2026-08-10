@@ -22,6 +22,7 @@ import {
 } from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import { createPiNativeProjectionHost } from "../src/pi-integration/native-agent-projection.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { registerAgentsCommand } from "../src/tools/owner-surfaces.ts";
 import {
@@ -659,6 +660,135 @@ test("passive Runtime readiness failure closes the exact selected view", async (
 		JSON.stringify(host.services.diagnostics),
 		/deterministic passive Runtime readiness failure/,
 	);
+});
+
+test("a submitted Dormant Agent turn survives returning to the Owner during prompt preflight", async (t) => {
+	const submittedInput = "Continue after the Owner leaves this Agent view.";
+	let markInputPreflightStarted!: () => void;
+	const inputPreflightStarted = new Promise<void>((resolve) => {
+		markInputPreflightStarted = resolve;
+	});
+	let releaseInputPreflight!: () => void;
+	const inputPreflightGate = new Promise<void>((resolve) => {
+		releaseInputPreflight = resolve;
+	});
+	let markInputPreflightFinished!: () => void;
+	const inputPreflightFinished = new Promise<void>((resolve) => {
+		markInputPreflightFinished = resolve;
+	});
+	let staleContextError: unknown;
+	let coordinator!: WorkflowCoordinator;
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "delayed-child-prompt-preflight",
+			hidden: true,
+			factory(pi) {
+				pi.on("input", async (event, ctx) => {
+					if (
+						event.text !== submittedInput ||
+						!ctx.sessionManager.getEntries().some((entry) =>
+							entry.type === "custom" &&
+							entry.customType === "agent-coordination.identity"
+						)
+					) return { action: "continue" };
+					markInputPreflightStarted();
+					await inputPreflightGate;
+					try {
+						void ctx.cwd;
+					} catch (error) {
+						staleContextError = error;
+						return { action: "handled" };
+					} finally {
+						markInputPreflightFinished();
+					}
+					return { action: "continue" };
+				});
+			},
+		}],
+	});
+	const identity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+	});
+	await bindTestOwnerHost(host, "tui");
+	const owner = coordinator.forAgent(identity.agentId);
+	t.after(async () => {
+		releaseInputPreflight();
+		await coordinator.shutdown(async () => host.runtime.dispose());
+	});
+	const spawnInput = {
+		request: "Settle before the Owner submits a successor turn.",
+		label: "Preflight Retention Worker",
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, {
+				id: "spawn-preflight-retention-worker",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const spawnSourceEntry = host.session.sessionManager.getLeafEntry();
+	assert.ok(spawnSourceEntry);
+	const creationRequestId = deriveMessageIdentity({
+		agentId: identity.agentId,
+		entryId: spawnSourceEntry.id,
+		toolCallId: "spawn-preflight-retention-worker",
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "answer",
+				requestId: creationRequestId,
+				answer: "The initial Agent turn settled.",
+			}, { id: "answer-preflight-retention-creation-request" }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The initial Agent turn settled."),
+		fauxAssistantMessage("The submitted turn completed after returning to the Owner."),
+	]);
+	const spawn = await owner.spawn("spawn-preflight-retention-worker", spawnInput);
+	assert.ok("agentId" in spawn && spawn.agentId);
+	const agentId = spawn.agentId;
+	await waitForCondition(() => {
+		const transcriptPath = owner.status(agentId).primaryEvidence.transcriptPath;
+		return transcriptPath !== null && JSON.stringify(
+			SessionManager.open(transcriptPath).getEntries(),
+		).includes("The initial Agent turn settled.");
+	});
+	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
+
+	const activeView = await owner.openAgentView(agentId);
+	assert.ok(activeView);
+	for (const character of submittedInput) {
+		activeView.projection().dispatchInput(character);
+	}
+	activeView.projection().dispatchInput("\r");
+	await inputPreflightStarted;
+	await owner.openAgentView(identity.agentId);
+	releaseInputPreflight();
+	await inputPreflightFinished;
+
+	assert.equal(
+		staleContextError,
+		undefined,
+		staleContextError instanceof Error ? staleContextError.message : String(staleContextError),
+	);
+	await waitForCondition(() => {
+		const transcriptPath = owner.status(agentId).primaryEvidence.transcriptPath;
+		return transcriptPath !== null && JSON.stringify(
+			SessionManager.open(transcriptPath).getEntries(),
+		).includes("The submitted turn completed after returning to the Owner.");
+	});
+	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
 });
 
 test("a Dormant Agent keeps commands available and starts one successor on editor submission", async (t) => {

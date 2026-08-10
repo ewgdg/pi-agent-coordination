@@ -58,6 +58,7 @@ type BoundAgentRuntime = {
 	admitted: boolean;
 	failed: boolean;
 	expectedInterruption: boolean;
+	releaseDeferredUntilInputSettles: boolean;
 };
 
 type HeldNativeQueue = {
@@ -72,6 +73,7 @@ type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) =
 export type AgentRunEndCause = "clean" | "failure" | "termination" | "shutdown";
 type EndedHandler = (handle: AgentRunHandle, cause: AgentRunEndCause) => void;
 type StateChangeHandler = () => void;
+type ProjectionInputSettledHandler = () => void;
 type RunFenceHandler = (handle: AgentRunHandle) => void;
 export type ResidualRequestRelationships = Readonly<{
 	awaitingAnswerRequestIds: readonly string[];
@@ -110,6 +112,7 @@ export class InProcessAgentHost {
 	readonly #settledHandlers = new Set<SettledHandler>();
 	readonly #endedHandlers = new Set<EndedHandler>();
 	readonly #stateChangeHandlers = new Set<StateChangeHandler>();
+	#projectionInputSettledHandler: ProjectionInputSettledHandler | undefined;
 	#runFenceHandler: RunFenceHandler | undefined;
 	#runStartInitializer: RunStartInitializer | undefined;
 	#runStartedHandler: RunStartedHandler | undefined;
@@ -196,6 +199,10 @@ export class InProcessAgentHost {
 	addStateChangeHandler(handler: StateChangeHandler): () => void {
 		this.#stateChangeHandlers.add(handler);
 		return () => this.#stateChangeHandlers.delete(handler);
+	}
+
+	setProjectionInputSettledHandler(handler: ProjectionInputSettledHandler): void {
+		this.#projectionInputSettledHandler = handler;
 	}
 
 	setRunFenceHandler(handler: RunFenceHandler): void {
@@ -659,7 +666,15 @@ export class InProcessAgentHost {
 	): Promise<"released" | "retained" | "stale"> {
 		const run = this.#runtime;
 		if (!run?.admitted || run.handle !== handle) return "stale";
-		if (this.#starting || this.#ending || !run.session.isIdle) return "retained";
+		if (hasInFlightProjectionInput(run)) {
+			this.#deferReleaseUntilProjectionInputSettles(run);
+			return "retained";
+		}
+		if (
+			this.#starting ||
+			this.#ending ||
+			!run.session.isIdle
+		) return "retained";
 		// Selection owns Runtime availability, not the exact Run. Release an
 		// otherwise unretained Run without tearing down its attached Pi mode.
 		const retainRuntime = this.#retentionReasons.has("interactive_selection");
@@ -711,7 +726,15 @@ export class InProcessAgentHost {
 	async releasePreparedRuntimeInLane(): Promise<"released" | "retained" | "stale"> {
 		const run = this.#runtime;
 		if (!run || run.admitted) return "stale";
-		if (this.#starting || this.#ending || this.#retentionReasons.size > 0) {
+		if (hasInFlightProjectionInput(run)) {
+			this.#deferReleaseUntilProjectionInputSettles(run);
+			return "retained";
+		}
+		if (
+			this.#starting ||
+			this.#ending ||
+			this.#retentionReasons.size > 0
+		) {
 			return "retained";
 		}
 		this.#ending = true;
@@ -887,6 +910,7 @@ export class InProcessAgentHost {
 			admitted,
 			failed: false,
 			expectedInterruption: false,
+			releaseDeferredUntilInputSettles: false,
 		};
 		// Publish ownership before the native subscribe call so startup rollback can
 		// still dispose the exact projection and session if subscription itself fails.
@@ -963,6 +987,24 @@ export class InProcessAgentHost {
 			this.trackOperation(run.session.sendUserMessage(message, { deliverAs: "followUp" }));
 		}
 	}
+
+	#deferReleaseUntilProjectionInputSettles(run: BoundAgentRuntime): void {
+		// agent_settled can request release before the projection loop leaves
+		// session.prompt(); retry only after that exact input lifecycle closes.
+		if (run.releaseDeferredUntilInputSettles || !run.projection) return;
+		run.releaseDeferredUntilInputSettles = true;
+		void run.projection.whenInputIdle().then(() => {
+			if (this.#runtime !== run || !run.releaseDeferredUntilInputSettles) return;
+			run.releaseDeferredUntilInputSettles = false;
+			this.#projectionInputSettledHandler?.();
+		});
+	}
+}
+
+function hasInFlightProjectionInput(run: BoundAgentRuntime): boolean {
+	// Pi remains session-idle during async input and prompt preflight, so only
+	// the native projection can protect the exact Runtime across that interval.
+	return run.projection?.isProcessingInput() ?? false;
 }
 
 function isRequestRelationshipReason(
