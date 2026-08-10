@@ -24,7 +24,7 @@ The package registers the Owner tool definitions through Pi's `registerTool()` A
 
 - `agent_spawn` creates one fresh configured child, optionally resolving a named Agent Template, and delivers its initial Creation Request.
 - `agent_message` sends Messages, creates correlated Requests, Answers, retrieves, and cancels.
-- `ask_user_question` blocks the caller's exact Run on one or more structured Questions. Its matching successful native tool result is the sole Human Answer.
+- `ask_user_question` blocks the caller's exact Run on one free-form question. Its matching successful native tool result is the sole Human Answer.
 - `agent_observe` returns an authorized Agent's durable identity, structural relationship, bounded primary transcript evidence, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
 - `agent_control` interrupts, explicitly resumes, or terminates one authorized exact child Run.
 - `/agents` opens the framed [Agent selector and full-window view](agent-selector.md), with Owner-only Human and Operational attention plus Live and Dormant Agent rosters.
@@ -33,7 +33,7 @@ Agent views attach a selected Agent's complete Pi mode and forward input through
 
 Coordination roles are trusted protocol participants, not a security boundary. Role-scoped tools constrain the intended workflow and keep caller identity out of model-supplied arguments; they do not isolate mutually hostile code or users.
 
-See [Human Requests](human-requests.md) for the Question and Answer shapes, interaction keys, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and Agent-view retention.
+See [Human Requests](human-requests.md) for the request and Answer shapes, transcript presentation, editor behavior, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and Agent-view retention.
 
 ## Activation modes
 
@@ -43,7 +43,7 @@ Coordination activates only when Pi reports interactive TUI mode with UI support
 
 Compatibility is determined jointly by the running Pi host's integration shape and native behavioral conformance. Before bootstrapping a Workflow, the package verifies the required runtime, interactive-mode, session, transcript, resource, extension, TUI, schema, and disposal seams from host-provided peer modules. A missing or malformed seam is reported by its canonical member name, and incompatible startup appends no Owner Identity or partial runtime.
 
-The conformance gate then exercises transcript ordering and branches, model-visible Delivery, sequential Human Questions, Pi-native Agent projections, full-window Owner-preserving views, role-bound extensions, and coordinated disposal against the concrete installed Pi graph. Run it with `npm run test:conformance`; `npm test` remains the complete regression gate.
+The conformance gate then exercises transcript ordering and branches, model-visible Delivery, sequential Human Requests, Pi-native Agent projections, full-window Owner-preserving views, role-bound extensions, and coordinated disposal against the concrete installed Pi graph. Run it with `npm run test:conformance`; `npm test` remains the complete regression gate.
 
 Pi's version is diagnostic information, not an allowlist. Package builds use a pinned Pi development cohort only to make conformance tests reproducible; installed Pi packages are runtime peers supplied by the host.
 
@@ -51,7 +51,7 @@ Pi's version is diagnostic information, not an allowlist. Package builds use a p
 
 Pi transcripts are the durable authority for Agent identity, authored Messages and Requests, committed Deliveries and Answers, and recovery evidence. Agent Templates and Workflow Policy are resolved from current trusted resources; policy reload publishes complete snapshots but does not write them to transcripts.
 
-Delivery scheduling, execution permits, Human Request surfaces and drafts, Operational Attention, exact Run handles, Holds, and the open Agent-view attachment are volatile and bounded where their owning feature specifies a limit. They are not replayed as durable work after process loss. Polling, explicit retry, and transcript-based cold recovery are the supported recovery paths.
+Delivery scheduling, execution permits, Human Request attention and Answer mode, Operational Attention, exact Run handles, Holds, and the open Agent-view attachment are volatile and bounded where their owning feature specifies a limit. They are not replayed as durable work after process loss. Polling, explicit retry, and transcript-based cold recovery are the supported recovery paths.
 
 ## Shutdown
 

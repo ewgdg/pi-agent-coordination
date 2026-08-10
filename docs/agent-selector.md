@@ -10,7 +10,7 @@ Agent selection prepares the target mode before dismissing the roster. The selec
 
 Live uses one continuous list across three adjacent sections:
 
-- **Attention Inbox** contains Owner-visible Human `DECIDE` items and exhausted Operational `ATTENTION` items. The first attention item receives initial focus. `DECIDE` opens its exact Human Request; Operational `ATTENTION` remains passive.
+- **Attention Inbox** contains Owner-visible Human `DECIDE` items and exhausted Operational `ATTENTION` items. A `DECIDE` row identifies the requesting Agent and shows a bounded one-line question preview. The first attention item receives initial focus. Selecting `DECIDE` opens that Agent's full-window view at its pending request and focuses its native editor; Operational `ATTENTION` remains passive.
 - **Owner** remains fixed in every Live scope.
 - **Agents** contains the current scope's direct ordinary children in creation order. Live Moderators appear at the Owner scope as standalone participants.
 
@@ -30,7 +30,7 @@ The selector keeps focus while the Runtime is prepared. Its mode is attached bef
 
 The outer overlay adds no fixed header. It presents the child mode's complete Pi fullscreen frame: transcript, pending and working state, tool rendering, widgets, editor, footer, notifications, selectors, dialogs, and child-local extension overlays.
 
-A scoped activity dock lives inside the native above-editor widget area. For a selected non-Owner Agent, its first row is `label · compact Agent ID · status`; the label is accented and bold, the identity is dim, and only the status receives its semantic status color. Rendered statuses are lowercase: `dormant` when no exact Run exists, `active` while a Run executes work, `idle` when a current Run is settled, `waiting` with a named reason when progress needs human input, an Agent answer, or resumption, and `starting`, `ending`, or `failed` during those lifecycle conditions. A leaf retains only this identity row directly against the native editor border.
+A scoped activity dock lives inside the native above-editor widget area. For a selected non-Owner Agent, its first row is `label · compact Agent ID · status`; the label is accented and bold, the identity is dim, and only the status receives its semantic status color. Rendered statuses are lowercase: `dormant` when no exact Run exists, `active` while a Run executes work, `idle` when a current Run is settled, `waiting` with a named reason when progress needs human input, an Agent answer, or resumption, and `starting`, `ending`, or `failed` during those lifecycle conditions. While the selected Agent awaits a Human Answer, the dock also shows `ANSWER · Enter submits` directly above the unchanged native editor.
 
 With Owner selected, the dock shows the Owner-only Attention Inbox before Owner's direct children that have a current Run. With another Agent selected, it shows only that Agent's identity and direct children that have a current Run. Starting, live, and ending child rows stay in creation order and project Run state, attention, model/thinking configuration, and queued-input count. Dormant Agents remain available through `/agents` but do not appear in the activity dock. Human `DECIDE` and exhausted operational `ATTENTION` occur only in the Owner dock; `/agents` retains their existing actions.
 

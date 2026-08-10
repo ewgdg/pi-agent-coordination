@@ -161,11 +161,8 @@ An ordinary free-form Agent Request from a Moderator to the Workflow Owner for t
 The bounded response when a Moderator Run terminally fails after same-Run Automatic Reconciliation: one fresh replacement Moderator continues the original handling with pointers to the first attempt. Failure of that replacement stops automatic attempts and creates a passive Workflow Owner Attention Inbox entry centered on the original condition and affected Agents rather than on Moderator recovery.
 
 **Human Request**:
-A blocking Request targeting the human and containing one or more Human Questions. Its committed `ask_user_question` tool call is the canonical Request; a spawned ordinary Agent or Moderator may have at most one unresolved Human Request, while different Agents may have requests open concurrently. The Workflow Owner does not author Human Requests.
-
-**Human Question**:
-One independently presented prompt within a Human Request. A request-specific UI presents multiple Human Questions as tabs, and its matching Human Answer is identified by the Question's stable position in that Request.
+A blocking Request from an ordinary Agent or Moderator asking the human one free-form question. Each Agent may have at most one unresolved Human Request, while different Agents may have requests open concurrently; the Workflow Owner does not author Human Requests.
 
 **Human Answer**:
-The successful native tool result containing the structured set of human responses to a Human Request's Questions, canonically bound to that exact tool call. It ends the Request's protocol obligation without claiming that its content is semantically sufficient.
+The human-authored free-form text that resolves one Human Request and allows its requesting Run to continue. It does not claim that its content is semantically sufficient.
 _Avoid_: Human Response, Agent-confirmed resolution

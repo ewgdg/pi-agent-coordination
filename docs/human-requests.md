@@ -1,71 +1,96 @@
 # Human Requests
 
-Any spawned ordinary Agent or Moderator can call `ask_user_question` to ask the human one or more structured Questions and block its current Run until the native tool call succeeds or is interrupted. The Workflow Owner does not have this tool.
+Any spawned ordinary Agent or Moderator can call `ask_user_question` to ask the human one free-form question and block its current Run until the native tool call succeeds or is interrupted. The Workflow Owner does not have this tool.
 
 ```ts
 ask_user_question({
-  questions: [
-    {
-      kind: "select_one",
-      header: "Boundary",
-      prompt: "Which boundary should remain authoritative?",
-      options: [
-        { label: "Native Pi", description: "Use the native tool result." },
-        { label: "Separate store" }
-      ],
-      allowOther: false
-    },
-    {
-      kind: "select_many",
-      header: "Validation",
-      prompt: "Which checks should run?",
-      options: [
-        { label: "Real session" },
-        { label: "PTY" }
-      ],
-      allowOther: true
-    },
-    {
-      kind: "text",
-      header: "Rationale",
-      prompt: "Why?",
-      multiline: true
-    }
-  ]
+  question: "Which boundary should remain authoritative?"
 })
 ```
 
-Every request contains at least one Question. Headers, prompts, option labels, option descriptions, custom values, and text Answers must contain non-whitespace text. Select Questions require at least one unique option. `allowOther` controls whether the human may provide a custom value.
+The question must contain non-whitespace text. Each Agent may have at most one unresolved Human Request, while different Agents may wait independently.
 
-Questions, options, and Answers correlate by array position. A complete Answer contains one matching Answer for every Question:
+A successful Human Answer contains one nonblank free-form text value:
 
 ```json
 {
   "requestId": "...",
-  "answers": [
-    { "kind": "select_one", "selectedOptionIndex": 0 },
-    {
-      "kind": "select_many",
-      "selectedOptionIndexes": [0],
-      "customValue": "Package dry run"
-    },
-    { "kind": "text", "text": "The transcript remains authoritative." }
-  ]
+  "answer": "Keep the native Pi boundary."
 }
 ```
 
-A select-one Answer contains either one zero-based `selectedOptionIndex` or one allowed `customValue`. A select-many Answer contains unique zero-based `selectedOptionIndexes` and may also contain one allowed `customValue`; at least one listed or custom choice is required.
+## Transcript presentation
 
-## Native interaction
+The committed tool call renders in the requesting Agent's transcript as a full-width message-like row. The complete question is Markdown-rendered and wraps with the native transcript; it is not truncated to fit a modal surface.
 
-The Owner's own request opens immediately. A background Agent's request adds one passive `DECIDE` row to the Owner-scoped activity dock without taking focus. Use `/agents` and select the numbered `DECIDE` row to open that request.
+While waiting:
 
-The request surface has one tab per Question. Use Tab or Left/Right to change Questions, Up/Down to move through options, Space to toggle select-many options, Enter to confirm, and Escape to interrupt. If the requesting Agent has an open Agent view, the Human Request temporarily receives focus inside that Agent's complete mode; Escape interrupts only that Agent's open request and establishes its exact-Run Interruption Hold. When the request surface closes, the interactive Agent view reclaims focus. Partial selections remain only in the open surface. Pi preserves the Owner editor contents throughout.
+```text
+[Ask User]  waiting
+
+Which boundary should remain authoritative?
+```
+
+After successful commitment, the canonical tool result renders as a visually separate user-style block:
+
+```text
+[Ask User]
+
+Which boundary should remain authoritative?
+
+[Answer]
+
+Keep the native Pi boundary.
+```
+
+The question and Answer remain one native Tool Execution internally. The presentation appends no synthetic Message or custom transcript entry.
+
+An interrupted request retains its question and renders the canonical error result separately:
+
+```text
+[Interrupted]
+
+Human request interrupted before an answer was provided.
+```
+
+A non-user fence renders its actual failure text instead. Failed requests never render an `[Answer]` block.
+
+## Attention and navigation
+
+A background Human Request never changes views or takes focus. It adds one passive row to the Owner-scoped Attention Inbox:
+
+```text
+DECIDE  Agent label · Which boundary should remain authoritative?…
+```
+
+The row contains a bounded one-line question preview. Selecting it closes the roster, opens the requesting Agent's full-window view at the latest transcript position, and focuses that Agent's native editor. The request remains pending if the human switches to Owner or another Agent.
+
+## Answer mode
+
+A selected Agent with an unresolved Human Request shows one compact line above its native editor:
+
+```text
+ANSWER · Enter submits
+```
+
+The Human Request does not replace the editor, install a special editor, or alter its current draft. The human may keep, edit, delete, or copy the existing text. The primary Enter submission adopts the complete nonblank editor text as the Human Answer instead of queuing an ordinary Agent Message. Native multiline editing remains available.
+
+Alt+Enter retains Pi's native follow-up behavior and leaves the Human Request unresolved. Recognized built-in, extension, skill, and prompt-template commands also retain their native behavior rather than becoming Answers. If a command produces a Message, that Message uses its ordinary delivery mode and remains subject to the blocking request's scheduling boundary. An unrecognized slash-prefixed string is ordinary editor text and may be submitted as the Answer.
+
+Human Answers are text-only. A submission containing images is rejected without resolving the request. Blank, image-bearing, stale, fenced, or otherwise rejected submissions restore their submitted text to the editor and report the reason, allowing correction and retry. A successful submission clears through the native editor path.
+
+Human Request handling does not capture Escape. The default Pi editor may abort the blocked Run, while custom editors retain their own Escape semantics. Context-switching commands remain available without being treated as Answers.
 
 ## Commitment and scheduling
 
-The committed `ask_user_question` call is the Human Request. Its matching successful native tool result is the sole Human Answer. UI submission is only a candidate: `input_required` attention remains until that exact result is present in the transcript.
+The committed `ask_user_question` call is the Human Request. Its matching successful native tool result is the sole Human Answer. Editor submission is only a candidate: `input_required` attention remains until that exact result is present in the transcript.
 
-The tool runs sequentially, so later sibling calls wait for the Answer or interruption. Steer Messages wait for successful Answer commitment. Deferred Messages wait until the answered turn settles. Other Agent Messages cannot answer a Human Request.
+The tool runs sequentially, so later sibling calls wait for the Answer or interruption. Steer Messages wait for successful Answer commitment. Deferred and follow-up Messages wait until the answered turn settles. Other Agent Messages cannot answer a Human Request.
 
-Escape aborts the exact live invocation and records one matching error tool result. A Run failure that fences the interaction before successful result commitment also closes the surface and rejects late input. Pending interaction state and drafts are volatile; a successor Run does not reconstruct the request.
+A Run fence after submission but before result commitment defeats the candidate, records the matching native error result, and restores the submitted text when the interactive editor remains available. A committed Human Answer remains canonical if the Run subsequently fails.
+
+## Availability and lifetime
+
+Human Requests require an interactive TUI with an available Agent editor. Without one, the tool call fails before establishing `input_required` attention; the system never admits a request the human cannot answer.
+
+Human attention, Answer mode, and uncommitted editor state are volatile. They are not reconstructed for a successor Run or after host loss. The Pi transcript remains authoritative for the committed Human Request and any terminal native tool result.

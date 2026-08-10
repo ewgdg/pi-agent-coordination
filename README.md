@@ -7,7 +7,7 @@ Durable Pi agents that collaborate asynchronously under explicit Owner and Spawn
 - **Owner-directed Workflows:** the current interactive Pi session becomes the durable Workflow Owner. The Owner can fork or clone copied conversation into a fresh, independent Workflow.
 - **Durable child Agents:** ordinary Agents can create context-isolated children with `agent_spawn`.
 - **Messaging and Requests:** `agent_message` supports immutable Deferred and Steer Messages, correlated Requests and Answers, retrieval, and cancellation.
-- **Human decisions for spawned Agents:** `ask_user_question` lets a spawned Agent block its exact Run on structured human input. Background requests appear as passive `DECIDE` attention.
+- **Human decisions for spawned Agents:** `ask_user_question` lets a spawned Agent block its exact Run on one free-form Human Answer. The full request stays in the Agent transcript, while background requests appear as passive `DECIDE` attention.
 - **Run supervision:** Workflow Owners and Direct Spawners can inspect authorized Agents with `agent_observe`, then interrupt, explicitly resume, or terminate exact Runs with `agent_control`.
 - **Operational incident handling:** isolated Moderators handle overdue answer obligations, Obligation Stalls, answer-obligated Run Failures, and closed live Dependency Deadlocks. Review renewal, Run control, Owner escalation, and Resolution are policy-bounded and mechanically gated.
 - **Durable recovery:** a fresh host reconstructs verified authority, standalone Moderators, and residual Request retention from complete Pi transcripts without replaying volatile work.
@@ -59,7 +59,7 @@ Pi transcripts are the durable authority for identity, Messages, Requests, Deliv
 - [Workflow Policy](docs/workflow-policy.md) — reloadable execution, delivery, and review limits
 - [Agent spawning](docs/agent-spawning.md) — child creation and receipt semantics
 - [Agent messaging](docs/agent-messaging.md) — delivery modes and Agent Requests
-- [Human Requests](docs/human-requests.md) — structured Questions and native interaction
+- [Human Requests](docs/human-requests.md) — transcript-native questions, Answer mode, and commitment
 - [Agent selector](docs/agent-selector.md) — Live hierarchy, Dormant recency, attention, and keyboard navigation
 - [Interactive Agent view acceptance](docs/agent-view-acceptance.md) — complete-mode rendering, input, transitions, isolation, and lifecycle evidence
 - [Run supervision](docs/run-supervision.md) — observation, interruption, resumption, termination, and Agent-view retention
