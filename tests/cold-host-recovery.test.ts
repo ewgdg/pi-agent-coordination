@@ -16,6 +16,8 @@ import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import {
 	executeRegisteredTool,
 	openAgentsSurface,
+	openDormantAgentView,
+	returnAgentViewToOwner,
 } from "./support/agent-session.ts";
 import {
 	bindTestOwnerHost,
@@ -177,7 +179,7 @@ test("a cold-recovered Agent stays durable and dormant when its named inline fac
 			pi.registerTool({
 				name: "cold_inline_probe",
 				label: "Cold inline probe",
-				description: "Requires the named inline factory for every Run.",
+				description: "Requires the named inline factory for every Runtime preparation.",
 				parameters: Type.Object({}, { additionalProperties: false }),
 				async execute() {
 					return {
@@ -529,6 +531,93 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		],
 	);
 	assert.deepEqual(await snapshotDirectory(directory), bytesBeforeAdmission);
+	await reopened.runtime.dispose();
+});
+
+test("opening and closing a cold-recovered answer-obligated Agent keeps it dormant", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
+	await bindTestOwnerHost(host, "tui");
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"ask_user_question",
+				{
+					questions: [{
+						kind: "text",
+						header: "Pause",
+						prompt: "Leave the Creation Request unanswered across host loss.",
+						multiline: false,
+					}],
+				},
+				{ id: "pause-before-cold-dormant-inspection" },
+			),
+			{ stopReason: "toolUse" },
+		),
+	]);
+	const spawned = await executeTool(
+		host,
+		"agent_spawn",
+		"spawn-cold-dormant-inspection-child",
+		{
+			request: "Keep this Creation Request unresolved across host loss.",
+			label: "cold-dormant-inspection-child",
+		},
+	) as { agentId: string };
+	const workflowDirectory = workflowSessionDirectory(host);
+	const childSessionFile = await waitForSessionFile(
+		workflowDirectory,
+		spawned.agentId,
+	);
+	await waitForTranscriptEntry(
+		childSessionFile,
+		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) =>
+					part.type === "toolCall" &&
+					part.id === "pause-before-cold-dormant-inspection",
+			),
+	);
+	assert.equal(await countModeratorSessions(workflowDirectory), 0);
+	const ownerSessionFile = host.session.sessionManager.getSessionFile();
+	assert.ok(ownerSessionFile);
+	await host.runtime.dispose();
+
+	const reopened = await reopenOwner(host, ownerSessionFile, {
+		implicitModeratorResponses: false,
+	});
+	const observe = reopened.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const observePhase = async (toolCallId: string) => {
+		const result = await observe.execute(
+			toolCallId,
+			{ operation: "status", agentId: spawned.agentId },
+			undefined,
+			undefined,
+			reopened.session.extensionRunner.createContext(),
+		);
+		return (result.details as { run: { phase: string } }).run.phase;
+	};
+	assert.equal(await observePhase("observe-before-cold-dormant-inspection"), "dormant");
+	assert.equal(await countModeratorSessions(workflowDirectory), 0);
+	const entriesBeforeInspection = SessionManager.open(childSessionFile).getEntries();
+
+	const opened = await openDormantAgentView(reopened, spawned.agentId);
+	assert.equal(await observePhase("observe-during-cold-dormant-inspection"), "dormant");
+	await waitForCondition(async () =>
+		opened.view.render(80).join("\n").includes("cold-dormant-inspection-child")
+	);
+	assert.match(opened.view.render(80).join("\n"), /cold-dormant-inspection-child/);
+	await returnAgentViewToOwner(reopened, opened);
+	assert.equal(await observePhase("observe-after-cold-dormant-inspection"), "dormant");
+	assert.deepEqual(
+		SessionManager.open(childSessionFile).getEntries(),
+		entriesBeforeInspection,
+	);
+	await new Promise<void>((resolve) => setTimeout(resolve, 20));
+	assert.equal(await countModeratorSessions(workflowDirectory), 0);
 	await reopened.runtime.dispose();
 });
 
@@ -1045,6 +1134,21 @@ async function reopenOwner(
 	});
 	await bindTestOwnerHost(reopened, "tui");
 	return reopened;
+}
+
+async function countModeratorSessions(directory: string): Promise<number> {
+	let count = 0;
+	for (const filename of await readdir(directory)) {
+		if (!filename.endsWith(".jsonl")) continue;
+		const entries = SessionManager.open(join(directory, filename)).getEntries();
+		if (
+			entries.some(
+				(entry) => entry.type === "custom_message" &&
+					entry.customType === "agent-coordination.moderator-input",
+			)
+		) count += 1;
+	}
+	return count;
 }
 
 async function waitForModeratorSession(

@@ -199,12 +199,63 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	const dormantRendered = stripTerminalSequences(
 		dormantView.view.render(80).join("\n"),
 	);
-	assert.match(dormantRendered, /moderator.*idle/);
+	assert.match(dormantRendered, /moderator.*dormant/);
 	assert.match(dormantRendered, new RegExp(moderator.id.slice(-8)));
 	assert.equal(host.runtime.session, ownerSession);
 	await returnAgentViewToOwner(host, dormantView);
 
 	await host.runtime.dispose();
+});
+
+test("deselecting a genuinely live settled obligation creates an Obligation Stall Moderator", async (t) => {
+	let markChildStarted!: () => void;
+	const childStarted = new Promise<void>((resolve) => {
+		markChildStarted = resolve;
+	});
+	let releaseChild!: () => void;
+	const childGate = new Promise<void>((resolve) => {
+		releaseChild = resolve;
+	});
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		implicitModeratorResponses: false,
+	});
+	try {
+		host.model.setResponses([
+			async () => {
+				markChildStarted();
+				await childGate;
+				return fauxAssistantMessage(
+					"I settled while selected without answering the Creation Request.",
+				);
+			},
+		]);
+		const spawn = await executeAndCommitRegisteredTool(
+			host.session,
+			"agent_spawn",
+			"spawn-selected-obligation-stall",
+			{
+				request: "Settle while selected, then remain answer-obligated.",
+				label: "Selected Obligation Worker",
+			},
+		);
+		const agentId = (spawn.details as { agentId: string }).agentId;
+		await childStarted;
+		const opened = await openLiveAgentView(host, agentId);
+		releaseChild();
+		await waitForCondition(async () => {
+			const status = await observeStatus(host, agentId);
+			return status.run.phase === "live" && status.run.work === "settled";
+		});
+		assert.equal((await findModerators(host)).length, 0);
+
+		await returnAgentViewToOwner(host, opened);
+		const moderator = await waitForModeratorKind(host, "obligation_stall");
+		assert.equal(moderatorAffectedAgentId(moderator.path), agentId);
+	} finally {
+		releaseChild();
+		await host.runtime.dispose();
+	}
 });
 
 test("an overdue answer-obligated root call creates one minimal Operation Review Moderator", async (t) => {
@@ -320,8 +371,8 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	const moderator = await waitForModeratorKind(host, "operation_review");
 	const ordinaryProjection = projectionsBySessionId.get(child.agentId);
 	const moderatorProjection = projectionsBySessionId.get(moderator.id);
-	assert.equal(ordinaryProjection?.kind, "live");
-	assert.equal(moderatorProjection?.kind, "live");
+	assert.ok(ordinaryProjection);
+	assert.ok(moderatorProjection);
 	assert.match(
 		stripTerminalSequences(
 			ordinaryProjection.presentation.render(PROJECTION_RENDER_WIDTH).join("\n"),
@@ -1784,7 +1835,6 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 		host.runtime,
 		"<inline:pi-agent-coordination>",
 	);
-	let selectedAgentId = identity.agentId;
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -1793,24 +1843,6 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		humanRequestPresentation: new HumanRequestSurface(host.ui),
-		humanSessionSelection: {
-			selectedAgentId: () => selectedAgentId,
-			addChangeHandler: () => () => undefined,
-			isBoundTo: (agentId) => selectedAgentId === agentId,
-			async activate({ agentId }) {
-				selectedAgentId = agentId;
-			},
-			async restoreOwnerRuntimeForShutdown() {
-				selectedAgentId = identity.agentId;
-			},
-			async replaceIfSelected(agentId, binding) {
-				if (selectedAgentId !== agentId) {
-					await binding.release?.();
-					return false;
-				}
-				return true;
-			},
-		},
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
@@ -1896,7 +1928,8 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 			"dependency_deadlock",
 		);
 
-		assert.equal(await owner.selectForHuman(participant.agentId), "selected");
+		const selectedView = await owner.openAgentView(participant.agentId);
+		assert.ok(selectedView);
 		const humanAttention = owner.humanAttention()[0]!;
 		const focused = owner.focusHumanRequest(humanAttention.requestId);
 		await waitForCondition(() => host.ui.customSurfaces.length === 1);
@@ -1923,7 +1956,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 				({ reason }) => reason === "interruption_hold",
 			)
 		);
-		assert.equal(await owner.selectForHuman(identity.agentId), "selected");
+		await selectedView.close();
 		await assertNoModeratorKindAtSafeBoundary(
 			owner,
 			host,
@@ -2615,7 +2648,12 @@ async function observeStatus(
 	run:
 		| { phase: "dormant"; retentionReasons: readonly [] }
 		| {
-			phase: "starting" | "live" | "ending";
+			phase: "starting" | "ending";
+			retentionReasons: ReadonlyArray<{ reason: string; count: number }>;
+		}
+		| {
+			phase: "live";
+			work: "active" | "settled";
 			retentionReasons: ReadonlyArray<{ reason: string; count: number }>;
 		};
 }> {

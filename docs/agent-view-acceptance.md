@@ -1,6 +1,6 @@
 # Interactive Agent view acceptance matrix
 
-This matrix maps the acceptance criteria for issues #63–#68 to production paths and concrete regression tests. Criterion numbers follow the order in each issue body.
+This matrix maps the acceptance criteria for issues #63–#69 to production paths and concrete regression tests. Criterion numbers follow the order in each issue body.
 
 ## Shared implementation paths
 
@@ -8,9 +8,9 @@ This matrix maps the acceptance criteria for issues #63–#68 to production path
 - `src/presentation/agent-view-surface.ts` — headerless full-window presentation, input prioritization, failure boundary, and Owner shutdown delegation.
 - `src/presentation/agent-activity-surface.ts` — native above-editor selected identity, scoped direct-child activity, and Owner-only attention.
 - `src/coordination/durable-agent-view.ts` — one retargetable attachment per selected durable Agent view.
-- `src/coordination/workflow-coordinator.ts` — live acquisition, selection-started successor admission, retention, failure transitions, switching, and shutdown.
-- `src/runtime/default-child-session-factory.ts` — exact live and Dormant failure-presentation session/projection construction.
-- `src/runtime/in-process-agent-host.ts` — exact Run startup, terminal lifecycle ordering, failure, and disposal.
+- `src/coordination/workflow-coordinator.ts` — Agent Runtime preparation, Run admission, retention, failure transitions, switching, and shutdown.
+- `src/runtime/default-child-session-factory.ts` — configured Agent Runtime construction.
+- `src/runtime/in-process-agent-host.ts` — prepared Runtime ownership plus exact Run state, fencing, failure, and disposal.
 
 Pi theme configuration is intentionally Workflow-global. The projection boundary restores incidental child initialization changes and Owner callback ownership; explicit theme changes remain shared.
 
@@ -21,8 +21,8 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 1. Live ordinary and Moderator complete modes; Owner stays bound | `tests/agent-view.test.ts` — “complete interactive mode while Owner stays bound”; `tests/operational-incidents.test.ts` Moderator view coverage |
 | 2. Per-session extensions and one startup | `tests/interactive-host-conformance.test.ts` — child startup isolation and repeated attachment |
 | 3. Detached terminal with no physical writes | `ProjectionTerminal`; `tests/native-agent-projection.test.ts` complete projection and compatibility cleanup; PTY Owner-state checks |
-| 4. Dormant selection starts one no-prompt, command-capable successor | `tests/agent-view.test.ts` — selection-started successor and startup-modal tests |
-| 5. Durable live/failure/Dormant/successor transitions | selected startup failure, terminal failure, selection-started successor, and Message successor tests in `tests/agent-view.test.ts` |
+| 4. Dormant selection stays passive while retaining commands and UI | `tests/agent-view.test.ts` — Dormant command, editor activation, and startup-modal tests |
+| 5. Stable Runtime across Dormant/live/failure/successor transitions | selected startup failure, terminal failure, input-started successor, and Message activation tests in `tests/agent-view.test.ts` |
 | 6. Agent-local UI and input features | complete-mode, independent-mode, shortcut/autocomplete, retained drafts/overlays, and child-startup isolation tests |
 | 7. Native rendering parity | rich rendering and differential native fullscreen tests in `tests/native-agent-projection.test.ts`, including Markdown, Mermaid, pending/completed tools, custom Messages, and custom entries |
 | 8. Long transcript navigation during streaming/resize | streaming-anchor and fullscreen viewport tests plus real PTY scroll/resize tests |
@@ -30,18 +30,18 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 10. Real PTY interaction and untouched Owner return | `tests/coordinated-workflow-pty.test.ts` main fullscreen flow; fixture asserts Owner runtime, transcript, editor factory/text/cursor, footer, services, and diagnostics |
 | 11. Mechanical private-host compatibility | `tests/host-shape.test.ts`, host module/conformance suites |
 
-## #64 — Exact Run and Dormant failure-projection ownership
+## #64 — Agent Runtime and exact Run ownership
 
 | Criterion | Evidence |
 |---|---|
-| 1. One mode before binding/model work | projection admission and session-start model-work ordering tests |
-| 2. One extension binding/startup per child session | repeated attachment conformance and repeated lifecycle counters |
+| 1. One Runtime mode before model work | projection admission and session-start model-work ordering tests |
+| 2. One extension binding/startup per Runtime | repeated attachment conformance and Runtime lifecycle counters |
 | 3. Narrow complete projection interface | `PiNativeAgentProjection`; host-shape preflight |
 | 4. Complete native frame | fullscreen viewport, rich rendering, retry/compaction, and retained-mode state tests |
 | 5. Native input/focus/custom editor/shortcut path | complete-mode custom editor test; shortcut/autocomplete test; streaming custom-editor test |
 | 6. Inert detached terminal with live dimensions/callbacks | `ProjectionTerminal`; resize and PTY tests |
-| 7. Dormant activation and failure presentation | selection-started successor, native Dormant failure projection, and terminal-failure tests |
-| 8. Exact clean/failure/termination/replacement/shutdown disposal | `tests/run-projection-lifecycle.test.ts`, constructor watcher rollback, and `tests/agent-view.test.ts` lifecycle tests |
+| 7. Passive Runtime preparation and in-place Run admission | editor-, command-, session-start-, and Message-activated Run tests |
+| 8. Exact clean/failure/termination/shutdown lifecycle | `tests/run-projection-lifecycle.test.ts`, constructor watcher rollback, and `tests/agent-view.test.ts` Runtime lifecycle tests |
 | 9. Owner presentation/global consistency | Owner binding assertions, explicit shared-theme tests, process listener/keybinding/theme baselines |
 | 10. No partial startup resource | constructor watcher rollback, compatibility failure, initial render failure, selected initialization failure, and PTY failure tests |
 | 11. Concrete complete-frame/input/role/lifecycle host coverage | native projection, agent view, operational incident, conformance, and PTY suites |
@@ -53,13 +53,13 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 1. Complete view without Owner mutation | complete-mode Owner-binding test |
 | 2. Native child interaction features | direct input, custom editor, shortcut, autocomplete, commands, overlays, and footer tests |
 | 3. Escape to child; `/agents` return/switch | custom-editor Escape and Agent-to-Agent switching tests |
-| 4. Dormant selection starts a successor without model input | selection-started successor test |
-| 5. Selected successor exposes normal commands and startup UI | command-capable successor and startup-modal tests |
-| 6. Durable identity independent of exact session | scoped dock identity and failure/successor retarget tests |
-| 7. Exact `interactive_selection` retention | attachment, return, and release conformance tests |
+| 4. Dormant selection prepares evidence and editor without admitting work | cold-recovery open/close regression and Dormant Agent view test |
+| 5. Extension behavior remains native; model-starting effects admit a Run | UI-only command, command-emitted user message, `session_start` input, and editor submission tests |
+| 6. One Runtime spans exact Run transitions | scoped dock identity, failure, and repeated-successor tests |
+| 7. Exact `interactive_selection` Runtime retention | attachment, return, and release conformance tests |
 | 8. Other retention preserves live mode | multiply retained switching and retained resource-reload tests |
-| 9. Terminal failure retargets same view to Dormant | unit and PTY terminal-failure tests |
-| 10. Message successor attaches before Delivery | Message-started successor test |
+| 9. Terminal failure keeps the same Runtime view while becoming Dormant | unit and PTY terminal-failure tests |
+| 10. Message activates the attached Runtime before Delivery execution | Message-activated Runtime test |
 | 11. Atomic selector handoff | `tests/agent-selector-surface.test.ts` preparation-focus test |
 | 12. Child UI local before/during/after attachment | interactive host conformance child-UI test |
 | 13. No Owner rebind or generic command | complete-mode assertions and generic command collision test |
@@ -78,7 +78,7 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 6. No state from another Agent | independent-mode switch and retained-mode negative assertions |
 | 7. Hidden UI cannot mutate Owner/terminal | child startup isolation conformance and detached terminal implementation |
 | 8. Shared theme/keybinding consistency | retained shared-config test; session-start and paused-startup explicit shared-theme tests |
-| 9. Reload affects later modes, not retained modes | “later Runs use reloaded factories without mutating a retained child mode”; successor factory resolution test |
+| 9. Reload affects later Runtime preparations, not retained modes | retained-mode reload test and successor Runtime factory-resolution test |
 | 10. Command collision safety | generic child-view command conformance test |
 | 11. Real extensions and complete native modes | native projection, agent view, interactive host conformance, and PTY suites |
 
@@ -86,7 +86,7 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 
 | Criterion | Evidence |
 |---|---|
-| 1. Initial newest content with editor/footer | complete fullscreen viewport and selection-started successor tests |
+| 1. Initial newest content with editor/footer | complete fullscreen viewport and Dormant Runtime/editor tests |
 | 2. Bounded wheel/drag/page/end navigation plus text entry | native viewport test, Agent-view surface routing, and main PTY flow |
 | 3. Tail-only partial/completed follow | streaming-anchor test and PTY chunked stream |
 | 4. Scrolled logical anchor survives append | streaming-anchor test and PTY anchor assertion |
@@ -105,14 +105,26 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 1. Constructor/init/bind/startup/render/compatibility failure cleanup | footer watcher construction rollback, native projection failure tests, lifecycle rollback tests, and selected initialization PTY |
 | 2. Bounded async render/input failure | Agent-view surface tests, real child failure tests, and failure PTYs |
 | 3. No selector handoff input leak | selector preparation-focus test and prioritized input routing tests |
-| 4. Idempotent switch/dispose/duplicate close/teardown/shutdown | durable attachment and surface tests; selected and unselected startup custom-UI cancellation/shutdown tests |
-| 5. Selected failure replaces before disposal | selected startup and terminal failure unit/PTY tests |
-| 6. Selection-started and Message successors attach before work, once | selected successor, startup-modal, stale-target no-restart, and Message successor tests |
+| 4. Idempotent switch/dispose/duplicate close/teardown/shutdown | durable attachment and surface tests; prepared-Runtime and unselected startup custom-UI cancellation/shutdown tests |
+| 5. Selected terminal failure retains the Runtime; invalid initialization closes | selected startup and terminal failure unit/PTY tests |
+| 6. Input, extension, and Message work activate the attached Runtime once | editor submission, command-emitted and `session_start` user messages, and Message activation tests |
 | 7. Sole view release once | exact retention conformance test |
 | 8. Other retention prevents premature disposal | retained switching and resource-reload tests |
-| 9. Repeated attachment does not recreate/start/grow resources | repeated attachment conformance, repeated projection resource baseline |
-| 10. Repeated successors create/dispose exact lifecycles and return resources | repeated successor test compares startup/shutdown multisets, process listeners, and active process resources |
-| 11. Shutdown continues after one cleanup throws | throwing Dormant cleanup test |
+| 9. Repeated attachment does not recreate/start/grow resources | repeated attachment conformance and repeated projection resource baseline |
+| 10. Repeated Runs reuse one selected Runtime and return resources | repeated successor test compares one startup/shutdown pair, process listeners, and active process resources |
+| 11. Shutdown cleanup continues after projection failure | `tests/run-projection-lifecycle.test.ts` cleanup-continuation test |
 | 12. Failure/switch/noninteractive PTY matrix | input, render, initialization, terminal Run, switching, and unviewed disposal PTYs |
 | 13. Stable interfaces/process observations | lifecycle tests use projection/host interfaces; resource tests use process listeners and `process.getActiveResourcesInfo()` |
 | 14. Release gates | full test, conformance, typecheck, package dry-run, audit, and diff-check commands documented in the completed plan |
+
+## #69 — Dormant selection remains passive
+
+| Criterion | Evidence |
+|---|---|
+| 1. Cold-recovered unresolved Creation Request remains Dormant without moderation | `tests/cold-host-recovery.test.ts` — cold-recovered answer-obligated open/close regression |
+| 2. Real `/agents` open/close creates no Run or transcript evidence | same cold-recovery regression through `openDormantAgentView()` and Owner return |
+| 3. Observation remains `phase: "dormant"` while open | cold-recovery and Dormant command tests |
+| 4. First editor submission activates one exact Run and commits once | Dormant editor-submission test |
+| 5. Extension behavior retains native semantics and can activate work | UI-only command, command-emitted user message, and `session_start` input tests |
+| 6. Message Delivery activates the same projection before execution | ordinary Message-activated Runtime test |
+| 7. Genuine live settled obligation still moderates | `tests/operational-incidents.test.ts` Obligation Stall coverage |

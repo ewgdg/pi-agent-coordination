@@ -1,42 +1,39 @@
 # Child UI context
 
-Every exact live ordinary Agent or Moderator Run owns one complete Pi `InteractiveMode`. The mode is constructed and published before extension binding and model admission, so the child session's extensions bind to that mode's own UI context and emit `session_start` exactly once. Publishing the initializing mode lets `/agents` display and operate a dialog opened by `session_start`; model work remains gated until that startup UI settles.
+Each hosted ordinary Agent or Moderator can own one complete Pi `AgentSession` and `InteractiveMode`. Together they form the Agent Runtime. The Runtime can be prepared while the Agent is Dormant; a Run is admitted only when Agent work begins.
 
-## Per-child presentation
+The mode is published before extension startup and model admission. `/agents` can therefore attach a dialog or custom surface opened by `session_start`. Extension lifecycle behavior is not filtered or replayed: if `session_start` sends a user message or otherwise starts Agent work, that work activates the prepared Runtime normally.
 
-A child mode owns its own transcript components, pending and working state, widgets, editor, footer, statuses, notifications, selectors, dialogs, extension commands, shortcuts, and focused overlays. Extension UI calls always target that child mode, whether or not it is currently selected. They do not mutate the Owner editor, footer, statuses, widgets, notifications, focus, or transcript, and they do not affect another child mode.
+## Per-Agent presentation
 
-Opening an Agent view attaches the existing mode. It does not rebind extensions, replay `session_start`, recreate the editor, or copy child UI state into the Owner TUI. Repeated view cycles therefore preserve the exact mode's editor and extension presentation until its Run ends.
+A child mode owns its transcript components, pending and working state, widgets, editor, footer, statuses, notifications, selectors, dialogs, extension commands, shortcuts, tools, and focused overlays. Extension UI calls always target that mode, whether or not it is selected. They do not mutate the Owner editor, footer, statuses, widgets, notifications, focus, or transcript, and they do not affect another Agent mode.
+
+Opening an Agent view attaches the existing mode or prepares it once when absent. It does not rebind extensions, replay `session_start`, recreate the editor, or copy child UI state into the Owner TUI. Runtime identity therefore remains stable when a Dormant Agent starts work, when coordination Delivery activates it, and when a selected Run fails.
 
 ## Detached terminal
 
-Each child mode renders against a detached terminal. The terminal proxies the available dimensions, retains Pi's normal input and resize callbacks, and discards physical writes, title changes, progress updates, cursor operations, and screen-control output.
+Each child mode renders against a detached terminal. The terminal proxies available dimensions and retains Pi's normal input and resize callbacks while discarding physical writes, title changes, progress updates, cursor operations, and screen-control output.
 
-The full-window Owner overlay renders the child renderer's complete fullscreen frame. Input is forwarded through the detached terminal callback, not sent directly to the editor. Pi therefore retains normal focus routing for custom editors, extension overlays, autocomplete, commands, shortcuts, mouse input, and transcript navigation.
+The full-window Owner overlay renders the child renderer's complete fullscreen frame. Input goes through the detached terminal callback rather than directly to the editor, preserving normal focus routing for custom editors, extension overlays, autocomplete, commands, shortcuts, mouse input, and transcript navigation.
 
-The Owner's original runtime, session, services, diagnostics, component tree, editor implementation and text, footer, extension context, and physical terminal remain mounted throughout attachment.
+The Owner's runtime, session, services, diagnostics, component tree, editor implementation and text, footer, extension context, and physical terminal remain mounted throughout attachment.
 
-An embedded child mode is a component, not a process owner. It installs no process signal handlers, never calls `process.exit()`, and cannot independently dispose its runtime. `/quit`, Ctrl-D, and repeated Ctrl-C forward shutdown intent to the continuously bound Owner, which performs Pi's normal graceful process shutdown. Child render, editor-input, and input-acquisition failures close the exact view, restore Owner input routing, and report one Owner diagnostic. Projection initialization is serialized because Pi themes, theme callbacks, registered themes, and keybindings are process-global. Incidental child constructor/settings application is restored before extension startup, while explicit child or Owner theme changes remain shared across the Workflow. Footer git-watcher startup is deferred until mode construction succeeds so a late constructor failure has no unreachable watcher to clean up.
+An embedded child mode is not a process owner. It installs no process signal handlers, never calls `process.exit()`, and cannot independently end the Workflow. `/quit`, Ctrl-D, and repeated Ctrl-C forward shutdown intent to the continuously bound Owner. Child render, editor-input, and input-acquisition failures close the exact view, restore Owner input routing, and report one Owner diagnostic.
 
-## Pi-native Run projection
+Projection initialization is serialized because Pi themes, theme callbacks, registered themes, and keybindings are process-global. Incidental child initialization changes are restored before extension startup, while explicit child or Owner theme changes remain shared across the Workflow. Footer git-watcher startup is deferred until mode construction succeeds so a late constructor failure has no unreachable watcher.
 
-The projection adapter concentrates the private Pi seams needed to:
+## Runtime preparation and Run admission
 
-- initialize one complete child `InteractiveMode`;
-- expose its already-laid-out fullscreen frame;
-- update detached terminal dimensions;
-- dispatch terminal input;
-- notify the attached Owner overlay about native render requests; and
-- dispose the exact mode with its session.
+Selecting a Dormant Agent resolves its current configuration and prepares the same full Runtime used for later work. Selection alone does not initialize Run-scoped Request relationships, append transcript evidence, or invoke the model. The Agent remains Dormant.
 
-Model work remains behind the Run-admission gate until mode initialization, extension startup, transcript subscription, and coordination runtime policy are complete. This ensures the mode observes the Run's first model-visible event without permitting Pi startup behavior to restore generic retries or mutate the Owner presentation.
+Extension actions retain their native semantics. UI-only commands leave the Agent Dormant. Editor submission, a slash command or `session_start` handler that emits model-starting input, and ordinary coordination Delivery activate an exact Run in the already-attached Runtime. Runtime and projection identity remain unchanged through activation.
 
-Projection ownership follows the exact Run, not view attachment. Clean release, failure, termination, startup rollback, and Workflow shutdown emit `session_shutdown`, release extension-owned UI, and dispose the live mode with its session exactly once. Closing or switching a view only removes `interactive_selection`; it never directly disposes a live projection retained by the Run.
+Model execution remains behind projection readiness, coordination policy, and Workflow capacity admission. Run activation establishes the exact handle used for Delivery, Request retention, interruption, termination, failure, and Operational Incident evaluation.
 
-## Dormant activation and failure presentation
+When a selected Run releases or fails, its exact Run state ends while the Runtime can remain attached and Dormant. Later work activates a new exact Run in that Runtime. Closing a selected Dormant Runtime removes `interactive_selection` retention and disposes it; closing the view never invents Run work or an Operational Incident.
 
-Selecting a Dormant Agent starts exactly one successor Run in the Agent lane with `interactive_selection` retention. Selection itself submits no model input. The successor's complete live mode supplies normal coordination tools, commands, shell input, custom extensions, editor, and footer immediately after startup, while its initializing projection remains available for `session_start` UI before readiness settles.
+## Projection lifecycle
 
-Concurrent selection and Message Delivery converge on the same exact startup attempt. Selection records the observed Run sequence, so queued or switching handoff work cannot reinterpret a failed attempt as permission to start another successor. Closing a selected mode with pending startup UI cancels that exact initialization before lane-owned cleanup; selectors, inputs, editors, and custom extension surfaces settle without hidden terminal input. The close then removes `interactive_selection`, and ordinary Run release decides whether the Agent becomes Dormant again.
+The projection adapter concentrates the private Pi seams needed to initialize one child mode, expose its laid-out fullscreen frame, update detached dimensions, dispatch terminal input, publish native render changes, and dispose the Runtime.
 
-If a selected live Run fails, the durable view first receives a view-owned Dormant failure presentation before the failed exact-Run projection is disposed. Explicit human input or ordinary Message Delivery can start a successor, and the same durable attachment receives its complete live mode before model-visible work proceeds. Failure-presentation and live child settings remain isolated from the Owner settings manager.
+A Runtime projection is created once and remains stable across Dormant-to-live activation and selected Run failure. Unselected Dormant Runtime cleanup, initialization rollback, termination, and Workflow shutdown dispose its mode and session exactly once. A selected Run can end without disposing or replacing the retained Runtime.

@@ -65,15 +65,6 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 		this.#reportFailure(error);
 	}
 
-	replaceProjection(projection: PiNativeAgentProjection): void {
-		if (this.#closed) return;
-		if (projection === this.#projection) return;
-		this.#removeProjectionChangeHandler();
-		this.#projection = projection;
-		this.#removeProjectionChangeHandler = this.#observeProjection(projection);
-		this.#notifyChanged();
-	}
-
 	retarget(options: {
 		agentId: string;
 		label: string;

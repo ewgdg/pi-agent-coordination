@@ -120,7 +120,7 @@ export class MessageCoordinator {
 		);
 		this.#deliveryScheduler.integrate(record);
 		if (record.host.currentHandle()) {
-			record.host.initializeBoundRunRelationships();
+			record.host.initializeCurrentRunRelationships();
 		}
 	}
 

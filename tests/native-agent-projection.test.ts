@@ -122,11 +122,9 @@ test("a real live InteractiveMode projection reconstructs transcript and follows
 	]);
 
 	const projection = await projectionHost.createProjection({
-		kind: "live",
 		session: ownerSession,
 		services: ownerServices,
 	});
-	assert.equal(projection.kind, "live");
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.runtime.services, ownerServices);
 	assert.equal(mutableOwnerRuntime.rebindSession, ownerRebindSession);
@@ -207,7 +205,6 @@ test("a rejected native input acquisition is reported through the projection fai
 	let projection: Awaited<ReturnType<typeof projectionHost.createProjection>> | undefined;
 	try {
 		projection = await projectionHost.createProjection({
-			kind: "live",
 			session: host.session,
 			services: host.services,
 			exposeWhileInitializing: true,
@@ -233,7 +230,6 @@ test("retained child rendering preserves newer shared theme and keybinding confi
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 	});
@@ -277,7 +273,6 @@ test("an explicit session_start theme change remains Workflow-global", async () 
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 	});
@@ -312,7 +307,6 @@ test("a shared theme change remains active while child startup is paused", async
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 		exposeWhileInitializing: true,
@@ -352,7 +346,6 @@ test("initial native render failure rejects readiness before projection admissio
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 		exposeWhileInitializing: true,
@@ -404,7 +397,6 @@ test("repeated real projection lifetimes return process and extension resources 
 			noTools: "all",
 		});
 		const projection = await projectionHost.createProjection({
-			kind: "live",
 			session: created.session,
 			services: host.services,
 		});
@@ -446,7 +438,6 @@ test("native child shortcuts and command autocomplete remain functional", async 
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 	});
@@ -523,7 +514,6 @@ test("two retained child modes preserve independent drafts and overlays", async 
 	>> = [];
 	for (const created of createdSessions) {
 		projections.push(await projectionHost.createProjection({
-			kind: "live",
 			session: created.session,
 			services: host.services,
 		}));
@@ -614,7 +604,6 @@ test("the complete child renderer keeps a fullscreen transcript viewport and edi
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.runtime.services,
 	});
@@ -706,7 +695,6 @@ test("streaming follows at the tail and preserves the inspected transcript ancho
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 	});
@@ -768,7 +756,6 @@ test("the native child renderer presents retry and compaction transitions", asyn
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 	});
@@ -868,7 +855,6 @@ test("the native projection renders rich transcript and extension entry types to
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 	});
@@ -980,7 +966,6 @@ test("embedded projection lines match a separately initialized native fullscreen
 	const projection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 	});
@@ -1022,7 +1007,6 @@ test("constructor input failure creates no footer watcher or partial runtime bin
 			() => createPiNativeProjectionHost({
 				ownerRuntime: host.runtime,
 			}).createProjection({
-				kind: "live",
 				session: host.session,
 				services: host.services,
 			}),
@@ -1047,7 +1031,6 @@ test("constructor input failure creates no footer watcher or partial runtime bin
 	const recoveredProjection = await createPiNativeProjectionHost({
 		ownerRuntime: host.runtime,
 	}).createProjection({
-		kind: "live",
 		session: host.session,
 		services: host.services,
 	});
@@ -1090,7 +1073,6 @@ test("projection compatibility failure restores Owner globals before subscribing
 	try {
 		await assert.rejects(
 			() => projectionHost.createProjection({
-				kind: "live",
 				session: host.session,
 				services: host.services,
 			}),
@@ -1122,7 +1104,6 @@ test("session_start model work begins only after the live projection is subscrib
 		childExtensionFactory: () => () => undefined,
 		moderatorExtensionFactory: () => () => undefined,
 		activityExtensionFactory: () => () => undefined,
-		presentationExtensionFactory: () => () => undefined,
 	});
 	let markResponseStarted!: () => void;
 	const responseStarted = new Promise<void>((resolve) => {
@@ -1202,7 +1183,6 @@ test("projection construction failure disposes a partially started real Run sess
 		childExtensionFactory: () => () => undefined,
 		moderatorExtensionFactory: () => () => undefined,
 		activityExtensionFactory: () => () => undefined,
-		presentationExtensionFactory: () => () => undefined,
 		projectionHost: {
 			async createProjection({ session }) {
 				const nativeDispose = session.dispose.bind(session);
@@ -1266,71 +1246,6 @@ test("projection construction failure disposes a partially started real Run sess
 	assert.equal(childSessionDisposals, 1);
 	assert.equal(childModelRequests, 0);
 	assert.equal(host.runtime.session, host.session);
-	await host.runtime.dispose();
-});
-
-test("a Dormant projection renders durable evidence without tools, model work, or transcript writes", async () => {
-	const host = await createTestOwnerHost(() => undefined, { persistent: true });
-	host.model.setResponses([
-		fauxAssistantMessage("Durable transcript evidence remains presentation-only."),
-	]);
-	await host.session.prompt("Persist evidence for passive inspection.");
-	await host.session.waitForIdle();
-	const sessionFile = host.session.sessionManager.getSessionFile();
-	assert.ok(sessionFile);
-	const durableSessionManager = SessionManager.open(sessionFile);
-	const entriesBefore = durableSessionManager.getEntries();
-	const created = await createAgentSessionFromServices({
-		services: host.services,
-		sessionManager: durableSessionManager,
-		noTools: "all",
-	});
-	const passiveSession = created.session;
-	await passiveSession.bindExtensions({ mode: "tui", uiContext: host.ui });
-	passiveSession.setActiveToolsByName([]);
-	const projectionHost = createPiNativeProjectionHost({ ownerRuntime: host.runtime });
-
-	const projection = await projectionHost.createProjection({
-		kind: "dormant",
-		session: passiveSession,
-		services: host.services,
-	});
-	assert.equal(projection.kind, "dormant");
-	assert.deepEqual(passiveSession.getActiveToolNames(), []);
-	assert.match(renderText(projection.presentation), /Persist evidence for passive inspection/);
-	assert.match(
-		renderText(projection.presentation),
-		/Durable transcript evidence remains presentation-only/,
-	);
-	assert.doesNotMatch(renderText(projection.presentation), /Working/);
-	assert.deepEqual(durableSessionManager.getEntries(), entriesBefore);
-	let dormantModelRequests = 0;
-	host.model.setResponses([() => {
-		dormantModelRequests += 1;
-		return fauxAssistantMessage("Dormant commands must not reach a model.");
-	}]);
-	for (const character of "/compact") projection.dispatchInput(character);
-	projection.dispatchInput("\r");
-	await waitForCondition(() =>
-		renderText(projection.presentation).includes(
-			"Start the Agent with a message before running commands",
-		)
-	);
-	assert.equal(dormantModelRequests, 0);
-	assert.deepEqual(durableSessionManager.getEntries(), entriesBefore);
-	let ownerShutdownRequests = 0;
-	projection.addExitRequestHandler(() => {
-		ownerShutdownRequests += 1;
-	});
-	for (const character of "/quit") projection.dispatchInput(character);
-	projection.dispatchInput("\r");
-	await waitForCondition(() => ownerShutdownRequests === 1);
-	assert.equal(dormantModelRequests, 0);
-	assert.deepEqual(durableSessionManager.getEntries(), entriesBefore);
-
-	await projection.dispose();
-	passiveSession.dispose();
-	assert.deepEqual(SessionManager.open(sessionFile).getEntries(), entriesBefore);
 	await host.runtime.dispose();
 });
 

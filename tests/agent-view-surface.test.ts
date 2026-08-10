@@ -233,7 +233,7 @@ test("child quit intent delegates once to the Owner process owner", async () => 
 	await opened;
 });
 
-test("projection replacement keeps one interactive surface and host close settles once", async () => {
+test("projection retargeting keeps one interactive surface and host close settles once", async () => {
 	const live = projectionWithFrame("live", ["live frame", "live editor", "live footer"]);
 	const dormant = projectionWithFrame("dormant", [
 		"persisted dormant frame",
@@ -269,7 +269,7 @@ test("projection replacement keeps one interactive surface and host close settle
 });
 
 function projectionWithFrame(
-	kind: "live" | "dormant",
+	name: string,
 	initialFrame: readonly string[],
 	options?: { dispatchInputError?: Error },
 ): PiNativeAgentProjection & {
@@ -285,8 +285,7 @@ function projectionWithFrame(
 	const failureHandlers = new Set<(error: unknown) => void>();
 	const exitRequestHandlers = new Set<() => void>();
 	return {
-		kind,
-		sessionId: `${kind}-projection-session`,
+		sessionId: `${name}-projection-session`,
 		presentation: {
 			render: () => frame,
 			invalidate() {},

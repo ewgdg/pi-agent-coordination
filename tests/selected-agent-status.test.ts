@@ -21,6 +21,7 @@ const identity = {
 test("selected Agent identity gives every work status its specified theme role", () => {
 	const cases = [
 		{ status: { kind: "active" as const }, role: "success", label: "active" },
+		{ status: { kind: "dormant" as const }, role: "dim", label: "dormant" },
 		{ status: { kind: "idle" as const }, role: "dim", label: "idle" },
 		{
 			status: { kind: "waiting" as const, reason: "human input" },
@@ -111,7 +112,7 @@ test("selected lifecycle transitions and failure take precedence", () => {
 			phase: "dormant",
 			retentionReasons: [],
 		}, false),
-		{ kind: "idle" },
+		{ kind: "dormant" },
 	);
 	assert.deepEqual(
 		selectedAgentWorkStatus({

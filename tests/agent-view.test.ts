@@ -471,7 +471,7 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 	await returnAgentViewToOwner(host, view, command);
 });
 
-test("a selected Agent whose session_start fails transitions to Dormant before live disposal", async (t) => {
+test("a selected Agent whose runtime initialization fails closes the invalid view", async (t) => {
 	let coordinator!: WorkflowCoordinator;
 	let ownerAgentId = "";
 	const host = await createUnboundTestOwnerHost((pi) => {
@@ -494,7 +494,6 @@ test("a selected Agent whose session_start fails transitions to Dormant before l
 		projectionHost: {
 			async createProjection(options) {
 				const projection = await nativeProjectionHost.createProjection(options);
-				if (options.kind !== "live") return projection;
 				return {
 					...projection,
 					async ready() {
@@ -562,27 +561,118 @@ test("a selected Agent whose session_start fails transitions to Dormant before l
 		},
 		{ disposition: "created_unscheduled", failedStage: "run_start" },
 	);
-	await waitForCondition(() =>
-		stripTerminalSequences(view.render(80).join("\n")).includes("failed")
-	);
-	assert.equal(host.ui.customSurfaces[0], view);
+	await command;
+	assert.equal(host.ui.customSurfaces.length, 0);
 	assert.equal(coordinator.forAgent(ownerAgentId).status(agentId).run.phase, "dormant");
-
-	await returnAgentViewToOwner(host, view, command);
 });
 
-test("selecting a Dormant Agent starts one command-capable successor without prompting the model", async (t) => {
+test("passive Runtime readiness failure closes the exact selected view", async (t) => {
+	let coordinator!: WorkflowCoordinator;
+	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	const identity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	const nativeProjectionHost = createPiNativeProjectionHost({
+		ownerRuntime: host.runtime,
+	});
+	let failNextPreparation = false;
+	let releasePassiveFailure!: () => void;
+	const passiveFailureGate = new Promise<void>((resolve) => {
+		releasePassiveFailure = resolve;
+	});
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		projectionHost: {
+			async createProjection(options) {
+				const projection = await nativeProjectionHost.createProjection(options);
+				if (!failNextPreparation) return projection;
+				return {
+					...projection,
+					async ready() {
+						await projection.ready();
+						await passiveFailureGate;
+						throw new Error("deterministic passive Runtime readiness failure");
+					},
+				};
+			},
+		},
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+	});
+	await bindTestOwnerHost(host, "tui");
+	const owner = coordinator.forAgent(identity.agentId);
+	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
+	t.after(async () => {
+		releasePassiveFailure();
+		await activeView?.close();
+		await coordinator.shutdown(async () => host.runtime.dispose());
+	});
+	const spawnInput = {
+		request: "Become Dormant before passive Runtime preparation fails.",
+		label: "Passive Failure Worker",
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, { id: "spawn-passive-failure-worker" }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	host.model.setResponses([
+		fauxAssistantMessage("The initial passive-failure Run settles."),
+	]);
+	const spawn = await owner.spawn("spawn-passive-failure-worker", spawnInput);
+	assert.ok("agentId" in spawn && spawn.agentId);
+	const agentId = spawn.agentId;
+	await waitForCondition(() => {
+		const run = owner.status(agentId).run;
+		return run.phase === "live" && run.work === "settled";
+	});
+	const terminateInput = {
+		operation: "terminate" as const,
+		agentId,
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_control", terminateInput, {
+				id: "terminate-passive-failure-worker",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	await owner.control("terminate-passive-failure-worker", terminateInput);
+
+	failNextPreparation = true;
+	activeView = await owner.openAgentView(agentId);
+	assert.ok(activeView);
+	let closed = false;
+	activeView.addCloseHandler(() => {
+		closed = true;
+	});
+	releasePassiveFailure();
+
+	await waitForCondition(() => closed);
+	assert.equal(owner.status(agentId).run.phase, "dormant");
+	assert.match(
+		JSON.stringify(host.services.diagnostics),
+		/deterministic passive Runtime readiness failure/,
+	);
+});
+
+test("a Dormant Agent keeps commands available and starts one successor on editor submission", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		additionalExtensionFactories: [{
-			name: "selected-successor-command-probe",
+			name: "dormant-command-probe",
 			hidden: true,
 			factory(pi) {
-				pi.registerCommand("mark-selected-successor", {
-					description: "Prove the selected successor accepts normal commands",
+				pi.registerCommand("mark-dormant-view", {
+					description: "Prove the Dormant view accepts normal commands",
 					async handler(_args, ctx) {
-						ctx.ui.setWidget("selected-successor-command", [
-							"Selected successor command executed",
+						ctx.ui.setWidget("dormant-command", [
+							"Dormant command executed",
 						]);
 					},
 				});
@@ -627,28 +717,28 @@ test("selecting a Dormant Agent starts one command-capable successor without pro
 	]);
 
 	const { command, view } = await openDormantAgentView(host, agentId);
-	await waitForCondition(async () =>
-		await currentRunPhase(host, agentId) === "live" &&
+	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n"))
 			.replace(/\s+/g, "")
 			.includes("PersistthisresponseforinteractiveDormantinspection")
 	);
 	const rendered = stripTerminalSequences(view.render(80).join("\n"));
 	assert.match(rendered, /Dormant Worker/);
-	assert.match(rendered, /idle/);
+	assert.match(rendered, /dormant/);
 	assert.match(rendered.replace(/\s+/g, ""), /PersistthisresponseforinteractiveDormantinspection/);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
-	assert.equal(await currentRunPhase(host, agentId), "live");
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	assert.equal(successorModelRequests, 0);
 
-	for (const character of "/mark-selected-successor") view.handleInput?.(character);
+	for (const character of "/mark-dormant-view") view.handleInput?.(character);
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
-			"Selected successor command executed",
+			"Dormant command executed",
 		)
 	);
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	assert.equal(successorModelRequests, 0);
 
 	for (const character of "Direction submitted from the Dormant Agent editor.") {
@@ -661,6 +751,17 @@ test("selecting a Dormant Agent starts one command-capable successor without pro
 		)
 	);
 	assert.equal(successorModelRequests, 1);
+	assert.equal(
+		(await childEntries(host, agentId)).filter(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "user" &&
+				JSON.stringify(entry.message.content).includes(
+					"Direction submitted from the Dormant Agent editor.",
+				),
+		).length,
+		1,
+	);
 	assert.equal(await currentRunPhase(host, agentId), "live");
 	assert.match(
 		stripTerminalSequences(view.render(80).join("\n")),
@@ -681,12 +782,105 @@ test("selecting a Dormant Agent starts one command-capable successor without pro
 	assert.equal(host.ui.getEditorText(), ownerEditor);
 });
 
-test("a Dormant selection exposes successor session_start UI before startup settles", async (t) => {
+test("a Dormant command activates the already-attached Agent runtime once", async (t) => {
+	const submittedText = "Start the successor from a Dormant slash command.";
 	let childSessionStarts = 0;
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		additionalExtensionFactories: [{
-			name: "selected-successor-startup-modal",
+			name: "dormant-command-message-probe",
+			hidden: true,
+			factory(pi) {
+				pi.on("session_start", (_event, ctx) => {
+					if (ctx.sessionManager.getEntries().some((entry) =>
+						entry.type === "custom" &&
+						entry.customType === "agent-coordination.identity"
+					)) childSessionStarts += 1;
+				});
+				pi.registerCommand("wake-dormant-agent", {
+					description: "Emit one user message from the Dormant command",
+					async handler() {
+						pi.sendUserMessage(submittedText);
+					},
+				});
+			},
+		}],
+	});
+	t.after(() => host.runtime.dispose());
+	host.model.setResponses([
+		fauxAssistantMessage("Initial Run settles before command-driven startup."),
+	]);
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-dormant-command-message-agent",
+		{
+			request: "Become Dormant before command-driven startup.",
+			label: "Dormant Command Worker",
+		},
+	);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"Initial Run settles before command-driven startup.",
+		)
+	);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-dormant-command-message",
+		{ operation: "terminate", agentId },
+	);
+	let successorModelRequests = 0;
+	host.model.setResponses([() => {
+		successorModelRequests += 1;
+		return fauxAssistantMessage("The command-emitted user message was processed.");
+	}]);
+
+	const opened = await openDormantAgentView(host, agentId);
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
+	await waitForCondition(() => childSessionStarts === 2);
+	const passiveTermination = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-prepared-dormant-runtime",
+		{ operation: "terminate", agentId },
+	);
+	assert.equal(
+		(passiveTermination.details as { disposition: string }).disposition,
+		"not_running",
+	);
+	for (const character of "/wake-dormant-agent") {
+		opened.view.handleInput?.(character);
+	}
+	opened.view.handleInput?.("\r");
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"The command-emitted user message was processed.",
+		)
+	);
+	const entries = await childEntries(host, agentId);
+	assert.equal(
+		entries.filter(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "user" &&
+				JSON.stringify(entry.message.content).includes(submittedText),
+		).length,
+		1,
+	);
+	assert.equal(successorModelRequests, 1);
+	assert.equal(await currentRunPhase(host, agentId), "live");
+	assert.equal(childSessionStarts, 2);
+	await returnAgentViewToOwner(host, opened.view, opened.command);
+});
+
+test("Dormant session_start input activates the same attached Agent runtime", async (t) => {
+	let childSessionStarts = 0;
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "dormant-runtime-startup-modal",
 			hidden: true,
 			factory(pi) {
 				pi.on("session_start", async (_event, ctx) => {
@@ -696,9 +890,12 @@ test("a Dormant selection exposes successor session_start UI before startup sett
 					)) return;
 					childSessionStarts += 1;
 					if (childSessionStarts !== 2) return;
+					pi.sendUserMessage(
+						"Dormant session_start input activates this Agent runtime.",
+					);
 					await ctx.ui.confirm(
-						"Selected successor startup",
-						"Finish starting the selected Dormant Agent?",
+						"Dormant Runtime startup",
+						"Finish opening the Dormant Agent presentation?",
 					);
 				});
 			},
@@ -706,27 +903,28 @@ test("a Dormant selection exposes successor session_start UI before startup sett
 	});
 	t.after(async () => host.runtime.dispose());
 	host.model.setResponses([
-		fauxAssistantMessage("Initial Run settles before selection-started activation."),
+		fauxAssistantMessage("Initial Run settles before Dormant Runtime."),
+		fauxAssistantMessage("The session_start input activated this same runtime."),
 	]);
 	const spawn = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_spawn",
-		"spawn-selected-successor-modal",
+		"spawn-dormant-runtime-modal",
 		{
 			request: "Settle before the Owner selects this Dormant Agent.",
-			label: "Selected Successor Modal Worker",
+			label: "Dormant Runtime Modal Worker",
 		},
 	);
 	const agentId = (spawn.details as { agentId: string }).agentId;
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, agentId)).includes(
-			"Initial Run settles before selection-started activation.",
+			"Initial Run settles before Dormant Runtime.",
 		)
 	);
 	await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-before-selected-successor-modal",
+		"terminate-before-dormant-runtime-modal",
 		{ operation: "terminate", agentId },
 	);
 
@@ -734,154 +932,27 @@ test("a Dormant selection exposes successor session_start UI before startup sett
 	const { command, view } = await opening;
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
-			"Selected successor startup",
+			"Dormant Runtime startup",
 		)
 	);
-	assert.equal(await currentRunPhase(host, agentId), "starting");
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	view.handleInput?.("\r");
-	await waitForCondition(async () => await currentRunPhase(host, agentId) === "live");
+	await waitForCondition(() =>
+		!stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Dormant Runtime startup",
+		)
+	);
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"The session_start input activated this same runtime.",
+		)
+	);
+	assert.equal(await currentRunPhase(host, agentId), "live");
 	assert.equal(childSessionStarts, 2);
 	await returnAgentViewToOwner(host, view, command);
 });
 
-test("a failed selection target is not restarted while switching waits on the previous Agent lane", async (t) => {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	const nativeProjectionHost = createPiNativeProjectionHost({
-		ownerRuntime: host.runtime,
-	});
-	const projectionStarts = new Map<string, number>();
-	const startupBehavior = new Map<string, "hold" | "fail_once">();
-	let markPreviousStartupHeld!: () => void;
-	const previousStartupHeld = new Promise<void>((resolve) => {
-		markPreviousStartupHeld = resolve;
-	});
-	let releasePreviousStartup!: () => void;
-	const previousStartupGate = new Promise<void>((resolve) => {
-		releasePreviousStartup = resolve;
-	});
-	let markTargetStartupFailed!: () => void;
-	const targetStartupFailed = new Promise<void>((resolve) => {
-		markTargetStartupFailed = resolve;
-	});
-	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-		projectionHost: {
-			async createProjection(options) {
-				const projection = await nativeProjectionHost.createProjection(options);
-				if (options.kind !== "live") return projection;
-				const sessionId = options.session.sessionId;
-				const start = (projectionStarts.get(sessionId) ?? 0) + 1;
-				projectionStarts.set(sessionId, start);
-				const behavior = startupBehavior.get(sessionId);
-				if (behavior === "hold" && start === 2) {
-					return {
-						...projection,
-						async ready() {
-							await projection.ready();
-							markPreviousStartupHeld();
-							await previousStartupGate;
-						},
-					};
-				}
-				if (behavior === "fail_once" && start === 2) {
-					return {
-						...projection,
-						async ready() {
-							await projection.ready();
-							markTargetStartupFailed();
-							throw new Error("deterministic stale selection target failure");
-						},
-					};
-				}
-				return projection;
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-	});
-	await bindTestOwnerHost(host, "tui");
-	const owner = coordinator.forAgent(identity.agentId);
-	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
-	t.after(async () => {
-		releasePreviousStartup();
-		await activeView?.close();
-		await coordinator.shutdown(async () => host.runtime.dispose());
-	});
-	const appendToolSource = (
-		toolName: string,
-		toolCallId: string,
-		input: Record<string, unknown>,
-	) => {
-		host.session.sessionManager.appendMessage(
-			fauxAssistantMessage(
-				fauxToolCall(toolName, input, { id: toolCallId }),
-				{ stopReason: "toolUse" },
-			),
-		);
-	};
-	host.model.setResponses([
-		fauxAssistantMessage("First switch-race Agent becomes Dormant."),
-		fauxAssistantMessage("Second switch-race Agent becomes Dormant."),
-	]);
-	const spawnAgent = async (toolCallId: string, label: string) => {
-		const input = { request: `Prepare ${label} for the switch race.`, label };
-		appendToolSource("agent_spawn", toolCallId, input);
-		const receipt = await owner.spawn(toolCallId, input);
-		assert.ok("agentId" in receipt && receipt.agentId);
-		const agentId = receipt.agentId;
-		await waitForCondition(() => owner.status(agentId).run.phase === "live");
-		await waitForCondition(() => {
-			const run = owner.status(agentId).run;
-			return run.phase === "live" && run.work === "settled";
-		});
-		const terminateInput = {
-			operation: "terminate" as const,
-			agentId,
-		};
-		appendToolSource("agent_control", `terminate-${toolCallId}`, terminateInput);
-		await owner.control(`terminate-${toolCallId}`, terminateInput);
-		return agentId;
-	};
-	const previousAgentId = await spawnAgent(
-		"spawn-switch-race-previous",
-		"Switch Race Previous",
-	);
-	const targetAgentId = await spawnAgent(
-		"spawn-switch-race-target",
-		"Switch Race Target",
-	);
-	startupBehavior.set(previousAgentId, "hold");
-	startupBehavior.set(targetAgentId, "fail_once");
-
-	activeView = await owner.openAgentView(previousAgentId);
-	assert.ok(activeView);
-	await previousStartupHeld;
-	const switching = owner.openAgentView(targetAgentId);
-	await targetStartupFailed;
-	await waitForCondition(() => owner.status(targetAgentId).run.phase === "dormant");
-	releasePreviousStartup();
-	const switchResult = await switching.then(
-		() => ({ disposition: "resolved" as const }),
-		(error: unknown) => ({ disposition: "rejected" as const, error }),
-	);
-
-	assert.equal(
-		switchResult.disposition,
-		"rejected",
-		"a failed exact target must not be replaced by another selection-started Run",
-	);
-	assert.equal(projectionStarts.get(targetAgentId), 2);
-	assert.equal(owner.status(targetAgentId).run.phase, "dormant");
-});
-
-test("closing a selection-started session_start modal cancels initialization without modal input", async (t) => {
+test("closing a Dormant session_start modal cancels view initialization without modal input", async (t) => {
 	let selectedAgentId = "";
 	let childSessionStarts = 0;
 	let childSessionShutdowns = 0;
@@ -1011,7 +1082,7 @@ test("closing a selection-started session_start modal cancels initialization wit
 	assert.equal(
 		closeOutcome,
 		"closed",
-		"view closure must not wait for hidden startup UI input",
+		"view closure must not wait for hidden Dormant UI input",
 	);
 	assert.equal(owner.status(agentId).run.phase, "dormant");
 	assert.equal(childSessionStarts, 2);
@@ -1287,7 +1358,7 @@ test("/agents switches the mounted durable view between independent child modes"
 	await command;
 });
 
-test("later Runs use reloaded factories without mutating a retained child mode", async () => {
+test("later Runtime preparations use reloaded factories without mutating a retained mode", async () => {
 	const createFactory = (generation: "original" | "replacement"): ExtensionFactory =>
 		(pi) => {
 			pi.on("session_start", (_event, ctx) => {
@@ -1422,7 +1493,7 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	assert.equal(host.runtime.session, ownerSession);
 });
 
-test("repeated successor Runs own and dispose one complete mode per exact session", async () => {
+test("repeated successor Runs reuse one selected Agent runtime and dispose its mode once", async () => {
 	const sessionStarts: string[] = [];
 	const sessionShutdowns: string[] = [];
 	const baselineListeners = processListenerCounts();
@@ -1486,28 +1557,51 @@ test("repeated successor Runs own and dispose one complete mode per exact sessio
 		const startsBeforeSuccessor = sessionStarts.length;
 		for (const character of input) opened.view.handleInput?.(character);
 		opened.view.handleInput?.("\r");
-		await waitForCondition(() => sessionStarts.length >= startsBeforeSuccessor + 2);
 		await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 		await waitForCondition(() => {
 			const frame = stripTerminalSequences(opened.view.render(80).join("\n"));
 			return frame.includes("failed") && frame.includes(input);
 		});
+		assert.equal(sessionStarts.length, startsBeforeSuccessor);
 	}
 
 	await returnAgentViewToOwner(host, opened.view, opened.command);
 	await host.runtime.dispose();
-	assert.ok(sessionStarts.length >= 5, JSON.stringify(sessionStarts));
+	assert.equal(sessionStarts.length, 2, JSON.stringify(sessionStarts));
 	assert.deepEqual(
 		[...sessionShutdowns].sort(),
 		[...sessionStarts].sort(),
 		JSON.stringify({ sessionStarts, sessionShutdowns }),
 	);
 	assert.deepEqual(processListenerCounts(), baselineListeners);
+	await waitForCondition(() => {
+		try {
+			assertNoProcessResourceGrowth(baselineResources, processResourceCounts());
+			return true;
+		} catch {
+			return false;
+		}
+	});
 	assertNoProcessResourceGrowth(baselineResources, processResourceCounts());
 });
 
-test("an ordinary Message-started successor attaches to the already-open durable Agent view before execution", async (t) => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+test("an ordinary Message activates the already-open Agent runtime before execution", async (t) => {
+	let childSessionStarts = 0;
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		additionalExtensionFactories: [{
+			name: "message-runtime-identity-probe",
+			hidden: true,
+			factory(pi) {
+				pi.on("session_start", (_event, ctx) => {
+					if (ctx.sessionManager.getEntries().some((entry) =>
+						entry.type === "custom" &&
+						entry.customType === "agent-coordination.identity"
+					)) childSessionStarts += 1;
+				});
+			},
+		}],
+	});
 	let releaseInitialFailure!: () => void;
 	const initialFailureGate = new Promise<void>((resolve) => {
 		releaseInitialFailure = resolve;
@@ -1601,6 +1695,7 @@ test("an ordinary Message-started successor attaches to the already-open durable
 	assert.equal(host.ui.customSurfaces[0], view);
 	assert.equal(await currentRunPhase(host, agentId), "live");
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), true);
+	assert.equal(childSessionStarts, 1);
 
 	releaseSuccessor();
 	await waitForCondition(async () =>
@@ -1639,114 +1734,6 @@ test("Workflow shutdown disposes an open overlay once without disposing its live
 	await host.runtime.dispose();
 	await command;
 	assert.equal(host.ui.customSurfaces.length, 0);
-});
-
-test("Workflow shutdown continues through a throwing Dormant view while another live mode is retained", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	const nativeProjectionHost = createPiNativeProjectionHost({
-		ownerRuntime: host.runtime,
-	});
-	const disposedKinds: string[] = [];
-	let dormantFailureInjected = false;
-	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-		projectionHost: {
-			async createProjection(options) {
-				const projection = await nativeProjectionHost.createProjection(options);
-				let disposal: Promise<void> | undefined;
-				return {
-					...projection,
-					dispose() {
-						disposal ??= (async () => {
-							disposedKinds.push(options.kind);
-							await projection.dispose();
-							if (options.kind === "dormant" && !dormantFailureInjected) {
-								dormantFailureInjected = true;
-								throw new Error("deterministic Dormant presentation cleanup failure");
-							}
-						})();
-						return disposal;
-					},
-				};
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-	});
-	const owner = coordinator.forAgent(identity.agentId);
-	const appendToolSource = (
-		toolName: string,
-		toolCallId: string,
-		input: Record<string, unknown>,
-	) => {
-		host.session.sessionManager.appendMessage(
-			fauxAssistantMessage(
-				fauxToolCall(toolName, input, { id: toolCallId }),
-				{ stopReason: "toolUse" },
-			),
-		);
-	};
-	let markFailureStarted!: () => void;
-	const failureStarted = new Promise<void>((resolve) => {
-		markFailureStarted = resolve;
-	});
-	let releaseFailure!: () => void;
-	const failureGate = new Promise<void>((resolve) => {
-		releaseFailure = resolve;
-	});
-	host.model.setResponses([async () => {
-		markFailureStarted();
-		await failureGate;
-		return fauxAssistantMessage("First shutdown Agent fails while selected.", {
-			stopReason: "error",
-			errorMessage: "deterministic selected Run failure before shutdown",
-		});
-	}]);
-	const firstInput = {
-		request: "Fail while selected so shutdown owns a Dormant failure presentation.",
-		label: "Shutdown Dormant Worker",
-	};
-	appendToolSource("agent_spawn", "spawn-shutdown-dormant-worker", firstInput);
-	const firstSpawn = await owner.spawn("spawn-shutdown-dormant-worker", firstInput);
-	assert.equal(firstSpawn.disposition, "pending");
-	await failureStarted;
-	const dormantView = await owner.openAgentView(firstSpawn.agentId);
-	assert.ok(dormantView);
-	releaseFailure();
-	await waitForCondition(() => owner.status(firstSpawn.agentId).run.phase === "dormant");
-
-	host.model.setResponses([
-		fauxAssistantMessage("Second shutdown Agent remains live and retained."),
-	]);
-	const secondInput = {
-		request: "Remain live while shutdown cleans another Dormant presentation.",
-		label: "Shutdown Live Worker",
-	};
-	appendToolSource("agent_spawn", "spawn-shutdown-live-worker", secondInput);
-	const secondSpawn = await owner.spawn("spawn-shutdown-live-worker", secondInput);
-	assert.equal(secondSpawn.disposition, "pending");
-	await waitForCondition(() =>
-		owner.status(secondSpawn.agentId).run.phase === "live"
-	);
-
-	await assert.rejects(
-		() => coordinator.shutdown(async () => host.runtime.dispose()),
-		(error: unknown) =>
-			error instanceof AggregateError &&
-			JSON.stringify(error, Object.getOwnPropertyNames(error)).includes(
-				"deterministic Dormant presentation cleanup failure",
-			),
-	);
-	assert.equal(dormantFailureInjected, true);
-	assert.ok(disposedKinds.filter((kind) => kind === "live").length >= 2);
-	assert.equal(disposedKinds.filter((kind) => kind === "dormant").length, 1);
 });
 
 async function openSelectedAgentView(

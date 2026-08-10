@@ -150,7 +150,7 @@ See [Workflow Policy](workflow-policy.md) for strict file validation and prospec
 
 ## Delivery across dormant Runs
 
-Agent identity outlives any individual Run. When a child has no work and no Run Retention Reason, its current Run is released and the Agent becomes dormant. A Message, Request, Answer, or Cancellation to that Agent starts a successor Run, commits at the first boundary allowed by its authored mode, and releases the successor again when no retention reason remains.
+Agent identity and a selected Agent Runtime can outlive any individual Run. When a child has no work and no Run Retention Reason, its current Run is released and the Agent becomes dormant. A Message, Request, Answer, or Cancellation to that Agent activates a successor Run in its prepared Runtime when available, commits at the first boundary allowed by its authored mode, and releases the successor again when no Run Retention Reason remains.
 
 Live scheduling is intentionally disposable. Run failure, exact Run termination, or Workflow shutdown discards every uncommitted item for that host. Receipts are not rewritten, Messages are not replayed automatically, and backlog is not transferred to a successor Run. Poll and explicit retry are the recovery path.
 

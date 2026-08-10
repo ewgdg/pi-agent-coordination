@@ -191,9 +191,12 @@ export class MessageDeliveryScheduler {
 	}
 
 	requestRelease(record: AgentRecord): Promise<"released" | "retained" | "stale"> {
-		const handle = record.host.currentHandle();
-		if (!handle) return Promise.resolve("stale");
-		return record.host.lane.run(() => record.host.releaseIfEligibleInLane(handle));
+		return record.host.lane.run(() => {
+			const handle = record.host.currentHandle();
+			return handle
+				? record.host.releaseIfEligibleInLane(handle)
+				: record.host.releasePreparedRuntimeInLane();
+		});
 	}
 
 	discardInLane(record: AgentRecord): void {

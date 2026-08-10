@@ -29,10 +29,7 @@ const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 const FALLBACK_TERMINAL_COLUMNS = 80;
 const FALLBACK_TERMINAL_ROWS = 24;
 
-type ProjectionKind = "live" | "dormant";
-
 export type PiNativeAgentProjection = Readonly<{
-	kind: ProjectionKind;
 	sessionId: string;
 	presentation: Component;
 	resize(columns: number, rows: number): void;
@@ -47,7 +44,6 @@ export type PiNativeAgentProjection = Readonly<{
 
 export type PiNativeProjectionHost = Readonly<{
 	createProjection(options: {
-		kind: ProjectionKind;
 		session: AgentSession;
 		services: AgentSessionServices;
 		exposeWhileInitializing?: boolean;
@@ -164,7 +160,7 @@ export function createPiNativeProjectionHost(options: {
 		options.ownerInteractiveMode,
 	);
 	return Object.freeze({
-		createProjection: ({ kind, session, services, exposeWhileInitializing }) => {
+		createProjection: ({ session, services, exposeWhileInitializing }) => {
 			let publish!: (projection: PiNativeAgentProjection) => void;
 			let rejectPublication!: (error: unknown) => void;
 			const publication = new Promise<PiNativeAgentProjection>((resolve, reject) => {
@@ -177,7 +173,6 @@ export function createPiNativeProjectionHost(options: {
 			});
 			let published = false;
 			void serializeProjectionInitialization(async () => {
-				if (kind === "dormant") assertDormantSession(session);
 				const [themeInternals, FooterDataProvider] = await Promise.all([
 					loadThemeInternals(),
 					loadFooterDataProviderConstructor(),
@@ -189,11 +184,12 @@ export function createPiNativeProjectionHost(options: {
 					session,
 					services,
 					async () => {
-						throw new Error("Presentation projection cannot replace its exact session");
+						throw new Error("Agent projection cannot replace its exact session");
 					},
 					services.diagnostics,
 				);
 				let mode: ProjectionInteractiveMode | undefined;
+				let projectionFailures: ProjectionFailures | undefined;
 				let initialPresentationApplied = false;
 				let initializationState: "pending" | "resolved" | "rejected" = "pending";
 				let initializationCancellation: Readonly<{ error: unknown }> | undefined;
@@ -236,6 +232,7 @@ export function createPiNativeProjectionHost(options: {
 					}
 					const changes = new ProjectionChanges();
 					const failures = new ProjectionFailures();
+					projectionFailures = failures;
 					const exitRequests = new ProjectionExitRequests();
 					let renderFailure: Readonly<{ error: unknown }> | undefined;
 					const terminal = new ProjectionTerminal(terminalState);
@@ -286,7 +283,6 @@ export function createPiNativeProjectionHost(options: {
 						changes.notify();
 					};
 					const resource = createProjectionResource(
-						kind,
 						session.sessionId,
 						mode,
 						projectionRuntime,
@@ -311,7 +307,6 @@ export function createPiNativeProjectionHost(options: {
 					}
 					await mode.init();
 					if (initializationCancellation) throw initializationCancellation.error;
-					if (kind === "dormant") installDormantSubmissionPolicy(mode);
 					// Validate one complete frame before model admission. The renderer's own
 					// scheduled loop is guarded below, so asynchronous component failures are
 					// retained and become exact Run startup failure rather than process failure.
@@ -358,15 +353,17 @@ export function createPiNativeProjectionHost(options: {
 							[error, restoreError],
 							"Pi-native projection construction and Owner presentation restoration failed",
 						);
-						if (published) rejectReady(aggregate);
-						else {
+						if (published) {
+							if (rejectReady(aggregate)) projectionFailures?.notify(aggregate);
+						} else {
 							if (mode) await disposeMode(mode, projectionRuntime);
 							rejectPublication(aggregate);
 						}
 						return;
 					}
-					if (published) rejectReady(error);
-					else {
+					if (published) {
+						if (rejectReady(error)) projectionFailures?.notify(error);
+					} else {
 						if (mode) await disposeMode(mode, projectionRuntime);
 						rejectPublication(error);
 					}
@@ -493,32 +490,7 @@ function installEmbeddedRenderFailurePolicy(
 	};
 }
 
-function installDormantSubmissionPolicy(mode: ProjectionInteractiveMode): void {
-	const nativeSubmit = mode.defaultEditor.onSubmit;
-	if (typeof nativeSubmit !== "function") {
-		throw new IncompatiblePiHostError("InteractiveMode.defaultEditor.onSubmit", VERSION);
-	}
-	const submit = async (text: string) => {
-		const normalized = text.trim();
-		if (normalized === "/agents" || normalized === "/quit") {
-			await nativeSubmit(normalized);
-			return;
-		}
-		if (normalized.startsWith("/") || normalized.startsWith("!")) {
-			mode.editor.setText("");
-			mode.showError(
-				"Start the Agent with a message before running commands in a Dormant view.",
-			);
-			return;
-		}
-		await nativeSubmit(text);
-	};
-	mode.defaultEditor.onSubmit = submit;
-	mode.editor.onSubmit = submit;
-}
-
 function createProjectionResource(
-	kind: ProjectionKind,
 	sessionId: string,
 	mode: ProjectionInteractiveMode,
 	runtime: AgentSessionRuntime,
@@ -548,7 +520,6 @@ function createProjectionResource(
 		return disposal;
 	};
 	return Object.freeze({
-		kind,
 		sessionId,
 		presentation: {
 			render(width) {
@@ -673,15 +644,6 @@ async function disposeMode(
 	attempt(() => runtime.setRebindSession(undefined));
 	if (cleanupErrors.length > 0) {
 		throw new AggregateError(cleanupErrors, "Pi-native projection disposal failed");
-	}
-}
-
-function assertDormantSession(session: AgentSession): void {
-	if (!session.isIdle) {
-		throw new Error("Dormant projection requires an idle presentation-only session");
-	}
-	if (session.getActiveToolNames().length > 0) {
-		throw new Error("Dormant projection session must not expose active tools");
 	}
 }
 

@@ -6,7 +6,7 @@ const COMPACT_AGENT_IDENTITY_LENGTH = 8;
 
 export type AgentWorkStatus =
 	| Readonly<{ kind: "active" }>
-	| Readonly<{ kind: "idle" }>
+	| Readonly<{ kind: "dormant" | "idle" }>
 	| Readonly<{
 		kind: "waiting";
 		reason: "human input" | "agent answer" | "resumption";
@@ -26,7 +26,7 @@ export function selectedAgentWorkStatus(
 	if (failed) return { kind: "failed" };
 	if (run.phase === "starting") return { kind: "starting" };
 	if (run.phase === "ending") return { kind: "ending" };
-	if (run.phase === "dormant") return { kind: "idle" };
+	if (run.phase === "dormant") return { kind: "dormant" };
 	if (run.attention === "input_required") {
 		return { kind: "waiting", reason: "human input" };
 	}

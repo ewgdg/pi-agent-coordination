@@ -220,7 +220,7 @@ for (const failureKind of ["input", "render"] as const) {
 	});
 }
 
-test("real fullscreen PTY replaces selected initialization failure with Failed presentation", {
+test("real fullscreen PTY closes a failed Agent runtime initialization and restores Owner", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
 	const terminal = launchFixture(FAILURE_FIXTURE, {
@@ -236,18 +236,6 @@ test("real fullscreen PTY replaces selected initialization failure with Failed p
 		);
 		terminal.write("j");
 		terminal.write("\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) =>
-				line.includes("PTY Failure Worker") && line.includes("failed")
-			)
-		);
-		terminal.write("/agents");
-		terminal.write("\r");
-		await terminal.waitForScreen((frame) =>
-			frame.some((line) => line.includes("Tab views"))
-		);
-		terminal.write("\t");
-		terminal.write("\r");
 		await terminal.waitFor("__PTY_AGENT_VIEW_FAILURE_RESTORED__initialization");
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Owner failure baseline remains mounted")) &&
@@ -259,7 +247,7 @@ test("real fullscreen PTY replaces selected initialization failure with Failed p
 	}
 });
 
-test("real fullscreen PTY replaces a terminally failed selected Run with Failed presentation", {
+test("real fullscreen PTY keeps a terminally failed selected Run in its Agent view", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
 	const terminal = launchFixture(FAILURE_FIXTURE, {

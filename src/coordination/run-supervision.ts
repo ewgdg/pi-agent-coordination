@@ -52,19 +52,19 @@ export class RunSupervisor {
 		const target = this.#requireControllableTarget(callerAgentId, control.agentId);
 		return target.host.lane.run(async () => {
 			if (control.operation === "terminate") {
-				if (this.#isInteractivelySelected(target.identity.agentId)) {
-					return {
-						agentId: target.identity.agentId,
-						disposition: "rejected",
-						rejectionReason: "interactive_selection",
-					};
-				}
 				const residualRequests = target.host.residualRequestCounts();
 				if (!target.host.currentHandle()) {
 					return {
 						agentId: target.identity.agentId,
 						disposition: "not_running",
 						residualRequests,
+					};
+				}
+				if (this.#isInteractivelySelected(target.identity.agentId)) {
+					return {
+						agentId: target.identity.agentId,
+						disposition: "rejected",
+						rejectionReason: "interactive_selection",
 					};
 				}
 				this.#messages.discardSchedulingInLane(target);

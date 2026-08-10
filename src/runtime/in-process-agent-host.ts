@@ -12,12 +12,14 @@ export type RunRetentionReason =
 	| "pending_delivery"
 	| "awaiting_answer"
 	| "answer_owed"
-	| "interactive_selection"
 	| "interruption_hold"
 	| "moderator_handling";
 
-export type RunRetention = Readonly<{
-	reason: RunRetentionReason;
+export type AgentRuntimeRetentionReason = "interactive_selection";
+export type AgentRetentionReason = RunRetentionReason | AgentRuntimeRetentionReason;
+
+export type AgentRetention = Readonly<{
+	reason: AgentRetentionReason;
 	count: number;
 }>;
 
@@ -27,7 +29,7 @@ export type LiveRunState = Readonly<{
 	phase: "starting" | "live" | "ending";
 	work?: "active" | "settled";
 	attention: "none" | "input_required";
-	retentionReasons: readonly RunRetention[];
+	retentionReasons: readonly AgentRetention[];
 }>;
 
 export type DormantRunState = Readonly<{
@@ -42,17 +44,18 @@ export type InterruptionHoldHandle = Readonly<{
 	sequence: number;
 }>;
 
-export type StartedAgentRun = Readonly<{
+export type StartedAgentRuntime = Readonly<{
 	session: AgentSession;
 	projection: PiNativeAgentProjection;
 	ready?: Promise<void>;
 }>;
 
-type BoundRun = {
+type BoundAgentRuntime = {
 	handle: AgentRunHandle;
 	session: AgentSession;
 	projection: PiNativeAgentProjection | undefined;
 	unsubscribe: () => void;
+	admitted: boolean;
 	failed: boolean;
 	expectedInterruption: boolean;
 };
@@ -63,7 +66,7 @@ type HeldNativeQueue = {
 	followUp: string[];
 };
 
-type StartSession = () => Promise<StartedAgentRun>;
+type StartSession = () => Promise<StartedAgentRuntime>;
 export type AgentRunSettlement = "settled" | "failed";
 type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
 export type AgentRunEndCause = "clean" | "failure" | "termination" | "shutdown";
@@ -89,14 +92,15 @@ export class InProcessAgentHost {
 	readonly lane = new SerialLane();
 	readonly sessionManager: SessionManager;
 	readonly #startSession: StartSession | undefined;
-	readonly #retentionReasons = new Set<RunRetentionReason>();
+	readonly #retentionReasons = new Set<AgentRetentionReason>();
 	readonly #requestRelationships = new Map<
 		RequestRelationshipReason,
 		Set<string>
 	>();
 	readonly #trackedOperations = new Set<Promise<void>>();
-	#run: BoundRun | undefined;
+	#runtime: BoundAgentRuntime | undefined;
 	#starting = false;
+	#passivePreparation = false;
 	#startingCancellationRequested = false;
 	#runStartsClosed = false;
 	#ending = false;
@@ -121,7 +125,7 @@ export class InProcessAgentHost {
 		sessionManager: SessionManager;
 		startSession?: StartSession;
 		initialSession?: AgentSession;
-		initialRetentionReasons?: readonly RunRetentionReason[];
+		initialRetentionReasons?: readonly AgentRetentionReason[];
 	}) {
 		this.sessionManager = options.sessionManager;
 		this.#startSession = options.startSession;
@@ -129,7 +133,10 @@ export class InProcessAgentHost {
 			this.#retentionReasons.add(reason);
 		}
 		if (options.initialSession) {
-			this.#bindRun({ session: options.initialSession, projection: undefined });
+			this.#bindRuntime(
+				{ session: options.initialSession, projection: undefined },
+				true,
+			);
 		}
 	}
 
@@ -157,15 +164,15 @@ export class InProcessAgentHost {
 			})),
 			...(this.#interruptionHold ? [{ reason: "interruption_hold" as const, count: 1 }] : []),
 		];
-		if (this.#starting) {
+		if (this.#starting && !this.#passivePreparation) {
 			return {
 				phase: "starting",
 				attention: "none",
 				retentionReasons,
 			};
 		}
-		const run = this.#run;
-		if (!run) return { phase: "dormant", retentionReasons: [] };
+		const run = this.#runtime;
+		if (!run?.admitted) return { phase: "dormant", retentionReasons: [] };
 		return {
 			phase: this.#ending ? "ending" : "live",
 			work: run.session.isIdle ? "settled" : "active",
@@ -207,37 +214,37 @@ export class InProcessAgentHost {
 		this.#runEndingHandler = handler;
 	}
 
-	initializeBoundRunRelationships(): void {
-		if (!this.#run || this.#starting || this.#ending) {
+	initializeCurrentRunRelationships(): void {
+		if (!this.#runtime || this.#starting || this.#ending) {
 			throw new Error("invariant_violation: Request relationships require a bound Agent Run");
 		}
 		this.#initializeRequestRelationships();
 	}
 
 	currentHandle(): AgentRunHandle | undefined {
-		return this.#run?.handle;
+		return this.#runtime?.admitted ? this.#runtime.handle : undefined;
 	}
 
 	currentProjection(): PiNativeAgentProjection | undefined {
-		return this.#run?.projection;
+		return this.#runtime?.projection;
 	}
 
 	async beginShutdown(): Promise<boolean> {
 		this.#runStartsClosed = true;
-		const projection = this.#run?.projection;
+		const projection = this.#runtime?.projection;
 		return projection
-			? this.cancelStartingRun(
+			? this.cancelRuntimeInitialization(
 				projection,
 				new Error("Workflow shutdown during Agent Run initialization"),
 			)
 			: false;
 	}
 
-	async cancelStartingRun(
+	async cancelRuntimeInitialization(
 		projection: PiNativeAgentProjection,
 		error: unknown,
 	): Promise<boolean> {
-		const run = this.#run;
+		const run = this.#runtime;
 		if (!this.#starting || !run || run.projection !== projection) return false;
 		const cancellation = projection.cancelInitialization(error);
 		if (!cancellation) return false;
@@ -251,11 +258,11 @@ export class InProcessAgentHost {
 	}
 
 	currentRunFailed(): boolean {
-		return this.#run?.failed ?? false;
+		return this.#runtime?.admitted ? this.#runtime.failed : false;
 	}
 
 	isCurrent(handle: AgentRunHandle): boolean {
-		return this.#run?.handle === handle;
+		return this.#runtime?.admitted === true && this.#runtime.handle === handle;
 	}
 
 	blocksOrdinaryDelivery(): boolean {
@@ -271,7 +278,7 @@ export class InProcessAgentHost {
 	}
 
 	isCurrentInterruptionHold(hold: InterruptionHoldHandle): boolean {
-		return this.#interruptionHold === hold && this.#run?.handle === hold.run;
+		return this.#interruptionHold === hold && this.#runtime?.handle === hold.run;
 	}
 
 	beginIsolatedResumptionInLane(hold: InterruptionHoldHandle): boolean {
@@ -301,8 +308,13 @@ export class InProcessAgentHost {
 	async interruptCurrentRunInLane(): Promise<
 		"held" | "already_held" | "not_running"
 	> {
-		const run = this.#run;
-		if (!run || this.#starting || this.#ending || run.failed) return "not_running";
+		const run = this.#runtime;
+		if (
+			!run?.admitted ||
+			this.#starting ||
+			this.#ending ||
+			run.failed
+		) return "not_running";
 		if (this.#interruptionHold?.run === run.handle) return "already_held";
 		this.#isolatedResumption = undefined;
 		run.expectedInterruption = true;
@@ -322,7 +334,7 @@ export class InProcessAgentHost {
 				this.#heldNativeQueue = existing;
 			}
 			await run.session.abort();
-			if (this.#run !== run || this.#ending || run.failed || !run.session.isIdle) {
+			if (this.#runtime !== run || this.#ending || run.failed || !run.session.isIdle) {
 				return "not_running";
 			}
 			this.#holdSequence += 1;
@@ -339,9 +351,9 @@ export class InProcessAgentHost {
 	}
 
 	prepareInterruption(): void {
-		const run = this.#run;
+		const run = this.#runtime;
 		if (
-			!run ||
+			!run?.admitted ||
 			this.#starting ||
 			this.#ending ||
 			run.failed ||
@@ -354,7 +366,7 @@ export class InProcessAgentHost {
 	}
 
 	beginInputRequired(handle: AgentRunHandle, requestId: string): void {
-		const run = this.#run;
+		const run = this.#runtime;
 		if (
 			!run ||
 			run.handle !== handle ||
@@ -375,7 +387,7 @@ export class InProcessAgentHost {
 	}
 
 	acceptsInputRequired(handle: AgentRunHandle, requestId: string): boolean {
-		const run = this.#run;
+		const run = this.#runtime;
 		return run?.handle === handle &&
 			!this.#starting &&
 			!this.#ending &&
@@ -385,7 +397,7 @@ export class InProcessAgentHost {
 	}
 
 	failExactRun(handle: AgentRunHandle): void {
-		const run = this.#run;
+		const run = this.#runtime;
 		if (!run || run.handle !== handle || this.#ending) return;
 		this.#markRunFailed(run, handle);
 		this.trackOperation(run.session.abort());
@@ -402,15 +414,61 @@ export class InProcessAgentHost {
 	}
 
 	requireLiveSession(): AgentSession {
-		const session = this.#run?.session;
+		const session = this.#runtime?.admitted ? this.#runtime.session : undefined;
 		if (!session) throw new Error(`Agent Run is unavailable: ${this.sessionManager.getSessionId()}`);
 		return session;
 	}
 
+	requirePreparedSession(): AgentSession {
+		const session = this.#runtime?.session;
+		if (!session) {
+			throw new Error(`Agent runtime is unavailable: ${this.sessionManager.getSessionId()}`);
+		}
+		return session;
+	}
+
 	async startInLane(
-		initialRetentionReasons: readonly RunRetentionReason[] = [],
+		initialRetentionReasons: readonly AgentRetentionReason[] = [],
 	): Promise<AgentSession> {
-		if (this.#run) return this.#run.session;
+		return this.#ensureRuntimeInLane(true, initialRetentionReasons);
+	}
+
+	async prepareInLane(
+		initialRetentionReasons: readonly AgentRetentionReason[] = [],
+	): Promise<AgentSession> {
+		return this.#ensureRuntimeInLane(false, initialRetentionReasons);
+	}
+
+	async #ensureRuntimeInLane(
+		admitRun: boolean,
+		initialRetentionReasons: readonly AgentRetentionReason[],
+	): Promise<AgentSession> {
+		const existing = this.#runtime;
+		if (existing) {
+			if (admitRun && !existing.admitted && this.#runStartsClosed) {
+				throw new Error("host_shutting_down: Agent Run startup is closed");
+			}
+			for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
+			if (!admitRun || existing.admitted) return existing.session;
+			this.#starting = true;
+			this.#passivePreparation = false;
+			this.#notifyStateChanged();
+			try {
+				await this.#admitPreparedRun(existing);
+				return existing.session;
+			} catch (error) {
+				const cleanupErrors = [error, ...await this.#discardFailedStart("failure")];
+				this.#clearRunScopedState();
+				if (cleanupErrors.length > 1) {
+					throw new AggregateError(cleanupErrors, "Agent Run admission cleanup failed");
+				}
+				throw error;
+			} finally {
+				this.#starting = false;
+				this.#passivePreparation = false;
+				this.#notifyStateChanged();
+			}
+		}
 		if (this.#runStartsClosed) {
 			throw new Error("host_shutting_down: Agent Run startup is closed");
 		}
@@ -418,16 +476,17 @@ export class InProcessAgentHost {
 			throw new Error(`Agent Run cannot restart: ${this.sessionManager.getSessionId()}`);
 		}
 		this.#starting = true;
+		this.#passivePreparation = !admitRun;
 		for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
 		this.#notifyStateChanged();
-		let startedRun: StartedAgentRun | undefined;
+		let startedRun: StartedAgentRuntime | undefined;
 		let readiness: Promise<void> | undefined;
 		let readinessObserved = false;
 		try {
-			this.#initializeRequestRelationships();
 			startedRun = await this.#startSession();
 			readiness = startedRun.ready ?? Promise.resolve();
-			this.#bindRun(startedRun);
+			this.#bindRuntime(startedRun);
+			if (admitRun) this.#markPreparedRunAdmitted(this.#runtime!);
 			if (this.#runStartsClosed) {
 				const shutdownError = new Error(
 					"Workflow shutdown during Agent Run initialization",
@@ -452,7 +511,9 @@ export class InProcessAgentHost {
 				this.#startingCancellationRequested = true;
 				throw shutdownError;
 			}
-			await this.#runStartedHandler?.(startedRun.session, this.#run!.handle);
+			if (admitRun) {
+				await this.#runStartedHandler?.(this.#runtime!.session, this.#runtime!.handle);
+			}
 			await readiness;
 			readinessObserved = true;
 			return startedRun.session;
@@ -478,15 +539,35 @@ export class InProcessAgentHost {
 			cleanupErrors.push(...await this.#discardFailedStart(endCause));
 			this.#clearRunScopedState();
 			if (cleanupErrors.length > 1) {
-				throw new AggregateError(cleanupErrors, "Agent Run startup cleanup failed");
+				throw new AggregateError(
+					cleanupErrors,
+					admitRun
+						? "Agent Run startup cleanup failed"
+						: "Agent runtime preparation cleanup failed",
+				);
 			}
 			throw error;
 		} finally {
 			if (this.#starting) {
 				this.#starting = false;
+				this.#passivePreparation = false;
 				this.#notifyStateChanged();
 			}
 		}
+	}
+
+	async #admitPreparedRun(run: BoundAgentRuntime): Promise<void> {
+		if (run.admitted) return;
+		this.#markPreparedRunAdmitted(run);
+		await this.#runStartedHandler?.(run.session, run.handle);
+	}
+
+	#markPreparedRunAdmitted(run: BoundAgentRuntime): void {
+		this.#runSequence += 1;
+		run.handle = Object.freeze({ sequence: this.#runSequence });
+		run.admitted = true;
+		this.#initializeRequestRelationships();
+		this.#notifyStateChanged();
 	}
 
 	#initializeRequestRelationships(): void {
@@ -501,8 +582,8 @@ export class InProcessAgentHost {
 		}
 	}
 
-	addRetentionReason(reason: RunRetentionReason, requestId?: string): void {
-		if (!this.#run && !this.#starting) return;
+	addRetentionReason(reason: AgentRetentionReason, requestId?: string): void {
+		if (!this.#runtime && !this.#starting) return;
 		if (isRequestRelationshipReason(reason)) {
 			const exactRequestId = requireRequestRelationshipId(reason, requestId);
 			let relationships = this.#requestRelationships.get(reason);
@@ -520,7 +601,7 @@ export class InProcessAgentHost {
 		this.#notifyStateChanged();
 	}
 
-	removeRetentionReason(reason: RunRetentionReason, requestId?: string): void {
+	removeRetentionReason(reason: AgentRetentionReason, requestId?: string): void {
 		if (isRequestRelationshipReason(reason)) {
 			const exactRequestId = requireRequestRelationshipId(reason, requestId);
 			const relationships = this.#requestRelationships.get(reason);
@@ -532,7 +613,7 @@ export class InProcessAgentHost {
 		if (this.#retentionReasons.delete(reason)) this.#notifyStateChanged();
 	}
 
-	hasRetentionReason(reason: RunRetentionReason, requestId?: string): boolean {
+	hasRetentionReason(reason: AgentRetentionReason, requestId?: string): boolean {
 		if (isRequestRelationshipReason(reason)) {
 			const relationships = this.#requestRelationships.get(reason);
 			return requestId === undefined
@@ -560,7 +641,7 @@ export class InProcessAgentHost {
 
 	queuedInputCount(): number {
 		const held = this.#heldNativeQueue;
-		return (this.#run?.session.pendingMessageCount ?? 0) +
+		return (this.#runtime?.session.pendingMessageCount ?? 0) +
 			(held ? held.steering.length + held.followUp.length : 0);
 	}
 
@@ -576,11 +657,16 @@ export class InProcessAgentHost {
 	async releaseIfEligibleInLane(
 		handle: AgentRunHandle,
 	): Promise<"released" | "retained" | "stale"> {
-		const run = this.#run;
-		if (!run || run.handle !== handle) return "stale";
+		const run = this.#runtime;
+		if (!run?.admitted || run.handle !== handle) return "stale";
 		if (this.#starting || this.#ending || !run.session.isIdle) return "retained";
+		// Selection owns Runtime availability, not the exact Run. Release an
+		// otherwise unretained Run without tearing down its attached Pi mode.
+		const retainRuntime = this.#retentionReasons.has("interactive_selection");
+		const runRetentionReasonCount = this.#retentionReasons.size -
+			(retainRuntime ? 1 : 0);
 		if (
-			this.#retentionReasons.size > 0 ||
+			runRetentionReasonCount > 0 ||
 			this.#requestRelationships.size > 0 ||
 			this.#inputRequired !== undefined ||
 			this.#interruptionHold !== undefined
@@ -598,12 +684,20 @@ export class InProcessAgentHost {
 			}
 		};
 		try {
-			await attemptCleanup(() => run.unsubscribe());
-			await attemptCleanup(() => run.projection?.dispose());
-			await attemptCleanup(() => run.session.dispose());
+			if (!retainRuntime) {
+				await attemptCleanup(() => run.unsubscribe());
+				await attemptCleanup(() => run.projection?.dispose());
+				await attemptCleanup(() => run.session.dispose());
+			}
 		} finally {
-			this.#run = undefined;
-			this.#clearRunScopedState();
+			if (retainRuntime) {
+				run.admitted = false;
+				run.failed = false;
+				run.expectedInterruption = false;
+			} else {
+				this.#runtime = undefined;
+			}
+			this.#clearRunScopedState(retainRuntime);
 			this.#ending = false;
 			this.#notifyStateChanged();
 			this.#notifyEnded(run.handle, "clean");
@@ -614,15 +708,54 @@ export class InProcessAgentHost {
 		return "released";
 	}
 
+	async releasePreparedRuntimeInLane(): Promise<"released" | "retained" | "stale"> {
+		const run = this.#runtime;
+		if (!run || run.admitted) return "stale";
+		if (this.#starting || this.#ending || this.#retentionReasons.size > 0) {
+			return "retained";
+		}
+		this.#ending = true;
+		this.#notifyStateChanged();
+		const cleanupErrors: unknown[] = [];
+		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
+			try {
+				await cleanup();
+			} catch (error) {
+				cleanupErrors.push(error);
+			}
+		};
+		try {
+			await attemptCleanup(() => run.unsubscribe());
+			await attemptCleanup(() => run.projection?.dispose());
+			await attemptCleanup(() => run.session.dispose());
+		} finally {
+			this.#runtime = undefined;
+			this.#clearRunScopedState();
+			this.#ending = false;
+			this.#notifyStateChanged();
+		}
+		if (cleanupErrors.length > 0) {
+			throw new AggregateError(cleanupErrors, "Prepared Agent runtime cleanup failed");
+		}
+		return "released";
+	}
+
 	async discardAndEndInLane(
 		cause: Exclude<AgentRunEndCause, "clean">,
 		disposeRun?: (session: AgentSession) => Promise<void>,
 	): Promise<void> {
-		const run = this.#run;
+		const run = this.#runtime;
 		if (!run) {
 			this.#clearRunScopedState();
 			return;
 		}
+		// A failed selected Run becomes Dormant in place so transcript, commands,
+		// extension state, and projection identity remain available to the human.
+		const retainRuntime = cause === "failure" &&
+			disposeRun === undefined &&
+			run.projection !== undefined &&
+			this.#retentionReasons.has("interactive_selection");
+		const endedHandle = run.handle;
 		const cleanupErrors: unknown[] = [];
 		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
 			try {
@@ -633,12 +766,14 @@ export class InProcessAgentHost {
 		};
 		this.#ending = true;
 		this.#notifyStateChanged();
-		this.#runFenceHandler?.(run.handle);
+		if (run.admitted) this.#runFenceHandler?.(run.handle);
 		try {
-			await attemptCleanup(() =>
-				this.#runEndingHandler?.(run.session, run.handle, cause)
-			);
-			await attemptCleanup(() => run.unsubscribe());
+			if (run.admitted) {
+				await attemptCleanup(() =>
+					this.#runEndingHandler?.(run.session, run.handle, cause)
+				);
+			}
+			if (!retainRuntime) await attemptCleanup(() => run.unsubscribe());
 			await attemptCleanup(() => run.session.clearQueue());
 			if (disposeRun) {
 				await attemptCleanup(() => disposeRun(run.session));
@@ -646,31 +781,41 @@ export class InProcessAgentHost {
 				await attemptCleanup(() => run.session.abort());
 				await attemptCleanup(() => run.session.waitForIdle());
 			}
-			// The projection remains subscribed until the exact Run has emitted its
-			// final abort/settlement presentation, then stops before normal disposal.
-			await attemptCleanup(() => run.projection?.dispose());
-			if (!disposeRun) {
+			if (!retainRuntime) await attemptCleanup(() => run.projection?.dispose());
+			if (!disposeRun && !retainRuntime) {
 				await attemptCleanup(() => run.session.dispose());
 			}
 			await attemptCleanup(() => Promise.all([...this.#trackedOperations]).then(
 				() => undefined,
 			));
 		} finally {
-			this.#run = undefined;
-			this.#clearRunScopedState();
+			if (retainRuntime) {
+				run.admitted = false;
+				run.failed = false;
+				run.expectedInterruption = false;
+			} else {
+				this.#runtime = undefined;
+			}
+			this.#clearRunScopedState(retainRuntime);
 			this.#ending = false;
 			this.#notifyStateChanged();
-			this.#notifyEnded(run.handle, cause);
+			if (endedHandle.sequence > 0) this.#notifyEnded(endedHandle, cause);
 		}
 		if (cleanupErrors.length > 0) {
 			throw new AggregateError(cleanupErrors, "Agent Run cleanup failed");
 		}
 	}
 
-	#clearRunScopedState(): void {
+	#clearRunScopedState(preserveInteractiveSelection = false): void {
+		const interactiveSelectionRetained = preserveInteractiveSelection &&
+			this.#retentionReasons.has("interactive_selection");
 		this.#retentionReasons.clear();
+		if (interactiveSelectionRetained) {
+			this.#retentionReasons.add("interactive_selection");
+		}
 		this.#requestRelationships.clear();
 		this.#startingCancellationRequested = false;
+		this.#passivePreparation = false;
 		this.#inputRequired = undefined;
 		this.#interruptionHold = undefined;
 		this.#isolatedResumption = undefined;
@@ -681,7 +826,7 @@ export class InProcessAgentHost {
 	async #discardFailedStart(
 		cause: Extract<AgentRunEndCause, "failure" | "termination">,
 	): Promise<unknown[]> {
-		const failedStart = this.#run;
+		const failedStart = this.#runtime;
 		if (!failedStart) return [];
 		const cleanupErrors: unknown[] = [];
 		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
@@ -691,56 +836,61 @@ export class InProcessAgentHost {
 				cleanupErrors.push(error);
 			}
 		};
-		this.#runFenceHandler?.(failedStart.handle);
+		if (failedStart.admitted) this.#runFenceHandler?.(failedStart.handle);
 		try {
 			// An initializing projection may already be the human's active view.
-			// Publish terminal failure before disposing it so presentation owners can
-			// atomically replace or close that exact attachment.
-			await attemptCleanup(() =>
-				this.#runEndingHandler?.(
-					failedStart.session,
-					failedStart.handle,
-					cause,
-				)
-			);
+			// Publish terminal failure before disposal so its owner closes the invalid
+			// attachment before the Runtime disappears.
+			if (failedStart.admitted) {
+				await attemptCleanup(() =>
+					this.#runEndingHandler?.(
+						failedStart.session,
+						failedStart.handle,
+						cause,
+					)
+				);
+			}
 			await attemptCleanup(() => failedStart.unsubscribe());
 			await attemptCleanup(() => failedStart.projection?.dispose());
 			await attemptCleanup(() => failedStart.session.dispose());
 		} finally {
-			this.#run = undefined;
+			this.#runtime = undefined;
 			this.#clearRunScopedState();
 			this.#starting = false;
 			this.#notifyStateChanged();
-			this.#notifyEnded(failedStart.handle, cause);
+			if (failedStart.admitted) this.#notifyEnded(failedStart.handle, cause);
 		}
 		return cleanupErrors;
 	}
 
-	#markRunFailed(run: BoundRun, handle: AgentRunHandle): void {
-		if (run.failed) return;
+	#markRunFailed(run: BoundAgentRuntime, handle: AgentRunHandle): void {
+		if (!run.admitted || run.failed) return;
 		run.failed = true;
 		this.#runFenceHandler?.(handle);
 		this.#notifyStateChanged();
 	}
 
-	#bindRun(startedRun: {
+	#bindRuntime(startedRun: {
 		session: AgentSession;
 		projection: PiNativeAgentProjection | undefined;
-	}): void {
+	}, admitted = false): void {
 		const { session, projection } = startedRun;
-		this.#runSequence += 1;
-		const handle = Object.freeze({ sequence: this.#runSequence });
-		const run: BoundRun = {
+		if (admitted) this.#runSequence += 1;
+		const handle = Object.freeze({
+			sequence: admitted ? this.#runSequence : 0,
+		});
+		const run: BoundAgentRuntime = {
 			handle,
 			session,
 			projection,
 			unsubscribe: () => undefined,
+			admitted,
 			failed: false,
 			expectedInterruption: false,
 		};
 		// Publish ownership before the native subscribe call so startup rollback can
 		// still dispose the exact projection and session if subscription itself fails.
-		this.#run = run;
+		this.#runtime = run;
 		run.unsubscribe = session.subscribe((event) => {
 			if (
 				event.type === "agent_start" ||
@@ -762,16 +912,16 @@ export class InProcessAgentHost {
 					// into Run Failure before the exact Hold is established.
 					!this.#interrupting &&
 					!expectedInterruption;
-				if (terminalFailure) this.#markRunFailed(run, handle);
+				if (terminalFailure) this.#markRunFailed(run, run.handle);
 			}
 			if (event.type === "agent_settled") {
 				run.expectedInterruption = false;
 				for (const handler of this.#settledHandlers) {
-					handler(handle, run.failed ? "failed" : "settled");
+					handler(run.handle, run.failed ? "failed" : "settled");
 				}
 			}
 			if (event.type === "agent_end") {
-				this.#restoreHeldNativeQueueAfterIsolatedTurn(run, handle, event);
+				this.#restoreHeldNativeQueueAfterIsolatedTurn(run, run.handle, event);
 			}
 		});
 		this.#ending = false;
@@ -787,7 +937,7 @@ export class InProcessAgentHost {
 	}
 
 	#restoreHeldNativeQueueAfterIsolatedTurn(
-		run: BoundRun,
+		run: BoundAgentRuntime,
 		handle: AgentRunHandle,
 		event: Extract<Parameters<Parameters<AgentSession["subscribe"]>[0]>[0], {
 			type: "agent_end";
@@ -816,7 +966,7 @@ export class InProcessAgentHost {
 }
 
 function isRequestRelationshipReason(
-	reason: RunRetentionReason,
+	reason: AgentRetentionReason,
 ): reason is RequestRelationshipReason {
 	return reason === "awaiting_answer" || reason === "answer_owed";
 }

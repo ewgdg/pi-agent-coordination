@@ -14,7 +14,6 @@ import {
 } from "./native-agent-projection.ts";
 import {
 	hasInstalledExtensionBindings,
-	rememberNativeExtensionUIState,
 	refreshNativeExtensionBindings,
 } from "./extension-bindings.ts";
 
@@ -129,7 +128,6 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 			}
 			if (!hasInstalledExtensionBindings(runtime.session)) {
 				await originalBindCurrentSessionExtensions.call(this);
-				rememberNativeExtensionUIState(runtime.session);
 				requestFullInteractiveRender(this);
 				return;
 			}

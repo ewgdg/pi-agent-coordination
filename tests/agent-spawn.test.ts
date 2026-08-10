@@ -733,7 +733,7 @@ test("missing, duplicate, and anonymous inline factories fail before Agent Ident
 	}
 });
 
-test("successor Runs re-resolve the current named inline factory and stay dormant when it disappears", async () => {
+test("successor Runtime preparations re-resolve named inline factories and stay dormant when one disappears", async () => {
 	let originalInvocations = 0;
 	let replacementInvocations = 0;
 	const createProbeFactory = (generation: "original" | "replacement"): ExtensionFactory =>

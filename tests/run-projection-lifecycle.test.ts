@@ -44,6 +44,64 @@ test("clean release disposes the exact projection and session once", async () =>
 	assert.equal(host.observe().phase, "dormant");
 });
 
+test("selected clean Runs release inside one retained Runtime", async () => {
+	const resource = createRunResource();
+	let runtimePreparations = 0;
+	const host = InProcessAgentHost.createChild({
+		sessionManager: SessionManager.inMemory(),
+		startSession: async () => {
+			runtimePreparations += 1;
+			return resource.startedRun;
+		},
+	});
+	const ended: Array<{ sequence: number; cause: string }> = [];
+	host.addEndedHandler((handle, cause) => {
+		ended.push({ sequence: handle.sequence, cause });
+	});
+
+	const preparedSession = await host.lane.run(() =>
+		host.prepareInLane(["interactive_selection"])
+	);
+	const preparedProjection = host.currentProjection();
+	await host.lane.run(() => host.startInLane());
+	const firstHandle = host.currentHandle();
+	assert.ok(firstHandle);
+	assert.equal(
+		await host.lane.run(() => host.releaseIfEligibleInLane(firstHandle)),
+		"released",
+	);
+	assert.equal(host.observe().phase, "dormant");
+	assert.equal(host.currentProjection(), preparedProjection);
+	assert.deepEqual(resource.counts(), {
+		projectionDisposals: 0,
+		sessionDisposals: 0,
+		unsubscriptions: 0,
+	});
+
+	assert.equal(await host.lane.run(() => host.startInLane()), preparedSession);
+	const secondHandle = host.currentHandle();
+	assert.ok(secondHandle);
+	assert.notEqual(secondHandle, firstHandle);
+	assert.equal(secondHandle.sequence, firstHandle.sequence + 1);
+	assert.equal(host.currentProjection(), preparedProjection);
+	assert.equal(runtimePreparations, 1);
+
+	host.removeRetentionReason("interactive_selection");
+	assert.equal(
+		await host.lane.run(() => host.releaseIfEligibleInLane(secondHandle)),
+		"released",
+	);
+	assert.deepEqual(ended, [
+		{ sequence: firstHandle.sequence, cause: "clean" },
+		{ sequence: secondHandle.sequence, cause: "clean" },
+	]);
+	assert.deepEqual(resource.counts(), {
+		projectionDisposals: 1,
+		sessionDisposals: 1,
+		unsubscriptions: 1,
+	});
+});
+
 test("failure, termination, and Workflow shutdown each dispose their exact projection and session once", async () => {
 	for (const cause of ["failure", "termination", "shutdown"] as const) {
 		const resource = createRunResource();
@@ -165,6 +223,47 @@ test("post-binding startup failure cancels and observes pending exact readiness"
 		unsubscriptions: 1,
 	});
 	assert.equal(host.observe().phase, "dormant");
+});
+
+test("shutdown fencing prevents a prepared Runtime from admitting a Run", async () => {
+	const resource = createRunResource();
+	const host = InProcessAgentHost.createChild({
+		sessionManager: SessionManager.inMemory(),
+		startSession: async () => resource.startedRun,
+	});
+	let relationshipInitializations = 0;
+	host.setRunStartInitializer(() => {
+		relationshipInitializations += 1;
+		return {
+			awaitingAnswerRequestIds: [],
+			answerOwedRequestIds: [],
+		};
+	});
+
+	await host.lane.run(() => host.prepareInLane(["interactive_selection"]));
+	assert.equal(host.observe().phase, "dormant");
+	assert.equal(host.latestStartedRunSequence(), 0);
+	assert.equal(await host.beginShutdown(), false);
+
+	await assert.rejects(
+		() => host.lane.run(() => host.startInLane(["pending_delivery"])),
+		/host_shutting_down: Agent Run startup is closed/,
+	);
+	assert.equal(host.observe().phase, "dormant");
+	assert.equal(host.hasRetentionReason("pending_delivery"), false);
+	assert.equal(host.latestStartedRunSequence(), 0);
+	assert.equal(relationshipInitializations, 0);
+
+	host.removeRetentionReason("interactive_selection");
+	assert.equal(
+		await host.lane.run(() => host.releasePreparedRuntimeInLane()),
+		"released",
+	);
+	assert.deepEqual(resource.counts(), {
+		projectionDisposals: 1,
+		sessionDisposals: 1,
+		unsubscriptions: 1,
+	});
 });
 
 test("shutdown fenced before projection binding observes accepted startup cancellation", async () => {
@@ -332,7 +431,6 @@ test("termination keeps the projection subscribed through final Run settlement",
 	const nativeProjection = await createPiNativeProjectionHost({
 		ownerRuntime: ownerHost.runtime,
 	}).createProjection({
-		kind: "live",
 		session,
 		services: ownerHost.services,
 	});
@@ -420,7 +518,6 @@ function createRunResource(options?: {
 		invalidate() {},
 	};
 	const projection: PiNativeAgentProjection = {
-		kind: "live",
 		sessionId: "projected-run",
 		presentation: component,
 		resize() {},

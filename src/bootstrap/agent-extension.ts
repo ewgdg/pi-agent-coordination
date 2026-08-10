@@ -44,28 +44,6 @@ export function createModeratorBoundExtension(
 	);
 }
 
-export function createPresentationBoundExtension(
-	resolveView: () => HumanPresentationCoordinatorView,
-): ExtensionFactory {
-	return (pi) => {
-		registerChildNativeSessionPolicy(pi);
-		registerAgentsCommand(pi, resolveView);
-		registerAgentActivityDock(pi, resolveView);
-		pi.on("input", async (event, ctx) => {
-			if (event.source !== "interactive") return { action: "handled" };
-			try {
-				await resolveView().resumeFromHuman(event.text, event.images);
-			} catch (error) {
-				ctx.ui.notify(
-					`Agent input failed: ${error instanceof Error ? error.message : String(error)}`,
-					"error",
-				);
-			}
-			return { action: "handled" };
-		});
-	};
-}
-
 export function createAgentActivityExtension(
 	resolveView: () => HumanPresentationCoordinatorView,
 ): ExtensionFactory {

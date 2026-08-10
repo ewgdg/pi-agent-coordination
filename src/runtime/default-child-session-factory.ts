@@ -19,11 +19,6 @@ import {
 	type AgentRecord,
 } from "../coordination/agent-record.ts";
 import {
-	copyExtensionBindings,
-	createDetachedExtensionUIContext,
-	rememberNativeExtensionUIState,
-} from "../pi-integration/extension-bindings.ts";
-import {
 	createPiNativeProjectionHost,
 	type PiNativeAgentProjection,
 	type PiNativeProjectionHost,
@@ -34,7 +29,6 @@ import {
 	type ModelRunAdmission,
 } from "../pi-integration/run-admission.ts";
 import { resolveRunExtensions } from "../pi-integration/named-inline-extension-factories.ts";
-import type { HumanPresentationBinding } from "../pi-integration/interactive-session-selection.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
 import type {
@@ -49,7 +43,7 @@ import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { ModeratorIdentity } from "../protocol/moderator-input.ts";
 import {
 	InProcessAgentHost,
-	type StartedAgentRun,
+	type StartedAgentRuntime,
 } from "./in-process-agent-host.ts";
 import { SerialLane } from "./serial-lane.ts";
 import { discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
@@ -98,11 +92,6 @@ export type PreparedAgentRun = Readonly<{
 	configuration: EffectiveAgentRunConfiguration;
 }>;
 
-export type DormantAgentProjection = Readonly<{
-	projection: PiNativeAgentProjection;
-	dispose(): Promise<void>;
-}>;
-
 export class DefaultChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
 	readonly #hostResourceLoader: AgentSessionServices["resourceLoader"];
@@ -112,7 +101,6 @@ export class DefaultChildSessionFactory {
 	readonly #childExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #moderatorExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #activityExtensionFactory: (agentId: string) => ExtensionFactory;
-	readonly #presentationExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #projectionHost: PiNativeProjectionHost;
 	readonly #modelRuntimeServiceLane: SerialLane;
 	readonly #automaticGenerationReconciliation:
@@ -129,7 +117,6 @@ export class DefaultChildSessionFactory {
 		childExtensionFactory(agentId: string): ExtensionFactory;
 		moderatorExtensionFactory(agentId: string): ExtensionFactory;
 		activityExtensionFactory(agentId: string): ExtensionFactory;
-		presentationExtensionFactory(agentId: string): ExtensionFactory;
 		projectionHost?: PiNativeProjectionHost;
 		automaticGenerationReconciliation?: AutomaticGenerationReconciliationAdapter;
 		templateRoots?(baselineCwd: string, projectTrusted: boolean): readonly AgentTemplateRoot[];
@@ -144,7 +131,6 @@ export class DefaultChildSessionFactory {
 		this.#childExtensionFactory = options.childExtensionFactory;
 		this.#moderatorExtensionFactory = options.moderatorExtensionFactory;
 		this.#activityExtensionFactory = options.activityExtensionFactory;
-		this.#presentationExtensionFactory = options.presentationExtensionFactory;
 		this.#projectionHost = options.projectionHost ?? createPiNativeProjectionHost({
 			ownerRuntime: options.ownerRuntime,
 		});
@@ -427,22 +413,10 @@ export class DefaultChildSessionFactory {
 		};
 	}
 
-	#detachedChildBindings(session: AgentSession) {
-		const bindings = copyExtensionBindings(this.#ownerRuntime.session, session);
-		// Children inherit the Owner's non-UI seams (mode, abort, shutdown,
-		// errors) but never its UI context: session_start must run against the
-		// child's own detached context so its side effects stay per-child.
-		bindings.uiContext = createDetachedExtensionUIContext(
-			session,
-			this.#ownerRuntime.session,
-		);
-		return bindings;
-	}
-
 	async startSession(options: {
 		sessionManager: SessionManager;
 		prepared: PreparedAgentRun;
-	}): Promise<StartedAgentRun> {
+	}): Promise<StartedAgentRuntime> {
 		const { sessionManager, prepared } = options;
 		const model = prepared.services.modelRuntime.getModel(
 			prepared.configuration.model.provider,
@@ -468,11 +442,10 @@ export class DefaultChildSessionFactory {
 			);
 			this.#validateStartedSession(session, prepared.configuration);
 			modelRunAdmission = holdModelRunsUntilProjectionAdmission(session);
-			// The exact Run's InteractiveMode owns initial extension binding. This
-			// gives every child one complete native editor/footer/UI lifecycle and
-			// emits session_start once, while model work remains behind the gate.
+			// The Agent Runtime's InteractiveMode owns extension binding. This gives
+			// every prepared Runtime one native editor/footer/UI lifecycle and emits
+			// session_start once, while model work remains behind the readiness gate.
 			projection = await this.#projectionHost.createProjection({
-				kind: "live",
 				session,
 				services: prepared.services,
 				exposeWhileInitializing: true,
@@ -509,174 +482,6 @@ export class DefaultChildSessionFactory {
 			throw error;
 		}
 		return { session, projection, ready };
-	}
-
-	async createDormantProjection(record: AgentRecord): Promise<DormantAgentProjection> {
-		const cwd = record.host.sessionManager.getCwd();
-		const services = await this.#modelRuntimeServiceLane.run(() =>
-			createAgentSessionServices({
-				cwd,
-				agentDir: this.#ownerRuntime.services.agentDir,
-				modelRuntime: this.#ownerRuntime.services.modelRuntime,
-				settingsManager: this.#createIsolatedSettingsManager(cwd),
-				resourceLoaderOptions: {
-					noContextFiles: true,
-					noPromptTemplates: true,
-					noSkills: true,
-					noThemes: true,
-					noExtensions: true,
-					extensionFactories: [{
-						name: `pi-agent-coordination-presentation:${record.identity.agentId}`,
-						hidden: true,
-						factory: this.#presentationExtensionFactory(record.identity.agentId),
-					}],
-				},
-			}),
-		);
-		const created = await createAgentSessionFromServices({
-			services,
-			sessionManager: record.host.sessionManager,
-			noTools: "all",
-		});
-		const session = created.session;
-		let projection: PiNativeAgentProjection | undefined;
-		try {
-			session.setActiveToolsByName([]);
-			projection = await this.#projectionHost.createProjection({
-				kind: "dormant",
-				session,
-				services,
-			});
-			await projection.ready();
-		} catch (error) {
-			const cleanupErrors: unknown[] = [error];
-			try {
-				await projection?.dispose();
-			} catch (cleanupError) {
-				cleanupErrors.push(cleanupError);
-			}
-			try {
-				session.dispose();
-			} catch (cleanupError) {
-				cleanupErrors.push(cleanupError);
-			}
-			if (cleanupErrors.length > 1) {
-				throw new AggregateError(cleanupErrors, "Dormant Agent projection startup cleanup failed");
-			}
-			throw error;
-		}
-		let disposed = false;
-		return Object.freeze({
-			projection,
-			async dispose() {
-				if (disposed) return;
-				disposed = true;
-				const cleanupErrors: unknown[] = [];
-				try {
-					await projection.dispose();
-				} catch (error) {
-					cleanupErrors.push(error);
-				}
-				try {
-					session.dispose();
-				} catch (error) {
-					cleanupErrors.push(error);
-				}
-				if (cleanupErrors.length > 0) {
-					throw new AggregateError(cleanupErrors, "Dormant Agent projection cleanup failed");
-				}
-			},
-		});
-	}
-
-	async createPresentationBinding(record: AgentRecord): Promise<HumanPresentationBinding> {
-		const agentId = record.identity.agentId;
-		const cwd = record.host.sessionManager.getCwd();
-		const services = await this.#modelRuntimeServiceLane.run(() =>
-			createAgentSessionServices({
-				cwd,
-				agentDir: this.#ownerRuntime.services.agentDir,
-				modelRuntime: this.#ownerRuntime.services.modelRuntime,
-				settingsManager: this.#createIsolatedSettingsManager(cwd),
-				resourceLoaderOptions: {
-					noContextFiles: true,
-					noPromptTemplates: true,
-					noSkills: true,
-					noThemes: true,
-					noExtensions: true,
-					extensionFactories: [{
-						name: `pi-agent-coordination-presentation:${agentId}`,
-						hidden: true,
-						factory: this.#presentationExtensionFactory(agentId),
-					}],
-				},
-			}),
-		);
-		const created = await createAgentSessionFromServices({
-			services,
-			sessionManager: record.host.sessionManager,
-			noTools: "builtin",
-		});
-		const session = created.session;
-		let projection: PiNativeAgentProjection | undefined;
-		try {
-			await session.bindExtensions(
-				this.#detachedChildBindings(session),
-			);
-			// The detached context starts without an editor, and its own
-			// session_start can only register one per-child. Nothing reaches the
-			// Owner's editor slot.
-			rememberNativeExtensionUIState(session);
-			session.setActiveToolsByName([]);
-			projection = await this.#projectionHost.createProjection({
-				kind: "dormant",
-				session,
-				services,
-			});
-			await projection.ready();
-		} catch (error) {
-			const cleanupErrors: unknown[] = [error];
-			try {
-				await projection?.dispose();
-			} catch (cleanupError) {
-				cleanupErrors.push(cleanupError);
-			}
-			try {
-				session.dispose();
-			} catch (cleanupError) {
-				cleanupErrors.push(cleanupError);
-			}
-			if (cleanupErrors.length > 1) {
-				throw new AggregateError(cleanupErrors, "Dormant projection startup cleanup failed");
-			}
-			throw error;
-		}
-		let released = false;
-		return {
-			agentId,
-			session,
-			services,
-			diagnostics: services.diagnostics,
-			projection,
-			release: async () => {
-				if (released) return;
-				released = true;
-				const cleanupErrors: unknown[] = [];
-				try {
-					await projection.dispose();
-				} catch (error) {
-					cleanupErrors.push(error);
-				}
-				try {
-					session.dispose();
-				} catch (error) {
-					cleanupErrors.push(error);
-				}
-				if (cleanupErrors.length > 0) {
-					throw new AggregateError(cleanupErrors, "Dormant projection cleanup failed");
-				}
-			},
-		};
 	}
 
 	workflowSessionDirectory(): string {

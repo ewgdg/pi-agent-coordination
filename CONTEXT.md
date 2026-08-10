@@ -54,15 +54,15 @@ One operation available to each authenticated ordinary Agent—a Workflow Owner 
 The ordinary Agent Request authored by an Agent Spawn invocation as its child's initial work. Its identity derives from that invocation as a Message, while the matching child Agent Identity supplies its recipient and makes it canonical. It then uses ordinary fixed-mode delivery, retry, cancellation, Answer, and Answer Retrieval semantics without becoming an Agent lifecycle result.
 
 **Agent Template**:
-A user-authored named partial Agent runtime configuration that may be selected during Agent Spawn. Apart from its name, it can prefill only the template-enabled parts of Agent Spawn configuration; working directory and Agent display metadata remain spawn-owned. Its current complete definition is re-resolved on every Run, overlays the Agent's immutable creation baseline, and remains overridable by that spawn without changing protocol identity or role relationships. Project-scoped discovery remains anchored to the Agent's Baseline Working Directory.
+A user-authored named partial Agent runtime configuration that may be selected during Agent Spawn. Apart from its name, it can prefill only the template-enabled parts of Agent Spawn configuration; working directory and Agent display metadata remain spawn-owned. Its current complete definition is re-resolved whenever an Agent Runtime is prepared, overlays the Agent's immutable creation baseline, and remains overridable by that spawn without changing protocol identity or role relationships. A retained Runtime keeps its resolved configuration across successive exact Runs. Project-scoped discovery remains anchored to the Agent's Baseline Working Directory.
 _Avoid_: Agent profile, Agent role
 
 **Agent Configuration**:
-The immutable Agent label, optional description, and creation baseline committed during Agent bootstrap. For a spawned Agent the baseline snapshots the spawning parent's inheritable runtime properties at creation, while every Run freshly applies the currently resolved selected Agent Template, canonical spawn overrides, and fixed role requirements.
+The immutable Agent label, optional description, and creation baseline committed during Agent bootstrap. For a spawned Agent the baseline snapshots the spawning parent's inheritable runtime properties at creation, while every Runtime preparation freshly applies the currently resolved selected Agent Template, canonical spawn overrides, and fixed role requirements.
 _Avoid_: Agent settings, runtime state
 
 **Baseline Working Directory**:
-The immutable working directory inherited from the Direct Spawner's Effective Run Working Directory at Agent Spawn admission. A Moderator instead inherits the Workflow Owner's Effective Run Working Directory at Moderator creation. It anchors project-scoped Agent Template discovery and relative template or per-spawn working-directory values on every Run.
+The immutable working directory inherited from the Direct Spawner's Effective Run Working Directory at Agent Spawn admission. A Moderator instead inherits the Workflow Owner's Effective Run Working Directory at Moderator creation. It anchors project-scoped Agent Template discovery and relative template or per-spawn working-directory values on every Runtime preparation.
 
 **Effective Run Working Directory**:
 The working directory obtained for one Run by applying the immutable per-spawn override over the Baseline Working Directory. Pi discovers ordinary Project Context and cwd-scoped resources from this directory. It never redirects that Agent's template discovery.
@@ -89,15 +89,24 @@ An immutable requester-authored Message withdrawing one exact Agent Request. It 
 **Cooperative Cancellation**:
 A responder's explicit decision, after receiving Request Cancellation, to cancel its own downstream Requests that are no longer needed. Every cancellation remains an independent requester-authored fact; there is no cascade identity or runtime claim that an entire dependency chain was cancelled.
 
+**Agent Runtime**:
+The volatile Pi session, configured resources, and interactive presentation currently hosted for one durable Agent Identity. A Runtime can be prepared while its Agent is Dormant and can remain available across successive Runs while interactively selected. Preparing it executes ordinary extension lifecycle behavior without censoring extension effects; any effect that initiates Agent work admits a Run normally.
+
+**Run**:
+One exact transient epoch of admitted Agent work within an Agent Runtime. Initial creation work, model-starting human or extension input, and coordination Delivery can start a Run; navigation and UI-only commands cannot. Exact Run identity fences interruption, termination, failure, Human Requests, Delivery scheduling, and Operational Incident evaluation. Releasing, failing, or terminating a Run does not remove its durable Agent Identity and need not replace a selected Agent Runtime.
+
 **Run Retention Reason**:
-A transient, live-observed reason the host must retain an exact Agent Run rather than dispose it. Active work, required input, pending delivery, unresolved Request relationships, interactive selection, interruption hold, unresolved Moderator handling, and Owner host binding may each provide one.
+A transient, live-observed reason the host must retain an exact Agent Run. Active work, required input, pending delivery, unresolved Request relationships, interruption hold, unresolved Moderator handling, and Owner host binding may each provide one.
 _Avoid_: Completion blocker, Request blocker
 
+**Agent Runtime Retention Reason**:
+A transient reason to keep an Agent Runtime available independently of Run admission. Interactive Selection provides the current Runtime retention reason.
+
 **Interactive Selection**:
-The transient human choice to attach a full-window interactive view of one durable non-Owner Agent over the continuously bound Owner TUI. A live attachment gives its exact Run `interactive_selection` retention and presents that Run's complete child-owned Pi mode—transcript, Run state, widgets, editor, footer, commands, shortcuts, and extension UI—without transferring Owner runtime, services, diagnostics, transcript, editor, footer, or extension-context ownership. Input follows the child TUI's detached terminal path. Selecting a Dormant Agent is itself a Run-start trigger: it starts exactly one successor with `interactive_selection`, submits no model input, and exposes the initializing mode before startup UI settles. The selected successor accepts native commands, shell input, custom extensions, and later editor input through its normal live mode. Selection binds to that exact startup attempt and never retries a successor that ends during handoff. Closing while startup UI is pending cancels that exact initialization without requiring hidden UI input. Exact Run failure replaces the attachment with a view-owned Dormant failure presentation, and an ordinary Message-started successor attaches before Delivery execution. `/agents` switches the attachment or returns to Owner; Workflow disposal closes once, releases live retention, disposes only failure-presentation resources, and restores the untouched Owner presentation.
+The transient human choice to attach a full-window interactive view of one durable non-Owner Agent over the continuously bound Owner TUI. Selection prepares and retains that Agent's configured Runtime and shows its transcript, Run state, widgets, editor, footer, commands, shortcuts, and extension UI without transferring Owner ownership. Selection itself does not admit a Run, initialize Run-scoped Request relationships, invoke the model, or append transcript evidence. User input, slash-command effects, extension lifecycle effects, and coordination Delivery keep their ordinary power: if they initiate Agent work, the same Runtime enters a Run. Run failure leaves the selected Runtime and view in place while the Agent becomes Dormant. Closing a never-activated view disposes only its prepared Runtime and cannot create an Operational Incident.
 
 **Selected Agent Status**:
-The human-facing work disposition of an Agent under Interactive Selection. A healthy current Run is Active while work is executing, Waiting with a concise reason when progress requires a named external condition or human action, and Idle when settled without such a wait. Starting, Ending, and Failed communicate lifecycle transitions or failure separately from this work disposition.
+The human-facing lifecycle and work disposition of an Agent under Interactive Selection. It is Dormant when no exact Run exists. A healthy current Run is Active while work is executing, Waiting with a concise reason when progress requires a named external condition or human action, and Idle when settled without such a wait. Starting, Ending, and Failed communicate lifecycle transitions or failure separately.
 
 **Interruption Hold**:
 The transient exact-Run pause established by confirmed authorized-supervisor interruption or Human Escape. It retains the Run, Requests, obligations, and pending scheduling while blocking ordinary Message Delivery commits and stuck-condition moderation. Only a native human editor Message commit or a standalone Supervisory Resume Message Delivery commit bound to that exact Hold atomically replaces it with an isolated resumption turn; explicit Run Termination instead ends the held Run and discards its undelivered backlog.
@@ -106,14 +115,14 @@ The transient exact-Run pause established by confirmed authorized-supervisor int
 An authorized supervisor's free-form Message requesting that one exact held Agent Run continue. It uses reserved fixed resumption scheduling, clears only the exact Interruption Hold against which it was admitted when its standalone Delivery commits, and otherwise remains ordinary Steer direction without gaining power over a later Hold.
 
 **Run Release Gate**:
-The live decision that permits automatic disposal of a child Agent Run only when no Run Retention Reason remains.
+The live decision that permits an exact child Agent Run to end only when no Run Retention Reason remains. A separately retained Agent Runtime may remain prepared after Run release.
 
 **Run Termination**:
 An authorized controlled end of one exact current Agent Run that deliberately bypasses its Run Retention Reasons. Ordinary termination is rejected while the Agent owns Interactive Selection; completed deselection permits termination. It settles an exact pending Human Request through interruption but does not cancel Agent Requests, affect descendants, or create Agent lifecycle state. A later Message may start a successor Run for the same Agent.
 _Avoid_: Agent termination
 
 **Run Failure**:
-The unexpected terminal end of one exact Agent Run after any applicable Automatic Reconciliation could not preserve that Run. It starts Moderator handling only while the failed Agent retains an unresolved Answer Obligation and clears when a successor Run starts or every such obligation ends through Agent Answer commit or Request Cancellation Delivery. It does not mark the durable Agent or Workflow failed, reconstruct work, or start a successor Run automatically. An open Interactive Selection remains on the durable Agent through a passive Dormant failure presentation until explicit human input or ordinary coordination starts a successor.
+The unexpected terminal end of one exact Agent Run after any applicable Automatic Reconciliation could not preserve that Run. It starts Moderator handling only while the failed Agent retains an unresolved Answer Obligation and clears when a successor Run starts or every such obligation ends through Agent Answer commit or Request Cancellation Delivery. It does not mark the durable Agent or Workflow failed, reconstruct work, or start a successor Run automatically. An open Interactive Selection keeps the same Agent Runtime and presentation while the Agent becomes Dormant; later input or coordination may admit a successor in that Runtime.
 
 **Dependency Deadlock**:
 A live closed component of current Agent Runs in which every Run is settled, retained solely by unresolved Request relationships within the component, and has no admitted input or other progress source. It is a transient observation that clears when its predicate changes, grants no additional authority, and is not reconstructed after host loss.

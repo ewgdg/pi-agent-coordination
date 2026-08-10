@@ -6,10 +6,8 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
 	createAgentBoundExtension,
 	createModeratorBoundExtension,
-	createPresentationBoundExtension,
 } from "../src/bootstrap/agent-extension.ts";
 import type {
-	HumanPresentationCoordinatorView,
 	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
 } from "../src/coordination/workflow-coordinator.ts";
@@ -34,48 +32,32 @@ const plainTheme = {
 	bold: (text: string) => text,
 } as unknown as Theme;
 
-test("child session surfaces disable native session replacement", async (t) => {
+test("child session surfaces disable native session replacement", async () => {
 	const unavailableView = () => {
 		throw new Error("Child session command conformance does not execute coordination behavior");
 	};
-	const childSurfaces = [
+	const extension = createAgentBoundExtension(
+		unavailableView as () => OrdinaryAgentCoordinatorView,
+	);
+	const host = await createTestOwnerHost(extension, { persistent: true });
+	const sessionFile = host.session.sessionManager.getSessionFile();
+	assert.ok(sessionFile);
+	assert.deepEqual(
+		await host.runtime.switchSession(sessionFile),
+		{ cancelled: true },
+	);
+	assert.deepEqual(await host.runtime.fork("unused-entry"), { cancelled: true });
+	assert.deepEqual(host.ui.notifications.slice(-2), [
 		{
-			name: "live",
-			extension: createAgentBoundExtension(
-				unavailableView as () => OrdinaryAgentCoordinatorView,
-			),
+			message: "Return to Owner before replacing or forking the native session.",
+			type: "error",
 		},
 		{
-			name: "dormant",
-			extension: createPresentationBoundExtension(
-				unavailableView as () => HumanPresentationCoordinatorView,
-			),
+			message: "Return to Owner before replacing or forking the native session.",
+			type: "error",
 		},
-	] as const;
-
-	for (const { name, extension } of childSurfaces) {
-		await t.test(name, async () => {
-			const host = await createTestOwnerHost(extension, { persistent: true });
-			const sessionFile = host.session.sessionManager.getSessionFile();
-			assert.ok(sessionFile);
-			assert.deepEqual(
-				await host.runtime.switchSession(sessionFile),
-				{ cancelled: true },
-			);
-			assert.deepEqual(await host.runtime.fork("unused-entry"), { cancelled: true });
-			assert.deepEqual(host.ui.notifications.slice(-2), [
-				{
-					message: "Return to Owner before replacing or forking the native session.",
-					type: "error",
-				},
-				{
-					message: "Return to Owner before replacing or forking the native session.",
-					type: "error",
-				},
-			]);
-			await host.runtime.dispose();
-		});
-	}
+	]);
+	await host.runtime.dispose();
 });
 
 test("role-bound extensions expose strict sequential tools with compact native renderers", async (t) => {
