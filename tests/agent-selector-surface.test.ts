@@ -109,7 +109,7 @@ test("Live remains terminal-bounded across Attention, Owner, and Agent sections"
 			requestId: "human-request-id",
 			agentId: "agent-1",
 			agentLabel: "Agent 1",
-			questionCount: 1,
+			question: "Choose the implementation boundary.",
 		}],
 	});
 	await Promise.resolve();
@@ -452,7 +452,7 @@ test("Live uses one attention-first list and dispatches the exact Human Request"
 			requestId: "human-request-id",
 			agentId: "researcher",
 			agentLabel: "Researcher",
-			questionCount: 2,
+			question: "Which boundary should remain authoritative?",
 		}],
 		operationalAttention: [],
 	});
@@ -473,8 +473,9 @@ test("Live uses one attention-first list and dispatches the exact Human Request"
 
 	harness.component.handleInput?.("\r");
 	assert.deepEqual(await selection, {
-		kind: "focus_human_request",
+		kind: "decide",
 		requestId: "human-request-id",
+		agentId: "researcher",
 	});
 });
 

@@ -13,7 +13,6 @@ import {
 } from "../coordination/workflow-coordinator.ts";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { adoptOrValidateOwnerIdentity } from "../protocol/owner-identity.ts";
-import { HumanRequestSurface } from "../presentation/human-request-surface.ts";
 import { OperationalIncidentSurface } from "../presentation/operational-incident-surface.ts";
 import {
 	WorkflowPolicyStore,
@@ -99,7 +98,6 @@ export async function initializeOwnerWorkflow(options: {
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(runtime, identity, {
 		entryModulePath,
-		humanRequestPresentation: new HumanRequestSurface(ctx.ui),
 		operationalIncidentPresentation: new OperationalIncidentSurface(),
 		projectionHost,
 		childExtensionFactory: (agentId) =>

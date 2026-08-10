@@ -23,6 +23,7 @@ import {
 	selectedAgentWorkStatus,
 	type AgentWorkStatus,
 } from "./selected-agent-status.ts";
+import { boundedToolPreview } from "../tools/bounded-preview.ts";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const SPINNER_FRAME_INTERVAL_MS = 80;
@@ -36,6 +37,7 @@ export type AgentActivityStatus = AgentRosterStatus & Readonly<{
 export type AgentActivitySnapshot = Readonly<{
 	scope: AgentActivityStatus;
 	children: readonly AgentActivityStatus[];
+	answerMode: boolean;
 	humanAttention: readonly HumanAttentionItem[];
 	operationalAttention: readonly OperationalIncidentAttention[];
 }>;
@@ -108,8 +110,13 @@ export class AgentActivityDock implements Component {
 					this.#renderAgent(child, index, liveChildren.length)
 				),
 			];
+		const answerModeLines = snapshot.answerMode
+			? [
+				`${this.#theme.fg("accent", this.#theme.bold("ANSWER"))}${this.#theme.fg("dim", " · Enter submits")}`,
+			]
+			: [];
 		this.#syncSpinner(snapshot);
-		return [...identityLines, ...attentionLines, ...agentLines].map(
+		return [...identityLines, ...attentionLines, ...agentLines, ...answerModeLines].map(
 			(line) => truncateToWidth(line, safeWidth, ""),
 		);
 	}
@@ -143,8 +150,7 @@ export class AgentActivityDock implements Component {
 			...items.map((item, index) => {
 				const branch = index === items.length - 1 ? "└─" : "├─";
 				if (item.kind === "human") {
-					const count = item.attention.questionCount;
-					return `${branch} ${this.#theme.fg("warning", "DECIDE")} ${this.#theme.bold(item.attention.agentLabel)} · ${count} question${count === 1 ? "" : "s"}`;
+					return `${branch} ${this.#theme.fg("warning", "DECIDE")} ${this.#theme.bold(item.attention.agentLabel)} · ${boundedToolPreview(item.attention.question)}`;
 				}
 				return `${branch} ${this.#theme.fg("warning", "ATTENTION")} ${formatOperationalIncidentHeadline(item.attention)}`;
 			}),

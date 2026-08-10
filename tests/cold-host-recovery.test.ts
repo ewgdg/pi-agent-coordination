@@ -544,14 +544,7 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 		fauxAssistantMessage(
 			fauxToolCall(
 				"ask_user_question",
-				{
-					questions: [{
-						kind: "text",
-						header: "Pause",
-						prompt: "Leave the Creation Request unanswered across host loss.",
-						multiline: false,
-					}],
-				},
+				{ question: "Leave the Creation Request unanswered across host loss." },
 				{ id: "pause-before-cold-dormant-inspection" },
 			),
 			{ stopReason: "toolUse" },
@@ -677,16 +670,7 @@ test("cold bootstrap and successor start recover exact residual Creation Request
 		fauxAssistantMessage(
 			fauxToolCall(
 				"ask_user_question",
-				{
-					questions: [
-						{
-							kind: "text",
-							header: "Hold",
-							prompt: "Keep this successor Run observable.",
-							multiline: false,
-						},
-					],
-				},
+				{ question: "Keep this successor Run observable." },
 				{ id: "hold-recovered-child-run" },
 			),
 			{ stopReason: "toolUse" },

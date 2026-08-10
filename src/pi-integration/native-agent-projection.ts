@@ -34,6 +34,7 @@ export type PiNativeAgentProjection = Readonly<{
 	presentation: Component;
 	resize(columns: number, rows: number): void;
 	dispatchInput(data: string): void;
+	focusEditor(): void;
 	addChangeHandler(handler: () => void): () => void;
 	addFailureHandler(handler: (error: unknown) => void): () => void;
 	addExitRequestHandler(handler: () => void): () => void;
@@ -65,6 +66,7 @@ type ProjectionInteractiveMode = {
 		previousScreen: string[];
 		doRender(): void;
 		renderNow(force?: boolean): void;
+		scrollToBottom(): void;
 	};
 	isInitialized: boolean;
 	init(): Promise<void>;
@@ -92,6 +94,8 @@ type ProjectionInteractiveMode = {
 type ProjectionEditor = {
 	onSubmit?: (text: string) => void | Promise<void>;
 	setText(text: string): void;
+	render(width: number): string[];
+	invalidate(): void;
 };
 
 type ThemeInternals = {
@@ -534,6 +538,14 @@ function createProjectionResource(
 		},
 		resize: (columns, rows) => terminal.resize(columns, rows),
 		dispatchInput: (data) => terminal.dispatchInput(data),
+		focusEditor() {
+			if (!mode.isInitialized) {
+				throw new Error("Interactive Agent editor is unavailable");
+			}
+			mode.renderer.scrollToBottom();
+			mode.renderer.setFocus(mode.editor);
+			mode.renderer.requestRender();
+		},
 		addChangeHandler: (handler) => changes.addHandler(handler),
 		addFailureHandler: (handler) => failures.addHandler(handler),
 		addExitRequestHandler: (handler) => exitRequests.addHandler(handler),

@@ -15,7 +15,6 @@ import {
 	WorkflowCoordinator,
 	type AgentMessageInput,
 } from "../src/coordination/workflow-coordinator.ts";
-import { HumanRequestSurface } from "../src/presentation/human-request-surface.ts";
 import piAgentCoordination from "../src/index.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -127,12 +126,7 @@ test("interruption keeps an aborted Human Request Run held when Pi reports an er
 	const child = await harness.spawnChild("spawn-aborted-human-request-child");
 	await child.session.waitForIdle();
 	const input = {
-		questions: [{
-			kind: "text" as const,
-			header: "Interruptible Request",
-			prompt: "This request remains unanswered while its Run is held.",
-			multiline: false,
-		}],
+		question: "This request remains unanswered while its Run is held.",
 	};
 	const toolCallId = "ask-aborted-human-request";
 	harness.host.model.setResponses([
@@ -147,19 +141,15 @@ test("interruption keeps an aborted Human Request Run held when Pi reports an er
 		const run = child.view.status().run;
 		return run.phase !== "dormant" && run.attention === "input_required";
 	});
-	const attention = harness.ownerView.humanAttention().find(
-		(item) => item.agentId === child.agentId,
-	);
-	assert.ok(attention);
-	const focus = harness.ownerView.focusHumanRequest(attention.requestId);
-	await waitForCondition(() => harness.host.ui.customSurfaces.length === 1);
-	harness.host.ui.customSurfaces[0]!.handleInput?.("\x1b");
-	await focus;
+	const selectedView = await harness.ownerView.openAgentView(child.agentId);
+	assert.ok(selectedView);
+	selectedView.projection().dispatchInput("\x1b");
 	await prompt;
 	assert.equal(child.view.status().run.phase, "live");
 	assert.equal(child.view.status().run.retentionReasons.some(
 		({ reason }) => reason === "interruption_hold",
 	), true);
+	await selectedView.close();
 
 	await harness.shutdown();
 });
@@ -586,14 +576,7 @@ test("supervisory interruption settles an active Human Request through its error
 		fauxAssistantMessage(
 			fauxToolCall(
 				"ask_user_question",
-				{
-					questions: [{
-						kind: "text",
-						header: "Interrupt",
-						prompt: "The supervisor will interrupt this exact Run.",
-						multiline: false,
-					}],
-				},
+				{ question: "The supervisor will interrupt this exact Run." },
 				{ id: toolCallId },
 			),
 			{ stopReason: "toolUse" },
@@ -1074,14 +1057,7 @@ test("shutdown fences Run, tool, control, and Human Request admission", async ()
 	await assert.rejects(
 		async () => harness.ownerView.askHuman(
 			"human-after-shutdown",
-			{
-				questions: [{
-					kind: "text",
-					header: "Too late",
-					prompt: "This surface must not open.",
-					multiline: false,
-				}],
-			},
+			{ question: "This request must not open." },
 			new AbortController().signal,
 		),
 		/host_shutting_down/,
@@ -1130,7 +1106,6 @@ async function createRunSupervisionHarness(options?: {
 				},
 			}
 			: undefined,
-		humanRequestPresentation: new HumanRequestSurface(host.ui),
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>

@@ -1,9 +1,17 @@
-import type {
-	AgentToolResult,
-	Theme,
-	ToolRenderResultOptions,
+import {
+	getMarkdownTheme,
+	type AgentToolResult,
+	type Theme,
+	type ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import {
+	Box,
+	Container,
+	Markdown,
+	Spacer,
+	Text,
+	type Component,
+} from "@earendil-works/pi-tui";
 
 import type { HumanRequestInput, HumanAnswer } from "../protocol/human-request.ts";
 import type {
@@ -57,28 +65,43 @@ export function renderAgentControlResult(
 	return receipt(theme, `${disposition} · ${details.agentId}`, details, options);
 }
 
-export function renderHumanRequestCall(args: HumanRequestInput, theme: Theme): Text {
-	const questionCount = args.questions.length;
-	const headers = boundedToolPreview(args.questions.map(({ header }) => header).join(", "));
-	return toolCall(theme, "ask human", [
-		`${questionCount} Question${questionCount === 1 ? "" : "s"}`,
-		headers,
-	]);
+export function renderHumanRequestCall(
+	args: HumanRequestInput,
+	theme: Theme,
+	context: Readonly<{ isPartial: boolean }>,
+): Component {
+	return transcriptBlock({
+		label: context.isPartial ? "[Ask User]  waiting" : "[Ask User]",
+		markdown: typeof args.question === "string" ? args.question : "",
+		theme,
+		background: "customMessageBg",
+		textColor: "customMessageText",
+	});
 }
 
 export function renderHumanRequestResult(
 	result: AgentToolResult<HumanAnswer>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-): Text {
-	if (options.isPartial || result.details === undefined) return pending(theme, "waiting for human");
-	const details = result.details;
-	return receipt(
+	context: Readonly<{ isError: boolean }>,
+): Component {
+	if (options.isPartial) return new Container();
+	if (context.isError) {
+		return transcriptBlock({
+			label: "[Interrupted]",
+			markdown: toolResultText(result),
+			theme,
+			background: "toolErrorBg",
+			textColor: "error",
+		});
+	}
+	return transcriptBlock({
+		label: "[Answer]",
+		markdown: result.details?.answer ?? toolResultText(result),
 		theme,
-		`answered · ${details.answers.length} Question${details.answers.length === 1 ? "" : "s"}`,
-		details,
-		options,
-	);
+		background: "userMessageBg",
+		textColor: "userMessageText",
+	});
 }
 
 export function renderModeratorControlCall(
@@ -135,4 +158,40 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	return typeof value === "object" && value !== null
 		? value as Record<string, unknown>
 		: undefined;
+}
+
+function transcriptBlock(options: {
+	label: string;
+	markdown: string;
+	theme: Theme;
+	background: "customMessageBg" | "toolErrorBg" | "userMessageBg";
+	textColor: "customMessageText" | "error" | "userMessageText";
+}): Component {
+	const box = new Box(
+		1,
+		1,
+		(content) => options.theme.bg(options.background, content),
+	);
+	box.addChild(new Text(
+		options.theme.fg(options.textColor, options.theme.bold(options.label)),
+		0,
+		0,
+	));
+	box.addChild(new Spacer(1));
+	box.addChild(new Markdown(
+		options.markdown,
+		0,
+		0,
+		getMarkdownTheme(),
+		{ color: (content) => options.theme.fg(options.textColor, content) },
+		{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+	));
+	return box;
+}
+
+function toolResultText(result: AgentToolResult<unknown>): string {
+	return result.content
+		.filter((part): part is { type: "text"; text: string } => part.type === "text")
+		.map(({ text }) => text)
+		.join("\n");
 }

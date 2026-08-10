@@ -62,19 +62,44 @@ export function registerAgentsCommand(
 			const view = resolveView();
 			const roster = view.selectionRoster();
 			const selectedAgent = view.status();
+			const isPendingDecision = (decision: {
+				requestId: string;
+				agentId: string;
+			}) => view.humanAttention().some(
+				(item) =>
+					item.requestId === decision.requestId &&
+					item.agentId === decision.agentId,
+			);
 			let preparedAgentView:
 				| Awaited<ReturnType<typeof view.openAgentView>>
 				| undefined;
+			const restorePreviousSelection = async () => {
+				if (preparedAgentView) await preparedAgentView.close();
+				else await view.openAgentView(selectedAgent.agentId);
+				preparedAgentView = undefined;
+			};
 			const action = await openAgentSelectorSurface(ctx.ui, {
 				...roster,
 				selectedAgentId: selectedAgent.agentId,
 				humanAttention: view.humanAttention(),
 				operationalAttention: view.operationalAttention(),
-				prepareSelection(selection) {
-					if (selection.kind !== "select_agent") return;
-					return view.openAgentView(selection.agentId).then((agentView) => {
-						preparedAgentView = agentView;
-					});
+				async prepareSelection(selection) {
+					if (
+						selection.kind === "decide" &&
+						!isPendingDecision(selection)
+					) {
+						throw new Error("stale_request: Human Request is no longer pending");
+					}
+					preparedAgentView = await view.openAgentView(selection.agentId);
+					if (
+						selection.kind === "decide" &&
+						!isPendingDecision(selection)
+					) {
+						// Preparation may have acquired or retargeted a view while the
+						// selector retained focus. Undo that change if the Request won the race.
+						await restorePreviousSelection();
+						throw new Error("stale_request: Human Request is no longer pending");
+					}
 				},
 				onSelectionError(error) {
 					ctx.ui.notify(
@@ -83,14 +108,24 @@ export function registerAgentsCommand(
 					);
 				},
 			});
-			if (action?.kind === "select_agent") {
+			if (action?.kind === "decide") {
+				try {
+					await view.focusHumanAnswer(action.agentId, action.requestId);
+				} catch (error) {
+					await restorePreviousSelection();
+					ctx.ui.notify(
+						`Human Request selection failed: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					);
+					return;
+				}
+			}
+			if (action) {
 				if (preparedAgentView) {
 					await openAgentViewSurface(ctx.ui, preparedAgentView, {
 						requestShutdown: () => ctx.shutdown(),
 					});
 				}
-			} else if (action?.kind === "focus_human_request") {
-				await view.focusHumanRequest(action.requestId);
 			}
 		},
 	});
@@ -296,53 +331,9 @@ function registerAgentTools(
 			{ additionalProperties: false },
 		),
 	]));
-	const humanOption = Type.Object(
-		{
-			label: Type.String({ minLength: 1 }),
-			description: Type.Optional(Type.String({ minLength: 1 })),
-		},
-		{ additionalProperties: false },
-	);
-	const humanQuestion = Type.Union([
-		Type.Object(
-			{
-				kind: Type.Literal("select_one"),
-				header: Type.String({ minLength: 1 }),
-				prompt: Type.String({ minLength: 1 }),
-				options: Type.Array(humanOption, {
-					minItems: 1,
-					uniqueItems: true,
-				}),
-				allowOther: Type.Boolean(),
-			},
-			{ additionalProperties: false },
-		),
-		Type.Object(
-			{
-				kind: Type.Literal("select_many"),
-				header: Type.String({ minLength: 1 }),
-				prompt: Type.String({ minLength: 1 }),
-				options: Type.Array(humanOption, {
-					minItems: 1,
-					uniqueItems: true,
-				}),
-				allowOther: Type.Boolean(),
-			},
-			{ additionalProperties: false },
-		),
-		Type.Object(
-			{
-				kind: Type.Literal("text"),
-				header: Type.String({ minLength: 1 }),
-				prompt: Type.String({ minLength: 1 }),
-				multiline: Type.Boolean(),
-			},
-			{ additionalProperties: false },
-		),
-	]);
 	const humanRequestParameters = Type.Object(
 		{
-			questions: Type.Array(humanQuestion, { minItems: 1 }),
+			question: Type.String({ minLength: 1 }),
 		},
 		{ additionalProperties: false },
 	);
@@ -438,13 +429,14 @@ function registerAgentTools(
 	if (role.humanRequest) {
 		pi.registerTool({
 			name: "ask_user_question",
-			label: "Ask Human",
+			label: "Ask User",
 			description:
-				"Ask the human one or more structured Questions and wait for one complete positional Answer.",
+				"Ask the human one nonblank free-form question and wait for one nonblank free-form Answer.",
 			promptSnippet:
-				"Use for decisions that require human select-one, select-many, or non-empty text input.",
+				"Block until the human supplies judgment through this Agent's native editor.",
 			executionMode: "sequential",
 			parameters: humanRequestParameters,
+			renderShell: "self",
 			renderCall: renderHumanRequestCall,
 			renderResult: renderHumanRequestResult,
 			async execute(toolCallId, parameters, signal) {

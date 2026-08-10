@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 
 import {
 	createAgentBoundExtension,
@@ -29,6 +29,7 @@ const moderatorTools = [
 ] as const;
 const plainTheme = {
 	fg: (_color: string, text: string) => text,
+	bg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 } as unknown as Theme;
 
@@ -129,24 +130,6 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 			expandedDetail: /disposition/,
 		},
 		{
-			host: ordinaryHost,
-			toolName: "ask_user_question",
-			args: {
-				questions: [{
-					kind: "text",
-					header: "Decision",
-					prompt: "Choose the authoritative boundary.",
-					multiline: false,
-				}],
-			},
-			details: {
-				requestId: "human-request",
-				answers: [{ kind: "text", text: "Native Pi" }],
-			},
-			summary: /answered .* 1 Question/,
-			expandedDetail: /Native Pi/,
-		},
-		{
 			host: moderatorHost,
 			toolName: "moderator_control",
 			args: {
@@ -207,6 +190,70 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 
 	await ordinaryHost.runtime.dispose();
 	await moderatorHost.runtime.dispose();
+});
+
+test("Human Request owns a transcript-native question and Answer shell", async () => {
+	initTheme("dark");
+	const unavailableView = () => {
+		throw new Error("Renderer conformance does not execute coordination behavior");
+	};
+	const host = await createTestOwnerHost(
+		createAgentBoundExtension(
+			unavailableView as () => OrdinaryAgentCoordinatorView,
+		),
+	);
+	const tool = host.session.getToolDefinition("ask_user_question");
+	assert.ok(tool?.renderCall);
+	assert.ok(tool.renderResult);
+	assert.equal(tool.renderShell, "self");
+	const args = { question: "Choose the **authoritative** boundary." };
+	const pendingContext = {
+		args,
+		toolCallId: "render-ask-user",
+		invalidate() {},
+		lastComponent: undefined,
+		state: {},
+		cwd: host.cwd,
+		argsComplete: true,
+		isPartial: true,
+		expanded: false,
+		showImages: false,
+		isError: false,
+		executionStarted: true,
+	};
+	const waiting = tool.renderCall(args, plainTheme, pendingContext).render(60).join("\n");
+	assert.match(waiting, /\[Ask User\].*waiting/s);
+	assert.match(waiting, /Choose the authoritative boundary\./);
+
+	const answer = { requestId: "human-request", answer: "Keep native Pi." };
+	const terminalContext = { ...pendingContext, isPartial: false };
+	const answeredCall = tool.renderCall(args, plainTheme, terminalContext).render(60).join("\n");
+	assert.doesNotMatch(answeredCall, /waiting/);
+	const answeredResult = tool.renderResult(
+		{
+			content: [{ type: "text", text: JSON.stringify(answer) }],
+			details: answer,
+		},
+		{ expanded: false, isPartial: false },
+		plainTheme,
+		terminalContext,
+	).render(60).join("\n");
+	assert.match(answeredResult, /\[Answer\]/);
+	assert.match(answeredResult, /Keep native Pi\./);
+
+	const interrupted = tool.renderResult(
+		{
+			content: [{ type: "text", text: "Exact Run was fenced." }],
+			details: undefined,
+		},
+		{ expanded: false, isPartial: false },
+		plainTheme,
+		{ ...terminalContext, isError: true },
+	).render(60).join("\n");
+	assert.match(interrupted, /\[Interrupted\]/);
+	assert.match(interrupted, /Exact Run was fenced\./);
+
+	await host.runtime.dispose();
 });
 
 function assertProviderCompatibleObjectSchema(schema: unknown, toolName: string): void {

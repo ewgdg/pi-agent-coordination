@@ -37,9 +37,9 @@ import {
 } from "../runtime/default-child-session-factory.ts";
 import {
 	HumanRequestCoordinator,
+	type GuardedHumanToolResult,
 	type HumanAttentionItem,
 	type HumanRequestBoundaryHooks,
-	type HumanRequestPresentation,
 } from "./human-requests.ts";
 import type {
 	HumanAnswerCandidate,
@@ -118,9 +118,9 @@ export type HumanPresentationCoordinatorView = Readonly<{
 		dormant: readonly AgentRosterStatus[];
 	}>;
 	openAgentView(agentId: string): Promise<DurableAgentView | undefined>;
+	focusHumanAnswer(agentId: string, requestId: string): Promise<void>;
 	humanAttention(): readonly HumanAttentionItem[];
 	operationalAttention(): readonly OperationalIncidentAttention[];
-	focusHumanRequest(requestId: string): Promise<void>;
 }>;
 
 type ActiveDurableAgentView = {
@@ -145,7 +145,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	): Promise<HumanAnswerCandidate>;
 	guardHumanToolResult(
 		message: MessageEndEvent["message"],
-	): MessageEndEvent["message"] | undefined;
+	): GuardedHumanToolResult | undefined;
 	reconcileHumanToolResults(): void;
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(): Promise<void>;
@@ -206,7 +206,6 @@ export class WorkflowCoordinator {
 			automaticGenerationReconciliation?: AutomaticGenerationReconciliationAdapter;
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
-			humanRequestPresentation?: HumanRequestPresentation;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
 			projectionHost?: PiNativeProjectionHost;
 		},
@@ -286,9 +285,7 @@ export class WorkflowCoordinator {
 		this.#humanRequests = new HumanRequestCoordinator({
 			agents: this.#agents,
 			ownerIdentity: identity,
-			presentation: options.humanRequestPresentation,
 			boundaryHooks: options.humanRequestBoundaryHooks,
-			isInteractivelySelected: (agentId) => this.#isInteractivelySelected(agentId),
 			interruptRun: (record) => {
 				record.host.prepareInterruption();
 				void record.host.lane.run(async () => {
@@ -392,6 +389,10 @@ export class WorkflowCoordinator {
 				this.#assertAdmissionOpen();
 				return this.#openAgentView(targetAgentId);
 			},
+			focusHumanAnswer: (targetAgentId, requestId) => {
+				this.#assertAdmissionOpen();
+				return this.#focusHumanAnswer(targetAgentId, requestId);
+			},
 			askHuman: (toolCallId, input, signal) => {
 				this.#assertAdmissionOpen();
 				return this.#humanRequests.ask(agentId, toolCallId, input, signal);
@@ -406,10 +407,6 @@ export class WorkflowCoordinator {
 				this.#humanRequests.attentionItems(this.#ownerIdentity.agentId),
 			operationalAttention: () =>
 				this.#operationalIncidents.attentionItems(this.#ownerIdentity.agentId),
-			focusHumanRequest: (requestId) => {
-				this.#assertAdmissionOpen();
-				return this.#humanRequests.focus(this.#ownerIdentity.agentId, requestId);
-			},
 			reachSafeBoundary: async () => {
 				this.#operationalIncidents.reconcileCommittedToolResults(agentId);
 				await this.#messages.reachSafeBoundary(agentId);
@@ -552,6 +549,7 @@ export class WorkflowCoordinator {
 			children: record.children.map((childId) =>
 				this.#agentActivityStatus(this.#requireAgent(childId))
 			),
+			answerMode: this.#humanRequests.hasPendingRequest(agentId),
 			humanAttention: ownerScope
 				? this.#humanRequests.attentionItems(this.#ownerIdentity.agentId)
 				: [],
@@ -851,6 +849,21 @@ export class WorkflowCoordinator {
 		});
 	}
 
+	#focusHumanAnswer(agentId: string, requestId: string): Promise<void> {
+		return this.#agentViewLane.run(() => {
+			if (!this.#humanRequests.hasPendingRequest(agentId, requestId)) {
+				throw new Error("stale_request: Human Request is no longer pending");
+			}
+			const active = this.#activeAgentView;
+			if (!active || active.record.identity.agentId !== agentId) {
+				throw new Error(
+					`invariant_violation: Human Request Agent ${agentId} is not selected`,
+				);
+			}
+			active.attachment.projection().focusEditor();
+		});
+	}
+
 	#isInteractivelySelected(agentId: string): boolean {
 		return this.#activeAgentView?.record.identity.agentId === agentId;
 	}
@@ -901,6 +914,9 @@ export class WorkflowCoordinator {
 		text: string,
 		images: readonly ImageContent[] | undefined,
 	): Promise<boolean> {
+		if (this.#humanRequests.submitAnswer(agentId, text, (images?.length ?? 0) > 0)) {
+			return Promise.resolve(true);
+		}
 		return this.#agentViewLane.run(async () => {
 			const active = this.#activeAgentView;
 			if (!active || active.record.identity.agentId !== agentId) {

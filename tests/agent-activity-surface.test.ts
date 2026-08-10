@@ -120,6 +120,7 @@ test("activity installs as one persistent native above-editor widget", () => {
 	const snapshots = source({
 		scope: agent({ agentId: "leaf-12345678", label: "Leaf", parent: "owner" }),
 		children: [],
+		answerMode: false,
 		humanAttention: [],
 		operationalAttention: [],
 	});
@@ -168,11 +169,12 @@ test("Owner activity renders Attention Inbox above direct children in creation o
 	const { dock } = createDock({
 		scope: owner,
 		children: [first, second],
+		answerMode: false,
 		humanAttention: [{
 			requestId: "request-1",
 			agentId: "researcher",
 			agentLabel: "Researcher",
-			questionCount: 2,
+			question: "Which boundary should remain authoritative for the final implementation?",
 		}],
 		operationalAttention: [{
 			trigger: {
@@ -187,7 +189,7 @@ test("Owner activity renders Attention Inbox above direct children in creation o
 
 	const rendered = dock.render(200);
 	assert.match(rendered[0]!, /Attention Inbox/);
-	assert.match(rendered[1]!, /DECIDE.*Researcher.*2 questions/);
+	assert.match(rendered[1]!, /DECIDE.*Researcher.*Which boundary should remain authoritative/);
 	assert.match(rendered[2]!, /ATTENTION.*Dependency Deadlock/);
 	assert.match(rendered[3]!, /Agents/);
 	assert.match(rendered[4]!, /Researcher/);
@@ -199,6 +201,7 @@ test("Owner activity renders direct children without requiring attention", () =>
 	const { dock } = createDock({
 		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
 		children: [agent({ agentId: "child", label: "Child", parent: "owner" })],
+		answerMode: false,
 		humanAttention: [],
 		operationalAttention: [],
 	});
@@ -227,11 +230,12 @@ test("nested Agent activity shows identity and only its direct children", () => 
 			agent({ agentId: "source-scout", label: "Source Scout", parent: "agent-researcher-12345678" }),
 			agent({ agentId: "synthesizer", label: "Synthesizer", parent: "agent-researcher-12345678" }),
 		],
+		answerMode: false,
 		humanAttention: [{
 			requestId: "owner-only",
 			agentId: "sibling",
 			agentLabel: "Sibling",
-			questionCount: 1,
+			question: "Owner-only decision",
 		}],
 		operationalAttention: [],
 	});
@@ -255,6 +259,7 @@ test("leaf selection keeps only the plain identity directly above the editor", (
 			parent: "owner",
 		}),
 		children: [],
+		answerMode: false,
 		humanAttention: [],
 		operationalAttention: [],
 	});
@@ -262,6 +267,34 @@ test("leaf selection keeps only the plain identity directly above the editor", (
 	assert.deepEqual(dock.render(120), [
 		"<accent><bold>Leaf</bold></accent><dim> · 87654321 · </dim><dim>idle</dim>",
 	]);
+	dock.dispose();
+});
+
+test("selected Agent activity projects Answer mode directly above its native editor", () => {
+	const { dock } = createDock({
+		scope: agent({
+			agentId: "requester-12345678",
+			label: "Requester",
+			parent: "owner",
+			run: {
+				phase: "live",
+				work: "active",
+				attention: "input_required",
+				retentionReasons: [],
+			},
+		}),
+		children: [],
+		answerMode: true,
+		humanAttention: [],
+		operationalAttention: [],
+	});
+
+	const rendered = dock.render(120);
+	assert.match(rendered[0]!, /Requester.*waiting \(human input\)/);
+	assert.equal(
+		stripTerminalSequences(rendered.at(-1)!).replace(/<[^>]+>/g, ""),
+		"ANSWER · Enter submits",
+	);
 	dock.dispose();
 });
 
@@ -289,6 +322,7 @@ test("activity lists only Agents with a current Run", () => {
 				run: { phase: "dormant", retentionReasons: [] },
 			}),
 		],
+		answerMode: false,
 		humanAttention: [],
 		operationalAttention: [],
 	});
@@ -305,6 +339,7 @@ test("activity updates volatile state and rebinds scope without retaining a stal
 	const initial: AgentActivitySnapshot = {
 		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
 		children: [agent({ agentId: "live-child", label: "Live Child", parent: "owner" })],
+		answerMode: false,
 		humanAttention: [],
 		operationalAttention: [],
 	};
@@ -314,6 +349,7 @@ test("activity updates volatile state and rebinds scope without retaining a stal
 	snapshots.publish({
 		scope: agent({ agentId: "nested-12345678", label: "Nested", parent: "owner" }),
 		children: [],
+		answerMode: false,
 		humanAttention: [],
 		operationalAttention: [],
 	});

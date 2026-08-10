@@ -25,7 +25,6 @@ import {
 } from "../src/policy/workflow-policy.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import { HumanRequestSurface } from "../src/presentation/human-request-surface.ts";
 import {
 	createPiNativeProjectionHost,
 	type PiNativeAgentProjection,
@@ -1190,16 +1189,7 @@ test("external Answer clearance releases Moderator handling", async () => {
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"ask_user_question",
-					{
-						questions: [
-							{
-								kind: "text",
-								header: "Pause",
-								prompt: "Keep this Run active after its Answer commits.",
-								multiline: false,
-							},
-						],
-					},
+					{ question: "Keep this Run active after its Answer commits." },
 					{ id: "wait-after-answer-clearance" },
 				),
 				{ stopReason: "toolUse" },
@@ -1842,7 +1832,6 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-		humanRequestPresentation: new HumanRequestSurface(host.ui),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
@@ -1888,14 +1877,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 				return fauxAssistantMessage(
 					fauxToolCall(
 						"ask_user_question",
-						{
-							questions: [{
-								kind: "text",
-								header: "Resume",
-								prompt: "Provide input before this Run settles.",
-								multiline: false,
-							}],
-						},
+						{ question: "Provide input before this Run settles." },
 						{ id: "pause-self-cycle" },
 					),
 					{ stopReason: "toolUse" },
@@ -1930,12 +1912,8 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 
 		const selectedView = await owner.openAgentView(participant.agentId);
 		assert.ok(selectedView);
-		const humanAttention = owner.humanAttention()[0]!;
-		const focused = owner.focusHumanRequest(humanAttention.requestId);
-		await waitForCondition(() => host.ui.customSurfaces.length === 1);
-		host.ui.customSurfaces[0]!.handleInput?.("Continue to settlement");
-		host.ui.customSurfaces[0]!.handleInput?.("\r");
-		await focused;
+		selectedView.projection().dispatchInput("Continue to settlement");
+		selectedView.projection().dispatchInput("\r");
 		await waitForCondition(() => {
 			const run = owner.status(participant.agentId).run;
 			return run.phase === "live" && run.work === "settled";

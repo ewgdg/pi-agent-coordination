@@ -4,18 +4,22 @@ import type { AgentRecord } from "./agent-record.ts";
 import {
 	resolveCommittedHumanRequest,
 	inspectCommittedHumanRequestResult,
-	validateHumanAnswers,
+	validateHumanAnswer,
 	type HumanAnswer,
 	type HumanAnswerCandidate,
-	type HumanQuestionAnswer,
 	type HumanRequest,
 	type HumanRequestInput,
 } from "../protocol/human-request.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { AgentRunHandle } from "../runtime/in-process-agent-host.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
+
 const INTERRUPTED_MESSAGE = "Human request interrupted before an answer was provided.";
 const FENCED_MESSAGE = "Human request ended because its Agent Run is no longer available.";
+const INTERACTIVE_EDITOR_REQUIRED_MESSAGE =
+	"Human Request requires an interactive Agent editor.";
+const IMAGE_ANSWER_UNSUPPORTED_MESSAGE =
+	"Human Answers do not support images. Remove the image and submit text only.";
 
 type PendingPhase = "open" | "submitted" | "fenced";
 
@@ -35,21 +39,13 @@ export type HumanAttentionItem = Readonly<{
 	requestId: string;
 	agentId: string;
 	agentLabel: string;
-	questionCount: number;
+	question: string;
 }>;
 
-export type PresentedHumanRequest = HumanAttentionItem & Readonly<{
-	request: HumanRequest;
-	submit(answers: readonly HumanQuestionAnswer[]): boolean;
-	ownsInteractiveSelection(): boolean;
-	interrupt(): void;
-}>;
-
-export type HumanRequestPresentation = Readonly<{
-	present(request: PresentedHumanRequest, foreground: boolean): void;
-	dismiss(requestId: string): void;
-	items(): readonly HumanAttentionItem[];
-	focus(requestId: string): Promise<void>;
+export type GuardedHumanToolResult = Readonly<{
+	message?: MessageEndEvent["message"];
+	rejectedAnswer?: string;
+	reason?: string;
 }>;
 
 // Tests may force only the concrete admission and pre-append races below. The
@@ -68,23 +64,10 @@ export type HumanRequestBoundaryHooks = Readonly<{
 	}>): void;
 }>;
 
-const unavailablePresentation: HumanRequestPresentation = {
-	present() {
-		throw new Error("Human Request presentation is unavailable");
-	},
-	dismiss() {},
-	items: () => [],
-	async focus(requestId) {
-		throw new Error(`unknown_identity: Human Request ${requestId}`);
-	},
-};
-
 export class HumanRequestCoordinator {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #ownerIdentity: OwnerIdentity;
-	readonly #presentation: HumanRequestPresentation;
 	readonly #boundaryHooks: HumanRequestBoundaryHooks;
-	readonly #isInteractivelySelected: (agentId: string) => boolean;
 	readonly #interruptRun: (record: AgentRecord) => void;
 	readonly #suspendExecution: (record: AgentRecord) => void;
 	readonly #beginHumanWaiting: (source: ToolCallPointer) => void;
@@ -95,9 +78,7 @@ export class HumanRequestCoordinator {
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		ownerIdentity: OwnerIdentity;
-		presentation?: HumanRequestPresentation;
 		boundaryHooks?: HumanRequestBoundaryHooks;
-		isInteractivelySelected(agentId: string): boolean;
 		interruptRun(record: AgentRecord): void;
 		suspendExecution(record: AgentRecord): void;
 		beginHumanWaiting(source: ToolCallPointer): void;
@@ -106,9 +87,7 @@ export class HumanRequestCoordinator {
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
-		this.#presentation = options.presentation ?? unavailablePresentation;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
-		this.#isInteractivelySelected = options.isInteractivelySelected;
 		this.#interruptRun = options.interruptRun;
 		this.#suspendExecution = options.suspendExecution;
 		this.#beginHumanWaiting = options.beginHumanWaiting;
@@ -135,6 +114,14 @@ export class HumanRequestCoordinator {
 		});
 		const handle = record.host.currentHandle();
 		if (!handle) throw new Error("Agent Run is unavailable");
+		if (!record.host.currentProjection()) {
+			throw new Error(INTERACTIVE_EDITOR_REQUIRED_MESSAGE);
+		}
+		if (this.#pendingForAgent(callerAgentId)) {
+			throw new Error(
+				`invalid_state: Agent ${callerAgentId} already has an unresolved Human Request`,
+			);
+		}
 		if (this.#pendingByRequestId.has(request.requestId)) {
 			throw new Error(`invariant_violation: Human Request ${request.requestId} is already pending`);
 		}
@@ -144,7 +131,12 @@ export class HumanRequestCoordinator {
 			resolveCandidate = resolve;
 			rejectAnswer = reject;
 		});
-		const onAbort = () => this.#fence(request.requestId, INTERRUPTED_MESSAGE);
+		const onAbort = () => {
+			// The default editor expresses Escape through the Run signal. Translate
+			// that native abort into the exact Hold path without capturing Escape.
+			this.#interruptRun(record);
+			this.#fence(request.requestId, INTERRUPTED_MESSAGE);
+		};
 		signal.addEventListener("abort", onAbort, { once: true });
 		const pending: PendingHumanRequest = {
 			request,
@@ -164,19 +156,6 @@ export class HumanRequestCoordinator {
 			this.#suspendExecution(record);
 			this.#pendingByRequestId.set(request.requestId, pending);
 			this.#beginHumanWaiting(request.source);
-			this.#presentation.present(
-				{
-					requestId: request.requestId,
-					agentId: callerAgentId,
-					agentLabel: record.identity.configuration.label,
-					questionCount: request.questions.length,
-					request,
-					submit: (answers) => this.#submit(request.requestId, answers),
-					ownsInteractiveSelection: () => this.#isInteractivelySelected(callerAgentId),
-					interrupt: () => this.#interrupt(request.requestId),
-				},
-				callerAgentId === this.#ownerIdentity.agentId,
-			);
 			this.#onAttentionChanged();
 			this.#boundaryHooks.afterAdmission?.({
 				agentId: callerAgentId,
@@ -197,14 +176,45 @@ export class HumanRequestCoordinator {
 		return candidatePromise;
 	}
 
+	submitAnswer(
+		callerAgentId: string,
+		answerText: string,
+		hasImages: boolean,
+	): boolean {
+		const pending = this.#pendingForAgent(callerAgentId);
+		if (!pending) return false;
+		if (hasImages) throw new Error(IMAGE_ANSWER_UNSUPPORTED_MESSAGE);
+		if (pending.phase !== "open") {
+			throw new Error("stale_request: Human Answer is already pending commitment");
+		}
+		if (
+			pending.signal.aborted ||
+			!pending.record.host.acceptsInputRequired(
+				pending.handle,
+				pending.request.requestId,
+			)
+		) {
+			this.#fence(pending.request.requestId, FENCED_MESSAGE);
+			throw new Error(FENCED_MESSAGE);
+		}
+		const candidate = validateHumanAnswer(pending.request.requestId, {
+			requestId: pending.request.requestId,
+			answer: answerText,
+		});
+		pending.phase = "submitted";
+		pending.answerCandidate = candidate;
+		this.#beginHumanResultCommit(pending.request.source);
+		pending.resolve(candidate);
+		return true;
+	}
+
 	guardResultCommit(
 		callerAgentId: string,
 		message: MessageEndEvent["message"],
-	): MessageEndEvent["message"] | undefined {
+	): GuardedHumanToolResult | undefined {
 		if (
 			message.role !== "toolResult" ||
-			message.toolName !== "ask_user_question" ||
-			message.isError
+			message.toolName !== "ask_user_question"
 		) return undefined;
 		const pending = [...this.#pendingByRequestId.values()].find(
 			(candidate) =>
@@ -212,9 +222,10 @@ export class HumanRequestCoordinator {
 				candidate.request.source.toolCallId === message.toolCallId,
 		);
 		if (!pending) return undefined;
-		if (
-			pending.phase === "submitted"
-		) {
+		if (message.isError) {
+			return this.#rejectedCandidate(pending, messageText(message));
+		}
+		if (pending.phase === "submitted") {
 			this.#boundaryHooks.beforeResultCommit?.({
 				agentId: callerAgentId,
 				requestId: pending.request.requestId,
@@ -230,11 +241,15 @@ export class HumanRequestCoordinator {
 			this.#fence(pending.request.requestId, FENCED_MESSAGE);
 		}
 		if (pending.phase !== "fenced") return undefined;
-		return {
+		const replacement = {
 			...message,
-			content: [{ type: "text", text: FENCED_MESSAGE }],
+			content: [{ type: "text" as const, text: FENCED_MESSAGE }],
 			details: undefined,
 			isError: true,
+		};
+		return {
+			message: replacement,
+			...this.#rejectedCandidate(pending, FENCED_MESSAGE),
 		};
 	}
 
@@ -263,48 +278,42 @@ export class HumanRequestCoordinator {
 
 	attentionItems(callerAgentId: string): readonly HumanAttentionItem[] {
 		const caller = this.#requireAgent(callerAgentId);
-		return this.#presentation.items().filter((item) => {
-			if (callerAgentId === this.#ownerIdentity.agentId) return true;
-			if (item.agentId === callerAgentId) return true;
-			return this.#agents.get(item.agentId)?.identity.directSpawnerAgentId ===
-				caller.identity.agentId;
-		});
+		return [...this.#pendingByRequestId.values()]
+			.filter((pending) => {
+				const itemAgentId = pending.request.requesterAgentId;
+				if (callerAgentId === this.#ownerIdentity.agentId) return true;
+				if (itemAgentId === callerAgentId) return true;
+				return this.#agents.get(itemAgentId)?.identity.directSpawnerAgentId ===
+					caller.identity.agentId;
+			})
+			.map((pending) => ({
+				requestId: pending.request.requestId,
+				agentId: pending.request.requesterAgentId,
+				agentLabel: pending.record.identity.configuration.label,
+				question: pending.request.question,
+			}));
 	}
 
-	async focus(callerAgentId: string, requestId: string): Promise<void> {
-		if (!this.attentionItems(callerAgentId).some((item) => item.requestId === requestId)) {
-			throw new Error(`unknown_identity: Human Request ${requestId}`);
-		}
-		await this.#presentation.focus(requestId);
+	hasPendingRequest(agentId: string, requestId?: string): boolean {
+		const pending = this.#pendingForAgent(agentId);
+		return pending !== undefined && (
+			requestId === undefined || pending.request.requestId === requestId
+		);
 	}
 
-	#submit(requestId: string, answers: readonly HumanQuestionAnswer[]): boolean {
-		const pending = this.#pendingByRequestId.get(requestId);
-		if (
-			!pending ||
-			pending.phase !== "open" ||
-			pending.signal.aborted ||
-			!pending.record.host.acceptsInputRequired(pending.handle, requestId)
-		) {
-			return false;
-		}
-		const completeAnswers = validateHumanAnswers(pending.request.questions, answers);
-		const candidate: HumanAnswerCandidate = {
-			requestId,
-			answers: completeAnswers,
-		};
-		pending.phase = "submitted";
-		pending.answerCandidate = candidate;
-		this.#beginHumanResultCommit(pending.request.source);
-		pending.resolve(candidate);
-		return true;
+	#rejectedCandidate(
+		pending: PendingHumanRequest,
+		reason: string,
+	): GuardedHumanToolResult | undefined {
+		return pending.answerCandidate
+			? { rejectedAnswer: pending.answerCandidate.answer, reason }
+			: undefined;
 	}
 
-	#interrupt(requestId: string): void {
-		const pending = this.#pendingByRequestId.get(requestId);
-		if (!pending || pending.phase !== "open") return;
-		this.#interruptRun(pending.record);
-		this.#fence(requestId, INTERRUPTED_MESSAGE);
+	#pendingForAgent(agentId: string): PendingHumanRequest | undefined {
+		return [...this.#pendingByRequestId.values()].find(
+			(pending) => pending.request.requesterAgentId === agentId,
+		);
 	}
 
 	#fenceRun(agentId: string, handle: AgentRunHandle): void {
@@ -332,7 +341,6 @@ export class HumanRequestCoordinator {
 		// Submission and fencing are synchronous phase transitions. The last
 		// pre-append guard above rechecks this phase, so an asynchronous Run fence
 		// can still defeat a submitted candidate until native result commitment.
-		this.#presentation.dismiss(requestId);
 		this.#onAttentionChanged();
 		pending.reject(new Error(message));
 	}
@@ -340,9 +348,8 @@ export class HumanRequestCoordinator {
 	#complete(pending: PendingHumanRequest): void {
 		pending.removeAbortListener();
 		pending.record.host.endInputRequired(pending.handle, pending.request.requestId);
-		this.#presentation.dismiss(pending.request.requestId);
-		this.#onAttentionChanged();
 		this.#pendingByRequestId.delete(pending.request.requestId);
+		this.#onAttentionChanged();
 	}
 
 	#requireAgent(agentId: string): AgentRecord {
@@ -357,4 +364,11 @@ function sameCommittedAnswerToCandidate(
 	expected: HumanAnswerCandidate | undefined,
 ): boolean {
 	return expected !== undefined && JSON.stringify(value) === JSON.stringify(expected);
+}
+
+function messageText(message: Extract<MessageEndEvent["message"], { role: "toolResult" }>): string {
+	return message.content
+		.filter((part): part is { type: "text"; text: string } => part.type === "text")
+		.map(({ text }) => text)
+		.join("\n");
 }

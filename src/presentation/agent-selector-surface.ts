@@ -21,6 +21,7 @@ import {
 	formatOperationalIncidentHeadline,
 	operationalIncidentRequestEvidence,
 } from "./operational-incident-surface.ts";
+import { boundedToolPreview } from "../tools/bounded-preview.ts";
 
 const AGENT_SELECTOR_OVERLAY_WIDTH = 80;
 const AGENT_SELECTOR_OVERLAY_MARGIN = 1;
@@ -46,8 +47,9 @@ export type AgentSelectorAction =
 		agentId: string;
 	}>
 	| Readonly<{
-		kind: "focus_human_request";
+		kind: "decide";
 		requestId: string;
+		agentId: string;
 	}>;
 
 export type AgentSelectorOptions = Readonly<{
@@ -290,16 +292,17 @@ class AgentSelectorSurface implements Component {
 		const human = (this.#options.humanAttention ?? []).map((attention, index) => ({
 			value: `human:${attention.requestId}`,
 			label: `DECIDE ${index + 1} · ${attention.agentLabel}`,
-			description: `${attention.questionCount} Question${attention.questionCount === 1 ? "" : "s"}`,
+			description: boundedToolPreview(attention.question),
 			kind: "decide" as const,
 			action: {
-				kind: "focus_human_request" as const,
+				kind: "decide" as const,
 				requestId: attention.requestId,
+				agentId: attention.agentId,
 			},
 			detailLines: [
 				"",
 				`Agent ${attention.agentId}`,
-				`${attention.questionCount} Human Question${attention.questionCount === 1 ? "" : "s"}`,
+				boundedToolPreview(attention.question),
 				`Human Request ${attention.requestId}`,
 			],
 		}));

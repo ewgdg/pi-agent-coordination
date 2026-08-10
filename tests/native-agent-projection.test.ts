@@ -637,7 +637,7 @@ test("the complete child renderer keeps a fullscreen transcript viewport and edi
 		);
 	}
 
-	projection.dispatchInput("\x1b[F");
+	projection.focusEditor();
 	assert.match(
 		stripTerminalSequences(projection.presentation.render(100).join("\n")),
 		/Long transcript response 39/,

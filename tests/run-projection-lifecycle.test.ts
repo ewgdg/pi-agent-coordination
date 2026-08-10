@@ -522,6 +522,7 @@ function createRunResource(options?: {
 		presentation: component,
 		resize() {},
 		dispatchInput() {},
+		focusEditor() {},
 		addChangeHandler: () => () => undefined,
 		addFailureHandler: () => () => undefined,
 		addExitRequestHandler: () => () => undefined,

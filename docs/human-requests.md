@@ -75,7 +75,7 @@ ANSWER · Enter submits
 
 The Human Request does not replace the editor, install a special editor, or alter its current draft. The human may keep, edit, delete, or copy the existing text. The primary Enter submission adopts the complete nonblank editor text as the Human Answer instead of queuing an ordinary Agent Message. Native multiline editing remains available.
 
-Alt+Enter retains Pi's native follow-up behavior and leaves the Human Request unresolved. Recognized built-in, extension, skill, and prompt-template commands also retain their native behavior rather than becoming Answers. If a command produces a Message, that Message uses its ordinary delivery mode and remains subject to the blocking request's scheduling boundary. An unrecognized slash-prefixed string is ordinary editor text and may be submitted as the Answer.
+Alt+Enter retains Pi's native follow-up behavior and leaves the Human Request unresolved. This path also retains skill and prompt-template expansion, allowing expanded input to be queued for later without answering the request. Built-in and extension commands retain their native behavior because Pi dispatches them before Answer adoption. All other primary-Enter text is submitted literally as the Answer, including recognized skill or prompt-template invocations and unrecognized slash-prefixed strings.
 
 Human Answers are text-only. A submission containing images is rejected without resolving the request. Blank, image-bearing, stale, fenced, or otherwise rejected submissions restore their submitted text to the editor and report the reason, allowing correction and retry. A successful submission clears through the native editor path.
 

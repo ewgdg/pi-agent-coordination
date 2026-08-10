@@ -322,6 +322,7 @@ function projectionWithFrame(
 			if (options?.dispatchInputError) throw options.dispatchInputError;
 			inputs.push(data);
 		},
+		focusEditor() {},
 		async ready() {},
 		cancelInitialization() {
 			return undefined;

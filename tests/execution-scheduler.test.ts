@@ -15,10 +15,6 @@ import {
 	createAgentBoundExtension,
 	createModeratorBoundExtension,
 } from "../src/bootstrap/agent-extension.ts";
-import type {
-	HumanRequestPresentation,
-	PresentedHumanRequest,
-} from "../src/coordination/human-requests.ts";
 import {
 	WorkflowPolicyStore,
 	parseWorkflowPolicy,
@@ -266,22 +262,6 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 	t.after(() => {
 		delete (globalThis as Record<PropertyKey, unknown>)[registryKey];
 	});
-	let presentedRequest!: (request: PresentedHumanRequest) => void;
-	const requestPresented = new Promise<PresentedHumanRequest>((resolve) => {
-		presentedRequest = resolve;
-	});
-	const presented = new Map<string, PresentedHumanRequest>();
-	const presentation: HumanRequestPresentation = {
-		present(request) {
-			presented.set(request.requestId, request);
-			presentedRequest(request);
-		},
-		dismiss(requestId) {
-			presented.delete(requestId);
-		},
-		items: () => [...presented.values()],
-		async focus() {},
-	};
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
 		additionalExtensionPaths: [
@@ -301,7 +281,6 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
-		humanRequestPresentation: presentation,
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
 		moderatorExtensionFactory: (agentId) =>
@@ -317,17 +296,7 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 		fauxAssistantMessage(
 			fauxToolCall(
 				"ask_user_question",
-				{
-					questions: [
-						{
-							kind: "select_one",
-							header: "Continue",
-							prompt: "May this Run resume after the other child finishes?",
-							options: [{ label: "Yes" }],
-							allowOther: false,
-						},
-					],
-				},
+				{ question: "May this Run resume after the other child finishes?" },
 				{ id: "input-required-capacity" },
 			),
 			{ stopReason: "toolUse" },
@@ -341,13 +310,10 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 	]);
 
 	await spawnChild(owner, host, "input-required-child");
-	const humanRequest = await requestPresented;
+	await waitForCondition(() => owner.humanAttention().length === 1);
 	await spawnChild(owner, host, "execution-while-input-required");
 	await secondToolStart;
-	assert.equal(
-		humanRequest.submit([{ kind: "select_one", selectedOptionIndex: 0 }]),
-		true,
-	);
+	await childSessions[0]!.prompt("Yes", { streamingBehavior: "steer" });
 	releaseSecondTool();
 	await Promise.all(childSessions.map((session) => session.waitForIdle()));
 
@@ -368,4 +334,12 @@ async function spawnChild(
 	);
 	const receipt = await owner.spawn(toolCallId, input);
 	assert.equal(receipt.disposition, "pending");
+}
+
+async function waitForCondition(predicate: () => boolean): Promise<void> {
+	for (let attempt = 0; attempt < 300; attempt += 1) {
+		if (predicate()) return;
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+	throw new Error("Expected execution scheduler condition was not reached");
 }

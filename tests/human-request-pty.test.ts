@@ -6,80 +6,33 @@ import test from "node:test";
 
 const SCRIPT = "/usr/bin/script";
 const FIXTURE = fileURLToPath(
-	new URL("./fixtures/human-request-pty-fixture.ts", import.meta.url),
+	new URL("./fixtures/human-request-native-editor-pty-fixture.ts", import.meta.url),
 );
 
-test("a background multi-Question Request preserves the occupied native editor", {
+test("Human Request wraps in transcript and submits multiline Unicode through the native editor", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
-	const terminal = launchFixture("submit");
+	const terminal = launchFixture();
 	try {
-		await terminal.waitFor("Attention Inbox");
+		await terminal.waitFor("[Ask User]");
+		await terminal.waitFor("transcript-native boundary");
+		await terminal.waitFor("ANSWER");
+		await terminal.waitFor("Enter submits");
+		await terminal.waitFor("native draft");
 		terminal.write("Z");
-		terminal.write("\x1bh");
-		await terminal.waitFor("Architecture");
-		await terminal.waitFor("Validation");
-		await terminal.waitFor("Rationale");
-
+		terminal.write("\x1b[200~\n第二行 ✅\x1b[201~");
 		terminal.write("\r");
-		terminal.write("PTY");
-		terminal.write("\r");
-		terminal.write("\x1b[Z");
-		terminal.write(" rationale");
-		terminal.write("\t");
-		terminal.write("\x1b[Z");
-		terminal.write("\r");
-		terminal.write(" ");
-		terminal.write("\r");
-
-		const result = await terminal.result();
-		assert.deepEqual(result, {
-			kind: "submit",
-			editorText: "native draftZ",
-			answers: [
-				{ kind: "select_one", selectedOptionIndex: 0 },
-				{ kind: "text", text: "PTY rationale" },
-				{ kind: "select_many", selectedOptionIndexes: [0] },
-			],
-		});
-	} finally {
-		terminal.kill();
-	}
-});
-
-test("Escape closes the Request surface and restores the occupied native editor", {
-	skip: !existsSync(SCRIPT),
-}, async () => {
-	const terminal = launchFixture("interrupt");
-	try {
-		await terminal.waitFor("Attention Inbox");
-		terminal.write("Z");
-		terminal.write("\x1bh");
-		await terminal.waitFor("Interrupt");
-		terminal.write("\x1b");
-
+		await terminal.waitFor("[Answer]");
 		assert.deepEqual(await terminal.result(), {
-			kind: "interrupt",
-			editorText: "native draftZ",
+			answer: "native draftZ\n第二行 ✅",
 		});
 	} finally {
 		terminal.kill();
 	}
 });
 
-type FixtureResult =
-	| Readonly<{
-		kind: "submit";
-		editorText: string;
-		answers: readonly unknown[];
-	}>
-	| Readonly<{
-		kind: "interrupt";
-		editorText: string;
-	}>;
-
-function launchFixture(mode: "submit" | "interrupt") {
-	const command = `${quoteShell(process.execPath)} ${quoteShell(FIXTURE)} ${mode}`;
+function launchFixture() {
+	const command = `${quoteShell(process.execPath)} ${quoteShell(FIXTURE)}`;
 	const child = spawn(
 		SCRIPT,
 		["-q", "-e", "-f", "-c", command, "/dev/null"],
@@ -136,12 +89,6 @@ class PtyFixture {
 				cleanup();
 				resolve();
 			};
-			const cleanup = () => {
-				clearTimeout(timeout);
-				this.#child.stdout.off("data", inspect);
-				this.#child.stderr.off("data", inspect);
-				this.#child.off("close", closed);
-			};
 			const closed = () => {
 				if (this.#output.includes(value)) {
 					cleanup();
@@ -153,17 +100,23 @@ class PtyFixture {
 					`PTY fixture closed before ${JSON.stringify(value)} appeared\n${this.#output}`,
 				));
 			};
+			const cleanup = () => {
+				clearTimeout(timeout);
+				this.#child.stdout.off("data", inspect);
+				this.#child.stderr.off("data", inspect);
+				this.#child.off("close", closed);
+			};
 			this.#child.stdout.on("data", inspect);
 			this.#child.stderr.on("data", inspect);
 			this.#child.once("close", closed);
 		});
 	}
 
-	async result(): Promise<FixtureResult> {
+	async result(): Promise<{ answer: string }> {
 		await this.#closed;
 		const match = /__PTY_RESULT__(\{[^\r\n]+\})/.exec(this.#output);
 		if (!match) throw new Error(`PTY fixture produced no result marker\n${this.#output}`);
-		return JSON.parse(match[1]!) as FixtureResult;
+		return JSON.parse(match[1]!) as { answer: string };
 	}
 
 	kill(): void {

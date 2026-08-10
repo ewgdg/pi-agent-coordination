@@ -83,6 +83,7 @@ export type TestOwnerHostOptions = {
 	implicitModeratorResponses?: boolean;
 	fauxTokensPerSecond?: number;
 	settings?: Parameters<typeof SettingsManager.inMemory>[0];
+	noPromptTemplates?: boolean;
 };
 
 export async function createTestOwnerHost(
@@ -147,7 +148,7 @@ async function createUnboundTestOwnerHostWithRuntime(
 			settingsManager: SettingsManager.inMemory(options?.settings),
 			resourceLoaderOptions: {
 				noContextFiles: true,
-				noPromptTemplates: true,
+				noPromptTemplates: options?.noPromptTemplates ?? true,
 				noSkills: true,
 				noThemes: true,
 				additionalExtensionPaths,

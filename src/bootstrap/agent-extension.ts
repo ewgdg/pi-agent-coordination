@@ -166,12 +166,15 @@ function registerAgentBoundBehavior(
 	pi.on("agent_start", () => resolveView().beginExecution());
 	pi.on("input", async (event, ctx) => {
 		if (event.source !== "interactive") return { action: "continue" };
+		if (event.streamingBehavior === "followUp") return { action: "continue" };
 		try {
 			const resumed = await resolveView().resumeFromHuman(event.text, event.images);
 			return resumed ? { action: "handled" } : { action: "continue" };
 		} catch (error) {
+			const answeringHumanRequest = resolveView().agentActivity().answerMode;
+			if (answeringHumanRequest) ctx.ui.setEditorText(event.text);
 			ctx.ui.notify(
-				`Agent input failed: ${error instanceof Error ? error.message : String(error)}`,
+				`${answeringHumanRequest ? "Human Answer was not submitted" : "Agent input failed"}: ${error instanceof Error ? error.message : String(error)}`,
 				"error",
 			);
 			return { action: "handled" };
@@ -180,10 +183,26 @@ function registerAgentBoundBehavior(
 	// message_end is Pi's final awaited hook before it synchronously publishes the
 	// native result. A Run fence can still turn a submitted candidate into the one
 	// interruption result here; attention remains until later transcript proof.
-	pi.on("message_end", (event) => {
-		const replacement = resolveView().guardHumanToolResult(event.message);
-		if (!replacement) return;
-		return { message: replacement };
+	pi.on("message_end", (event, ctx) => {
+		const guarded = resolveView().guardHumanToolResult(event.message);
+		if (!guarded) return;
+		if (guarded.rejectedAnswer !== undefined) {
+			const currentDraft = ctx.ui.getEditorText();
+			if (currentDraft !== guarded.rejectedAnswer) {
+				// The editor remains usable during result commitment. Restore the
+				// rejected candidate without discarding text typed after submission.
+				ctx.ui.setEditorText(
+					currentDraft.length === 0
+						? guarded.rejectedAnswer
+						: `${guarded.rejectedAnswer}\n${currentDraft}`,
+				);
+			}
+			ctx.ui.notify(
+				`Human Answer was not committed: ${guarded.reason ?? "the request ended"}`,
+				"error",
+			);
+		}
+		return guarded.message ? { message: guarded.message } : undefined;
 	});
 	// A previous sequential tool result is committed before Pi admits the next
 	// sibling. Reconcile here so input-required attention cannot cross that barrier.

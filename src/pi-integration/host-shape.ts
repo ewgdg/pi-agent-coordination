@@ -299,7 +299,9 @@ export function assertProjectionInteractiveModeInstanceShape(
 		"doRender",
 		"render",
 		"renderNow",
+		"scrollToBottom",
 		"invalidate",
+		"setFocus",
 	] as const) {
 		requireFunction(renderer, member, `InteractiveMode.renderer.${member}`, version);
 	}
@@ -420,12 +422,14 @@ export function assertProjectionInteractiveModeInstanceShape(
 			`InteractiveMode.${editorName}`,
 			version,
 		);
-		requireFunction(
-			editor,
-			"setText",
-			`InteractiveMode.${editorName}.setText`,
-			version,
-		);
+		for (const member of ["invalidate", "render", "setText"] as const) {
+			requireFunction(
+				editor,
+				member,
+				`InteractiveMode.${editorName}.${member}`,
+				version,
+			);
+		}
 		requireWritableMember(
 			editor,
 			"onSubmit",
