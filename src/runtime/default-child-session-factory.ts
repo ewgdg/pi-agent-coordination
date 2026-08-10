@@ -84,6 +84,7 @@ export const MODERATOR_COORDINATION_TOOLS = [
 const BUILT_IN_TOOL_NAMES = new Set(["bash", "edit", "find", "grep", "ls", "read", "write"]);
 const CHILD_EXTENSION_PREFIX = "<inline:pi-agent-coordination-agent:";
 const MODERATOR_EXTENSION_PREFIX = "<inline:pi-agent-coordination-moderator:";
+const ACTIVITY_EXTENSION_PREFIX = "<inline:pi-agent-coordination-activity:";
 const INLINE_PUBLIC_EXTENSION_PATH = "<inline:pi-agent-coordination>";
 const modelRuntimeServiceLanes = new WeakMap<object, SerialLane>();
 
@@ -110,6 +111,7 @@ export class DefaultChildSessionFactory {
 	readonly #packageRoot: string;
 	readonly #childExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #moderatorExtensionFactory: (agentId: string) => ExtensionFactory;
+	readonly #activityExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #presentationExtensionFactory: (agentId: string) => ExtensionFactory;
 	readonly #projectionHost: PiNativeProjectionHost;
 	readonly #modelRuntimeServiceLane: SerialLane;
@@ -126,6 +128,7 @@ export class DefaultChildSessionFactory {
 		packageRoot: string;
 		childExtensionFactory(agentId: string): ExtensionFactory;
 		moderatorExtensionFactory(agentId: string): ExtensionFactory;
+		activityExtensionFactory(agentId: string): ExtensionFactory;
 		presentationExtensionFactory(agentId: string): ExtensionFactory;
 		projectionHost?: PiNativeProjectionHost;
 		automaticGenerationReconciliation?: AutomaticGenerationReconciliationAdapter;
@@ -140,6 +143,7 @@ export class DefaultChildSessionFactory {
 		this.#packageRoot = options.packageRoot;
 		this.#childExtensionFactory = options.childExtensionFactory;
 		this.#moderatorExtensionFactory = options.moderatorExtensionFactory;
+		this.#activityExtensionFactory = options.activityExtensionFactory;
 		this.#presentationExtensionFactory = options.presentationExtensionFactory;
 		this.#projectionHost = options.projectionHost ?? createPiNativeProjectionHost({
 			ownerRuntime: options.ownerRuntime,
@@ -346,6 +350,13 @@ export class DefaultChildSessionFactory {
 					noExtensions: true,
 					additionalExtensionPaths: [...runExtensions.filePaths],
 					extensionFactories: [
+						// Install the native dock before a user session_start handler can
+						// pause initialization on a dialog or other interactive surface.
+						{
+							name: `pi-agent-coordination-activity:${options.agentId}`,
+							hidden: true,
+							factory: this.#activityExtensionFactory(options.agentId),
+						},
 						...runExtensions.inlineFactories,
 						{
 							name: options.extensionName,
@@ -777,7 +788,8 @@ export class DefaultChildSessionFactory {
 		return resolvedPath === this.#entryModulePath ||
 			path === INLINE_PUBLIC_EXTENSION_PATH ||
 			path.startsWith(CHILD_EXTENSION_PREFIX) ||
-			path.startsWith(MODERATOR_EXTENSION_PREFIX);
+			path.startsWith(MODERATOR_EXTENSION_PREFIX) ||
+			path.startsWith(ACTIVITY_EXTENSION_PREFIX);
 	}
 }
 

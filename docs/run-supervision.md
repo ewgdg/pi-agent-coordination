@@ -78,7 +78,7 @@ A supervisory dispatch failure reports an error, clears only the failed resumpti
 
 The [Agent selector and view](agent-selector.md) present a durable Agent without changing protocol authority or Owner runtime ownership. An open live view adds `interactive_selection` retention to its exact Run and forwards input through that Run's complete Pi mode. Selecting a Dormant Agent starts one successor with that retention but submits no model input; its normal commands, shell input, custom extensions, and editor are then available through the attached live mode. Ordinary Message startup converges on the same serialized successor and attaches its mode before Delivery execution. Run failure replaces the attachment with a Dormant failure presentation without replaying work. Switching or closing removes live selection retention, and orderly shutdown closes the overlay before ending child Runs.
 
-The view header identifies the durable Agent by label and compact Agent identity. The child mode's complete fullscreen transcript, Run state, widgets, editor, footer, commands, and extension UI render inside the overlay, while the Owner presentation remains mounted and unchanged underneath.
+The native above-editor activity dock identifies the selected durable Agent by label, compact Agent identity, and semantic work status. It also projects only that Agent's direct children with a current Run; Dormant children remain absent from activity. Owner scope prepends Owner-only attention. The child mode's complete fullscreen transcript, Run state, widgets, editor, footer, commands, and extension UI render inside the headerless outer overlay, while the Owner presentation remains mounted and unchanged underneath.
 
 ## Terminate an exact Run
 

@@ -742,7 +742,11 @@ export class InProcessAgentHost {
 		// still dispose the exact projection and session if subscription itself fails.
 		this.#run = run;
 		run.unsubscribe = session.subscribe((event) => {
-			if (event.type === "agent_start") this.#notifyStateChanged();
+			if (
+				event.type === "agent_start" ||
+				event.type === "queue_update" ||
+				event.type === "thinking_level_changed"
+			) this.#notifyStateChanged();
 			if (event.type === "agent_end") {
 				const assistant = [...event.messages]
 					.reverse()

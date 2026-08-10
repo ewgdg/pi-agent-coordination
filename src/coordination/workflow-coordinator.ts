@@ -80,11 +80,14 @@ import {
 	configureCoordinatedSession,
 	type AutomaticGenerationReconciliationAdapter,
 } from "../pi-integration/automatic-reconciliation.ts";
-import { createPresentationBoundExtension } from "../bootstrap/agent-extension.ts";
+import {
+	createAgentActivityExtension,
+	createPresentationBoundExtension,
+} from "../bootstrap/agent-extension.ts";
 import type {
-	SelectedAgentPhase,
-	SelectedAgentStatusPresentation,
-} from "../presentation/selected-agent-status.ts";
+	AgentActivitySnapshot,
+	AgentActivityStatus,
+} from "../presentation/agent-activity-surface.ts";
 import type {
 	PiNativeAgentProjection,
 	PiNativeProjectionHost,
@@ -111,6 +114,9 @@ export type {
 
 export type HumanPresentationCoordinatorView = Readonly<{
 	status(agentId?: string): AgentStatus;
+	agentActivity(): AgentActivitySnapshot;
+	addAgentActivityChangeHandler(handler: () => void): () => void;
+	refreshAgentActivity(): void;
 	resumeFromHuman(
 		text: string,
 		images: readonly ImageContent[] | undefined,
@@ -130,6 +136,9 @@ type ActiveDurableAgentView = {
 	record: AgentRecord;
 	attachment: DurableAgentViewAttachment;
 	dormantProjection?: DormantAgentProjection;
+	// The host clears its exact failed Run after installing this view-owned
+	// Dormant projection; keep the selected Failed presentation volatile here.
+	failed: boolean;
 };
 
 type AgentViewTarget = Readonly<{
@@ -180,7 +189,7 @@ export class WorkflowCoordinator {
 	readonly #runSupervisor: RunSupervisor;
 	readonly #operationalIncidents: OperationalIncidentCoordinator;
 	readonly #humanSessionSelection: HumanSessionSelection | undefined;
-	readonly #selectedAgentStatusPresentation: SelectedAgentStatusPresentation | undefined;
+	readonly #agentActivityChangeHandlers = new Set<() => void>();
 	readonly #selectionLane = new SerialLane();
 	readonly #agentViewLane = new SerialLane();
 	readonly #dormantPresentations = new Map<string, HumanPresentationBinding>();
@@ -216,7 +225,6 @@ export class WorkflowCoordinator {
 			humanRequestPresentation?: HumanRequestPresentation;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
 			humanSessionSelection?: HumanSessionSelection;
-			selectedAgentStatusPresentation?: SelectedAgentStatusPresentation;
 			projectionHost?: PiNativeProjectionHost;
 		},
 	) {
@@ -228,8 +236,7 @@ export class WorkflowCoordinator {
 		this.#executionScheduler = new WorkflowExecutionScheduler(this.#workflowPolicy);
 		this.#ownerIdentity = identity;
 		this.#humanSessionSelection = options.humanSessionSelection;
-		this.#selectedAgentStatusPresentation = options.selectedAgentStatusPresentation;
-		this.#humanSessionSelection?.addChangeHandler(() => this.#refreshSelectedAgentStatus());
+		this.#humanSessionSelection?.addChangeHandler(() => this.#notifyAgentActivityChanged());
 		configureCoordinatedSession(
 			runtime.session,
 			options.automaticGenerationReconciliation,
@@ -248,6 +255,8 @@ export class WorkflowCoordinator {
 			templateRoots: options.templateRoots,
 			childExtensionFactory: options.childExtensionFactory,
 			moderatorExtensionFactory: options.moderatorExtensionFactory,
+			activityExtensionFactory: (agentId) =>
+				createAgentActivityExtension(() => this.#agentView(agentId)),
 			presentationExtensionFactory: (agentId) =>
 				createPresentationBoundExtension(() => this.#agentView(agentId)),
 			projectionHost: options.projectionHost,
@@ -322,6 +331,7 @@ export class WorkflowCoordinator {
 			beginHumanResultCommit: (source) => {
 				this.#operationalIncidents.beginHumanResultCommit(source);
 			},
+			onAttentionChanged: () => this.#notifyAgentActivityChanged(),
 		});
 		this.#runSupervisor = new RunSupervisor({
 			agents: this.#agents,
@@ -347,6 +357,7 @@ export class WorkflowCoordinator {
 			boundaryHooks: options.incidentBoundaryHooks,
 			presentation: options.operationalIncidentPresentation,
 			operationReviewClock: options.operationReviewClock,
+			onAttentionChanged: () => this.#notifyAgentActivityChanged(),
 		});
 		for (const record of this.#agents.values()) this.#integrateAgent(record);
 		this.#spawner = new DefaultChildSpawner({
@@ -358,7 +369,6 @@ export class WorkflowCoordinator {
 			boundaryHooks: options.spawnBoundaryHooks,
 			isShuttingDown: () => this.#shuttingDown,
 		});
-		this.#refreshSelectedAgentStatus();
 	}
 
 	forAgent(agentId: string): OrdinaryAgentCoordinatorView {
@@ -387,6 +397,12 @@ export class WorkflowCoordinator {
 	#agentView(agentId: string): AgentCoordinatorView {
 		return {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
+			agentActivity: () => this.#agentActivity(agentId),
+			addAgentActivityChangeHandler: (handler) => {
+				this.#agentActivityChangeHandlers.add(handler);
+				return () => this.#agentActivityChangeHandlers.delete(handler);
+			},
+			refreshAgentActivity: () => this.#notifyAgentActivityChanged(),
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
 			control: (toolCallId, input) => {
@@ -554,6 +570,37 @@ export class WorkflowCoordinator {
 		};
 	}
 
+	#agentActivity(agentId: string): AgentActivitySnapshot {
+		const record = this.#requireAgent(agentId);
+		const ownerScope = agentId === this.#ownerIdentity.agentId;
+		return {
+			scope: this.#agentActivityStatus(record),
+			children: record.children.map((childId) =>
+				this.#agentActivityStatus(this.#requireAgent(childId))
+			),
+			humanAttention: ownerScope
+				? this.#humanRequests.attentionItems(this.#ownerIdentity.agentId)
+				: [],
+			operationalAttention: ownerScope
+				? this.#operationalIncidents.attentionItems(this.#ownerIdentity.agentId)
+				: [],
+		};
+	}
+
+	#agentActivityStatus(record: AgentRecord): AgentActivityStatus {
+		const activeView = this.#activeAgentView;
+		return {
+			...this.#rosterStatus(record),
+			failed: record.host.currentRunFailed() || (
+				activeView?.record === record && activeView.failed
+			),
+		};
+	}
+
+	#notifyAgentActivityChanged(): void {
+		for (const handler of this.#agentActivityChangeHandlers) handler();
+	}
+
 	#requireAgent(agentId: string): AgentRecord {
 		return requireAgentRecord(
 			this.#agents,
@@ -576,8 +623,8 @@ export class WorkflowCoordinator {
 	}
 
 	#integrateAgent(record: AgentRecord): void {
-		record.host.addStateChangeHandler(() => this.#refreshSelectedAgentStatus());
-		record.host.addSettledHandler(() => this.#refreshSelectedAgentStatus());
+		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged());
+		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged());
 		record.host.setRunStartedHandler(async (session) => {
 			await this.#bindSelectedRunInLane(record, session);
 			await this.#bindViewedRunInLane(record);
@@ -588,6 +635,7 @@ export class WorkflowCoordinator {
 		});
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
+		this.#notifyAgentActivityChanged();
 	}
 
 	async #bindSelectedRunInLane(
@@ -652,7 +700,9 @@ export class WorkflowCoordinator {
 				record,
 				attachment,
 				dormantProjection: target.dormantProjection,
+				failed: false,
 			};
+			this.#notifyAgentActivityChanged();
 			return attachment;
 		});
 	}
@@ -730,6 +780,7 @@ export class WorkflowCoordinator {
 				}
 				active.record = record;
 				active.dormantProjection = target.dormantProjection;
+				active.failed = false;
 				active.attachment.retarget({
 					agentId: record.identity.agentId,
 					label: record.identity.configuration.label,
@@ -757,6 +808,7 @@ export class WorkflowCoordinator {
 					this.#reportAgentViewError(error);
 				}
 			}
+			this.#notifyAgentActivityChanged();
 			return;
 		}
 	}
@@ -836,7 +888,9 @@ export class WorkflowCoordinator {
 		record.host.addRetentionReason("interactive_selection");
 		const dormantProjection = active.dormantProjection;
 		active.dormantProjection = undefined;
+		active.failed = false;
 		active.attachment.replaceProjection(projection);
+		this.#notifyAgentActivityChanged();
 		if (!dormantProjection) return;
 		try {
 			await dormantProjection.dispose();
@@ -865,7 +919,9 @@ export class WorkflowCoordinator {
 				return;
 			}
 			active.dormantProjection = dormantProjection;
+			active.failed = true;
 			active.attachment.replaceProjection(dormantProjection.projection);
+			this.#notifyAgentActivityChanged();
 		} catch (error) {
 			if (this.#activeAgentView === active) this.#activeAgentView = undefined;
 			active.attachment.settleClosed();
@@ -879,46 +935,6 @@ export class WorkflowCoordinator {
 			type: "error",
 			message: `Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
 		});
-	}
-
-	#refreshSelectedAgentStatus(): void {
-		const presentation = this.#selectedAgentStatusPresentation;
-		const selection = this.#humanSessionSelection;
-		if (!presentation || !selection) return;
-		const selectedAgentId = selection.selectedAgentId();
-		if (selectedAgentId === this.#ownerIdentity.agentId) {
-			presentation.clear();
-			return;
-		}
-		const record = this.#agents.get(selectedAgentId);
-		if (!record) {
-			presentation.clear();
-			return;
-		}
-		presentation.present({
-			label: record.identity.configuration.label,
-			sessionId: this.#selectedAgentSessionId(record),
-			phase: this.#selectedAgentPhase(record),
-		});
-	}
-
-	#selectedAgentSessionId(record: AgentRecord): string {
-		return record.host.currentHandle()
-			? record.host.requireLiveSession().sessionManager.getSessionId()
-			: record.host.sessionManager.getSessionId();
-	}
-
-	#selectedAgentPhase(record: AgentRecord): SelectedAgentPhase {
-		const run = record.host.observe();
-		if (record.host.currentRunFailed()) return "failed";
-		if (run.phase === "dormant") return "dormant";
-		if (run.phase === "starting") return "starting";
-		if (run.phase === "ending") return "ending";
-		if (run.attention === "input_required") return "waiting_human";
-		if (run.retentionReasons.some(({ reason }) => reason === "interruption_hold")) {
-			return "held";
-		}
-		return run.work === "active" ? "active" : "settled";
 	}
 
 	#isInteractivelySelected(agentId: string): boolean {

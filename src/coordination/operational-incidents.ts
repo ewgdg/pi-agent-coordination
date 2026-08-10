@@ -124,6 +124,7 @@ export class OperationalIncidentCoordinator {
 	readonly #presentation: OperationalIncidentPresentation;
 	readonly #workflowPolicy: WorkflowPolicyStore;
 	readonly #operationReviews: OperationReviewWatcher;
+	readonly #onAttentionChanged: () => void;
 	readonly #handlingByKey = new Map<string, OperationalIncidentHandling>();
 	readonly #attemptByModeratorAgentId = new Map<string, OperationalConditionSnapshot>();
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
@@ -143,6 +144,7 @@ export class OperationalIncidentCoordinator {
 		boundaryHooks?: OperationalIncidentBoundaryHooks;
 		presentation?: OperationalIncidentPresentation;
 		operationReviewClock?: OperationReviewClock;
+		onAttentionChanged?(): void;
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
@@ -154,6 +156,7 @@ export class OperationalIncidentCoordinator {
 		this.#reportError = options.reportError;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#presentation = options.presentation ?? unavailablePresentation;
+		this.#onAttentionChanged = options.onAttentionChanged ?? (() => undefined);
 		this.#operationReviews = new OperationReviewWatcher({
 			clock: options.operationReviewClock ?? SYSTEM_OPERATION_REVIEW_CLOCK,
 			isUnresolved: (toolCall) => this.#isToolCallUnresolved(toolCall),
@@ -373,12 +376,16 @@ export class OperationalIncidentCoordinator {
 
 	shutdown(): void {
 		this.#operationReviews.shutdown();
+		let attentionDismissed = false;
 		for (const [key, handling] of this.#handlingByKey) {
-			if (handling.exhausted) this.#presentation.dismiss(key);
+			if (!handling.exhausted) continue;
+			this.#presentation.dismiss(key);
+			attentionDismissed = true;
 		}
 		this.#handlingByKey.clear();
 		this.#attemptByModeratorAgentId.clear();
 		this.#runFailureByKey.clear();
+		if (attentionDismissed) this.#onAttentionChanged();
 	}
 
 	async #reconcileWorkflow(): Promise<void> {
@@ -532,6 +539,7 @@ export class OperationalIncidentCoordinator {
 				handling.snapshot.key,
 				this.#attentionFor(handling),
 			);
+			this.#onAttentionChanged();
 		}
 	}
 
@@ -799,7 +807,10 @@ export class OperationalIncidentCoordinator {
 		const handling = this.#handlingByKey.get(key);
 		if (!handling) return;
 		this.#handlingByKey.delete(key);
-		if (handling.exhausted) this.#presentation.dismiss(key);
+		if (handling.exhausted) {
+			this.#presentation.dismiss(key);
+			this.#onAttentionChanged();
+		}
 		if (!handling.moderatorAgentId) return;
 		this.#agents
 			.get(handling.moderatorAgentId)

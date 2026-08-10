@@ -14,7 +14,7 @@ test("a background multi-Question Request preserves the occupied native editor",
 }, async () => {
 	const terminal = launchFixture("submit");
 	try {
-		await terminal.waitFor("Attention · 1 DECIDE");
+		await terminal.waitFor("Attention Inbox");
 		terminal.write("Z");
 		terminal.write("\x1bh");
 		await terminal.waitFor("Architecture");
@@ -52,7 +52,7 @@ test("Escape closes the Request surface and restores the occupied native editor"
 }, async () => {
 	const terminal = launchFixture("interrupt");
 	try {
-		await terminal.waitFor("Attention · 1 DECIDE");
+		await terminal.waitFor("Attention Inbox");
 		terminal.write("Z");
 		terminal.write("\x1bh");
 		await terminal.waitFor("Interrupt");

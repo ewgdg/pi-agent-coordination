@@ -56,9 +56,9 @@ test("the full-window Agent view renders the complete child frame and forwards n
 	const rendered = renderText(ui.component, 40);
 	assert.equal(rendered.length, 8);
 	assert.ok(rendered.every((line) => visibleWidth(line) <= 40));
-	assert.match(rendered.join("\n"), /Durable Agent · 12345678 · Live/);
-	assert.equal(ui.backgroundWidths().at(-1), 40);
-	assert.notEqual(rendered[1], "─".repeat(40));
+	assert.doesNotMatch(rendered.join("\n"), /Durable Agent|12345678|Live/);
+	assert.deepEqual(ui.backgroundWidths(), []);
+	assert.notEqual(rendered[0], "─".repeat(40));
 	assert.match(rendered.join("\n"), /native transcript/);
 	assert.match(rendered.join("\n"), /native Agent editor/);
 	assert.match(rendered.join("\n"), /native Agent footer/);
@@ -73,8 +73,10 @@ test("the full-window Agent view renders the complete child frame and forwards n
 		"x",
 		"\r",
 		"\x1b",
-		"\x1b[<0;10;4M",
-		"\x1b[M !$",
+		"\x1b[<0;10;1M",
+		"\x1b[<0;10;5M",
+		"\x1b[M !!",
+		"\x1b[M !%",
 	]);
 	assert.equal(view.cleanupCount(), 0);
 	assert.equal(ui.doneCalls(), 0);
@@ -134,10 +136,10 @@ test("a fullscreen Owner routes mouse input to the Agent before its own viewport
 	ui.dispatchTerminalInput("\x1b[<0;80;7m");
 	ui.dispatchTerminalInput("x");
 	assert.deepEqual(projection.inputs(), [
-		"\x1b[<64;10;4M",
-		"\x1b[<0;80;4M",
-		"\x1b[<32;80;6M",
-		"\x1b[<0;80;6m",
+		"\x1b[<64;10;5M",
+		"\x1b[<0;80;5M",
+		"\x1b[<32;80;7M",
+		"\x1b[<0;80;7m",
 		"x",
 	]);
 	assert.equal(ui.ownerViewportMouseEvents(), 0);
@@ -244,7 +246,7 @@ test("projection replacement keeps one interactive surface and host close settle
 	const opened = openAgentViewSurface(ui.ui, view.view);
 	await ui.ready;
 	const component = ui.component;
-	assert.match(renderText(component, 50).join("\n"), /Durable Agent · 12345678 · Live/);
+	assert.doesNotMatch(renderText(component, 50).join("\n"), /Durable Agent|12345678|Live/);
 	assert.deepEqual(live.handlerCounts(), { changes: 0, failures: 1, exits: 1 });
 
 	view.replaceProjection(dormant);
@@ -252,8 +254,9 @@ test("projection replacement keeps one interactive surface and host close settle
 	assert.equal(ui.component, component);
 	assert.match(
 		renderText(component, 50).join("\n"),
-		/Durable Agent · 12345678 · Dormant[\s\S]*persisted dormant frame[\s\S]*Dormant editor/,
+		/persisted dormant frame[\s\S]*Dormant editor/,
 	);
+	assert.doesNotMatch(renderText(component, 50).join("\n"), /Durable Agent|12345678/);
 	assert.deepEqual(live.handlerCounts(), { changes: 0, failures: 0, exits: 0 });
 	assert.deepEqual(dormant.handlerCounts(), { changes: 0, failures: 1, exits: 1 });
 

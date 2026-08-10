@@ -1,6 +1,5 @@
 import type {
 	ExtensionUIContext,
-	Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
 	truncateToWidth,
@@ -14,8 +13,6 @@ import {
 	type PiNativeAgentProjection,
 } from "../pi-integration/native-agent-projection.ts";
 
-const COMPACT_AGENT_IDENTITY_LENGTH = 8;
-const HEADER_ROWS = 1;
 const ENABLE_MOUSE_REPORTING = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h";
 const DISABLE_MOUSE_REPORTING = "\x1b[?1006l\x1b[?1004l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
@@ -52,10 +49,9 @@ export async function openAgentViewSurface(
 	};
 	try {
 		const interactiveClose = ui.custom<void>(
-			(tui, theme, _keybindings, _done) => {
+			(tui, _theme, _keybindings, _done) => {
 				component = new AgentViewSurface(
 					tui,
-					theme,
 					view,
 					closeFromHost,
 					options.requestShutdown,
@@ -93,7 +89,6 @@ export async function openAgentViewSurface(
 
 class AgentViewSurface implements Component {
 	readonly #tui: TUI;
-	readonly #theme: Theme;
 	readonly #view: DurableAgentView;
 	readonly #removeChangeHandler: () => void;
 	readonly #removeCloseHandler: () => void;
@@ -110,14 +105,12 @@ class AgentViewSurface implements Component {
 
 	constructor(
 		tui: TUI,
-		theme: Theme,
 		view: DurableAgentView,
 		closeFromHost: () => void,
 		requestShutdown: () => void,
 		failFromSurface: (error: unknown) => void,
 	) {
 		this.#tui = tui;
-		this.#theme = theme;
 		this.#view = view;
 		this.#failFromSurface = failFromSurface;
 		this.#removeChangeHandler = view.addChangeHandler(() => {
@@ -130,11 +123,8 @@ class AgentViewSurface implements Component {
 			tui,
 			(data) => {
 				try {
-					const childInput = translateMouseInputToChildFrame(data);
-					if (childInput !== undefined) {
-						this.#view.projection().dispatchInput(childInput);
-						this.#tui.requestRender();
-					}
+					this.#view.projection().dispatchInput(data);
+					this.#tui.requestRender();
 				} catch (error) {
 					this.#fail(error);
 				}
@@ -156,9 +146,7 @@ class AgentViewSurface implements Component {
 		// overlays, and submission. Navigation back to Owner happens through
 		// /agents rather than stealing Escape from custom editors such as pi-vim.
 		try {
-			const childInput = translateMouseInputToChildFrame(data);
-			if (childInput === undefined) return;
-			this.#view.projection().dispatchInput(childInput);
+			this.#view.projection().dispatchInput(data);
 			this.#tui.requestRender();
 		} catch (error) {
 			this.#fail(error);
@@ -183,30 +171,16 @@ class AgentViewSurface implements Component {
 		const safeWidth = Math.max(1, width);
 		const projection = this.#view.projection();
 		const terminalRows = Math.max(1, Math.floor(this.#tui.terminal.rows));
-		const phase = projection.kind === "live" ? "Live" : "Dormant";
-		const compactIdentity = this.#view.agentId.slice(-COMPACT_AGENT_IDENTITY_LENGTH);
-		const headerContent = this.#theme.fg(
-			"accent",
-			this.#theme.bold(`${this.#view.label} · ${compactIdentity} · ${phase}`),
-		);
-		const header = this.#theme.bg(
-			"selectedBg",
-			truncateToWidth(headerContent, safeWidth, "", true),
-		);
-		const headerLines = [header].slice(0, Math.min(HEADER_ROWS, terminalRows));
-		const availableRows = terminalRows - headerLines.length;
-		if (availableRows > 0) projection.resize(safeWidth, availableRows);
+		projection.resize(safeWidth, terminalRows);
 		const nativeFrame = projection.presentation
 			.render(safeWidth)
 			.map((line) => truncateToWidth(line, safeWidth, ""));
-		const visibleFrame = availableRows === 0
-			? []
-			: nativeFrame.slice(-availableRows);
+		const visibleFrame = nativeFrame.slice(-terminalRows);
 		const topPadding = Array.from(
-			{ length: Math.max(0, availableRows - visibleFrame.length) },
+			{ length: Math.max(0, terminalRows - visibleFrame.length) },
 			() => "",
 		);
-		return [...headerLines, ...topPadding, ...visibleFrame];
+		return [...topPadding, ...visibleFrame];
 	}
 
 	invalidate(): void {
@@ -254,19 +228,4 @@ class AgentViewSurface implements Component {
 			this.#tui.terminal.write(DISABLE_MOUSE_REPORTING);
 		}
 	}
-}
-
-function translateMouseInputToChildFrame(data: string): string | undefined {
-	const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
-	if (match) {
-		const physicalRow = Number(match[3]);
-		if (physicalRow <= HEADER_ROWS) return undefined;
-		return `\x1b[<${match[1]};${match[2]};${physicalRow - HEADER_ROWS}${match[4]}`;
-	}
-	if (data.length === 6 && data.startsWith("\x1b[M")) {
-		const physicalRow = data.charCodeAt(5) - 32;
-		if (physicalRow <= HEADER_ROWS) return undefined;
-		return `${data.slice(0, 5)}${String.fromCharCode(data.charCodeAt(5) - HEADER_ROWS)}`;
-	}
-	return data;
 }

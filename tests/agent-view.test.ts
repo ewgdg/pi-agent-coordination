@@ -549,9 +549,9 @@ test("a selected Agent whose session_start fails transitions to Dormant before l
 		host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
 	);
 	const view = host.ui.customSurfaces[0]!;
-	assert.match(
+	assert.doesNotMatch(
 		stripTerminalSequences(view.render(80).join("\n")),
-		/Startup Failure Worker.*Live/,
+		/Startup Failure Worker.*(?:Live|Dormant)/,
 	);
 	failLiveReadiness();
 	const spawn = await spawning;
@@ -563,7 +563,7 @@ test("a selected Agent whose session_start fails transitions to Dormant before l
 		{ disposition: "created_unscheduled", failedStage: "run_start" },
 	);
 	await waitForCondition(() =>
-		stripTerminalSequences(view.render(80).join("\n")).includes("Dormant")
+		stripTerminalSequences(view.render(80).join("\n")).includes("failed")
 	);
 	assert.equal(host.ui.customSurfaces[0], view);
 	assert.equal(coordinator.forAgent(ownerAgentId).status(agentId).run.phase, "dormant");
@@ -635,7 +635,7 @@ test("selecting a Dormant Agent starts one command-capable successor without pro
 	);
 	const rendered = stripTerminalSequences(view.render(80).join("\n"));
 	assert.match(rendered, /Dormant Worker/);
-	assert.match(rendered, /Live/);
+	assert.match(rendered, /idle/);
 	assert.match(rendered.replace(/\s+/g, ""), /PersistthisresponseforinteractiveDormantinspection/);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
@@ -1400,17 +1400,17 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	await failureStarted;
 	const ownerSession = host.runtime.session;
 	const { command, view } = await openSelectedAgentView(host, agentId);
-	assert.match(stripTerminalSequences(view.render(80).join("\n")), /Failing Worker.*Live/);
+	assert.match(stripTerminalSequences(view.render(80).join("\n")), /Failing Worker.*active/);
 
 	releaseFailure();
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	await waitForCondition(() =>
-		stripTerminalSequences(view.render(80).join("\n")).includes("Dormant")
+		stripTerminalSequences(view.render(80).join("\n")).includes("failed")
 	);
 	assert.equal(host.ui.customSurfaces[0], view);
 	assert.equal(host.runtime.session, ownerSession);
 	const dormantRendered = stripTerminalSequences(view.render(80).join("\n"));
-	assert.match(dormantRendered, /Failing Worker.*Dormant/);
+	assert.match(dormantRendered, /Failing Worker.*failed/);
 	assert.match(dormantRendered, /viewed exact Run failed terminally/);
 
 	await host.session.prompt("Confirm the Owner input loop still runs.");
@@ -1479,7 +1479,7 @@ test("repeated successor Runs own and dispose one complete mode per exact sessio
 	releaseInitialFailure();
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	await waitForCondition(() =>
-		stripTerminalSequences(opened.view.render(80).join("\n")).includes("Dormant")
+		stripTerminalSequences(opened.view.render(80).join("\n")).includes("failed")
 	);
 
 	for (const input of ["Start exact successor one.", "Start exact successor two."]) {
@@ -1490,7 +1490,7 @@ test("repeated successor Runs own and dispose one complete mode per exact sessio
 		await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 		await waitForCondition(() => {
 			const frame = stripTerminalSequences(opened.view.render(80).join("\n"));
-			return frame.includes("Dormant") && frame.includes(input);
+			return frame.includes("failed") && frame.includes(input);
 		});
 	}
 
@@ -1555,7 +1555,7 @@ test("an ordinary Message-started successor attaches to the already-open durable
 			attachedBeforeExecution =
 				host.ui.customSurfaces[0] === view &&
 				rendered.includes("SuccessorWorker") &&
-				rendered.includes("Live") &&
+				rendered.includes("active") &&
 				rendered.includes("StartthesuccessorthroughordinaryMessagedelivery.");
 			markSuccessorExecutionStarted();
 			await successorGate;
@@ -1581,7 +1581,7 @@ test("an ordinary Message-started successor attaches to the already-open durable
 	releaseInitialFailure();
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	await waitForCondition(() =>
-		stripTerminalSequences(view.render(80).join("\n")).includes("Dormant")
+		stripTerminalSequences(view.render(80).join("\n")).includes("failed")
 	);
 
 	const sent = await executeAndCommitRegisteredTool(

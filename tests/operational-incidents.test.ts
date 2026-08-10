@@ -165,7 +165,7 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	const ownerSession = host.runtime.session;
 	const liveView = await openLiveAgentView(host, moderator.id);
 	const liveRendered = stripTerminalSequences(liveView.view.render(80).join("\n"));
-	assert.match(liveRendered, /moderator.*Live/);
+	assert.match(liveRendered, /moderator.*idle/);
 	assert.match(liveRendered, new RegExp(moderator.id.slice(-8)));
 	assert.match(liveRendered, /\(coordination-test\) deterministic-owner/);
 	assert.equal(host.runtime.session, ownerSession);
@@ -193,10 +193,13 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	);
 	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
 	const dormantView = await openDormantAgentView(host, moderator.id);
+	await waitForCondition(() =>
+		stripTerminalSequences(dormantView.view.render(80).join("\n")).includes("moderator")
+	);
 	const dormantRendered = stripTerminalSequences(
 		dormantView.view.render(80).join("\n"),
 	);
-	assert.match(dormantRendered, /moderator.*Live/);
+	assert.match(dormantRendered, /moderator.*idle/);
 	assert.match(dormantRendered, new RegExp(moderator.id.slice(-8)));
 	assert.equal(host.runtime.session, ownerSession);
 	await returnAgentViewToOwner(host, dormantView);

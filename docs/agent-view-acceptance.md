@@ -5,7 +5,8 @@ This matrix maps the acceptance criteria for issues #63–#68 to production path
 ## Shared implementation paths
 
 - `src/pi-integration/native-agent-projection.ts` — complete child `InteractiveMode`, detached terminal, native frame/input, lifecycle policy, process-global initialization boundary, failure and exit-request seams.
-- `src/presentation/agent-view-surface.ts` — full-window presentation, one-row identity chrome, input prioritization, mouse translation, failure boundary, and Owner shutdown delegation.
+- `src/presentation/agent-view-surface.ts` — headerless full-window presentation, input prioritization, failure boundary, and Owner shutdown delegation.
+- `src/presentation/agent-activity-surface.ts` — native above-editor selected identity, scoped direct-child activity, and Owner-only attention.
 - `src/coordination/durable-agent-view.ts` — one retargetable attachment per selected durable Agent view.
 - `src/coordination/workflow-coordinator.ts` — live acquisition, selection-started successor admission, retention, failure transitions, switching, and shutdown.
 - `src/runtime/default-child-session-factory.ts` — exact live and Dormant failure-presentation session/projection construction.
@@ -54,7 +55,7 @@ Pi theme configuration is intentionally Workflow-global. The projection boundary
 | 3. Escape to child; `/agents` return/switch | custom-editor Escape and Agent-to-Agent switching tests |
 | 4. Dormant selection starts a successor without model input | selection-started successor test |
 | 5. Selected successor exposes normal commands and startup UI | command-capable successor and startup-modal tests |
-| 6. Durable identity independent of exact session | one-row identity surface and failure/successor retarget tests |
+| 6. Durable identity independent of exact session | scoped dock identity and failure/successor retarget tests |
 | 7. Exact `interactive_selection` retention | attachment, return, and release conformance tests |
 | 8. Other retention preserves live mode | multiply retained switching and retained resource-reload tests |
 | 9. Terminal failure retargets same view to Dormant | unit and PTY terminal-failure tests |

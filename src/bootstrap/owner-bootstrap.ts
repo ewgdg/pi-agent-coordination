@@ -24,6 +24,7 @@ import {
 	bindHiddenOwnerAgentExtension,
 	createAgentBoundExtension,
 	createModeratorBoundExtension,
+	installResolvedAgentActivityDock,
 } from "./agent-extension.ts";
 import { discoverColdWorkflow } from "./cold-host-discovery.ts";
 
@@ -64,6 +65,7 @@ export async function initializeOwnerWorkflow(options: {
 			}
 		}
 		const resolveView = () => existing.coordinator.forAgent(runtime.session.sessionId);
+		installResolvedAgentActivityDock(ctx.ui, resolveView);
 		bindHiddenOwnerAgentExtension({
 			pi,
 			runtime,
@@ -98,7 +100,7 @@ export async function initializeOwnerWorkflow(options: {
 	coordinator = new WorkflowCoordinator(runtime, identity, {
 		entryModulePath,
 		humanRequestPresentation: new HumanRequestSurface(ctx.ui),
-		operationalIncidentPresentation: new OperationalIncidentSurface(ctx.ui),
+		operationalIncidentPresentation: new OperationalIncidentSurface(),
 		projectionHost,
 		childExtensionFactory: (agentId) =>
 			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
@@ -119,6 +121,7 @@ export async function initializeOwnerWorkflow(options: {
 	};
 	const resolveView = () => coordinator.forAgent(identity.agentId);
 	try {
+		installResolvedAgentActivityDock(ctx.ui, resolveView);
 		bindHiddenOwnerAgentExtension({
 			pi,
 			runtime,

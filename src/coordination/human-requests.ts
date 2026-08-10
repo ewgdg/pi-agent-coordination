@@ -89,6 +89,7 @@ export class HumanRequestCoordinator {
 	readonly #suspendExecution: (record: AgentRecord) => void;
 	readonly #beginHumanWaiting: (source: ToolCallPointer) => void;
 	readonly #beginHumanResultCommit: (source: ToolCallPointer) => void;
+	readonly #onAttentionChanged: () => void;
 	readonly #pendingByRequestId = new Map<string, PendingHumanRequest>();
 
 	constructor(options: {
@@ -101,6 +102,7 @@ export class HumanRequestCoordinator {
 		suspendExecution(record: AgentRecord): void;
 		beginHumanWaiting(source: ToolCallPointer): void;
 		beginHumanResultCommit(source: ToolCallPointer): void;
+		onAttentionChanged?(): void;
 	}) {
 		this.#agents = options.agents;
 		this.#ownerIdentity = options.ownerIdentity;
@@ -111,6 +113,7 @@ export class HumanRequestCoordinator {
 		this.#suspendExecution = options.suspendExecution;
 		this.#beginHumanWaiting = options.beginHumanWaiting;
 		this.#beginHumanResultCommit = options.beginHumanResultCommit;
+		this.#onAttentionChanged = options.onAttentionChanged ?? (() => undefined);
 	}
 
 	async ask(
@@ -174,6 +177,7 @@ export class HumanRequestCoordinator {
 				},
 				callerAgentId === this.#ownerIdentity.agentId,
 			);
+			this.#onAttentionChanged();
 			this.#boundaryHooks.afterAdmission?.({
 				agentId: callerAgentId,
 				requestId: request.requestId,
@@ -329,6 +333,7 @@ export class HumanRequestCoordinator {
 		// pre-append guard above rechecks this phase, so an asynchronous Run fence
 		// can still defeat a submitted candidate until native result commitment.
 		this.#presentation.dismiss(requestId);
+		this.#onAttentionChanged();
 		pending.reject(new Error(message));
 	}
 
@@ -336,6 +341,7 @@ export class HumanRequestCoordinator {
 		pending.removeAbortListener();
 		pending.record.host.endInputRequired(pending.handle, pending.request.requestId);
 		this.#presentation.dismiss(pending.request.requestId);
+		this.#onAttentionChanged();
 		this.#pendingByRequestId.delete(pending.request.requestId);
 	}
 

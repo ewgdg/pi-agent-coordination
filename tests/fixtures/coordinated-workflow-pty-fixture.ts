@@ -67,6 +67,14 @@ await ownerSession.prompt("Owner baseline transcript before opening /agents.");
 await ownerSession.waitForIdle();
 
 host.model.setResponses([
+	fauxAssistantMessage(
+		fauxToolCall("agent_spawn", {
+			request: "Remain available as nested activity for PTY ordering.",
+			label: "PTY Nested Worker",
+		}, { id: "pty-spawn-nested-agent" }),
+		{ stopReason: "toolUse" },
+	),
+	fauxAssistantMessage("Nested PTY child remains live for activity ordering."),
 	fauxAssistantMessage(LONG_CHILD_RESPONSE),
 ]);
 const spawn = await executeCommittedTool(

@@ -58,7 +58,7 @@ A select-one Answer contains either one zero-based `selectedOptionIndex` or one 
 
 ## Native interaction
 
-The Owner's own request opens immediately. A background Agent's request adds passive `DECIDE` attention without taking focus. Use `/agents` and select the numbered `DECIDE` row to open that request.
+The Owner's own request opens immediately. A background Agent's request adds one passive `DECIDE` row to the Owner-scoped activity dock without taking focus. Use `/agents` and select the numbered `DECIDE` row to open that request.
 
 The request surface has one tab per Question. Use Tab or Left/Right to change Questions, Up/Down to move through options, Space to toggle select-many options, Enter to confirm, and Escape to interrupt. If the requesting Agent has an open Agent view, the Human Request temporarily receives focus inside that Agent's complete mode; Escape interrupts only that Agent's open request and establishes its exact-Run Interruption Hold. When the request surface closes, the interactive Agent view reclaims focus. Partial selections remain only in the open surface. Pi preserves the Owner editor contents throughout.
 

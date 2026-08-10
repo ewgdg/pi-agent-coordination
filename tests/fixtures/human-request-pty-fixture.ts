@@ -5,6 +5,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import type { HumanQuestionAnswer } from "../../src/protocol/human-request.ts";
+import { installAgentActivityDock } from "../../src/presentation/agent-activity-surface.ts";
 import { HumanRequestSurface } from "../../src/presentation/human-request-surface.ts";
 import { createUnboundTestOwnerHost } from "../support/pi-host.ts";
 
@@ -38,6 +39,34 @@ const extension: ExtensionFactory = (pi) => {
 		activeUi = ctx.ui;
 		ctx.ui.setEditorText("native draft");
 		surface = new HumanRequestSurface(ctx.ui);
+		installAgentActivityDock(ctx.ui, {
+			snapshot: () => ({
+				scope: {
+					agentId: "pty-owner",
+					workflowId: "pty-owner",
+					label: "Owner",
+					directSpawnerAgentId: null,
+					primaryEvidence: {
+						transcriptPath: null,
+						inspectedThrough: { agentId: "pty-owner", entryId: "pty-owner-tail" },
+					},
+					run: {
+						phase: "live",
+						work: "settled",
+						attention: "none",
+						retentionReasons: [],
+					},
+					model: { provider: "test", modelId: "test" },
+					thinking: "off",
+					queuedInputCount: 0,
+					failed: false,
+				},
+				children: [],
+				humanAttention: surface?.items() ?? [],
+				operationalAttention: [],
+			}),
+			addChangeHandler: () => () => undefined,
+		});
 		surface.present(
 			{
 				requestId: "pty-human-request",

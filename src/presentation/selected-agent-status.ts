@@ -1,79 +1,70 @@
-import type {
-	ExtensionUIContext,
-	Theme,
-} from "@earendil-works/pi-coding-agent";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 
-export type SelectedAgentPhase =
-	| "dormant"
-	| "starting"
-	| "active"
-	| "settled"
-	| "held"
-	| "waiting_human"
-	| "ending"
-	| "failed";
+import type { AgentRunState } from "../runtime/in-process-agent-host.ts";
 
-export type SelectedAgentStatus = Readonly<{
+const COMPACT_AGENT_IDENTITY_LENGTH = 8;
+
+export type AgentWorkStatus =
+	| Readonly<{ kind: "active" }>
+	| Readonly<{ kind: "idle" }>
+	| Readonly<{
+		kind: "waiting";
+		reason: "human input" | "agent answer" | "resumption";
+	}>
+	| Readonly<{ kind: "starting" | "ending" | "failed" }>;
+
+export type SelectedAgentIdentity = Readonly<{
 	label: string;
-	sessionId: string;
-	phase: SelectedAgentPhase;
+	agentId: string;
+	status: AgentWorkStatus;
 }>;
 
-export type SelectedAgentStatusPresentation = Readonly<{
-	present(status: SelectedAgentStatus): void;
-	clear(): void;
-}>;
-
-export const SELECTED_AGENT_STATUS_KEY = "agent-coordination-selected-agent";
-
-// Keep the accepted footer identity compact while retaining enough context to distinguish sessions.
-const COMPACT_SESSION_IDENTITY_LENGTH = 8;
-
-export function formatSessionIdentity(sessionId: string): string {
-	return sessionId.slice(-COMPACT_SESSION_IDENTITY_LENGTH);
+export function selectedAgentWorkStatus(
+	run: AgentRunState,
+	failed: boolean,
+): AgentWorkStatus {
+	if (failed) return { kind: "failed" };
+	if (run.phase === "starting") return { kind: "starting" };
+	if (run.phase === "ending") return { kind: "ending" };
+	if (run.phase === "dormant") return { kind: "idle" };
+	if (run.attention === "input_required") {
+		return { kind: "waiting", reason: "human input" };
+	}
+	if (run.retentionReasons.some(({ reason }) => reason === "interruption_hold")) {
+		return { kind: "waiting", reason: "resumption" };
+	}
+	if (run.work === "active") return { kind: "active" };
+	if (run.retentionReasons.some(({ reason }) => reason === "awaiting_answer")) {
+		return { kind: "waiting", reason: "agent answer" };
+	}
+	return { kind: "idle" };
 }
 
-export function formatAgentPhase(phase: SelectedAgentPhase): string {
-	return phase === "dormant"
-		? "Dormant"
-		: phase === "waiting_human"
-			? "waiting (human)"
-			: phase;
-}
-
-export function formatSelectedAgentStatus(
-	status: SelectedAgentStatus,
+export function formatSelectedAgentIdentity(
+	identity: SelectedAgentIdentity,
 	theme: Theme,
 ): string {
-	const phase = formatAgentPhase(status.phase);
-	const identity = ` · ${formatSessionIdentity(status.sessionId)} · `;
-	if (status.phase === "failed") {
-		return theme.fg("error", `${status.label}${identity}${phase}`);
-	}
-	const marker = status.phase === "active" ? "● " : status.phase === "dormant" ? "○ " : "";
-	const label = `${marker}${status.label}`;
-	const emphasizedLabel = theme.fg("accent", theme.bold(label));
-	if (status.phase === "waiting_human") {
-		return `${emphasizedLabel}${theme.fg("dim", identity)}${theme.fg("warning", phase)}`;
-	}
-	return `${emphasizedLabel}${theme.fg("dim", `${identity}${phase}`)}`;
+	const label = theme.fg("accent", theme.bold(identity.label));
+	const compactIdentity = identity.agentId.slice(-COMPACT_AGENT_IDENTITY_LENGTH);
+	const separator = theme.fg("dim", ` · ${compactIdentity} · `);
+	return `${label}${separator}${formatAgentWorkStatus(identity.status, theme)}`;
 }
 
-export class SelectedAgentStatusSurface implements SelectedAgentStatusPresentation {
-	readonly #ui: Pick<ExtensionUIContext, "setStatus" | "theme">;
-
-	constructor(ui: Pick<ExtensionUIContext, "setStatus" | "theme">) {
-		this.#ui = ui;
-	}
-
-	present(status: SelectedAgentStatus): void {
-		this.#ui.setStatus(
-			SELECTED_AGENT_STATUS_KEY,
-			formatSelectedAgentStatus(status, this.#ui.theme),
-		);
-	}
-
-	clear(): void {
-		this.#ui.setStatus(SELECTED_AGENT_STATUS_KEY, undefined);
-	}
+export function formatAgentWorkStatus(
+	status: AgentWorkStatus,
+	theme: Theme,
+): string {
+	const label = status.kind === "waiting"
+		? `waiting (${status.reason})`
+		: status.kind;
+	const role = status.kind === "active"
+		? "success"
+		: status.kind === "waiting"
+			? "warning"
+			: status.kind === "starting"
+				? "accent"
+				: status.kind === "failed"
+					? "error"
+					: "dim";
+	return theme.fg(role, label);
 }

@@ -1121,6 +1121,7 @@ test("session_start model work begins only after the live projection is subscrib
 		packageRoot: host.cwd,
 		childExtensionFactory: () => () => undefined,
 		moderatorExtensionFactory: () => () => undefined,
+		activityExtensionFactory: () => () => undefined,
 		presentationExtensionFactory: () => () => undefined,
 	});
 	let markResponseStarted!: () => void;
@@ -1200,6 +1201,7 @@ test("projection construction failure disposes a partially started real Run sess
 		packageRoot: host.cwd,
 		childExtensionFactory: () => () => undefined,
 		moderatorExtensionFactory: () => () => undefined,
+		activityExtensionFactory: () => () => undefined,
 		presentationExtensionFactory: () => () => undefined,
 		projectionHost: {
 			async createProjection({ session }) {

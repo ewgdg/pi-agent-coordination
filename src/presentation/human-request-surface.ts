@@ -23,8 +23,6 @@ import type {
 	PresentedHumanRequest,
 } from "../coordination/human-requests.ts";
 
-const ATTENTION_STATUS_KEY = "agent-coordination-attention";
-const ATTENTION_WIDGET_KEY = "agent-coordination-attention";
 const REQUEST_OVERLAY_WIDTH = "80%";
 const REQUEST_OVERLAY_MAX_HEIGHT = "80%";
 // Keep short multi-Question tabs and their controls legible on compact terminals.
@@ -61,7 +59,6 @@ export class HumanRequestSurface implements HumanRequestPresentation {
 		}
 		this.#requests.set(presentation.requestId, presentation);
 		this.#ensureTerminalListener();
-		this.#renderPassiveAttention();
 		if (foreground) void this.focus(presentation.requestId);
 	}
 
@@ -74,7 +71,6 @@ export class HumanRequestSurface implements HumanRequestPresentation {
 		if (this.#focused?.requestId === requestId) {
 			this.#focused.finish({ kind: "dismissed" });
 		}
-		this.#renderPassiveAttention();
 	}
 
 	items(): readonly HumanAttentionItem[] {
@@ -175,30 +171,6 @@ export class HumanRequestSurface implements HumanRequestPresentation {
 		});
 	}
 
-	#renderPassiveAttention(): void {
-		const ui = this.#ui;
-		const requests = [...this.#requests.values()];
-		if (requests.length === 0) {
-			ui.setStatus(ATTENTION_STATUS_KEY, undefined);
-			ui.setWidget(ATTENTION_WIDGET_KEY, undefined);
-			return;
-		}
-		ui.setStatus(
-			ATTENTION_STATUS_KEY,
-			`${requests.length} Human Request${requests.length === 1 ? "" : "s"} · DECIDE`,
-		);
-		ui.setWidget(
-			ATTENTION_WIDGET_KEY,
-			[
-				`Attention · ${requests.length} DECIDE`,
-				...requests.map(
-					(request) =>
-						`  ${request.agentLabel} · ${request.questionCount} Question${request.questionCount === 1 ? "" : "s"}`,
-				),
-			],
-			{ placement: "aboveEditor" },
-		);
-	}
 }
 
 export function createHumanRequestComponent(options: {

@@ -34,6 +34,51 @@ import {
 
 const MAX_CONDITION_POLL_ATTEMPTS = 100;
 
+test("activity subscriptions publish queued-input changes while a child Run remains active", async () => {
+	const harness = await createRunSupervisionHarness();
+	const child = await harness.spawnChild("spawn-activity-queue-child");
+	await child.session.waitForIdle();
+
+	let markGenerationStarted!: () => void;
+	const generationStarted = new Promise<void>((resolve) => {
+		markGenerationStarted = resolve;
+	});
+	let releaseGeneration!: () => void;
+	const generationRelease = new Promise<void>((resolve) => {
+		releaseGeneration = resolve;
+	});
+	harness.host.model.setResponses([
+		async () => {
+			markGenerationStarted();
+			await generationRelease;
+			return fauxAssistantMessage("The active child accepted queued input.");
+		},
+		fauxAssistantMessage("The queued input was processed."),
+	]);
+	let activityChanges = 0;
+	const removeActivityHandler = harness.ownerView.addAgentActivityChangeHandler(
+		() => activityChanges += 1,
+	);
+	const activeTurn = child.session.prompt("Remain active while input is queued.");
+	await generationStarted;
+	const changesBeforeQueue = activityChanges;
+
+	await child.session.sendUserMessage("Queued follow-up", { deliverAs: "followUp" });
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	const changesAfterQueue = activityChanges;
+	const queuedInputCount = harness.ownerView.agentActivity().children.find(
+		({ agentId }) => agentId === child.agentId
+	)?.queuedInputCount;
+
+	releaseGeneration();
+	await activeTurn;
+	await child.session.waitForIdle();
+	removeActivityHandler();
+	await harness.shutdown();
+	assert.equal(changesAfterQueue, changesBeforeQueue + 1);
+	assert.equal(queuedInputCount, 1);
+});
+
 test("interruption holds one exact settled Run and blocks ordinary Message Delivery", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-held-child");

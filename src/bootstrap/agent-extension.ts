@@ -4,6 +4,7 @@ import type {
 	ExtensionContext,
 	ExtensionFactory,
 	ExtensionHandler,
+	ExtensionUIContext,
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 
@@ -17,6 +18,10 @@ import {
 	registerModeratorAgentSurfaces,
 	registerOrdinaryAgentSurfaces,
 } from "../tools/owner-surfaces.ts";
+import {
+	installAgentActivityDock,
+	type AgentActivitySource,
+} from "../presentation/agent-activity-surface.ts";
 
 const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
 	"Return to Owner before replacing or forking the native session.";
@@ -45,6 +50,7 @@ export function createPresentationBoundExtension(
 	return (pi) => {
 		registerChildNativeSessionPolicy(pi);
 		registerAgentsCommand(pi, resolveView);
+		registerAgentActivityDock(pi, resolveView);
 		pi.on("input", async (event, ctx) => {
 			if (event.source !== "interactive") return { action: "handled" };
 			try {
@@ -60,6 +66,12 @@ export function createPresentationBoundExtension(
 	};
 }
 
+export function createAgentActivityExtension(
+	resolveView: () => HumanPresentationCoordinatorView,
+): ExtensionFactory {
+	return (pi) => registerAgentActivityDock(pi, resolveView);
+}
+
 function createParticipantBoundExtension<
 	View extends OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView,
 >(
@@ -71,6 +83,30 @@ function createParticipantBoundExtension<
 		registerSurfaces(pi, resolveView);
 		registerAgentBoundBehavior(pi, resolveView);
 	};
+}
+
+function registerAgentActivityDock(
+	pi: ExtensionAPI,
+	resolveView: () => HumanPresentationCoordinatorView,
+): void {
+	pi.on("session_start", (_event, ctx) => {
+		installResolvedAgentActivityDock(ctx.ui, resolveView);
+	});
+	// AgentSession publishes model changes only through the extension event path;
+	// forward that native invalidation to every scoped activity subscriber.
+	pi.on("model_select", () => resolveView().refreshAgentActivity());
+}
+
+export function installResolvedAgentActivityDock(
+	ui: ExtensionUIContext,
+	resolveView: () => HumanPresentationCoordinatorView,
+): void {
+	const source: AgentActivitySource = {
+		snapshot: () => resolveView().agentActivity(),
+		addChangeHandler: (handler) =>
+			resolveView().addAgentActivityChangeHandler(handler),
+	};
+	installAgentActivityDock(ui, source);
 }
 
 function registerChildNativeSessionPolicy(pi: ExtensionAPI): void {

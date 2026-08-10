@@ -50,7 +50,7 @@ An Operation Review trigger contains only `kind`, the exact `toolCall` pointer, 
 
 One continuous condition permits at most two committed automatic attempts: the initial Moderator and one fresh replacement. A post-commit startup failure or terminal Moderator Run failure consumes its attempt. The replacement continues the original condition and points to the first attempt's terminal evidence; Moderator failure never becomes a nested Operational Incident.
 
-After the second committed attempt fails, automatic creation stops. Passive Operational Attention appears in the native status/widget surface and as an `ATTENTION` row in `/agents`. It presents the original trigger—including its exact Run sequence when applicable and bounded Request source pointers—the affected Agent identities, and the two terminal diagnostic pointers. Only the Workflow Owner can observe this attention. It disappears immediately when the original predicate clears.
+After the second committed attempt fails, automatic creation stops. Passive Operational Attention appears once in the Owner-scoped activity dock and as an `ATTENTION` row in `/agents`. It presents the original trigger—including its exact Run sequence when applicable and bounded Request source pointers—the affected Agent identities, and the two terminal diagnostic pointers. Only the Workflow Owner can observe this attention. It disappears immediately when the original predicate clears.
 
 ## Diagnosis, escalation, and Resolution
 

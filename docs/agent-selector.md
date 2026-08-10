@@ -28,7 +28,11 @@ The selector keeps focus while the successor starts. Its initializing mode is at
 
 ## Full-window Agent view
 
-The fixed one-row outer header identifies the durable Agent by label, compact identity, and Live or Dormant phase. The remaining rows contain the child mode's complete Pi fullscreen frame: transcript, pending and working state, tool rendering, widgets, editor, footer, notifications, selectors, dialogs, and child-local extension overlays.
+The outer overlay adds no fixed header. It presents the child mode's complete Pi fullscreen frame: transcript, pending and working state, tool rendering, widgets, editor, footer, notifications, selectors, dialogs, and child-local extension overlays.
+
+A scoped activity dock lives inside the native above-editor widget area. For a selected non-Owner Agent, its first row is `label · compact Agent ID · status`; the label is accented and bold, the identity is dim, and only the status receives its semantic status color. Rendered statuses are lowercase: `active` while work executes, `idle` when settled, `waiting` with a named reason when progress needs human input, an Agent answer, or resumption, and `starting`, `ending`, or `failed` during those lifecycle conditions. A leaf retains only this identity row directly against the native editor border.
+
+With Owner selected, the dock shows the Owner-only Attention Inbox before Owner's direct children that have a current Run. With another Agent selected, it shows only that Agent's identity and direct children that have a current Run. Starting, live, and ending child rows stay in creation order and project Run state, attention, model/thinking configuration, and queued-input count. Dormant Agents remain available through `/agents` but do not appear in the activity dock. Human `DECIDE` and exhausted operational `ATTENTION` occur only in the Owner dock; `/agents` retains their existing actions.
 
 All input is routed through the child TUI's detached terminal. Printable text, paste, completion, commands, extension shortcuts, custom editors, and focused child overlays behave as they do in native Pi. The outer view does not steal Escape; custom editors such as pi-vim keep their normal Escape semantics.
 
