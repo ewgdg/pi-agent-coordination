@@ -466,25 +466,10 @@ export class DefaultChildSessionFactory {
 			throw error;
 		}
 		return {
-			runtime: new InProcessHostedRuntime({
+			runtime: InProcessHostedRuntime.fromSession({
 				session,
+				services: prepared.services,
 				projection,
-				inspectSnapshot: () => ({
-				cwd: prepared.services.cwd,
-				model: session.model
-					? { provider: session.model.provider, modelId: session.model.id }
-					: prepared.configuration.model,
-				thinking: session.thinkingLevel,
-				tools: [...session.getActiveToolNames()],
-				skills: prepared.services.resourceLoader
-					.getSkills()
-					.skills.map(({ name }) => name),
-				fileExtensionPaths: prepared.services.resourceLoader
-					.getExtensions()
-					.extensions.map(({ resolvedPath }) => resolvedPath),
-				projectTrusted: prepared.services.settingsManager.isProjectTrusted(),
-					sessionId: session.sessionManager.getSessionId(),
-				}),
 			}),
 			ready,
 		};

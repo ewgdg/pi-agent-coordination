@@ -1,7 +1,5 @@
 import type {
-	AgentSession,
 	AgentSessionRuntime,
-	AgentSessionServices,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
@@ -114,8 +112,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 	private constructor(options: {
 		sessionManager: SessionManager;
 		startSession?: StartSession;
-		initialSession?: AgentSession;
-		initialServices?: AgentSessionServices;
+		initialRuntime?: HostedAgentRuntime;
 		initialRetentionReasons?: readonly AgentRetentionReason[];
 	}) {
 		this.#sessionManager = options.sessionManager;
@@ -123,28 +120,19 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		for (const reason of options.initialRetentionReasons ?? []) {
 			this.#retentionReasons.add(reason);
 		}
-		if (options.initialSession) {
-			this.#bindRuntime(
-				{
-					runtime: new InProcessHostedRuntime({
-						session: options.initialSession,
-						projection: undefined,
-						inspectSnapshot: () => inspectInProcessRuntime(
-							options.initialSession!,
-							options.initialServices!,
-						),
-					}),
-				},
-				true,
-			);
+		if (options.initialRuntime) {
+			this.#bindRuntime({ runtime: options.initialRuntime }, true);
 		}
 	}
 
 	static bindOwner(runtime: AgentSessionRuntime): InProcessAgentHost {
 		return new InProcessAgentHost({
 			sessionManager: runtime.session.sessionManager,
-			initialSession: runtime.session,
-			initialServices: runtime.services,
+			initialRuntime: InProcessHostedRuntime.fromSession({
+				session: runtime.session,
+				services: runtime.services,
+				projection: undefined,
+			}),
 			initialRetentionReasons: ["owner_host_binding"],
 		});
 	}
@@ -1058,24 +1046,4 @@ function requireRequestRelationshipId(
 		throw new Error(`${reason} requires an exact Request identity`);
 	}
 	return requestId;
-}
-
-function inspectInProcessRuntime(
-	session: AgentSession,
-	services: AgentSessionServices,
-): EffectiveRuntimeSnapshot {
-	const model = session.model;
-	if (!model) throw new Error("Agent Runtime model is unavailable");
-	return {
-		cwd: services.cwd,
-		model: { provider: model.provider, modelId: model.id },
-		thinking: session.thinkingLevel,
-		tools: [...session.getActiveToolNames()],
-		skills: services.resourceLoader.getSkills().skills.map(({ name }) => name),
-		fileExtensionPaths: services.resourceLoader
-			.getExtensions()
-			.extensions.map(({ resolvedPath }) => resolvedPath),
-		projectTrusted: services.settingsManager.isProjectTrusted(),
-		sessionId: session.sessionManager.getSessionId(),
-	};
 }

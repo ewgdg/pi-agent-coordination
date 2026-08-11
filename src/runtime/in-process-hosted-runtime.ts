@@ -1,4 +1,7 @@
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type {
+	AgentSession,
+	AgentSessionServices,
+} from "@earendil-works/pi-coding-agent";
 
 import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
 import type {
@@ -28,6 +31,21 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		this.#session = options.session;
 		this.projection = options.projection;
 		this.#inspectSnapshot = options.inspectSnapshot;
+	}
+
+	static fromSession(options: {
+		session: AgentSession;
+		services: AgentSessionServices;
+		projection: HostedAgentProjection | undefined;
+	}): InProcessHostedRuntime {
+		return new InProcessHostedRuntime({
+			session: options.session,
+			projection: options.projection,
+			inspectSnapshot: () => inspectInProcessRuntime(
+				options.session,
+				options.services,
+			),
+		});
 	}
 
 	snapshot(): EffectiveRuntimeSnapshot {
@@ -184,4 +202,24 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		);
 		return commit.finally(unsubscribe);
 	}
+}
+
+function inspectInProcessRuntime(
+	session: AgentSession,
+	services: AgentSessionServices,
+): EffectiveRuntimeSnapshot {
+	const model = session.model;
+	if (!model) throw new Error("Agent Runtime model is unavailable");
+	return {
+		cwd: services.cwd,
+		model: { provider: model.provider, modelId: model.id },
+		thinking: session.thinkingLevel,
+		tools: [...session.getActiveToolNames()],
+		skills: services.resourceLoader.getSkills().skills.map(({ name }) => name),
+		fileExtensionPaths: services.resourceLoader
+			.getExtensions()
+			.extensions.map(({ resolvedPath }) => resolvedPath),
+		projectTrusted: services.settingsManager.isProjectTrusted(),
+		sessionId: session.sessionManager.getSessionId(),
+	};
 }
