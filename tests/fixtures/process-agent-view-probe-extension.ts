@@ -123,6 +123,20 @@ const processAgentViewProbe: ExtensionFactory = (pi) => {
 		});
 	}
 
+	if (activeScenario === "unexpected-exit") {
+		pi.registerCommand("exit-agent-process", {
+			description: "Terminate this exact process-backed Agent Runtime",
+			handler(_args, ctx) {
+				record({
+					kind: "process_exit",
+					sessionId: ctx.sessionManager.getSessionId(),
+					exitCode: 17,
+				});
+				process.exit(17);
+			},
+		});
+	}
+
 	if (activeScenario === "dormant-command-message") {
 		pi.registerCommand("wake-dormant-agent", {
 			description: "Emit one user message from the Dormant command",

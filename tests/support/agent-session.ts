@@ -120,10 +120,19 @@ export async function returnAgentViewToOwner(
 	opened: Readonly<{ command: Promise<void>; view: Component }>,
 ): Promise<void> {
 	for (const character of "/agents") opened.view.handleInput?.(character);
+	await waitForCondition(() =>
+		stripTerminalSequences(opened.view.render(80).join("\n")).includes("/agents")
+	);
 	opened.view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(opened.view.render(80).join("\n")).includes("Tab views")
 	);
+	if (stripTerminalSequences(opened.view.render(80).join("\n")).includes("Dormant Agents")) {
+		opened.view.handleInput?.("\t");
+		await waitForCondition(() =>
+			!stripTerminalSequences(opened.view.render(80).join("\n")).includes("Dormant Agents")
+		);
+	}
 	const ownerPattern = new RegExp(`→ owner[\\s\\S]*${host.session.sessionId}`);
 	for (let tab = 0; tab < 2; tab += 1) {
 		const firstFrame = stripTerminalSequences(opened.view.render(80).join("\n"));

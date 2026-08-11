@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -8,10 +11,6 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import * as hostPi from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
-import {
-	resetSessionStartProbe,
-	sessionStartReasons,
-} from "./fixtures/session-start-probe-extension.ts";
 import {
 	executeAndCommitRegisteredTool,
 	openLiveAgentView,
@@ -23,30 +22,20 @@ import {
 	type TestOwnerHost,
 } from "./support/pi-host.ts";
 
-const SESSION_START_PROBE = fileURLToPath(
-	new URL("./fixtures/session-start-probe-extension.ts", import.meta.url),
+const PROCESS_UI_PROBE = fileURLToPath(
+	new URL("./fixtures/process-ui-probe-extension.ts", import.meta.url),
 );
 const LLAMA_MODEL_ID = "local-conformance-model";
 const MAX_CONDITION_ATTEMPTS = 1_000;
 
 test("child session_start UI side effects stay detached before, during, and after Agent view attachment", async (t) => {
-	const editorFactories = new Map<string, unknown>();
+	const evidencePath = join(tmpdir(), `.process-ui-probe-${process.pid}-detached.jsonl`);
+	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
+	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
+	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "detached-child-ui-probe",
-			hidden: true,
-			factory: (pi) => {
-				pi.on("session_start", (_event, ctx) => {
-					ctx.ui.notify("startup-notice", "info");
-					ctx.ui.setStatus("probe-status", `status:${ctx.sessionManager.getSessionId()}`);
-					ctx.ui.setWidget("probe-widget", [`widget:${ctx.sessionManager.getSessionId()}`]);
-					const editorFactory = () => undefined as never;
-					editorFactories.set(ctx.sessionManager.getSessionId(), editorFactory);
-					ctx.ui.setEditorComponent(editorFactory);
-				});
-			},
-		}],
+		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	t.after(() => host.runtime.dispose());
 	assert.equal(host.ui.notifications.length, 1);
@@ -58,7 +47,9 @@ test("child session_start UI side effects stay detached before, during, and afte
 		fauxAssistantMessage("Remain live while detached UI conformance is checked."),
 	]);
 	const agentId = await spawnRetainedChild(host, "spawn-detached-ui-agent");
-	assert.ok(editorFactories.get(agentId));
+	await waitForProbeEvidence(evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "session_start" && entry.sessionId === agentId && entry.pid !== process.pid,
+	));
 
 	assert.equal(host.ui.notifications.length, 1);
 	assert.deepEqual(host.ui.statuses, ownerStatuses);
@@ -80,24 +71,34 @@ test("child session_start UI side effects stay detached before, during, and afte
 });
 
 test("repeated Agent view attachment does not replay either session startup lifecycle", async (t) => {
-	resetSessionStartProbe();
+	const evidencePath = join(tmpdir(), `.process-ui-probe-${process.pid}-repeat.jsonl`);
+	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
+	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
+	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionPaths: [SESSION_START_PROBE],
+		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Remain live through repeated interactive view cycles."),
 	]);
 	const agentId = await spawnRetainedChild(host, "spawn-view-lifecycle-agent");
+	await waitForProbeEvidence(evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "session_start" && entry.sessionId === agentId,
+	));
 
 	for (let cycle = 0; cycle < 2; cycle += 1) {
 		const opened = await openLiveAgentView(host, agentId);
 		await returnAgentViewToOwner(host, opened);
 	}
 
-	assert.deepEqual(sessionStartReasons(host.session.sessionId), ["startup"]);
-	assert.deepEqual(sessionStartReasons(agentId), ["startup"]);
+	const starts = (await readProbeEvidence(evidencePath)).filter(
+		(entry) => entry.kind === "session_start",
+	);
+	assert.equal(starts.filter((entry) => entry.sessionId === host.session.sessionId).length, 1);
+	assert.equal(starts.filter((entry) => entry.sessionId === agentId).length, 1);
+	assert.notEqual(starts.find((entry) => entry.sessionId === agentId)?.pid, process.pid);
 	assert.equal(host.runtime.session, host.session);
 });
 
@@ -136,28 +137,13 @@ test("an open Agent view rejects exact-Run termination and closing permits ordin
 });
 
 test("a third-party child-view command remains unique and does not interfere with Agent startup", async (t) => {
-	let invocations = 0;
-	const commandCountsBySessionId = new Map<string, number>();
+	const evidencePath = join(tmpdir(), `.process-ui-probe-${process.pid}-command.jsonl`);
+	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
+	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
+	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "third-party-child-view",
-			hidden: true,
-			factory: (pi) => {
-				pi.registerCommand("child-view", {
-					description: "Third-party command with the prohibited generic name",
-					handler: async () => {
-						invocations += 1;
-					},
-				});
-				pi.on("session_start", (_event, ctx) => {
-					commandCountsBySessionId.set(
-						ctx.sessionManager.getSessionId(),
-						pi.getCommands().filter(({ name }) => name === "child-view").length,
-					);
-				});
-			},
-		}],
+		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	t.after(() => host.runtime.dispose());
 	const commands = host.session.extensionRunner.getRegisteredCommands()
@@ -168,14 +154,23 @@ test("a third-party child-view command remains unique and does not interfere wit
 		fauxAssistantMessage("The child starts without a command collision."),
 	]);
 	const agentId = await spawnRetainedChild(host, "spawn-command-collision-agent");
-	assert.equal(commandCountsBySessionId.get(host.session.sessionId), 1);
-	assert.equal(commandCountsBySessionId.get(agentId), 1);
+	await waitForProbeEvidence(evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "session_start" && entry.sessionId === agentId,
+	));
+	const starts = (await readProbeEvidence(evidencePath)).filter(
+		(entry) => entry.kind === "session_start",
+	);
+	assert.equal(starts.find((entry) => entry.sessionId === host.session.sessionId)?.childViewCommandCount, 1);
+	assert.equal(starts.find((entry) => entry.sessionId === agentId)?.childViewCommandCount, 1);
 	assert.equal(
 		host.ui.notifications.some(({ message }) => message.includes("child-view")),
 		false,
 	);
 	await commands[0]?.handler("", host.session.extensionRunner.createCommandContext());
-	assert.equal(invocations, 1);
+	await waitForProbeEvidence(evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "command" && entry.sessionId === host.session.sessionId,
+	));
+
 });
 
 test("the named llama.cpp extension remains usable through child startup and shutdown on the Owner ModelRuntime", async () => {
@@ -337,4 +332,41 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
 		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error("Expected conformance condition did not become true");
+}
+
+type ProcessUiProbeEvidence = Readonly<{
+	kind: string;
+	sessionId: string;
+	pid: number;
+	reason?: string;
+	childViewCommandCount?: number;
+}>;
+
+async function readProbeEvidence(path: string): Promise<ProcessUiProbeEvidence[]> {
+	try {
+		return (await readFile(path, "utf8"))
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as ProcessUiProbeEvidence);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	}
+}
+
+async function waitForProbeEvidence(
+	path: string,
+	predicate: (entries: readonly ProcessUiProbeEvidence[]) => boolean,
+): Promise<void> {
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		if (predicate(await readProbeEvidence(path))) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Expected child process UI evidence did not become durable");
+}
+
+function restoreEnvironment(name: string, value: string | undefined): void {
+	if (value === undefined) delete process.env[name];
+	else process.env[name] = value;
 }

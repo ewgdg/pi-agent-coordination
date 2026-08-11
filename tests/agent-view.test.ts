@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import {
+	fauxAssistantMessage,
+	fauxToolCall,
+	type AssistantMessage,
+	type Context,
+} from "@earendil-works/pi-ai";
 import {
 	initTheme,
 	SessionManager,
@@ -86,6 +91,11 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 	});
 
 	const { command, view } = await openSelectedAgentView(host, agentId);
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n"))
+			.replace(/\s+/g, "")
+			.includes("Thechildisreadyfordirectinteractiveinput")
+	);
 	const rendered = stripTerminalSequences(view.render(80).join("\n"));
 	assert.match(rendered, /Viewed Worker/);
 	assert.match(rendered, new RegExp(agentId.slice(-8)));
@@ -124,18 +134,20 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 		)
 	);
 	view.handleInput?.("\x1b");
-	assert.match(
-		stripTerminalSequences(view.render(80).join("\n")),
-		/Custom editor Escape count · 1/,
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Custom editor Escape count · 1",
+		)
 	);
 	assert.equal(host.ui.customSurfaces.includes(view), true);
 
 	for (const character of "Human direction entered in the Agent editor.") {
 		view.handleInput?.(character);
 	}
-	assert.match(
-		stripTerminalSequences(view.render(80).join("\n")),
-		/Human direction entered in the Agent editor\./,
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Human direction entered in the Agent editor.",
+		)
 	);
 	view.handleInput?.("\r");
 	await waitForCondition(async () =>
@@ -167,10 +179,9 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
 	view.handleInput?.("k");
-	const ownerFocusedFrame = stripTerminalSequences(view.render(80).join("\n"));
-	assert.match(
-		ownerFocusedFrame,
-		new RegExp(`→ owner[\\s\\S]*${ownerRuntimeSession.sessionId}`),
+	const ownerPattern = new RegExp(`→ owner[\\s\\S]*${ownerRuntimeSession.sessionId}`);
+	await waitForCondition(() =>
+		ownerPattern.test(stripTerminalSequences(view.render(80).join("\n")))
 	);
 	view.handleInput?.("\r");
 	await command;
@@ -198,9 +209,10 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	t.after(async () => host.runtime.dispose());
-	host.model.setResponses([
-		fauxAssistantMessage("The throwing-editor Agent is ready."),
-	]);
+	host.model.setResponses(creationAnswerResponses(
+		"answer-throwing-editor-creation-request",
+		"The throwing-editor Agent is ready.",
+	));
 	const spawn = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_spawn",
@@ -216,10 +228,14 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 			"The throwing-editor Agent is ready.",
 		)
 	);
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	const ownerSession = host.runtime.session;
 	const ownerEditor = "Owner editor survives child input failure";
 	host.ui.setEditorText(ownerEditor);
-	const { command, view } = await openSelectedAgentView(host, agentId);
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
 
 	assert.doesNotThrow(() => view.handleInput?.("x"));
 	await command;
@@ -247,9 +263,10 @@ test("a real child render failure returns a bounded frame and restores Owner inp
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	t.after(async () => host.runtime.dispose());
-	host.model.setResponses([
-		fauxAssistantMessage("The throwing-render Agent is ready."),
-	]);
+	host.model.setResponses(creationAnswerResponses(
+		"answer-throwing-render-creation-request",
+		"The throwing-render Agent is ready.",
+	));
 	const spawn = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_spawn",
@@ -265,10 +282,14 @@ test("a real child render failure returns a bounded frame and restores Owner inp
 			"The throwing-render Agent is ready.",
 		)
 	);
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	const ownerSession = host.runtime.session;
 	const ownerEditor = "Owner editor survives child render failure";
 	host.ui.setEditorText(ownerEditor);
-	const { command, view } = await openSelectedAgentView(host, agentId);
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
 
 	view.handleInput?.("x");
 	let failedFrame: string[] = [];
@@ -369,20 +390,11 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 });
 
 test("a selected Agent whose runtime initialization fails closes the invalid view", async (t) => {
-	let coordinator!: WorkflowCoordinator;
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-	});
-	await bindTestOwnerHost(host, "tui");
-	t.after(async () => coordinator.shutdown(async () => host.runtime.dispose()));
+	t.after(async () => host.runtime.dispose());
 	const spawnInput = {
 		request: "Remain visible after this process Runtime cannot initialize.",
 		label: "Startup Failure Worker",
@@ -394,101 +406,79 @@ test("a selected Agent whose runtime initialization fails closes the invalid vie
 			extensions: "none" as const,
 		},
 	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", spawnInput, {
-				id: "spawn-selected-startup-failure",
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const spawn = await coordinator.forAgent(identity.agentId).spawn(
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
 		"spawn-selected-startup-failure",
 		spawnInput,
 	);
 	assert.deepEqual(
 		{
-			disposition: spawn.disposition,
-			failedStage: "failedStage" in spawn ? spawn.failedStage : undefined,
+			disposition: (spawn.details as { disposition: string }).disposition,
+			failedStage: (spawn.details as { failedStage?: string }).failedStage,
 		},
 		{ disposition: "created_unscheduled", failedStage: "run_start" },
 	);
-	assert.ok("agentId" in spawn);
+	const agentId = (spawn.details as { agentId: string }).agentId;
 
 	const { command, surface: selector } = await openAgentsSurface(host);
 	selector.handleInput?.("\t");
-	const agentId = selectAgentByLabel(selector, "Startup Failure Worker");
-	assert.ok(agentId);
+	assert.equal(selectAgentByLabel(selector, "Startup Failure Worker"), agentId);
 	await command;
 	assert.equal(host.ui.customSurfaces.length, 0);
-	assert.equal(coordinator.forAgent(identity.agentId).status(agentId).run.phase, "dormant");
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
 });
 
 test("an unexpected child-process exit closes the exact selected view", async (t) => {
-	let coordinator!: WorkflowCoordinator;
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const probe = configureProcessAgentViewProbe(t, "unexpected-exit");
+	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-	});
-	await bindTestOwnerHost(host, "tui");
-	const owner = coordinator.forAgent(identity.agentId);
-	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
-	t.after(async () => {
-		await activeView?.close();
-		await coordinator.shutdown(async () => host.runtime.dispose());
-	});
-	const spawnInput = {
-		request: "Become Dormant before passive Runtime preparation fails.",
-		label: "Passive Failure Worker",
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", spawnInput, { id: "spawn-passive-failure-worker" }),
-			{ stopReason: "toolUse" },
-		),
-	);
+	t.after(async () => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("The initial passive-failure Run settles."),
 	]);
-	const spawn = await owner.spawn("spawn-passive-failure-worker", spawnInput);
-	assert.ok("agentId" in spawn && spawn.agentId);
-	const agentId = spawn.agentId;
-	await waitForCondition(() => {
-		const run = owner.status(agentId).run;
-		return run.phase === "live" && run.work === "settled";
-	});
-	const terminateInput = {
-		operation: "terminate" as const,
-		agentId,
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_control", terminateInput, {
-				id: "terminate-passive-failure-worker",
-			}),
-			{ stopReason: "toolUse" },
-		),
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-passive-failure-worker",
+		{
+			request: "Become Dormant before passive Runtime preparation fails.",
+			label: "Passive Failure Worker",
+		},
 	);
-	await owner.control("terminate-passive-failure-worker", terminateInput);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"The initial passive-failure Run settles.",
+		)
+	);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-passive-failure-worker",
+		{ operation: "terminate", agentId },
+	);
 
-	activeView = await owner.openAgentView(agentId);
-	assert.ok(activeView);
-	let closed = false;
-	activeView.addCloseHandler(() => {
-		closed = true;
-	});
-	for (const character of "/quit") activeView.projection().dispatchInput(character);
-	activeView.projection().dispatchInput("\r");
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
+	for (const character of "/exit-agent-process") view.handleInput?.(character);
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes("/exit-agent-process")
+	);
+	view.handleInput?.("\r");
 
-	await waitForCondition(() => closed);
-	assert.equal(owner.status(agentId).run.phase, "dormant");
+	await command;
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "process_exit" && entry.sessionId === agentId &&
+			entry.pid !== process.pid && entry.exitCode === 17,
+	));
+	assert.equal(host.ui.customSurfaces.length, 0);
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	assert.match(
 		JSON.stringify(host.services.diagnostics),
 		/child_runtime_(?:unexpected_exit|channel_closed)/,
@@ -536,48 +526,72 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 		entryId: spawnSourceEntry.id,
 		toolCallId: "spawn-preflight-retention-worker",
 	});
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", {
-				operation: "answer",
-				requestId: creationRequestId,
-				answer: "The initial Agent turn settled.",
-			}, { id: "answer-preflight-retention-creation-request" }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The initial Agent turn settled."),
-		fauxAssistantMessage("The submitted turn completed after returning to the Owner."),
-	]);
+	const routePreflightResponse = (context: Context): AssistantMessage => {
+		const transcript = JSON.stringify(context.messages);
+		if (transcript.includes(submittedInput)) {
+			return fauxAssistantMessage("The submitted turn completed after returning to the Owner.");
+		}
+		if (transcript.includes('"toolCallId":"answer-preflight-retention-creation-request"')) {
+			return fauxAssistantMessage("The initial Agent turn settled.");
+		}
+		if (
+			transcript.includes("Settle before the Owner submits a successor turn.") &&
+			transcript.includes('\\"kind\\":\\"request\\"')
+		) {
+			return fauxAssistantMessage(
+				fauxToolCall("agent_message", {
+					operation: "answer",
+					requestId: creationRequestId,
+					answer: "The initial Agent turn settled.",
+				}, { id: "answer-preflight-retention-creation-request" }),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage("The Owner received the initial Agent Answer.");
+	};
+	host.model.setResponses(Array.from({ length: 4 }, () => routePreflightResponse));
 	const spawn = await owner.spawn("spawn-preflight-retention-worker", spawnInput);
 	assert.ok("agentId" in spawn && spawn.agentId);
 	const agentId = spawn.agentId;
 	await waitForCondition(() => {
 		const transcriptPath = owner.status(agentId).primaryEvidence.transcriptPath;
-		return transcriptPath !== null && JSON.stringify(
-			SessionManager.open(transcriptPath).getEntries(),
-		).includes("The initial Agent turn settled.");
+		return transcriptPath !== null && SessionManager.open(transcriptPath).getEntries().some(
+			(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+				JSON.stringify(entry.message.content).includes("The initial Agent turn settled."),
+		);
 	});
 	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
 
 	const activeView = await owner.openAgentView(agentId);
 	assert.ok(activeView);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
 	for (const character of submittedInput) {
 		activeView.projection().dispatchInput(character);
 	}
+	await waitForCondition(() =>
+		stripTerminalSequences(activeView.projection().presentation.render(80).join("\n"))
+			.includes(submittedInput)
+	);
 	activeView.projection().dispatchInput("\r");
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
 		(entry) => entry.kind === "input_preflight_started" && entry.sessionId === agentId,
 	));
-	await owner.openAgentView(identity.agentId);
+	const returningToOwner = owner.openAgentView(identity.agentId);
 	await releaseProcessAgentViewProbe(probe.releasePath);
+	await returningToOwner;
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
 		(entry) => entry.kind === "input_preflight_finished" && entry.staleContextError === null,
 	));
 	await waitForCondition(() => {
 		const transcriptPath = owner.status(agentId).primaryEvidence.transcriptPath;
-		return transcriptPath !== null && JSON.stringify(
-			SessionManager.open(transcriptPath).getEntries(),
-		).includes("The submitted turn completed after returning to the Owner.");
+		return transcriptPath !== null && SessionManager.open(transcriptPath).getEntries().some(
+			(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+				JSON.stringify(entry.message.content).includes(
+					"The submitted turn completed after returning to the Owner.",
+				),
+		);
 	});
 	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
 });
@@ -657,6 +671,11 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 	for (const character of "Direction submitted from the Dormant Agent editor.") {
 		view.handleInput?.(character);
 	}
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Direction submitted from the Dormant Agent editor.",
+		)
+	);
 	view.handleInput?.("\r");
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, agentId)).includes(
@@ -676,9 +695,10 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 		1,
 	);
 	assert.equal(await currentRunPhase(host, agentId), "live");
-	assert.match(
-		stripTerminalSequences(view.render(80).join("\n")),
-		/The successor received the Dormant editor input/,
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"The successor received the Dormant editor input.",
+		)
 	);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
 
@@ -818,7 +838,7 @@ test("Dormant session_start input activates the same attached Agent runtime", as
 			"Dormant Runtime startup",
 		)
 	);
-	assert.equal(await currentRunPhase(host, agentId), "dormant");
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "live");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		!stripTerminalSequences(view.render(80).join("\n")).includes(
@@ -915,6 +935,7 @@ test("closing a Dormant session_start modal cancels view initialization without 
 		"view closure must not wait for hidden Dormant UI input",
 	);
 	assert.equal(owner.status(agentId).run.phase, "dormant");
+	await releaseProcessAgentViewProbe(probe.releasePath);
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
 		childProcessSessionShutdowns(entries, agentId).length === 2
 	);
@@ -922,16 +943,14 @@ test("closing a Dormant session_start modal cancels view initialization without 
 		.filter((entry) => entry.sessionId === agentId && entry.pid !== process.pid);
 	assert.equal(childProcessSessionStarts(lifecycleEvidence, agentId).length, 2);
 	assert.equal(childProcessSessionShutdowns(lifecycleEvidence, agentId).length, 2);
-	assert.deepEqual(lifecycleEvidence
-		.filter((entry) => entry.kind === "session_start_after_ui" || entry.kind === "session_shutdown")
-		.slice(-2)
-		.map((entry) => entry.kind), [
-		"session_start_after_ui",
-		"session_shutdown",
-	]);
-	await releaseProcessAgentViewProbe(probe.releasePath);
-	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
-		entries.filter((entry) => entry.kind === "component_dispose" && entry.sessionId === agentId).length === 1
+	assert.equal(
+		lifecycleEvidence.filter((entry) => entry.kind === "session_start_after_ui").length,
+		0,
+	);
+	assert.deepEqual(
+		lifecycleEvidence.filter((entry) => entry.kind === "session_shutdown")
+			.map((entry) => entry.kind),
+		["session_shutdown", "session_shutdown"],
 	);
 	assert.equal(
 		owner.status(agentId).run.retentionReasons.some(
@@ -1029,10 +1048,15 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 		.filter((entry) => entry.sessionId === agentId && entry.pid !== process.pid);
 	assert.equal(childProcessSessionStarts(lifecycleEvidence, agentId).length, 2);
 	assert.equal(childProcessSessionShutdowns(lifecycleEvidence, agentId).length, 2);
-	assert.deepEqual(lifecycleEvidence
-		.filter((entry) => entry.kind === "session_start_after_ui" || entry.kind === "session_shutdown")
-		.slice(-2)
-		.map((entry) => entry.kind), ["session_start_after_ui", "session_shutdown"]);
+	assert.equal(
+		lifecycleEvidence.filter((entry) => entry.kind === "session_start_after_ui").length,
+		0,
+	);
+	assert.deepEqual(
+		lifecycleEvidence.filter((entry) => entry.kind === "session_shutdown")
+			.map((entry) => entry.kind),
+		["session_shutdown", "session_shutdown"],
+	);
 });
 
 test("/agents switches the mounted durable view between independent child modes", async (t) => {
@@ -1180,6 +1204,10 @@ test("later Runtime preparations load current file-backed child configuration wi
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, secondAgentId)).includes("Replacement resource")
 	);
+	await waitForCondition(async () => {
+		const run = await currentRunState(host, secondAgentId);
+		return run.phase === "live" && run.work === "settled";
+	});
 	const secondOpen = await openSelectedAgentView(host, secondAgentId);
 	assert.match(
 		stripTerminalSequences(secondOpen.view.render(80).join("\n")),
@@ -1207,7 +1235,6 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
-		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
 	});
 	let markFailureStarted!: () => void;
@@ -1222,18 +1249,29 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		releaseFailure();
 		await host.runtime.dispose();
 	});
-	const routeResponse = async (context: { messages: unknown; tools?: Array<{ name: string }> }) => {
+	const routeResponse = async (context: Context) => {
 		const messages = JSON.stringify(context.messages);
-		if (context.tools?.some(({ name }) => name === "moderator_control")) {
-			return fauxAssistantMessage("The Moderator observed the failed obligation.");
-		}
-		if (messages.includes("Fail terminally while the durable Agent view remains open.")) {
+		if (messages.includes("Trigger the selected Agent Run failure.")) {
 			markFailureStarted();
 			await failureGate;
 			return fauxAssistantMessage("The viewed exact Run failed terminally.", {
 				stopReason: "error",
 				errorMessage: "deterministic viewed Run failure",
 			});
+		}
+		if (messages.includes('"toolCallId":"answer-viewed-failure-creation-request"')) {
+			return fauxAssistantMessage("The viewed Agent is ready for a selected failure trigger.");
+		}
+		const requestId = creationRequestIdFromContext(context);
+		if (requestId) {
+			return fauxAssistantMessage(
+				fauxToolCall("agent_message", {
+					operation: "answer",
+					requestId,
+					answer: "The viewed Agent accepted its Creation Request.",
+				}, { id: "answer-viewed-failure-creation-request" }),
+				{ stopReason: "toolUse" },
+			);
 		}
 		return fauxAssistantMessage("The Owner input loop remains usable after viewed Run failure.");
 	};
@@ -1243,20 +1281,46 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		"agent_spawn",
 		"spawn-failing-agent-view",
 		{
-			request: "Fail terminally while the durable Agent view remains open.",
+			request: "Prepare for a terminal failure while the durable Agent view remains open.",
 			label: "Failing Worker",
 		},
 	);
 	const agentId = (spawn.details as { agentId: string }).agentId;
-	await failureStarted;
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"The viewed Agent is ready for a selected failure trigger.",
+		)
+	);
+	const terminated = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-ready-viewed-failure-worker",
+		{ operation: "terminate", agentId },
+	);
+	assert.equal((terminated.details as { disposition: string }).disposition, "terminated");
 	const ownerSession = host.runtime.session;
-	const { command, view } = await openSelectedAgentView(host, agentId);
-	assert.match(stripTerminalSequences(view.render(80).join("\n")), /Failing Worker.*active/);
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForCondition(() =>
+		/Failing Worker.*dormant/.test(stripTerminalSequences(view.render(80).join("\n")))
+	);
+	for (const character of "Trigger the selected Agent Run failure.") {
+		view.handleInput?.(character);
+	}
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Trigger the selected Agent Run failure.",
+		)
+	);
+	view.handleInput?.("\r");
+	await failureStarted;
+	await waitForCondition(() =>
+		/Failing Worker.*active/.test(stripTerminalSequences(view.render(80).join("\n")))
+	);
 
 	releaseFailure();
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	await waitForCondition(() =>
-		stripTerminalSequences(view.render(80).join("\n")).includes("failed")
+		/Failing Worker.*failed/.test(stripTerminalSequences(view.render(80).join("\n")))
 	);
 	assert.equal(host.ui.customSurfaces[0], view);
 	assert.equal(host.runtime.session, ownerSession);
@@ -1395,6 +1459,7 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 		markSuccessorExecutionStarted = resolve;
 	});
 	let attachedBeforeExecution = false;
+	let runAdmittedBeforeExecution = false;
 	let initialFailureProduced = false;
 	const routeSuccessor = async (context: { messages: unknown; tools?: Array<{ name: string }> }) => {
 		const messages = JSON.stringify(context.messages);
@@ -1414,13 +1479,8 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 			});
 		}
 		if (messages.includes("Start the successor through ordinary Message delivery.")) {
-			const rendered = stripTerminalSequences(view.render(80).join("\n"))
-				.replace(/\s+/g, "");
-			attachedBeforeExecution =
-				host.ui.customSurfaces[0] === view &&
-				rendered.includes("SuccessorWorker") &&
-				rendered.includes("active") &&
-				rendered.includes("StartthesuccessorthroughordinaryMessagedelivery.");
+			attachedBeforeExecution = host.ui.customSurfaces[0] === view;
+			runAdmittedBeforeExecution = await currentRunPhase(host, agentId) === "live";
 			markSuccessorExecutionStarted();
 			await successorGate;
 			return fauxAssistantMessage("The Message-started successor completed.");
@@ -1461,6 +1521,12 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	assert.equal((sent.details as { delivery: string }).delivery, "pending");
 	await successorExecutionStarted;
 	assert.equal(attachedBeforeExecution, true);
+	assert.equal(runAdmittedBeforeExecution, true);
+	await waitForCondition(() => {
+		const rendered = stripTerminalSequences(view.render(80).join("\n")).replace(/\s+/g, "");
+		return rendered.includes("SuccessorWorker") && rendered.includes("active") &&
+			rendered.includes("StartthesuccessorthroughordinaryMessagedelivery.");
+	});
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.customSurfaces[0], view);
 	assert.equal(await currentRunPhase(host, agentId), "live");
@@ -1536,21 +1602,34 @@ async function returnAgentViewToOwner(
 	command: Promise<void>,
 ): Promise<void> {
 	for (const character of "/agents") view.handleInput?.(character);
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes("/agents")
+	);
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
+	if (stripTerminalSequences(view.render(80).join("\n")).includes("Dormant Agents")) {
+		view.handleInput?.("\t");
+		await waitForCondition(() =>
+			!stripTerminalSequences(view.render(80).join("\n")).includes("Dormant Agents")
+		);
+	}
 	const ownerPattern = new RegExp(
 		`→ owner[\\s\\S]*${host.session.sessionId}`,
 	);
 	for (let tab = 0; tab < 2; tab += 1) {
+		const firstFrame = stripTerminalSequences(view.render(80).join("\n"));
 		for (let step = 0; step < MAX_SELECTOR_NAVIGATION_STEPS; step += 1) {
 			if (ownerPattern.test(stripTerminalSequences(view.render(80).join("\n")))) {
 				view.handleInput?.("\r");
 				await command;
 				return;
 			}
+			const previousFrame = view.render(80).join("\n");
 			view.handleInput?.("k");
+			await waitForFrameChange(view, previousFrame);
+			if (stripTerminalSequences(view.render(80).join("\n")) === firstFrame) break;
 		}
 		view.handleInput?.("\t");
 	}
@@ -1640,6 +1719,14 @@ function focusedDetailsShowAgent(surface: Component, targetAgentId: string): boo
 		.some((line) => line.slice(1, -1).trim() === targetAgentId);
 }
 
+async function waitForFrameChange(view: Component, previousFrame: string): Promise<void> {
+	const deadline = Date.now() + 250;
+	while (Date.now() < deadline) {
+		if (view.render(80).join("\n") !== previousFrame) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
+	}
+}
+
 async function hasRetention(
 	host: TestOwnerHost,
 	agentId: string,
@@ -1660,16 +1747,23 @@ async function hasRetention(
 }
 
 async function currentRunPhase(host: TestOwnerHost, agentId: string): Promise<string> {
+	return (await currentRunState(host, agentId)).phase;
+}
+
+async function currentRunState(
+	host: TestOwnerHost,
+	agentId: string,
+): Promise<{ phase: string; work?: string }> {
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const status = await observe.execute(
-		`observe-run-phase-${Date.now()}`,
+		`observe-run-state-${Date.now()}`,
 		{ operation: "status", agentId },
 		undefined,
 		undefined,
 		host.session.extensionRunner.createContext(),
 	);
-	return (status.details as { run: { phase: string } }).run.phase;
+	return (status.details as { run: { phase: string; work?: string } }).run;
 }
 
 async function childEntries(host: TestOwnerHost, agentId: string) {
@@ -1687,6 +1781,62 @@ async function childEntries(host: TestOwnerHost, agentId: string) {
 	}).primaryEvidence.transcriptPath;
 	assert.ok(transcriptPath);
 	return SessionManager.open(transcriptPath).getEntries();
+}
+
+function creationAnswerResponses(
+	toolCallId: string,
+	readyText: string,
+): Array<(context: Context) => AssistantMessage> {
+	const route = (context: Context): AssistantMessage => {
+		const transcript = JSON.stringify(context.messages);
+		if (transcript.includes(`"toolCallId":"${toolCallId}"`)) {
+			return fauxAssistantMessage(readyText);
+		}
+		const requestId = creationRequestIdFromContext(context);
+		if (requestId) {
+			return fauxAssistantMessage(
+				fauxToolCall("agent_message", {
+					operation: "answer",
+					requestId,
+					answer: readyText,
+				}, { id: toolCallId }),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage("The Owner remained usable after child startup.");
+	};
+	return Array.from({ length: 4 }, () => route);
+}
+
+function creationRequestIdFromContext(context: Context): string | undefined {
+	return findCreationRequestId(context.messages);
+}
+
+function findCreationRequestId(value: unknown): string | undefined {
+	if (typeof value === "string") {
+		try {
+			return findCreationRequestId(JSON.parse(value));
+		} catch {
+			return undefined;
+		}
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const requestId = findCreationRequestId(item);
+			if (requestId) return requestId;
+		}
+		return undefined;
+	}
+	if (typeof value !== "object" || value === null) return undefined;
+	const record = value as Record<string, unknown>;
+	if (record.kind === "request" && typeof record.requestId === "string") {
+		return record.requestId;
+	}
+	for (const nested of Object.values(record)) {
+		const requestId = findCreationRequestId(nested);
+		if (requestId) return requestId;
+	}
+	return undefined;
 }
 
 function processListenerCounts(): Readonly<Record<string, number>> {
@@ -1725,6 +1875,7 @@ type ProcessAgentViewEvidence = Readonly<{
 	command?: string;
 	staleContextError?: string | null;
 	generation?: string;
+	exitCode?: number;
 }>;
 
 function configureProcessAgentViewProbe(
