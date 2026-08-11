@@ -24,15 +24,6 @@ import {
 	registerOwnerAgentTools,
 } from "./tools/owner-surfaces.ts";
 
-export {
-	participantCoordinationToolSchemas,
-	registerParticipantCoordinationTools,
-	type AgentObserveInput,
-	type AgentObserveResult,
-	type ParticipantCoordinationRole,
-	type ParticipantCoordinationToolHandlers,
-} from "./tools/participant-coordination-tools.ts";
-
 const ENTRY_MODULE_PATH = import.meta.filename;
 
 const piAgentCoordination: ExtensionFactory = (pi) => {
