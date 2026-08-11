@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -114,13 +114,121 @@ test("new Agent transcript materialization commits pre-launch Identity evidence"
 	);
 });
 
+test("new Agent transcript materialization separates parent baseline cwd from effective header cwd", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-transcript-effective-cwd-"));
+	const baselineCwd = join(root, "parent");
+	const effectiveCwd = join(root, "child");
+	await Promise.all([
+		mkdir(baselineCwd, { recursive: true }),
+		mkdir(effectiveCwd, { recursive: true }),
+	]);
+	const prepared = SessionManager.create(effectiveCwd, join(root, "sessions"), {
+		id: "agent-effective-cwd",
+	});
+	prepared.appendCustomEntry("agent-coordination.identity", {
+		agentId: "agent-effective-cwd",
+		workflowId: "workflow-effective-cwd",
+		directSpawnerAgentId: "parent-effective-cwd",
+		spawnSource: {
+			agentId: "parent-effective-cwd",
+			entryId: "spawn-entry",
+			toolCallId: "spawn-tool-call",
+		},
+		configuration: {
+			label: "effective-cwd",
+			baseline: {
+				cwd: baselineCwd,
+				model: { provider: "anthropic", modelId: "claude-test" },
+				thinking: "off",
+				tools: [],
+				skills: [],
+				extensions: [],
+			},
+		},
+	});
+	commitAgentRuntimeBlueprint(prepared, {
+		agentId: "agent-effective-cwd",
+		role: "ordinary",
+		configuration: {
+			cwd: effectiveCwd,
+			model: { provider: "anthropic", modelId: "claude-test" },
+			thinking: "off",
+			tools: ["agent_message"],
+			skills: [],
+			extensions: [],
+		},
+		projectTrusted: false,
+		skillSources: [],
+		agentsFiles: [],
+	});
+
+	const sessionFile = await materializeNewAgentTranscript(prepared);
+	assert.equal(SessionManager.open(sessionFile).getHeader()?.cwd, effectiveCwd);
+});
+
+test("transcript materialization rejects a staging header outside the effective blueprint cwd", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-transcript-wrong-header-cwd-"));
+	const effectiveCwd = join(root, "effective");
+	await mkdir(effectiveCwd, { recursive: true });
+	const prepared = SessionManager.create(root, join(root, "sessions"), {
+		id: "agent-wrong-header-cwd",
+	});
+	prepared.appendCustomEntry("agent-coordination.identity", {
+		agentId: "agent-wrong-header-cwd",
+		workflowId: "workflow-wrong-header-cwd",
+		directSpawnerAgentId: "parent-wrong-header-cwd",
+		spawnSource: {
+			agentId: "parent-wrong-header-cwd",
+			entryId: "spawn-entry",
+			toolCallId: "spawn-tool-call",
+		},
+		configuration: {
+			label: "wrong-header-cwd",
+			baseline: {
+				cwd: root,
+				model: { provider: "anthropic", modelId: "claude-test" },
+				thinking: "off",
+				tools: [],
+				skills: [],
+				extensions: [],
+			},
+		},
+	});
+	commitAgentRuntimeBlueprint(prepared, {
+		agentId: "agent-wrong-header-cwd",
+		role: "ordinary",
+		configuration: {
+			cwd: effectiveCwd,
+			model: { provider: "anthropic", modelId: "claude-test" },
+			thinking: "off",
+			tools: ["agent_message"],
+			skills: [],
+			extensions: [],
+		},
+		projectTrusted: false,
+		skillSources: [],
+		agentsFiles: [],
+	});
+
+	await assert.rejects(
+		materializeNewAgentTranscript(prepared),
+		/effective Runtime cwd/,
+	);
+});
+
 test("new Moderator transcript materialization validates its Input bootstrap", async () => {
 	const root = await mkdtemp(join(tmpdir(), "moderator-transcript-materialize-"));
-	const prepared = SessionManager.create(root, join(root, "sessions"), {
+	const baselineCwd = join(root, "owner");
+	const effectiveCwd = join(root, "moderator");
+	await Promise.all([
+		mkdir(baselineCwd, { recursive: true }),
+		mkdir(effectiveCwd, { recursive: true }),
+	]);
+	const prepared = SessionManager.create(effectiveCwd, join(root, "sessions"), {
 		id: "moderator-materialized",
 	});
 	const baseline = {
-		cwd: root,
+		cwd: baselineCwd,
 		model: { provider: "anthropic", modelId: "claude-test" },
 		thinking: "off" as const,
 		tools: [],
@@ -158,6 +266,7 @@ test("new Moderator transcript materialization validates its Input bootstrap", a
 		role: "moderator",
 		configuration: {
 			...baseline,
+			cwd: effectiveCwd,
 			tools: ["agent_message", "moderator_control"],
 		},
 		projectTrusted: false,
@@ -166,7 +275,9 @@ test("new Moderator transcript materialization validates its Input bootstrap", a
 	});
 
 	const sessionFile = await materializeNewAgentTranscript(prepared);
-	assert.equal(SessionManager.open(sessionFile).getEntries().length, 2);
+	const reopened = SessionManager.open(sessionFile);
+	assert.equal(reopened.getEntries().length, 2);
+	assert.equal(reopened.getHeader()?.cwd, effectiveCwd);
 });
 
 test("transcript materialization rejects a blueprint without its role bootstrap evidence", async () => {
