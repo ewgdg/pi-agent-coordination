@@ -1158,12 +1158,14 @@ test("session_start model work begins only after the live projection is subscrib
 		},
 	});
 	await responseStarted;
-	const statusDuringStartupWork = renderText(startedRun.projection.presentation);
+	const projection = startedRun.runtime.projection;
+	assert.ok(projection);
+	const statusDuringStartupWork = renderText(projection.presentation);
 
 	releaseResponse();
-	await startedRun.session.waitForIdle();
-	await startedRun.projection.dispose();
-	startedRun.session.dispose();
+	await startedRun.runtime.waitForIdle();
+	await projection.dispose();
+	await startedRun.runtime.dispose();
 	await host.runtime.dispose();
 	assert.match(statusDuringStartupWork, /Working/);
 });

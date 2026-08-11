@@ -6,7 +6,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
-import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
 import type {
 	AgentRetentionReason,
 	AgentRunEndCause,
@@ -33,23 +32,23 @@ export type {
 	ResidualRequestRelationships,
 	RunRetentionReason,
 } from "./agent-runtime-host.ts";
-import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
+import type {
+	HostedAgentRuntime,
+	HostedRuntimeEvent,
+} from "./hosted-agent-runtime.ts";
+import { InProcessHostedRuntime } from "./in-process-hosted-runtime.ts";
 import { SerialLane } from "./serial-lane.ts";
 
 type RequestRelationshipReason = "awaiting_answer" | "answer_owed";
 
 export type StartedAgentRuntime = Readonly<{
-	session: AgentSession;
-	projection: HostedAgentProjection;
-	inspectRuntimeSnapshot(): EffectiveRuntimeSnapshot;
+	runtime: HostedAgentRuntime;
 	ready?: Promise<void>;
 }>;
 
 type BoundAgentRuntime = {
 	handle: AgentRunHandle;
-	session: AgentSession;
-	projection: HostedAgentProjection | undefined;
-	inspectRuntimeSnapshot: () => EffectiveRuntimeSnapshot;
+	runtime: HostedAgentRuntime;
 	unsubscribe: () => void;
 	admitted: boolean;
 	failed: boolean;
@@ -127,12 +126,14 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		if (options.initialSession) {
 			this.#bindRuntime(
 				{
-					session: options.initialSession,
-					projection: undefined,
-					inspectRuntimeSnapshot: () => inspectInProcessRuntime(
-						options.initialSession!,
-						options.initialServices!,
-					),
+					runtime: new InProcessHostedRuntime({
+						session: options.initialSession,
+						projection: undefined,
+						inspectSnapshot: () => inspectInProcessRuntime(
+							options.initialSession!,
+							options.initialServices!,
+						),
+					}),
 				},
 				true,
 			);
@@ -175,7 +176,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		if (!run?.admitted) return { phase: "dormant", retentionReasons: [] };
 		return {
 			phase: this.#ending ? "ending" : "live",
-			work: run.session.isIdle ? "settled" : "active",
+			work: run.runtime.workState() === "settled" ? "settled" : "active",
 			attention: this.#inputRequired?.handle === run.handle
 				? "input_required"
 				: "none",
@@ -230,29 +231,21 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 	}
 
 	currentProjection(): TerminalProjection | undefined {
-		return this.#runtime?.projection;
+		return this.#runtime?.runtime.projection;
 	}
 
 	effectiveRuntimeSnapshot(): EffectiveRuntimeSnapshot | undefined {
-		return this.#runtime?.inspectRuntimeSnapshot();
+		return this.#runtime?.runtime.snapshot();
 	}
 
 	currentWorkState(): AgentRuntimeWorkState {
 		const run = this.#runtime;
 		if (!run?.admitted) return "unavailable";
-		return run.session.isIdle ? "settled" : "active";
+		return run.runtime.workState();
 	}
 
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification {
-		const session = this.#requireLiveSession();
-		for (const toolName of toolNames) {
-			const definition = session.getToolDefinition(toolName);
-			if (!definition) {
-				throw new Error(`invariant_violation: tool definition ${toolName} is unavailable`);
-			}
-			if (definition.executionMode === "sequential") return "blocking";
-		}
-		return "asynchronous";
+		return this.#requireLiveRuntime().classifyToolBatch(toolNames);
 	}
 
 	exactRunCancellationSignal(handle: AgentRunHandle): AbortSignal {
@@ -260,15 +253,11 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		if (!run?.admitted || run.handle !== handle) {
 			throw new Error("stale_run: cancellation signal does not target the current Agent Run");
 		}
-		const signal = run.session.agent.signal;
-		if (!signal) {
-			throw new Error("invariant_violation: current Agent Run has no cancellation signal");
-		}
-		return signal;
+		return run.runtime.cancellationSignal();
 	}
 
 	continueFromCommittedInputInLane(): Promise<void> {
-		const continuation = continueFromCommittedInput(this.#requireLiveSession());
+		const continuation = this.#requireLiveRuntime().continueFromCommittedInput();
 		this.#trackOperation(continuation);
 		return continuation;
 	}
@@ -277,28 +266,14 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		delivery: AgentRuntimeDelivery,
 		confirmation?: TranscriptCommitConfirmation,
 	): AgentRuntimeDeliveryDispatch {
-		const session = this.#requireLiveSession();
-		if (!confirmation) {
-			const completion = dispatchRuntimeDelivery(session, delivery);
-			this.#trackOperation(completion);
-			return { completion };
-		}
-		let completion!: Promise<void>;
-		const transcriptCommit = sendAndConfirmTranscriptCommit({
-			session,
-			delivery,
-			inspectCommit: confirmation.inspectCommit,
-			onDispatched: (dispatched) => {
-				completion = dispatched;
-				this.#trackOperation(dispatched);
-			},
-		});
-		return { completion, transcriptCommit };
+		const dispatched = this.#requireLiveRuntime().deliver(delivery, confirmation);
+		this.#trackOperation(dispatched.completion);
+		return dispatched;
 	}
 
 	async beginShutdown(): Promise<boolean> {
 		this.#runStartsClosed = true;
-		const projection = this.#runtime?.projection;
+		const projection = this.#runtime?.runtime.projection;
 		return projection
 			? this.cancelRuntimeInitialization(
 				projection,
@@ -312,8 +287,8 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		error: unknown,
 	): Promise<boolean> {
 		const run = this.#runtime;
-		if (!this.#starting || !run || run.projection !== projection) return false;
-		const cancellation = run.projection.cancelInitialization(error);
+		if (!this.#starting || !run || run.runtime.projection !== projection) return false;
+		const cancellation = run.runtime.projection.cancelInitialization(error);
 		if (!cancellation) return false;
 		this.#startingCancellationRequested = true;
 		await cancellation;
@@ -387,7 +362,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		run.expectedInterruption = true;
 		this.#interrupting = true;
 		try {
-			const cleared = run.session.clearQueue();
+			const cleared = run.runtime.clearQueue();
 			if (
 				cleared.steering.length > 0 ||
 				cleared.followUp.length > 0 ||
@@ -400,8 +375,13 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 				existing.followUp.push(...cleared.followUp);
 				this.#heldNativeQueue = existing;
 			}
-			await run.session.abort();
-			if (this.#runtime !== run || this.#ending || run.failed || !run.session.isIdle) {
+			await run.runtime.abort();
+			if (
+				this.#runtime !== run ||
+				this.#ending ||
+				run.failed ||
+				run.runtime.workState() !== "settled"
+			) {
 				return "not_running";
 			}
 			this.#holdSequence += 1;
@@ -467,7 +447,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		const run = this.#runtime;
 		if (!run || run.handle !== handle || this.#ending) return;
 		this.#markRunFailed(run, handle);
-		this.#trackOperation(run.session.abort());
+		this.#trackOperation(run.runtime.abort());
 	}
 
 	endInputRequired(handle: AgentRunHandle, requestId: string): void {
@@ -480,10 +460,12 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		this.#notifyStateChanged();
 	}
 
-	#requireLiveSession(): AgentSession {
-		const session = this.#runtime?.admitted ? this.#runtime.session : undefined;
-		if (!session) throw new Error(`Agent Run is unavailable: ${this.#sessionManager.getSessionId()}`);
-		return session;
+	#requireLiveRuntime(): HostedAgentRuntime {
+		const runtime = this.#runtime?.admitted ? this.#runtime.runtime : undefined;
+		if (!runtime) {
+			throw new Error(`Agent Run is unavailable: ${this.#sessionManager.getSessionId()}`);
+		}
+		return runtime;
 	}
 
 	async startInLane(
@@ -506,20 +488,20 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 	async #ensureRuntimeInLane(
 		admitRun: boolean,
 		initialRetentionReasons: readonly AgentRetentionReason[],
-	): Promise<AgentSession> {
+	): Promise<HostedAgentRuntime> {
 		const existing = this.#runtime;
 		if (existing) {
 			if (admitRun && !existing.admitted && this.#runStartsClosed) {
 				throw new Error("host_shutting_down: Agent Run startup is closed");
 			}
 			for (const reason of initialRetentionReasons) this.#retentionReasons.add(reason);
-			if (!admitRun || existing.admitted) return existing.session;
+			if (!admitRun || existing.admitted) return existing.runtime;
 			this.#starting = true;
 			this.#passivePreparation = false;
 			this.#notifyStateChanged();
 			try {
 				await this.#admitPreparedRun(existing);
-				return existing.session;
+				return existing.runtime;
 			} catch (error) {
 				const cleanupErrors = [error, ...await this.#discardFailedStart("failure")];
 				this.#clearRunScopedState();
@@ -555,7 +537,8 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 				const shutdownError = new Error(
 					"Workflow shutdown during Agent Run initialization",
 				);
-				const cancellation = startedRun.projection.cancelInitialization(shutdownError);
+				const cancellation = requireRuntimeProjection(startedRun.runtime)
+					.cancelInitialization(shutdownError);
 				if (cancellation) {
 					this.#startingCancellationRequested = true;
 					const [cancellationResult] = await Promise.allSettled([
@@ -580,11 +563,12 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 			}
 			await readiness;
 			readinessObserved = true;
-			return startedRun.session;
+			return startedRun.runtime;
 		} catch (error) {
 			const cleanupErrors: unknown[] = [error];
 			if (startedRun && readiness && !readinessObserved) {
-				const cancellation = startedRun.projection.cancelInitialization(error);
+				const cancellation = requireRuntimeProjection(startedRun.runtime)
+					.cancelInitialization(error);
 				const results = await Promise.allSettled([
 					...(cancellation ? [cancellation] : []),
 					readiness,
@@ -705,7 +689,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 
 	queuedInputCount(): number {
 		const held = this.#heldNativeQueue;
-		return (this.#runtime?.session.pendingMessageCount ?? 0) +
+		return (this.#runtime?.runtime.queuedInputCount() ?? 0) +
 			(held ? held.steering.length + held.followUp.length : 0);
 	}
 
@@ -730,7 +714,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		if (
 			this.#starting ||
 			this.#ending ||
-			!run.session.isIdle
+			run.runtime.workState() !== "settled"
 		) return "retained";
 		// Selection owns Runtime availability, not the exact Run. Release an
 		// otherwise unretained Run without tearing down its attached Pi mode.
@@ -758,8 +742,8 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		try {
 			if (!retainRuntime) {
 				await attemptCleanup(() => run.unsubscribe());
-				await attemptCleanup(() => run.projection?.dispose());
-				await attemptCleanup(() => run.session.dispose());
+				await attemptCleanup(() => run.runtime.projection?.dispose());
+				await attemptCleanup(() => run.runtime.dispose());
 			}
 		} finally {
 			if (retainRuntime) {
@@ -806,8 +790,8 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		};
 		try {
 			await attemptCleanup(() => run.unsubscribe());
-			await attemptCleanup(() => run.projection?.dispose());
-			await attemptCleanup(() => run.session.dispose());
+			await attemptCleanup(() => run.runtime.projection?.dispose());
+			await attemptCleanup(() => run.runtime.dispose());
 		} finally {
 			this.#runtime = undefined;
 			this.#clearRunScopedState();
@@ -833,7 +817,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		// extension state, and projection identity remain available to the human.
 		const retainRuntime = cause === "failure" &&
 			disposeRuntime === undefined &&
-			run.projection !== undefined &&
+			run.runtime.projection !== undefined &&
 			this.#retentionReasons.has("interactive_selection");
 		const endedHandle = run.handle;
 		const cleanupErrors: unknown[] = [];
@@ -854,16 +838,16 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 				);
 			}
 			if (!retainRuntime) await attemptCleanup(() => run.unsubscribe());
-			await attemptCleanup(() => run.session.clearQueue());
+			await attemptCleanup(() => run.runtime.clearQueue());
 			if (disposeRuntime) {
 				await attemptCleanup(disposeRuntime);
 			} else {
-				await attemptCleanup(() => run.session.abort());
-				await attemptCleanup(() => run.session.waitForIdle());
+				await attemptCleanup(() => run.runtime.abort());
+				await attemptCleanup(() => run.runtime.waitForIdle());
 			}
-			if (!retainRuntime) await attemptCleanup(() => run.projection?.dispose());
+			if (!retainRuntime) await attemptCleanup(() => run.runtime.projection?.dispose());
 			if (!disposeRuntime && !retainRuntime) {
-				await attemptCleanup(() => run.session.dispose());
+				await attemptCleanup(() => run.runtime.dispose());
 			}
 			await attemptCleanup(() => Promise.all([...this.#trackedOperations]).then(
 				() => undefined,
@@ -930,8 +914,8 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 				);
 			}
 			await attemptCleanup(() => failedStart.unsubscribe());
-			await attemptCleanup(() => failedStart.projection?.dispose());
-			await attemptCleanup(() => failedStart.session.dispose());
+			await attemptCleanup(() => failedStart.runtime.projection?.dispose());
+			await attemptCleanup(() => failedStart.runtime.dispose());
 		} finally {
 			this.#runtime = undefined;
 			this.#clearRunScopedState();
@@ -949,44 +933,30 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		this.#notifyStateChanged();
 	}
 
-	#bindRuntime(startedRun: {
-		session: AgentSession;
-		projection: HostedAgentProjection | undefined;
-		inspectRuntimeSnapshot: () => EffectiveRuntimeSnapshot;
-	}, admitted = false): void {
-		const { session, projection, inspectRuntimeSnapshot } = startedRun;
+	#bindRuntime(startedRun: StartedAgentRuntime, admitted = false): void {
+		const { runtime } = startedRun;
 		if (admitted) this.#runSequence += 1;
 		const handle = Object.freeze({
 			sequence: admitted ? this.#runSequence : 0,
 		});
 		const run: BoundAgentRuntime = {
 			handle,
-			session,
-			projection,
-			inspectRuntimeSnapshot,
+			runtime,
 			unsubscribe: () => undefined,
 			admitted,
 			failed: false,
 			expectedInterruption: false,
 			releaseDeferredUntilInputSettles: false,
 		};
-		// Publish ownership before the native subscribe call so startup rollback can
-		// still dispose the exact projection and session if subscription itself fails.
+		// Publish ownership before subscription so startup rollback can still dispose
+		// the exact hosted Runtime if event binding itself fails.
 		this.#runtime = run;
-		run.unsubscribe = session.subscribe((event) => {
-			if (
-				event.type === "agent_start" ||
-				event.type === "queue_update" ||
-				event.type === "thinking_level_changed"
-			) this.#notifyStateChanged();
+		run.unsubscribe = runtime.subscribe((event) => {
+			if (event.type === "state_changed") this.#notifyStateChanged();
 			if (event.type === "agent_end") {
-				const assistant = [...event.messages]
-					.reverse()
-					.find((message) => message.role === "assistant");
 				const expectedInterruption = run.expectedInterruption;
 				run.expectedInterruption = false;
-				const terminalFailure = assistant?.role === "assistant" &&
-					assistant.stopReason === "error" &&
+				const terminalFailure = event.outcome === "error" &&
 					!event.willRetry &&
 					// Pi 0.84 can report an error when an interrupted sequential tool
 					// rejects before the abort reaches the model loop. The explicit
@@ -1021,37 +991,37 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 	#restoreHeldNativeQueueAfterIsolatedTurn(
 		run: BoundAgentRuntime,
 		handle: AgentRunHandle,
-		event: Extract<Parameters<Parameters<AgentSession["subscribe"]>[0]>[0], {
-			type: "agent_end";
-		}>,
+		event: Extract<HostedRuntimeEvent, { type: "agent_end" }>,
 	): void {
 		const queue = this.#heldNativeQueue;
 		if (
 			this.#isolatedResumption?.handle !== handle ||
 			queue?.handle !== handle
 		) return;
-		const assistant = [...event.messages]
-			.reverse()
-			.find((message) => message.role === "assistant");
-		if (
-			assistant?.role === "assistant" &&
-			(assistant.stopReason === "error" || assistant.stopReason === "aborted")
-		) return;
+		if (event.outcome === "error" || event.outcome === "aborted") return;
 		this.#heldNativeQueue = undefined;
 		for (const message of queue.steering) {
-			this.#trackOperation(run.session.sendUserMessage(message, { deliverAs: "steer" }));
+			this.#trackOperation(run.runtime.deliver({
+				kind: "user",
+				content: message,
+				deliverAs: "steer",
+			}).completion);
 		}
 		for (const message of queue.followUp) {
-			this.#trackOperation(run.session.sendUserMessage(message, { deliverAs: "followUp" }));
+			this.#trackOperation(run.runtime.deliver({
+				kind: "user",
+				content: message,
+				deliverAs: "followUp",
+			}).completion);
 		}
 	}
 
 	#deferReleaseUntilProjectionInputSettles(run: BoundAgentRuntime): void {
 		// agent_settled can request release before the projection loop leaves
 		// session.prompt(); retry only after that exact input lifecycle closes.
-		if (run.releaseDeferredUntilInputSettles || !run.projection) return;
+		if (run.releaseDeferredUntilInputSettles || !run.runtime.projection) return;
 		run.releaseDeferredUntilInputSettles = true;
-		void run.projection.whenInputIdle().then(() => {
+		void run.runtime.projection.whenInputIdle().then(() => {
 			if (this.#runtime !== run || !run.releaseDeferredUntilInputSettles) return;
 			run.releaseDeferredUntilInputSettles = false;
 			this.#projectionInputSettledHandler?.();
@@ -1059,10 +1029,19 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 	}
 }
 
+function requireRuntimeProjection(
+	runtime: HostedAgentRuntime,
+): NonNullable<HostedAgentRuntime["projection"]> {
+	if (!runtime.projection) {
+		throw new Error("invariant_violation: started Agent Runtime has no projection");
+	}
+	return runtime.projection;
+}
+
 function hasInFlightProjectionInput(run: BoundAgentRuntime): boolean {
 	// Pi remains session-idle during async input and prompt preflight, so only
 	// the native projection can protect the exact Runtime across that interval.
-	return run.projection?.isProcessingInput() ?? false;
+	return run.runtime.projection?.isProcessingInput() ?? false;
 }
 
 function isRequestRelationshipReason(
@@ -1099,76 +1078,4 @@ function inspectInProcessRuntime(
 		projectTrusted: services.settingsManager.isProjectTrusted(),
 		sessionId: session.sessionManager.getSessionId(),
 	};
-}
-
-function dispatchRuntimeDelivery(
-	session: AgentSession,
-	delivery: AgentRuntimeDelivery,
-): Promise<void> {
-	return delivery.kind === "custom"
-		? session.sendCustomMessage(delivery.message, {
-			triggerTurn: delivery.triggerTurn,
-			...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
-		})
-		: session.sendUserMessage(
-			typeof delivery.content === "string" ? delivery.content : [...delivery.content],
-			{
-				...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
-			},
-		);
-}
-
-function sendAndConfirmTranscriptCommit(options: {
-	session: AgentSession;
-	delivery: AgentRuntimeDelivery;
-	inspectCommit(): boolean;
-	onDispatched(completion: Promise<void>): void;
-}): Promise<boolean> {
-	const { session, delivery, inspectCommit, onDispatched } = options;
-	let settleCommit!: (committed: boolean) => void;
-	let rejectCommit!: (error: unknown) => void;
-	const commit = new Promise<boolean>((resolve, reject) => {
-		settleCommit = resolve;
-		rejectCommit = reject;
-	});
-	let settled = false;
-	const inspectAfterPersistence = () => queueMicrotask(() => {
-		if (settled) return;
-		try {
-			if (!inspectCommit()) return;
-			settled = true;
-			settleCommit(true);
-		} catch (error) {
-			settled = true;
-			rejectCommit(error);
-		}
-	});
-	const unsubscribe = session.subscribe((event) => {
-		if (
-			event.type === "message_end" &&
-			(
-				(delivery.kind === "custom" && event.message.role === "custom") ||
-				(delivery.kind === "user" && event.message.role === "user")
-			)
-		) inspectAfterPersistence();
-	});
-	const completion = dispatchRuntimeDelivery(session, delivery);
-	onDispatched(completion);
-	void completion.then(
-		() => {
-			if (settled) return;
-			inspectAfterPersistence();
-			queueMicrotask(() => {
-				if (settled) return;
-				settled = true;
-				settleCommit(false);
-			});
-		},
-		(error) => {
-			if (settled) return;
-			settled = true;
-			rejectCommit(error);
-		},
-	);
-	return commit.finally(unsubscribe);
 }

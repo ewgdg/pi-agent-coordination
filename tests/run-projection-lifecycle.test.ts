@@ -17,6 +17,7 @@ import {
 	type PiNativeAgentProjection,
 } from "../src/pi-integration/native-agent-projection.ts";
 import { InProcessAgentHost } from "../src/runtime/in-process-agent-host.ts";
+import { InProcessHostedRuntime } from "../src/runtime/in-process-hosted-runtime.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
@@ -181,7 +182,7 @@ test("post-binding startup failure cancels and observes pending exact readiness"
 	const ready = new Promise<void>((_resolve, reject) => {
 		rejectReady = reject;
 	});
-	const nativeProjection = resource.startedRun.projection;
+	const nativeProjection = resource.projection;
 	const projection: PiNativeAgentProjection = {
 		...nativeProjection,
 		ready: () => ready,
@@ -193,8 +194,7 @@ test("post-binding startup failure cancels and observes pending exact readiness"
 	const host = InProcessAgentHost.createChild({
 		sessionManager: SessionManager.inMemory(),
 		startSession: async () => ({
-			...resource.startedRun,
-			projection,
+			...resource.startedRunWithProjection(projection),
 			ready,
 		}),
 	});
@@ -277,7 +277,7 @@ test("shutdown fenced before projection binding observes accepted startup cancel
 		rejectReady = reject;
 	});
 	let disposal: Promise<void> | undefined;
-	const nativeProjection = resource.startedRun.projection;
+	const nativeProjection = resource.projection;
 	const projection: PiNativeAgentProjection = {
 		...nativeProjection,
 		ready: () => ready,
@@ -296,7 +296,7 @@ test("shutdown fenced before projection binding observes accepted startup cancel
 		startSession: async () => {
 			markPreparationStarted();
 			await preparationGate;
-			return { ...resource.startedRun, projection, ready };
+			return { ...resource.startedRunWithProjection(projection), ready };
 		},
 	});
 	const endedCauses: string[] = [];
@@ -332,7 +332,7 @@ test("a naturally rejected startup remains Run Failure after a pre-binding shutd
 	const ready = new Promise<void>((_resolve, reject) => {
 		rejectReady = reject;
 	});
-	const nativeProjection = resource.startedRun.projection;
+	const nativeProjection = resource.projection;
 	const projection: PiNativeAgentProjection = {
 		...nativeProjection,
 		ready: () => ready,
@@ -346,7 +346,7 @@ test("a naturally rejected startup remains Run Failure after a pre-binding shutd
 		startSession: async () => {
 			markPreparationStarted();
 			await preparationGate;
-			return { ...resource.startedRun, projection, ready };
+			return { ...resource.startedRunWithProjection(projection), ready };
 		},
 	});
 	const endedCauses: string[] = [];
@@ -448,11 +448,13 @@ test("termination keeps the projection subscribed through final Run settlement",
 	const agentHost = InProcessAgentHost.createChild({
 		sessionManager: session.sessionManager,
 		startSession: async () => ({
-			session,
-			projection,
-			inspectRuntimeSnapshot: () => {
-				throw new Error("snapshot is not inspected by this lifecycle test");
-			},
+			runtime: new InProcessHostedRuntime({
+				session,
+				projection,
+				inspectSnapshot: () => {
+					throw new Error("snapshot is not inspected by this lifecycle test");
+				},
+			}),
 		}),
 	});
 	await agentHost.lane.run(() => agentHost.startInLane());
@@ -584,20 +586,11 @@ function createRunResource(options?: {
 	projectionDisposeError?: Error;
 	subscribeError?: Error;
 }): {
-	startedRun: Readonly<{
-		session: AgentSession;
-		projection: PiNativeAgentProjection;
-		inspectRuntimeSnapshot(): Readonly<{
-			cwd: string;
-			model: Readonly<{ provider: string; modelId: string }>;
-			thinking: "high";
-			tools: readonly string[];
-			skills: readonly string[];
-			fileExtensionPaths: readonly string[];
-			projectTrusted: boolean;
-			sessionId: string;
-		}>;
-	}>;
+	startedRun: Readonly<{ runtime: InProcessHostedRuntime }>;
+	startedRunWithProjection(
+		projection: PiNativeAgentProjection,
+	): Readonly<{ runtime: InProcessHostedRuntime }>;
+	projection: PiNativeAgentProjection;
 	session: AgentSession;
 	signal: AbortSignal;
 	counts(): Readonly<{
@@ -660,21 +653,27 @@ function createRunResource(options?: {
 			sessionDisposals += 1;
 		},
 	} as unknown as AgentSession;
-	return {
-		startedRun: {
+	const inspectSnapshot = () => ({
+		cwd: "/runtime/project",
+		model: { provider: "test", modelId: "runtime-model" },
+		thinking: "high" as const,
+		tools: ["read", "sequential_tool"],
+		skills: ["runtime-skill"],
+		fileExtensionPaths: ["/runtime/extension.ts"],
+		projectTrusted: true,
+		sessionId: "projected-run",
+	});
+	const startedRunWithProjection = (hostedProjection: PiNativeAgentProjection) => ({
+		runtime: new InProcessHostedRuntime({
 			session,
-			projection,
-			inspectRuntimeSnapshot: () => ({
-				cwd: "/runtime/project",
-				model: { provider: "test", modelId: "runtime-model" },
-				thinking: "high",
-				tools: ["read", "sequential_tool"],
-				skills: ["runtime-skill"],
-				fileExtensionPaths: ["/runtime/extension.ts"],
-				projectTrusted: true,
-				sessionId: "projected-run",
-			}),
-		},
+			projection: hostedProjection,
+			inspectSnapshot,
+		}),
+	});
+	return {
+		startedRun: startedRunWithProjection(projection),
+		startedRunWithProjection,
+		projection,
 		session,
 		signal: cancellation.signal,
 		counts: () => ({

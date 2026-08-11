@@ -42,6 +42,7 @@ import {
 	InProcessAgentHost,
 	type StartedAgentRuntime,
 } from "./in-process-agent-host.ts";
+import { InProcessHostedRuntime } from "./in-process-hosted-runtime.ts";
 import { SerialLane } from "./serial-lane.ts";
 import { discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
 import {
@@ -465,10 +466,10 @@ export class DefaultChildSessionFactory {
 			throw error;
 		}
 		return {
-			session,
-			projection,
-			ready,
-			inspectRuntimeSnapshot: () => ({
+			runtime: new InProcessHostedRuntime({
+				session,
+				projection,
+				inspectSnapshot: () => ({
 				cwd: prepared.services.cwd,
 				model: session.model
 					? { provider: session.model.provider, modelId: session.model.id }
@@ -482,8 +483,10 @@ export class DefaultChildSessionFactory {
 					.getExtensions()
 					.extensions.map(({ resolvedPath }) => resolvedPath),
 				projectTrusted: prepared.services.settingsManager.isProjectTrusted(),
-				sessionId: session.sessionManager.getSessionId(),
+					sessionId: session.sessionManager.getSessionId(),
+				}),
 			}),
+			ready,
 		};
 	}
 
