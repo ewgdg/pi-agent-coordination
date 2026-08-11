@@ -12,6 +12,7 @@ import {
 	type TranscriptReader,
 } from "../src/transcript/agent-transcript.ts";
 import {
+	materializeNewAgentTranscript,
 	transcriptFromSessionFile,
 	transcriptFromSessionManager,
 } from "../src/pi-integration/session-manager-transcript.ts";
@@ -53,6 +54,27 @@ test("local SessionManager transcript inspections are snapshots, not a shared ca
 	assert.notEqual(before, after);
 	assert.notEqual(before.entries, after.entries);
 	assert.notEqual(before.activeBranch, after.activeBranch);
+});
+
+test("new Agent transcript materialization commits pre-launch Identity evidence", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-transcript-materialize-"));
+	const prepared = SessionManager.create(root, join(root, "sessions"), {
+		id: "agent-materialized",
+	});
+	prepared.appendCustomEntry("agent-coordination.identity", {
+		agentId: "agent-materialized",
+	});
+
+	const sessionFile = await materializeNewAgentTranscript(prepared);
+	const reopened = SessionManager.open(sessionFile);
+
+	assert.equal(reopened.getSessionId(), "agent-materialized");
+	assert.equal(reopened.getEntries().length, 1);
+	assert.equal(reopened.getEntries()[0]?.type, "custom");
+	await assert.rejects(
+		materializeNewAgentTranscript(prepared),
+		/transcript already exists/,
+	);
 });
 
 test("file-backed transcript inspections reopen durable evidence written by another authority", async () => {

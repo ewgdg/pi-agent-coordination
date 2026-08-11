@@ -1,4 +1,5 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { writeFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
 import {
@@ -46,6 +47,35 @@ export function transcriptFromSessionFile(sessionFile: string): AgentTranscript 
 	return new AgentTranscript(new SessionFileTranscriptReader(sessionFile));
 }
 
+/** Persists pre-launch evidence before a fresh Pi process becomes transcript authority. */
+export async function materializeNewAgentTranscript(
+	sessionManager: SessionManager,
+): Promise<string> {
+	const sessionFile = sessionManager.getSessionFile();
+	const header = sessionManager.getHeader();
+	if (!sessionFile || !header) {
+		throw new Error("transcript_materialization_failed: persisted session header is unavailable");
+	}
+	const entries = sessionManager.getEntries();
+	if (entries.length === 0) {
+		throw new Error("transcript_materialization_failed: Agent Identity evidence is unavailable");
+	}
+	const body = `${[header, ...entries]
+		.map((entry) => JSON.stringify(entry))
+		.join("\n")}\n`;
+	try {
+		await writeFile(sessionFile, body, { encoding: "utf8", flag: "wx", mode: 0o600 });
+	} catch (error) {
+		if (hasCode(error, "EEXIST")) {
+			throw new Error("transcript_materialization_failed: transcript already exists", {
+				cause: error,
+			});
+		}
+		throw error;
+	}
+	return sessionFile;
+}
+
 function inspectSessionManager(sessionManager: SessionManager): TranscriptInspection {
 	return {
 		sessionId: sessionManager.getSessionId(),
@@ -55,4 +85,9 @@ function inspectSessionManager(sessionManager: SessionManager): TranscriptInspec
 		activeBranch: sessionManager.getBranch(),
 		context: sessionManager.buildSessionContext(),
 	};
+}
+
+function hasCode(error: unknown, code: string): boolean {
+	return typeof error === "object" && error !== null && "code" in error
+		&& (error as NodeJS.ErrnoException).code === code;
 }
