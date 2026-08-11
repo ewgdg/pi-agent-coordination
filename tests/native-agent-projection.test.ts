@@ -658,6 +658,7 @@ test("streaming follows at the tail and preserves the inspected transcript ancho
 	let customEditorEscapes = 0;
 	const host = await createTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: false,
 		fauxTokensPerSecond: 400,
 		additionalExtensionFactories: [{
 			name: "streaming-custom-editor-probe",

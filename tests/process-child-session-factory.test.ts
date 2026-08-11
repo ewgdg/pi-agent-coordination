@@ -9,7 +9,10 @@ import {
 	fauxAssistantMessage,
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+	initTheme,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
@@ -23,6 +26,7 @@ import {
 import { createProcessModelBroker } from "./support/process-model-broker.ts";
 
 const TEST_TIMEOUT_MS = 45_000;
+const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 
 test("ordinary production spawn runs in a real child process over Owner participant RPC", {
 	timeout: TEST_TIMEOUT_MS,
@@ -224,6 +228,8 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 	skip: process.platform === "win32",
 }, async () => {
 	const broker = await createProcessModelBroker();
+	initTheme("dark");
+	const ownerTheme = (globalThis as Record<PropertyKey, unknown>)[THEME_KEY];
 	const moderatorWidgetExtension = join(
 		broker.runtimeDirectory,
 		"moderator-process-widget.mjs",
@@ -231,6 +237,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 	await writeFile(moderatorWidgetExtension, [
 		"export default function moderatorProcessWidget(pi) {",
 		"  pi.on('session_start', (_event, ctx) => {",
+		"    if (process.env.PI_AGENT_COORDINATION_BOOTSTRAP) ctx.ui.setTheme('light');",
 		"    ctx.ui.setWidget('moderator-process-widget', [",
 		"      'PROCESS_RUNTIME_CHILD_WIDGET',",
 		"      `PID=${process.pid}`,",
@@ -382,6 +389,11 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		replacementPid = Number(pidMatch[1]);
 		assert.ok(Number.isSafeInteger(replacementPid) && replacementPid > 1);
 		assert.notEqual(replacementPid, process.pid);
+		assert.equal(
+			(globalThis as Record<PropertyKey, unknown>)[THEME_KEY],
+			ownerTheme,
+			"child-local theme changes must not mutate Owner process globals",
+		);
 		await view.close();
 		assert.equal(moderatorProviderRequests, 3);
 	} finally {

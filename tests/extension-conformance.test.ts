@@ -74,7 +74,9 @@ test("role-bound extensions expose strict sequential tools with compact native r
 				: createModeratorBoundExtension(
 					unavailableView as () => ModeratorAgentCoordinatorView,
 				);
-			const host = await createTestOwnerHost(extension);
+			const host = await createTestOwnerHost(extension, {
+				processVisibleModel: false,
+			});
 			const expectedTools = role === "ordinary" ? ordinaryTools : moderatorTools;
 			assert.deepEqual(host.session.getActiveToolNames().sort(), [...expectedTools].sort());
 			for (const toolName of expectedTools) {
