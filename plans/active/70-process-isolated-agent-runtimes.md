@@ -495,7 +495,7 @@ Future-platform extensibility gate:
 - [x] Proved a fresh Pi CLI/PTY/Unix-socket vertical slice on throwaway branch `poc/process-isolated-pty` at `b1eef85`.
 - [x] Confirmed the standard Pi CLI reconstructs Pi-owned inline factories in every process.
 - [x] Confirmed real Herdr settlement, real child TUI, PTY input/resize, durable transcript, and clean child exit in the PoC.
-- [ ] Approve this proposed plan and move it to `plans/active/`.
+- [x] Approved and moved to `plans/active/` on implementation branch `feat/process-isolated-agent-runtimes`.
 - [ ] Complete Milestones 1–10.
 
 ## Surprises and discoveries
