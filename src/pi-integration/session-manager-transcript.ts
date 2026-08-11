@@ -67,9 +67,18 @@ export async function materializeNewAgentTranscript(
 		sessionId: sessionManager.getSessionId(),
 		entries,
 	});
+	if (header.id !== blueprint.agentId) {
+		throw new Error(
+			"transcript_materialization_failed: header does not match the Runtime blueprint Agent",
+		);
+	}
+	if (header.cwd !== blueprint.configuration.cwd) {
+		throw new Error(
+			"transcript_materialization_failed: header does not use the effective Runtime cwd",
+		);
+	}
 	const coldIdentityOptions = {
 		sessionId: sessionManager.getSessionId(),
-		sessionCwd: blueprint.configuration.cwd,
 		entries,
 	};
 	if (blueprint.role === "ordinary") {

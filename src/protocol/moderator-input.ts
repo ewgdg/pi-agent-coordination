@@ -164,7 +164,6 @@ export function validateCommittedModeratorInput(options: {
 
 export function validateColdModeratorInput(options: {
 	sessionId: string;
-	sessionCwd: string;
 	entries: readonly SessionEntry[];
 }): Readonly<{
 	identity: ModeratorIdentity;
@@ -234,11 +233,6 @@ export function validateColdModeratorInput(options: {
 	} catch (error) {
 		throw new ProtocolInvariantError(
 			error instanceof Error ? error.message : "Moderator Input baseline is invalid",
-		);
-	}
-	if (baseline.cwd !== options.sessionCwd) {
-		throw new ProtocolInvariantError(
-			"Moderator baseline cwd does not match its Pi session cwd",
 		);
 	}
 	return {

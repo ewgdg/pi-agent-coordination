@@ -61,7 +61,6 @@ export function validateCommittedChildIdentity(
 
 export function validateColdChildIdentity(options: {
 	sessionId: string;
-	sessionCwd: string;
 	entries: readonly SessionEntry[];
 }): ChildAgentIdentity {
 	const identityEntries = options.entries.filter(
@@ -131,9 +130,6 @@ export function validateColdChildIdentity(options: {
 		throw new ProtocolInvariantError(
 			error instanceof Error ? error.message : "child Identity baseline is invalid",
 		);
-	}
-	if (baseline.cwd !== options.sessionCwd) {
-		throw new ProtocolInvariantError("child baseline cwd does not match its Pi session cwd");
 	}
 	return {
 		agentId: options.sessionId,

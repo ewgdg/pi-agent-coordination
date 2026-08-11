@@ -341,7 +341,6 @@ async function readCandidate(path: string): Promise<Candidate> {
 				role: "moderator",
 				identity: validateColdModeratorInput({
 					sessionId: header.id,
-					sessionCwd: header.cwd,
 					entries,
 				}).identity,
 			};
@@ -350,7 +349,6 @@ async function readCandidate(path: string): Promise<Candidate> {
 				role: "ordinary",
 				identity: validateColdChildIdentity({
 					sessionId: header.id,
-					sessionCwd: header.cwd,
 					entries,
 				}),
 			};
