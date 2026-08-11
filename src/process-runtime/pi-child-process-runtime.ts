@@ -121,7 +121,7 @@ export class PiChildProcessRuntime {
 			this.#channelClosed = true;
 			if (this.#exitObserved) return;
 			const forceCleanup = setTimeout(() => {
-				if (!this.#exitObserved) void this.#projection.dispose();
+				if (!this.#exitObserved) forceKillProjection(this.#projection);
 			}, DEFAULT_SHUTDOWN_GRACE_MILLISECONDS);
 			forceCleanup.unref();
 		});
@@ -268,6 +268,7 @@ export class PiChildProcessRuntime {
 					.join("\n");
 			}
 			await channel?.close().catch(() => undefined);
+			if (projection) forceKillProjection(projection);
 			await projection?.dispose().catch(() => undefined);
 			await unlinkIfExists(bootstrapPath);
 			await listener.close().catch(() => undefined);
@@ -329,14 +330,25 @@ export class PiChildProcessRuntime {
 	}
 
 	async #shutdown(reason: string | undefined, graceMilliseconds: number): Promise<PtyExit> {
+		if (!Number.isSafeInteger(graceMilliseconds) || graceMilliseconds < 1) {
+			throw new Error("invalid_child_runtime_shutdown_grace: expected a positive integer");
+		}
 		if (!this.#channelClosed) {
 			await this.channel.request("runtime.shutdown", {
 				...(reason === undefined ? {} : { reason }),
 			}).catch(() => undefined);
+		} else {
+			// If structured control is already unavailable, the native command is the
+			// last graceful path before the exact process is forcibly terminated.
+			try {
+				this.#projection.writeInput("/quit\r");
+			} catch {
+				// The exit may have won the race; the exact exited Promise settles below.
+			}
 		}
 		const gracefulExit = await withTimeout(this.exited, graceMilliseconds);
 		if (gracefulExit) return gracefulExit;
-		await this.#projection.dispose();
+		forceKillProjection(this.#projection);
 		return await this.exited;
 	}
 
@@ -409,6 +421,14 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promis
 		]);
 	} finally {
 		if (timer) clearTimeout(timer);
+	}
+}
+
+function forceKillProjection(projection: PtyTerminalProjection): void {
+	try {
+		projection.kill("SIGKILL");
+	} catch {
+		// A concurrent exit is success for cleanup; exact settlement is observed via exited.
 	}
 }
 

@@ -34,6 +34,10 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		streamSimple: faux.streamSimple,
 	});
 
+	if (process.env.PROCESS_RUNTIME_HANG_SHUTDOWN === "1") {
+		pi.on("session_shutdown", () => new Promise<void>(() => undefined));
+	}
+
 	pi.on("session_start", (_event, ctx) => {
 		ctx.ui.setWidget("process-runtime-test", [
 			"PROCESS_RUNTIME_CHILD_WIDGET",

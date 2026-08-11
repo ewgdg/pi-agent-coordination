@@ -106,6 +106,22 @@ test("xterm-generated terminal replies use a separate PTY write path", { timeout
 	await projection.dispose();
 });
 
+test("explicit signals force a stubborn real PTY child to exact exit", { timeout: TEST_TIMEOUT_MS }, async () => {
+	const projection = await spawnNodeScript(String.raw`
+		process.on("SIGHUP", () => process.stdout.write("IGNORED_SIGHUP"));
+		process.stdin.resume();
+		process.stdout.write("READY");
+	`);
+	await waitForText(projection, "READY");
+
+	projection.kill("SIGHUP");
+	await waitForText(projection, "IGNORED_SIGHUP");
+	projection.kill("SIGKILL");
+	const exit = await projection.exited;
+	assert.notEqual(exit.signal, 0);
+	await projection.dispose();
+});
+
 test("resize updates xterm before notifying the real PTY", { timeout: TEST_TIMEOUT_MS }, async () => {
 	const projection = await spawnNodeScript(String.raw`
 		process.stdout.write("READY");

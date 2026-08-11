@@ -61,6 +61,7 @@ export interface PtyTerminalProjection {
 	frame(): TerminalProjectionFrame;
 	writeInput(data: string | Buffer): void;
 	resize(columns: number, rows: number): void;
+	kill(signal: NodeJS.Signals): void;
 	drain(): Promise<void>;
 	dispose(): Promise<void>;
 }
@@ -179,6 +180,12 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		// emulator must expose the new geometry before the PTY is notified.
 		this.#terminal.resize(columns, rows);
 		this.#child.resize(columns, rows);
+	}
+
+	kill(signal: NodeJS.Signals): void {
+		this.#requireActive();
+		if (this.#exitObserved) return;
+		this.#child.kill(signal);
 	}
 
 	drain(): Promise<void> {
