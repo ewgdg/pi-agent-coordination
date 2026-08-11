@@ -10,7 +10,6 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	SessionManager,
-	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
@@ -29,8 +28,6 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
-import { capturedAgentSession } from "./support/captured-agent-sessions.ts";
-import { capturedSessionManager } from "./support/captured-session-managers.ts";
 
 test("an authenticated Agent authors and polls one immutable Deferred Message through recipient proof", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
@@ -114,7 +111,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 		(entry) =>
 			entry.type === "custom_message" &&
 			entry.customType === "agent-coordination.message-delivery" &&
-			(entry.details as { messages?: unknown } | undefined)?.messages !== undefined,
+			JSON.stringify(entry.details) === JSON.stringify({ messages: [source] }),
 	);
 	const deliveries = entries.filter(
 		(entry) =>
@@ -794,7 +791,7 @@ test("poll rejects malformed Message Delivery evidence for another source", asyn
 		"Do not let malformed sibling evidence disappear during proof lookup.",
 	);
 	await waitForDelivery(harness, sent.source);
-	harness.childSessionManager.appendCustomMessageEntry(
+	SessionManager.open(harness.childSessionFile).appendCustomMessageEntry(
 		"agent-coordination.message-delivery",
 		JSON.stringify({
 			messages: [{
@@ -845,7 +842,10 @@ test("poll rejects unknown current-scope coordination evidence", async () => {
 		"Do not inspect through unknown coordination evidence.",
 	);
 	await waitForDelivery(harness, sent.source);
-	harness.childSessionManager.appendCustomEntry("agent-coordination.unknown", {});
+	SessionManager.open(harness.childSessionFile).appendCustomEntry(
+		"agent-coordination.unknown",
+		{},
+	);
 	const pollToolCallId = "poll-through-unknown-coordination-evidence";
 	const pollInput = {
 		operation: "poll" as const,
@@ -877,7 +877,7 @@ test("poll rejects a hidden custom message as Delivery evidence", async () => {
 		"Reject hidden custom messages during Delivery inspection.",
 	);
 	await waitForDelivery(harness, sent.source);
-	harness.childSessionManager.appendCustomMessageEntry(
+	SessionManager.open(harness.childSessionFile).appendCustomMessageEntry(
 		"agent-coordination.message-delivery",
 		JSON.stringify({
 			messages: [{
@@ -917,7 +917,6 @@ test("poll rejects a hidden custom message as Delivery evidence", async () => {
 });
 
 test("only the original sender can poll a Message", async () => {
-	const childSessions = new Map<string, AgentSession>();
 	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(
@@ -931,14 +930,6 @@ test("only the original sender can poll a Message", async () => {
 		// Keep any incidental Moderator attempt dormant so it cannot steal replies.
 		incidentBoundaryHooks: {
 			beforeModeratorRunStart: () => "confirmed_failure",
-		},
-		spawnBoundaryHooks: {
-			afterRunStart({ identity: childIdentity }) {
-				childSessions.set(
-					childIdentity.agentId,
-					capturedAgentSession(childIdentity.agentId),
-				);
-			},
 		},
 	});
 	const ownerView = coordinator.forAgent(identity.agentId);
@@ -960,10 +951,16 @@ test("only the original sender can poll a Message", async () => {
 	});
 	assert.ok("agentId" in spawnReceipt && typeof spawnReceipt.agentId === "string");
 	const childId = spawnReceipt.agentId;
-	await waitForCondition(() => childSessions.has(childId));
-	const childSession = childSessions.get(childId);
-	if (!childSession) throw new Error("Authorization child session was not captured");
-	await childSession.waitForIdle();
+	const childSessionFile = await waitForChildSessionFile(host, childId);
+	await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			JSON.stringify(entry.message.content).includes(
+				"I will not impersonate another sender.",
+			),
+	);
 	const sendToolCallId = "send-poll-authorization-message";
 	const sendInput = {
 		operation: "send" as const,
@@ -1011,11 +1008,14 @@ test("only the original sender can poll a Message", async () => {
 		isError: false,
 		timestamp: Date.now(),
 	});
-	await childSession.waitForIdle();
-	await childSession.prompt("Attempt to poll another sender's Message.");
-	await childSession.waitForIdle();
-
-	const unauthorized = childSession.sessionManager.getEntries().find(
+	const childEntries = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "child-polls-owner-message",
+	);
+	const unauthorized = childEntries.find(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -1892,7 +1892,6 @@ async function createDormantChildHarness(
 		"<inline:pi-agent-coordination>",
 	);
 	let coordinator: WorkflowCoordinator;
-	let childSessionManager: SessionManager | undefined;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		// Message-ordering tests intentionally strand unanswered work. Keep any
@@ -1901,9 +1900,6 @@ async function createDormantChildHarness(
 			beforeModeratorRunStart: () => "confirmed_failure",
 		},
 		spawnBoundaryHooks: {
-			afterIdentityCommit: ({ identity: childIdentity }) => {
-				childSessionManager = capturedSessionManager(childIdentity.agentId);
-			},
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
 		messageBoundaryHooks,
@@ -1927,13 +1923,13 @@ async function createDormantChildHarness(
 	const childId = "agentId" in spawn ? spawn.agentId : undefined;
 	if (typeof childId !== "string") throw new Error("Spawn receipt has no child identity");
 	assert.equal(view.status(childId).run.phase, "dormant");
-	if (!childSessionManager) throw new Error("Spawn did not expose its local transcript authority");
+	const childSessionFile = await waitForChildSessionFile(host, childId);
 	return {
 		host,
 		coordinator,
 		view,
 		childId,
-		childSessionManager,
+		childSessionFile,
 	};
 }
 
