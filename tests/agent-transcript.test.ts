@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { appendFile, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
@@ -8,7 +11,10 @@ import {
 	type TranscriptInspection,
 	type TranscriptReader,
 } from "../src/transcript/agent-transcript.ts";
-import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
+import {
+	transcriptFromSessionFile,
+	transcriptFromSessionManager,
+} from "../src/pi-integration/session-manager-transcript.ts";
 
 test("AgentTranscript asks its reader for a fresh inspection every time", () => {
 	const inspections: TranscriptInspection[] = [
@@ -47,6 +53,39 @@ test("local SessionManager transcript inspections are snapshots, not a shared ca
 	assert.notEqual(before, after);
 	assert.notEqual(before.entries, after.entries);
 	assert.notEqual(before.activeBranch, after.activeBranch);
+});
+
+test("file-backed transcript inspections reopen durable evidence written by another authority", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-transcript-"));
+	const writer = SessionManager.create(root, join(root, "sessions"), { id: "agent-file" });
+	writer.appendCustomEntry("agent-coordination.identity", { agentId: "agent-file" });
+	const sessionFile = writer.getSessionFile();
+	assert.ok(sessionFile);
+	const header = writer.getHeader();
+	const [identity] = writer.getEntries();
+	assert.ok(header);
+	assert.ok(identity);
+	await writeFile(
+		sessionFile,
+		`${[header, identity].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+	);
+	const transcript = transcriptFromSessionFile(sessionFile);
+
+	assert.equal(transcript.inspect().entries.length, 1);
+	await appendFile(sessionFile, `${JSON.stringify({
+		type: "custom",
+		id: "remote2",
+		parentId: identity.id,
+		timestamp: "2026-01-01T00:00:01.000Z",
+		customType: "agent-coordination.remote-marker",
+		data: { sequence: 2 },
+	})}\n`);
+	const afterRemoteWrite = transcript.inspect();
+
+	assert.equal(afterRemoteWrite.sessionId, "agent-file");
+	assert.equal(afterRemoteWrite.transcriptPath, sessionFile);
+	assert.equal(afterRemoteWrite.entries.length, 2);
+	assert.equal(afterRemoteWrite.entries.at(-1)?.type, "custom");
 });
 
 function inspection(sessionId: string, entryId: string): TranscriptInspection {
