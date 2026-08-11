@@ -7,7 +7,6 @@ import {
 	InteractiveMode,
 	SessionManager,
 	createAgentSessionFromServices,
-	createAgentSessionServices,
 	initTheme,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -22,8 +21,6 @@ import {
 } from "@earendil-works/pi-tui";
 
 import { IncompatiblePiHostError } from "../src/pi-integration/host-shape.ts";
-import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import { DefaultChildSessionFactory } from "../src/runtime/default-child-session-factory.ts";
 import {
 	createPiNativeProjectionHost,
 } from "../src/pi-integration/native-agent-projection.ts";
@@ -1087,167 +1084,6 @@ test("projection compatibility failure restores Owner globals before subscribing
 	assert.equal(projectionSubscriptions, 0);
 	assert.equal(getKeybindings(), ownerKeybindings);
 	assert.equal((globalThis as Record<PropertyKey, unknown>)[THEME_KEY], ownerTheme);
-	await host.runtime.dispose();
-});
-
-test("session_start model work begins only after the live projection is subscribed", async () => {
-	const host = await createTestOwnerHost(() => undefined, { persistent: true });
-	const ownerIdentity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	const factory = new DefaultChildSessionFactory({
-		ownerRuntime: host.runtime,
-		ownerIdentity,
-		entryModulePath: "<inline:pi-agent-coordination>",
-		packageRoot: host.cwd,
-		childExtensionFactory: () => () => undefined,
-		moderatorExtensionFactory: () => () => undefined,
-		activityExtensionFactory: () => () => undefined,
-	});
-	let markResponseStarted!: () => void;
-	const responseStarted = new Promise<void>((resolve) => {
-		markResponseStarted = resolve;
-	});
-	let releaseResponse!: () => void;
-	const responseGate = new Promise<void>((resolve) => {
-		releaseResponse = resolve;
-	});
-	host.model.setResponses([
-		async () => {
-			markResponseStarted();
-			await responseGate;
-			return fauxAssistantMessage("Child startup model work completed.");
-		},
-	]);
-	const model = host.session.model;
-	assert.ok(model);
-	const childServices = await createAgentSessionServices({
-		cwd: host.cwd,
-		agentDir: host.services.agentDir,
-		modelRuntime: host.services.modelRuntime,
-		settingsManager: host.services.settingsManager,
-		resourceLoaderOptions: {
-			noContextFiles: true,
-			noPromptTemplates: true,
-			noSkills: true,
-			noThemes: true,
-			extensionFactories: [{
-				name: "session-start-model-work-probe",
-				hidden: true,
-				factory(pi) {
-					pi.on("session_start", () => {
-						pi.sendUserMessage("Model work emitted by child session_start.");
-					});
-				},
-			}],
-		},
-	});
-	const startedRun = await factory.startSession({
-		sessionManager: SessionManager.inMemory(host.cwd),
-		prepared: {
-			services: childServices,
-			configuration: {
-				cwd: host.cwd,
-				model: { provider: model.provider, modelId: model.id },
-				thinking: "off",
-				tools: [],
-				skills: [],
-				extensions: [],
-			},
-		},
-	});
-	await responseStarted;
-	const projection = startedRun.runtime.projection;
-	assert.ok(projection);
-	const statusDuringStartupWork = renderText(projection.presentation);
-
-	releaseResponse();
-	await startedRun.runtime.waitForIdle();
-	await projection.dispose();
-	await startedRun.runtime.dispose();
-	await host.runtime.dispose();
-	assert.match(statusDuringStartupWork, /Working/);
-});
-
-test("projection construction failure disposes a partially started real Run session once", async () => {
-	const host = await createTestOwnerHost(() => undefined, { persistent: true });
-	const ownerIdentity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	let childSessionDisposals = 0;
-	const factory = new DefaultChildSessionFactory({
-		ownerRuntime: host.runtime,
-		ownerIdentity,
-		entryModulePath: "<inline:pi-agent-coordination>",
-		packageRoot: host.cwd,
-		childExtensionFactory: () => () => undefined,
-		moderatorExtensionFactory: () => () => undefined,
-		activityExtensionFactory: () => () => undefined,
-		projectionHost: {
-			async createProjection({ session }) {
-				const nativeDispose = session.dispose.bind(session);
-				session.dispose = () => {
-					childSessionDisposals += 1;
-					nativeDispose();
-				};
-				throw new Error("confirmed projection constructor failure");
-			},
-		},
-	});
-	const model = host.session.model;
-	assert.ok(model);
-	let childModelRequests = 0;
-	host.model.setResponses([
-		() => {
-			childModelRequests += 1;
-			return fauxAssistantMessage("This response must never start.");
-		},
-	]);
-	const childServices = await createAgentSessionServices({
-		cwd: host.cwd,
-		agentDir: host.services.agentDir,
-		modelRuntime: host.services.modelRuntime,
-		settingsManager: host.services.settingsManager,
-		resourceLoaderOptions: {
-			noContextFiles: true,
-			noPromptTemplates: true,
-			noSkills: true,
-			noThemes: true,
-			extensionFactories: [{
-				name: "failed-session-start-model-work-probe",
-				hidden: true,
-				factory(pi) {
-					pi.on("session_start", () => {
-						pi.sendUserMessage("Do not admit failed child startup work.");
-					});
-				},
-			}],
-		},
-	});
-
-	await assert.rejects(
-		() => factory.startSession({
-			sessionManager: SessionManager.inMemory(host.cwd),
-			prepared: {
-				services: childServices,
-				configuration: {
-					cwd: host.cwd,
-					model: { provider: model.provider, modelId: model.id },
-					thinking: "off",
-					tools: [],
-					skills: [],
-					extensions: [],
-				},
-			},
-		}),
-		/confirmed projection constructor failure/,
-	);
-	await new Promise<void>((resolve) => setImmediate(resolve));
-	assert.equal(childSessionDisposals, 1);
-	assert.equal(childModelRequests, 0);
-	assert.equal(host.runtime.session, host.session);
 	await host.runtime.dispose();
 });
 

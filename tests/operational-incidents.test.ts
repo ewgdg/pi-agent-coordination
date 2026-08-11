@@ -14,10 +14,6 @@ import {
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import piAgentCoordination from "../src/index.ts";
-import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import { resolveCommittedAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
 import {
@@ -26,10 +22,6 @@ import {
 } from "../src/policy/workflow-policy.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import {
-	createPiNativeProjectionHost,
-	type PiNativeAgentProjection,
-} from "../src/pi-integration/native-agent-projection.ts";
 import {
 	bindTestOwnerHost,
 	createTestOwnerHost,
@@ -45,11 +37,11 @@ import { ControllableOperationReviewClock } from "./support/controllable-operati
 
 const CONDITION_WAIT_TIMEOUT_MS = 5_000;
 const CONDITION_POLL_INTERVAL_MS = 1;
-const PROJECTION_RENDER_WIDTH = 240;
 
 test("a settled answer-obligated Agent creates one atomic Obligation Stall Moderator", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	let moderatorTools: string[] = [];
@@ -232,6 +224,7 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 	});
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	try {
@@ -300,6 +293,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	const clock = new ControllableOperationReviewClock();
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 		additionalExtensionPaths: [
 			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
@@ -310,28 +304,13 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 		host.runtime,
 		"<inline:pi-agent-coordination>",
 	);
-	const nativeProjectionHost = createPiNativeProjectionHost({
-		ownerRuntime: host.runtime,
-	});
-	const projectionsBySessionId = new Map<string, PiNativeAgentProjection>();
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		projectionHost: {
-			async createProjection(options) {
-				const projection = await nativeProjectionHost.createProjection(options);
-				projectionsBySessionId.set(projection.sessionId, projection);
-				return projection;
-			},
-		},
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy('{"operationReviewIntervalMs":1000}'),
 		),
 		operationReviewClock: clock,
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
@@ -383,19 +362,19 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	await coordinator.forAgent(child.agentId).reachSafeBoundary();
 
 	const moderator = await waitForModeratorKind(host, "operation_review");
-	const ordinaryProjection = projectionsBySessionId.get(child.agentId);
-	const moderatorProjection = projectionsBySessionId.get(moderator.id);
-	assert.ok(ordinaryProjection);
-	assert.ok(moderatorProjection);
+	const ordinaryView = await owner.openAgentView(child.agentId);
+	assert.ok(ordinaryView);
 	assert.match(
 		stripTerminalSequences(
-			ordinaryProjection.presentation.render(PROJECTION_RENDER_WIDTH).join("\n"),
+			ordinaryView.projection().presentation.render(240).join("\n"),
 		),
 		/Keep the Creation Request open/,
 	);
+	const moderatorView = await owner.openAgentView(moderator.id);
+	assert.ok(moderatorView);
 	assert.match(
 		stripTerminalSequences(
-			moderatorProjection.presentation.render(PROJECTION_RENDER_WIDTH).join("\n"),
+			moderatorView.projection().presentation.render(240).join("\n"),
 		),
 		/operation_review/,
 	);
@@ -461,6 +440,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 test("one failed provider request creates Run Failure without regenerating an answer-obligated Run", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	let failedChildProviderRequests = 0;
@@ -545,6 +525,7 @@ test("one failed provider request creates Run Failure without regenerating an an
 test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Moderator", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	let ownerRequestAuthored = false;
@@ -794,6 +775,7 @@ test("Request Cancellation clears Run Failure without starting a successor Incid
 test("Moderator Resolution is blocked while the Obligation Stall remains", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	host.model.setResponses([
@@ -846,6 +828,7 @@ test("Moderator Resolution is blocked while the Obligation Stall remains", async
 test("a Moderator observes the Workflow and controls only non-Owner Runs", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	host.model.setResponses([
@@ -961,6 +944,7 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 test("terminating the affected Run does not erase its durable Answer obligation", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	host.model.setResponses([
@@ -1037,6 +1021,7 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 test("a Moderator escalates through an ordinary Owner Request before Resolution", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	host.model.setResponses([
@@ -1150,6 +1135,7 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 test("external Answer clearance releases Moderator handling", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	host.model.setResponses([
@@ -1288,6 +1274,7 @@ test("external Answer clearance releases Moderator handling", async () => {
 test("a cleared Stall can recur with the same obligations and receive a fresh Moderator", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	host.model.setResponses([
@@ -1417,6 +1404,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 
 	host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 		additionalExtensionPaths: [
 			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
@@ -1430,10 +1418,6 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 	let rejectNextCreationDelivery = true;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator!.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator!.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
 				if (!rejectNextCreationDelivery) return;
@@ -1501,6 +1485,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 test("a closed settled Request cycle creates one normalized Dependency Deadlock Moderator", async () => {
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	await bindTestOwnerHost(host, "tui");
@@ -1512,10 +1497,6 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
 				if (rejectedCreationDeliveries >= 2) return;
@@ -1698,6 +1679,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 
 	host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 		additionalExtensionPaths: [
 			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
@@ -1711,10 +1693,6 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 	let rejectedCreationDeliveries = 0;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator!.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator!.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
 				if (rejectedCreationDeliveries >= 2) return;
@@ -1833,6 +1811,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock", async () => {
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	await bindTestOwnerHost(host, "tui");
@@ -1843,10 +1822,6 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
@@ -2441,6 +2416,7 @@ async function createIncidentBoundaryHarness(
 ) {
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
 	await bindTestOwnerHost(host, "tui");
@@ -2451,10 +2427,6 @@ async function createIncidentBoundaryHarness(
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks,
 	});
 	return { host, coordinator, owner: coordinator.forAgent(identity.agentId) };

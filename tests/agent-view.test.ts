@@ -16,15 +16,9 @@ import {
 } from "@earendil-works/pi-tui";
 
 import piAgentCoordination from "../src/index.ts";
-import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
-import { createPiNativeProjectionHost } from "../src/pi-integration/native-agent-projection.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import { registerAgentsCommand } from "../src/tools/owner-surfaces.ts";
 import {
 	executeAndCommitRegisteredTool,
 	openAgentsSurface,
@@ -97,6 +91,7 @@ class ThrowingAgentRenderEditor extends CustomEditor {
 test("/agents presents the live Agent's complete interactive mode while Owner stays bound", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "interactive-agent-view-probe",
 			hidden: true,
@@ -274,6 +269,7 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 test("a real child editor failure closes the view and reports one Owner diagnostic", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "throwing-agent-editor-probe",
 			hidden: true,
@@ -332,6 +328,7 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 test("a real child render failure returns a bounded frame and restores Owner input", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "throwing-agent-render-probe",
 			hidden: true,
@@ -393,6 +390,7 @@ test("a real child render failure returns a bounded frame and restores Owner inp
 test("a session_start modal is interactive before Agent Run startup settles", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "agent-startup-modal-probe",
 			hidden: true,
@@ -474,47 +472,29 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 
 test("a selected Agent whose runtime initialization fails closes the invalid view", async (t) => {
 	let coordinator!: WorkflowCoordinator;
-	let ownerAgentId = "";
-	const host = await createUnboundTestOwnerHost((pi) => {
-		registerAgentsCommand(pi, () => coordinator.forAgent(ownerAgentId));
-	}, { persistent: true });
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	const identity = adoptOrValidateOwnerIdentity(
 		host.runtime,
 		"<inline:pi-agent-coordination>",
 	);
-	ownerAgentId = identity.agentId;
-	const nativeProjectionHost = createPiNativeProjectionHost({
-		ownerRuntime: host.runtime,
-	});
-	let failLiveReadiness!: () => void;
-	const liveReadinessGate = new Promise<void>((resolve) => {
-		failLiveReadiness = resolve;
-	});
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		projectionHost: {
-			async createProjection(options) {
-				const projection = await nativeProjectionHost.createProjection(options);
-				return {
-					...projection,
-					async ready() {
-						await projection.ready();
-						await liveReadinessGate;
-						throw new Error("deterministic selected projection startup failure");
-					},
-				};
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	t.after(async () => coordinator.shutdown(async () => host.runtime.dispose()));
 	const spawnInput = {
-		request: "Fail startup only after the Owner selects this Agent.",
+		request: "Remain visible after this process Runtime cannot initialize.",
 		label: "Startup Failure Worker",
+		config: {
+			model: {
+				provider: "missing-process-provider",
+				modelId: "missing-process-model",
+			},
+			extensions: "none" as const,
+		},
 	};
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -524,37 +504,10 @@ test("a selected Agent whose runtime initialization fails closes the invalid vie
 			{ stopReason: "toolUse" },
 		),
 	);
-	const spawning = coordinator.forAgent(ownerAgentId).spawn(
+	const spawn = await coordinator.forAgent(identity.agentId).spawn(
 		"spawn-selected-startup-failure",
 		spawnInput,
 	);
-
-	let command!: Promise<void>;
-	let selector!: Component;
-	const selectorDeadline = Date.now() + SURFACE_WAIT_TIMEOUT_MS;
-	while (Date.now() < selectorDeadline) {
-		({ command, surface: selector } = await openAgentsSurface(host));
-		if (
-			stripTerminalSequences(selector.render(80).join("\n")).includes(
-				"Startup Failure Worker",
-			)
-		) break;
-		selector.handleInput?.("\x1b");
-		await command;
-		await new Promise<void>((resolve) => setTimeout(resolve, 1));
-	}
-	const agentId = selectAgentByLabel(selector, "Startup Failure Worker");
-	assert.ok(agentId);
-	await waitForCondition(() =>
-		host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
-	);
-	const view = host.ui.customSurfaces[0]!;
-	assert.doesNotMatch(
-		stripTerminalSequences(view.render(80).join("\n")),
-		/Startup Failure Worker.*(?:Live|Dormant)/,
-	);
-	failLiveReadiness();
-	const spawn = await spawning;
 	assert.deepEqual(
 		{
 			disposition: spawn.disposition,
@@ -562,52 +515,34 @@ test("a selected Agent whose runtime initialization fails closes the invalid vie
 		},
 		{ disposition: "created_unscheduled", failedStage: "run_start" },
 	);
+	assert.ok("agentId" in spawn);
+
+	const { command, surface: selector } = await openAgentsSurface(host);
+	selector.handleInput?.("\t");
+	const agentId = selectAgentByLabel(selector, "Startup Failure Worker");
+	assert.ok(agentId);
 	await command;
 	assert.equal(host.ui.customSurfaces.length, 0);
-	assert.equal(coordinator.forAgent(ownerAgentId).status(agentId).run.phase, "dormant");
+	assert.equal(coordinator.forAgent(identity.agentId).status(agentId).run.phase, "dormant");
 });
 
-test("passive Runtime readiness failure closes the exact selected view", async (t) => {
+test("an unexpected child-process exit closes the exact selected view", async (t) => {
 	let coordinator!: WorkflowCoordinator;
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	const identity = adoptOrValidateOwnerIdentity(
 		host.runtime,
 		"<inline:pi-agent-coordination>",
 	);
-	const nativeProjectionHost = createPiNativeProjectionHost({
-		ownerRuntime: host.runtime,
-	});
-	let failNextPreparation = false;
-	let releasePassiveFailure!: () => void;
-	const passiveFailureGate = new Promise<void>((resolve) => {
-		releasePassiveFailure = resolve;
-	});
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		projectionHost: {
-			async createProjection(options) {
-				const projection = await nativeProjectionHost.createProjection(options);
-				if (!failNextPreparation) return projection;
-				return {
-					...projection,
-					async ready() {
-						await projection.ready();
-						await passiveFailureGate;
-						throw new Error("deterministic passive Runtime readiness failure");
-					},
-				};
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
 	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
 	t.after(async () => {
-		releasePassiveFailure();
 		await activeView?.close();
 		await coordinator.shutdown(async () => host.runtime.dispose());
 	});
@@ -645,20 +580,20 @@ test("passive Runtime readiness failure closes the exact selected view", async (
 	);
 	await owner.control("terminate-passive-failure-worker", terminateInput);
 
-	failNextPreparation = true;
 	activeView = await owner.openAgentView(agentId);
 	assert.ok(activeView);
 	let closed = false;
 	activeView.addCloseHandler(() => {
 		closed = true;
 	});
-	releasePassiveFailure();
+	for (const character of "/quit") activeView.projection().dispatchInput(character);
+	activeView.projection().dispatchInput("\r");
 
 	await waitForCondition(() => closed);
 	assert.equal(owner.status(agentId).run.phase, "dormant");
 	assert.match(
 		JSON.stringify(host.services.diagnostics),
-		/deterministic passive Runtime readiness failure/,
+		/child_runtime_(?:unexpected_exit|channel_closed)/,
 	);
 });
 
@@ -680,6 +615,7 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 	let coordinator!: WorkflowCoordinator;
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "delayed-child-prompt-preflight",
 			hidden: true,
@@ -713,10 +649,6 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 	);
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
@@ -794,6 +726,7 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 test("a Dormant Agent keeps commands available and starts one successor on editor submission", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "dormant-command-probe",
 			hidden: true,
@@ -917,6 +850,7 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 	let childSessionStarts = 0;
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "dormant-command-message-probe",
 			hidden: true,
@@ -1009,6 +943,7 @@ test("Dormant session_start input activates the same attached Agent runtime", as
 	let childSessionStarts = 0;
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "dormant-runtime-startup-modal",
 			hidden: true,
@@ -1099,6 +1034,7 @@ test("closing a Dormant session_start modal cancels view initialization without 
 	});
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "selection-startup-close-probe",
 			hidden: true,
@@ -1148,10 +1084,6 @@ test("closing a Dormant session_start modal cancels view initialization without 
 				selectedAgentId = childIdentity.agentId;
 			},
 		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
@@ -1243,6 +1175,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 	});
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "unselected-startup-shutdown-probe",
 			hidden: true,
@@ -1285,10 +1218,6 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 				childAgentId = childIdentity.agentId;
 			},
 		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
@@ -1365,6 +1294,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 test("/agents switches the mounted durable view between independent child modes", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "independent-agent-mode-probe",
 			hidden: true,
@@ -1505,6 +1435,7 @@ test("later Runtime preparations use reloaded factories without mutating a retai
 	};
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [descriptor],
 	});
 	host.model.setResponses([
@@ -1557,6 +1488,7 @@ test("later Runtime preparations use reloaded factories without mutating a retai
 test("a terminally failed viewed Run stays open on the durable Dormant Agent", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
 	});
@@ -1630,6 +1562,7 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 	const baselineResources = processResourceCounts();
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
 		additionalExtensionFactories: [{
@@ -1719,6 +1652,7 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	let childSessionStarts = 0;
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionFactories: [{
 			name: "message-runtime-identity-probe",
 			hidden: true,
