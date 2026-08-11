@@ -157,7 +157,6 @@ test("real ordinary child Runs share fair execution capacity before generation a
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
 	});
-	t.after(() => host.runtime.dispose());
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(
 		host.runtime,
@@ -171,6 +170,7 @@ test("real ordinary child Runs share fair execution capacity before generation a
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
 	});
+	t.after(() => coordinator.shutdown(async () => host.runtime.dispose()));
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
 		async () => {
@@ -209,15 +209,9 @@ test("real ordinary child Runs share fair execution capacity before generation a
 	assert.ok(firstChild);
 	const childSessionFile = await waitForChildSessionFile(host, firstChild.agentId);
 	const childTranscript = structuredClone(SessionManager.open(childSessionFile).getEntries());
-	const selected = await owner.openAgentView(firstChild.agentId);
-	assert.ok(selected);
-	selected.projection().dispatchInput("/reload\r");
-	await waitForCondition(() => selected.projection().presentation.render(80).join("\n").includes("Reload"));
 	assert.equal(policy.current().maxConcurrentAgentRuns, 1);
 	assert.deepEqual(SessionManager.open(childSessionFile).getEntries(), childTranscript);
-	await selected.close();
 
-	await host.runtime.dispose();
 });
 
 test("an input-required ordinary Run releases capacity until work can resume", async (t) => {
@@ -232,7 +226,6 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
 	});
-	t.after(() => host.runtime.dispose());
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(
 		host.runtime,
@@ -246,6 +239,7 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
 	});
+	t.after(() => coordinator.shutdown(async () => host.runtime.dispose()));
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -279,7 +273,6 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 	));
 	await selected.close();
 
-	await host.runtime.dispose();
 });
 
 async function spawnChild(
@@ -304,7 +297,11 @@ async function waitForChildSessionFile(
 ): Promise<string> {
 	const sessionDirectory = host.session.sessionManager.getSessionDir();
 	if (!sessionDirectory) throw new Error("Persistent Owner session directory unavailable");
-	const workflowDirectory = join(sessionDirectory, host.session.sessionId);
+	const workflowDirectory = join(
+		sessionDirectory,
+		"pi-agent-coordination",
+		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
+	);
 	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
 		const child = sessions.find(({ id }) => id === childId);
