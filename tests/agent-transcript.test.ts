@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
+import { commitAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
 import {
 	AgentTranscript,
 	type TranscriptInspection,
@@ -64,13 +65,29 @@ test("new Agent transcript materialization commits pre-launch Identity evidence"
 	prepared.appendCustomEntry("agent-coordination.identity", {
 		agentId: "agent-materialized",
 	});
+	commitAgentRuntimeBlueprint(prepared, {
+		agentId: "agent-materialized",
+		role: "ordinary",
+		configuration: {
+			cwd: root,
+			model: { provider: "anthropic", modelId: "claude-test" },
+			thinking: "off",
+			tools: ["agent_message"],
+			skills: [],
+			extensions: [],
+		},
+		projectTrusted: false,
+		skillSources: [],
+		agentsFiles: [],
+	});
 
 	const sessionFile = await materializeNewAgentTranscript(prepared);
 	const reopened = SessionManager.open(sessionFile);
 
 	assert.equal(reopened.getSessionId(), "agent-materialized");
-	assert.equal(reopened.getEntries().length, 1);
+	assert.equal(reopened.getEntries().length, 2);
 	assert.equal(reopened.getEntries()[0]?.type, "custom");
+	assert.equal(reopened.getEntries()[1]?.type, "custom");
 	await assert.rejects(
 		materializeNewAgentTranscript(prepared),
 		/transcript already exists/,

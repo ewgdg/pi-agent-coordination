@@ -2,6 +2,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { writeFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
+import { resolveCommittedAgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
 import {
 	AgentTranscript,
 	type TranscriptInspection,
@@ -60,6 +61,10 @@ export async function materializeNewAgentTranscript(
 	if (entries.length === 0) {
 		throw new Error("transcript_materialization_failed: Agent Identity evidence is unavailable");
 	}
+	resolveCommittedAgentRuntimeBlueprint({
+		sessionId: sessionManager.getSessionId(),
+		entries,
+	});
 	const body = `${[header, ...entries]
 		.map((entry) => JSON.stringify(entry))
 		.join("\n")}\n`;
