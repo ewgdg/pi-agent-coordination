@@ -83,4 +83,14 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	});
 };
 
+export {
+	PiChildProcessRuntime,
+	resolveInstalledPiCliPath,
+	type PiChildRuntimeChannel,
+	type PiChildRuntimeEvent,
+	type PiChildRuntimeReady,
+	type PiChildRuntimeSnapshot,
+	type StartPiChildProcessRuntimeOptions,
+} from "./process-runtime/pi-child-process-runtime.ts";
+
 export default piAgentCoordination;
