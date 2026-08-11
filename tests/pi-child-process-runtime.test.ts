@@ -43,6 +43,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 	})}\n`, { mode: 0o600 });
 
 	const lifecycle: string[] = [];
+	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
 	let runtime: PiChildProcessRuntime | undefined;
 	let projection: ReturnType<typeof createAdmittedPiChildProcessProjection> | undefined;
 	try {
@@ -68,6 +69,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			ownerEnvironment: {
 				...process.env,
 				PI_SKIP_VERSION_CHECK: "1",
+				PROCESS_RUNTIME_RESPONSE_DELAY_MS: "200",
 				HERDR_ENV: "owned",
 				HERDR_SOCKET_PATH: "/tmp/owner-herdr.sock",
 				HERDR_PANE_ID: "owner-pane",
@@ -84,6 +86,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		projection.addExitRequestHandler(() => projectionExits += 1);
 		projection.addFailureHandler((error) => projectionFailures.push(error));
 		runtime.onEvent((event: ControlEvent<typeof agentControlProtocol>) => {
+			runtimeEvents.push(event);
 			if (["agent.start", "agent.end", "agent.settled", "session.shutdown"].includes(event.event)) {
 				lifecycle.push(event.event);
 			}
@@ -105,6 +108,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			tools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
+			projectTrusted: true,
 			sessionId: expectedSessionId,
 		});
 		assert.equal((await stat(runtime.bootstrapPath)).mode & 0o777, 0o600);
@@ -126,6 +130,57 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		await waitUntil(() => lifecycle.includes("agent.settled"));
 		assert.deepEqual(lifecycle.slice(0, 3), ["agent.start", "agent.end", "agent.settled"]);
 		assert.match(JSON.stringify(SessionManager.open(sessionPath).getEntries()), new RegExp(PROCESS_RUNTIME_TEST_RESPONSE));
+
+		assert.deepEqual(await runtime.channel.request("run.continue", {
+			runId: "process-runtime-continued-run",
+		}), { accepted: true });
+		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 2);
+
+		const lifecycleBeforeDelivery = lifecycle.length;
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "process-runtime-delivery-run",
+			delivery: {
+				kind: "user",
+				content: "Commit before the delayed model turn settles.",
+			},
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			queuedInputCount: 0,
+		});
+		assert.equal(
+			lifecycle.slice(lifecycleBeforeDelivery).includes("agent.settled"),
+			false,
+		);
+
+		const queuedDelivery = runtime.channel.request("message.deliver", {
+			runId: "process-runtime-delivery-run",
+			delivery: {
+				kind: "user",
+				content: "Clear this queued direction before it commits.",
+				deliverAs: "steer",
+			},
+		});
+		assert.deepEqual(await runtime.channel.request("queue.clear", {}), {
+			steering: ["Clear this queued direction before it commits."],
+			followUp: [],
+			queuedInputCount: 0,
+		});
+		assert.deepEqual(await runtime.channel.request("run.interrupt", {
+			runId: "process-runtime-delivery-run",
+		}), { accepted: true });
+		assert.deepEqual(await queuedDelivery, {
+			accepted: true,
+			transcriptCommitted: false,
+			queuedInputCount: 0,
+		});
+		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 3);
+		assert.equal(runtimeEvents.some((event) =>
+			event.event === "agent.end" &&
+			event.payload.runId === "process-runtime-delivery-run" &&
+			event.payload.outcome === "interrupted" &&
+			event.payload.willRetry === false
+		), true);
 
 		projection.resize(100, 30);
 		projection.dispatchInput("/runtime-probe OWNER_INPUT_OK\r");

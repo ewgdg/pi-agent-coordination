@@ -62,6 +62,10 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
 		"run.prompt",
+		"message.deliver",
+		"run.continue",
+		"queue.clear",
+		"run.interrupt",
 		"runtime.shutdown",
 	]);
 	assert.deepEqual(Object.keys(agentControlEvents), [
@@ -73,6 +77,10 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		"runtime.fault",
 	]);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.snapshot"), true);
+	assert.equal(Check(AgentControlMethodSchema, "message.deliver"), true);
+	assert.equal(Check(AgentControlMethodSchema, "run.continue"), true);
+	assert.equal(Check(AgentControlMethodSchema, "queue.clear"), true);
+	assert.equal(Check(AgentControlMethodSchema, "run.interrupt"), true);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.unknown"), false);
 	assert.equal(Check(AgentControlEventSchema, "agent.settled"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.unknown"), false);
@@ -83,6 +91,21 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	for (const definition of Object.values(agentControlEvents)) {
 		assert.equal(typeof definition.payload, "object");
 	}
+	assert.equal(Check(agentControlEvents["agent.start"].payload, {
+		runId: "run-1",
+		queuedInputCount: 1,
+	}), true);
+	assert.equal(Check(agentControlEvents["agent.end"].payload, {
+		runId: "run-1",
+		outcome: "interrupted",
+		willRetry: false,
+		queuedInputCount: 0,
+	}), true);
+	assert.equal(Check(agentControlEvents["agent.settled"].payload, {
+		runId: "run-1",
+		outcome: "interrupted",
+		queuedInputCount: 0,
+	}), true);
 	assert.equal(Check(RuntimeSnapshotSchema, {
 		cwd: "/project",
 		model: { provider: "provider", modelId: "model" },
@@ -90,6 +113,48 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		tools: ["read"],
 		skills: [],
 		extensions: [],
+		projectTrusted: true,
 		sessionId: "session",
+	}), true);
+	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		runId: "run-1",
+		delivery: {
+			kind: "user",
+			content: [
+				{ type: "text", text: "Direction", textSignature: "signature" },
+				{ type: "image", data: "base64", mimeType: "image/png" },
+			],
+			deliverAs: "steer",
+		},
+	}), true);
+	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		runId: "run-1",
+		delivery: {
+			kind: "custom",
+			message: {
+				customType: "agent-coordination.message-delivery",
+				content: "{\"messages\":[]}",
+				display: true,
+				details: {
+					messages: [{ agentId: "sender", entryId: "entry", toolCallId: "call" }],
+				},
+			},
+			triggerTurn: true,
+			deliverAs: "followUp",
+		},
+	}), true);
+	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		runId: "run-1",
+		delivery: { kind: "user", content: "Direction", retry: true },
+	}), false);
+	assert.equal(Check(agentControlMethods["message.deliver"].response, {
+		accepted: true,
+		transcriptCommitted: true,
+		queuedInputCount: 0,
+	}), true);
+	assert.equal(Check(agentControlMethods["queue.clear"].response, {
+		steering: ["one"],
+		followUp: ["two"],
+		queuedInputCount: 0,
 	}), true);
 });

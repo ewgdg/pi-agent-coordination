@@ -265,7 +265,12 @@ export class PiChildProcessRuntime {
 							"configuration snapshot",
 							cancellation,
 						);
-						assertRuntimeSnapshot(snapshot, options.configuration, bootstrap.expectedSessionId);
+						assertRuntimeSnapshot(
+							snapshot,
+							options.configuration,
+							options.projectTrusted,
+							bootstrap.expectedSessionId,
+						);
 						return new PiChildProcessRuntime({
 							projection: exactProjection,
 							admissionBroker,
@@ -516,6 +521,7 @@ export function resolveInstalledPiCliPath(): string {
 function assertRuntimeSnapshot(
 	actual: PiChildRuntimeSnapshot,
 	expected: EffectiveAgentRunConfiguration,
+	projectTrusted: boolean,
 	expectedSessionId: string,
 ): void {
 	const expectedSnapshot: PiChildRuntimeSnapshot = {
@@ -525,6 +531,7 @@ function assertRuntimeSnapshot(
 		tools: [...expected.tools],
 		skills: [...expected.skills],
 		extensions: [...expected.extensions],
+		projectTrusted,
 		sessionId: expectedSessionId,
 	};
 	if (JSON.stringify(actual) !== JSON.stringify(expectedSnapshot)) {

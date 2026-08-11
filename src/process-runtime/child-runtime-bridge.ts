@@ -1,11 +1,13 @@
 import * as hostPi from "@earendil-works/pi-coding-agent";
 import type {
+	AgentSessionEvent,
 	AgentSessionRuntime,
 	ExtensionContext,
 	ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import { readFile, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { FramedAgentControlChannel } from "../control/agent-control-channel.ts";
 import { agentControlProtocol } from "../control/agent-control-protocol.ts";
@@ -16,6 +18,8 @@ import {
 	validateChildProcessBootstrap,
 } from "../control/control-protocol-schemas.ts";
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
+import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
+import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
@@ -27,6 +31,7 @@ type RuntimeState = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
 	currentRunId?: string;
+	currentRunOutcome: "completed" | "interrupted" | "failed";
 	shutdownStarted: boolean;
 };
 
@@ -55,8 +60,16 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			channel,
 			context: ctx,
 			runtime: capture.runtime,
+			currentRunOutcome: "completed",
 			shutdownStarted: false,
 		};
+		capture.runtime.session.subscribe((event) => {
+			const current = state;
+			if (!current) return;
+			void reportRuntimeLifecycle(current, event).catch((error: unknown) =>
+				reportFault(current.channel, "runtime_lifecycle_failed", error)
+			);
+		});
 		channel.onRequest((request) => handleOwnerRequest(state as RuntimeState, request));
 		channel.onEvent(() => undefined);
 		channel.onClose(() => {
@@ -83,32 +96,6 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		}
 	});
 
-	pi.on("agent_start", async () => {
-		const current = requireState(state);
-		if (!current.currentRunId) {
-			await reportFault(current.channel, "run_identity_missing", new Error("Pi started without an admitted run"));
-			return;
-		}
-		await current.channel.sendEvent("agent.start", { runId: current.currentRunId });
-	});
-	pi.on("agent_end", async () => {
-		const current = requireState(state);
-		if (!current.currentRunId) return;
-		await current.channel.sendEvent("agent.end", {
-			runId: current.currentRunId,
-			outcome: "completed",
-		});
-	});
-	pi.on("agent_settled", async () => {
-		const current = requireState(state);
-		if (!current.currentRunId) return;
-		const runId = current.currentRunId;
-		await current.channel.sendEvent("agent.settled", {
-			runId,
-			outcome: "completed",
-		});
-		if (current.currentRunId === runId) current.currentRunId = undefined;
-	});
 	pi.on("session_shutdown", async (event) => {
 		const current = state;
 		if (!current) return;
@@ -130,6 +117,7 @@ async function handleOwnerRequest(
 				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
 			}
 			state.currentRunId = request.payload.runId;
+			state.currentRunOutcome = "completed";
 			let resolvePreflight!: (accepted: boolean) => void;
 			const preflight = new Promise<boolean>((resolve) => {
 				resolvePreflight = resolve;
@@ -144,6 +132,70 @@ async function handleOwnerRequest(
 			if (!accepted && state.currentRunId === request.payload.runId) {
 				state.currentRunId = undefined;
 			}
+			return { accepted };
+		}
+		case "message.deliver": {
+			admitRun(state, request.payload.runId);
+			const wasActive = !state.runtime.session.isIdle;
+			const commit = observeDeliveryCommit(
+				state.runtime,
+				request.payload.delivery,
+			);
+			const completion = dispatchDelivery(
+				state.runtime,
+				request.payload.delivery,
+			);
+			if (!wasActive) {
+				void completion.then(
+					() => queueMicrotask(() => commit.settle(false)),
+					(error: unknown) => commit.reject(error),
+				);
+			}
+			void completion.catch(async (error: unknown) => {
+				commit.reject(error);
+				await failCurrentRun(state, request.payload.runId, error);
+			});
+			const transcriptCommitted = await commit.result;
+			if (
+				!transcriptCommitted &&
+				state.runtime.session.isIdle &&
+				state.currentRunId === request.payload.runId
+			) state.currentRunId = undefined;
+			return {
+				accepted: true,
+				transcriptCommitted,
+				queuedInputCount: state.runtime.session.pendingMessageCount,
+			};
+		}
+		case "run.continue": {
+			if (state.currentRunId) {
+				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
+			}
+			state.currentRunId = request.payload.runId;
+			state.currentRunOutcome = "completed";
+			void continueFromCommittedInput(state.runtime.session).catch((error: unknown) =>
+				failCurrentRun(state, request.payload.runId, error)
+			);
+			return { accepted: true };
+		}
+		case "queue.clear": {
+			const cleared = state.runtime.session.clearQueue();
+			return {
+				...cleared,
+				queuedInputCount: state.runtime.session.pendingMessageCount,
+			};
+		}
+		case "run.interrupt": {
+			if (
+				request.payload.runId !== undefined &&
+				request.payload.runId !== state.currentRunId
+			) {
+				throw new Error(
+					`stale_run: ${request.payload.runId} does not target the current child Run`,
+				);
+			}
+			const accepted = state.currentRunId !== undefined;
+			await state.runtime.session.abort();
 			return { accepted };
 		}
 		case "runtime.shutdown":
@@ -167,8 +219,159 @@ function runtimeSnapshot(runtime: AgentSessionRuntime) {
 		extensions: runtime.services.resourceLoader.getExtensions().extensions
 			.map((extension) => extension.resolvedPath)
 			.filter((path) => !path.startsWith("<inline:") && canonicalExtensionPath(path) !== bridgePath),
+		projectTrusted: runtime.services.settingsManager.isProjectTrusted(),
 		sessionId: session.sessionId,
 	};
+}
+
+async function reportRuntimeLifecycle(
+	state: RuntimeState,
+	event: AgentSessionEvent,
+): Promise<void> {
+	if (event.type === "agent_start") {
+		if (!state.currentRunId) {
+			await reportFault(
+				state.channel,
+				"run_identity_missing",
+				new Error("Pi started without an admitted run"),
+			);
+			return;
+		}
+		await state.channel.sendEvent("agent.start", {
+			runId: state.currentRunId,
+			queuedInputCount: state.runtime.session.pendingMessageCount,
+		});
+		return;
+	}
+	if (event.type === "agent_end") {
+		if (!state.currentRunId) return;
+		const assistant = [...event.messages]
+			.reverse()
+			.find((message) => message.role === "assistant");
+		state.currentRunOutcome = assistant?.role === "assistant" && assistant.stopReason === "aborted"
+			? "interrupted"
+			: assistant?.role === "assistant" && assistant.stopReason === "error"
+				? "failed"
+				: "completed";
+		await state.channel.sendEvent("agent.end", {
+			runId: state.currentRunId,
+			outcome: state.currentRunOutcome,
+			willRetry: event.willRetry,
+			queuedInputCount: state.runtime.session.pendingMessageCount,
+			...(assistant?.role === "assistant" && assistant.errorMessage
+				? { error: assistant.errorMessage }
+				: {}),
+		});
+		return;
+	}
+	if (event.type !== "agent_settled" || !state.currentRunId) return;
+	const runId = state.currentRunId;
+	await state.channel.sendEvent("agent.settled", {
+		runId,
+		outcome: state.currentRunOutcome,
+		queuedInputCount: state.runtime.session.pendingMessageCount,
+	});
+	if (state.currentRunId === runId) state.currentRunId = undefined;
+}
+
+function admitRun(state: RuntimeState, runId: string): void {
+	if (state.currentRunId && state.currentRunId !== runId) {
+		throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
+	}
+	if (state.currentRunId) return;
+	state.currentRunId = runId;
+	state.currentRunOutcome = "completed";
+}
+
+function dispatchDelivery(
+	runtime: AgentSessionRuntime,
+	delivery: AgentRuntimeDelivery,
+): Promise<void> {
+	return delivery.kind === "custom"
+		? runtime.session.sendCustomMessage(delivery.message, {
+			triggerTurn: delivery.triggerTurn,
+			...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
+		})
+		: runtime.session.sendUserMessage(
+			typeof delivery.content === "string" ? delivery.content : [...delivery.content],
+			{
+				...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
+			},
+		);
+}
+
+function observeDeliveryCommit(
+	runtime: AgentSessionRuntime,
+	delivery: AgentRuntimeDelivery,
+): Readonly<{
+	result: Promise<boolean>;
+	settle(committed: boolean): void;
+	reject(error: unknown): void;
+}> {
+	let settleResult!: (committed: boolean) => void;
+	let rejectResult!: (error: unknown) => void;
+	let settled = false;
+	let unsubscribe: () => void = () => undefined;
+	const finish = (settlement: () => void) => {
+		if (settled) return;
+		settled = true;
+		unsubscribe();
+		settlement();
+	};
+	const result = new Promise<boolean>((resolve, reject) => {
+		settleResult = resolve;
+		rejectResult = reject;
+	});
+	unsubscribe = runtime.session.subscribe((event) => {
+		if (
+			event.type === "message_end" &&
+			matchesDeliveryMessage(delivery, event.message)
+		) {
+			// AgentSession notifies listeners immediately before its synchronous
+			// SessionManager append. The next microtask is the durable commit edge.
+			queueMicrotask(() => finish(() => settleResult(true)));
+		}
+		if (event.type === "agent_settled") finish(() => settleResult(false));
+	});
+	return {
+		result,
+		settle: (committed) => finish(() => settleResult(committed)),
+		reject: (error) => finish(() => rejectResult(error)),
+	};
+}
+
+function matchesDeliveryMessage(
+	delivery: AgentRuntimeDelivery,
+	message: unknown,
+): boolean {
+	if (!message || typeof message !== "object" || !("role" in message)) return false;
+	if (delivery.kind === "custom") {
+		return message.role === "custom" &&
+			"customType" in message && message.customType === delivery.message.customType &&
+			"content" in message && isDeepStrictEqual(message.content, delivery.message.content) &&
+			"display" in message && message.display === delivery.message.display &&
+			"details" in message && isDeepStrictEqual(message.details, delivery.message.details);
+	}
+	if (message.role !== "user" || !("content" in message)) return false;
+	const content = typeof delivery.content === "string"
+		? [{ type: "text", text: delivery.content }]
+		: normalizeUserContent(delivery.content);
+	return isDeepStrictEqual(message.content, content);
+}
+
+function normalizeUserContent(
+	content: Extract<AgentRuntimeDelivery, { kind: "user" }>["content"] & readonly unknown[],
+): readonly unknown[] {
+	const text = content
+		.filter((part): part is Extract<(typeof content)[number], { type: "text" }> =>
+			typeof part === "object" && part !== null && "type" in part && part.type === "text"
+		)
+		.map((part) => part.text)
+		.join("\n");
+	const images = content.filter((part) =>
+		typeof part === "object" && part !== null && "type" in part && part.type === "image"
+	);
+	return [{ type: "text", text }, ...images];
 }
 
 function requireModel(model: AgentSessionRuntime["session"]["model"]) {
@@ -186,9 +389,15 @@ async function failCurrentRun(state: RuntimeState, runId: string, error: unknown
 	await state.channel.sendEvent("agent.end", {
 		runId,
 		outcome: "failed",
+		willRetry: false,
+		queuedInputCount: state.runtime.session.pendingMessageCount,
 		error: errorMessage(error),
 	}).catch(() => undefined);
-	await state.channel.sendEvent("agent.settled", { runId, outcome: "failed" })
+	await state.channel.sendEvent("agent.settled", {
+		runId,
+		outcome: "failed",
+		queuedInputCount: state.runtime.session.pendingMessageCount,
+	})
 		.catch(() => undefined);
 	if (state.currentRunId === runId) state.currentRunId = undefined;
 }

@@ -22,7 +22,19 @@ const faux = createFauxCore({
 		maxTokens: 256,
 	}],
 });
-faux.setResponses([fauxAssistantMessage(PROCESS_RUNTIME_TEST_RESPONSE)]);
+const delayedResponse = async () => {
+	const delayMilliseconds = Number(process.env.PROCESS_RUNTIME_RESPONSE_DELAY_MS ?? 0);
+	if (delayMilliseconds > 0) {
+		await new Promise((resolve) => setTimeout(resolve, delayMilliseconds));
+	}
+	return fauxAssistantMessage(PROCESS_RUNTIME_TEST_RESPONSE);
+};
+faux.setResponses([
+	delayedResponse,
+	delayedResponse,
+	delayedResponse,
+	delayedResponse,
+]);
 
 const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 	pi.registerProvider(PROCESS_RUNTIME_TEST_PROVIDER, {
