@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -36,6 +36,10 @@ import {
 	openLiveAgentView,
 } from "./support/agent-session.ts";
 import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
+import {
+	EXECUTION_GATE_RELEASE_PATH_VARIABLE,
+	EXECUTION_GATE_STARTED_PATH_VARIABLE,
+} from "./support/execution-gate-tool.ts";
 
 const CONDITION_WAIT_TIMEOUT_MS = 5_000;
 const CONDITION_POLL_INTERVAL_MS = 1;
@@ -1137,12 +1141,13 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 	await host.runtime.dispose();
 });
 
-test("external Answer clearance releases Moderator handling", async () => {
+test("external Answer clearance releases Moderator handling", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
+	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -1231,6 +1236,14 @@ test("external Answer clearance releases Moderator handling", async () => {
 			({ reason }) => reason === "answer_owed",
 		);
 	});
+	// The Answer tool result commits before Pi requests its continuation. Keep the
+	// response router installed until that exact child Run reaches its Human
+	// Request, otherwise the next Moderator responses can be consumed by the child.
+	await waitForCondition(async () => {
+		const child = await observeStatus(host, parsedInput.trigger.agentId);
+		return child.run.phase === "live" &&
+			"attention" in child.run && child.run.attention === "input_required";
+	});
 	assert.equal((await findModerators(host)).length, 1);
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -1273,7 +1286,6 @@ test("external Answer clearance releases Moderator handling", async () => {
 			);
 	});
 
-	await host.runtime.dispose();
 });
 
 test("a cleared Stall can recur with the same obligations and receive a fresh Moderator", async () => {
@@ -1381,29 +1393,18 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 });
 
 test("an outgoing Request suppresses a Stall only while its responder can progress", async (t) => {
-	const registryKey = Symbol.for("pi-agent-coordination.test.execution-gate");
-	let targetStarted!: () => void;
-	const targetStart = new Promise<void>((resolve) => {
-		targetStarted = resolve;
-	});
-	let releaseTarget!: () => void;
-	const targetRelease = new Promise<void>((resolve) => {
-		releaseTarget = resolve;
-	});
-	(globalThis as Record<PropertyKey, unknown>)[registryKey] = {
-		async execute() {
-			targetStarted();
-			await targetRelease;
-		},
-	};
+	const executionGate = await createProcessExecutionGate("external-progress");
 	let targetReleased = false;
 	let coordinator: WorkflowCoordinator | undefined;
 	let host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>> | undefined;
 	t.after(async () => {
-		if (!targetReleased) releaseTarget();
-		delete (globalThis as Record<PropertyKey, unknown>)[registryKey];
-		if (coordinator && host) {
-			await coordinator.shutdown(async () => host!.runtime.dispose());
+		try {
+			if (!targetReleased) await executionGate.release();
+			if (coordinator && host) {
+				await coordinator.shutdown(async () => host!.runtime.dispose());
+			}
+		} finally {
+			executionGate.restoreEnvironment();
 		}
 	});
 
@@ -1441,26 +1442,44 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 	assert.equal(target.disposition, "created_unscheduled");
 	assert.equal(owner.status(target.agentId).run.phase, "dormant");
 
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall(
-				"agent_message",
-				{
-					operation: "request",
-					targetAgentId: target.agentId,
-					question: "Make progress while I remain obligated to the Owner.",
-				},
-				{ id: "request-external-progress" },
-			),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage(
-			fauxToolCall("execution_gate", {}, { id: "hold-external-progress" }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("I am settled while the responder remains active."),
-		fauxAssistantMessage("I settled without answering the downstream Request."),
-	]);
+	const routeExternalProgress = (context: Context) => {
+		const messages = JSON.stringify(context.messages);
+		const latestUser = JSON.stringify(
+			[...context.messages].reverse().find(({ role }) => role === "user"),
+		);
+		if (
+			latestUser.includes("Delegate progress") &&
+			!messages.includes('"id":"request-external-progress"')
+		) {
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{
+						operation: "request",
+						targetAgentId: target.agentId,
+						question: "Make progress while I remain obligated to the Owner.",
+					},
+					{ id: "request-external-progress" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		}
+		if (
+			latestUser.includes("Make progress while I remain obligated") &&
+			!messages.includes('"id":"hold-external-progress"')
+		) {
+			return fauxAssistantMessage(
+				fauxToolCall("execution_gate", {}, { id: "hold-external-progress" }),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage(
+			latestUser.includes("Make progress while I remain obligated")
+				? "I settled without answering the downstream Request."
+				: "I am settled while the responder remains active.",
+		);
+	};
+	host.model.setResponses(Array.from({ length: 12 }, () => routeExternalProgress));
 	const affected = await spawnFromView(
 		host.session,
 		owner,
@@ -1468,7 +1487,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 		"Delegate progress, then settle without answering this Creation Request.",
 	);
 	assert.equal(affected.disposition, "pending");
-	await targetStart;
+	await executionGate.waitUntilStarted();
 	await waitForCondition(() => {
 		const run = owner.status(affected.agentId).run;
 		return run.phase === "live" && run.work === "settled";
@@ -1479,7 +1498,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 	assert.equal((await findModerators(host!)).length, 0);
 
 	targetReleased = true;
-	releaseTarget();
+	await executionGate.release();
 	await waitForCondition(() => {
 		const run = owner.status(target.agentId).run;
 		return run.phase === "live" && run.work === "settled";
@@ -1598,7 +1617,11 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 		const expectedAgentIds = [first.agentId, second.agentId].sort();
 		await waitForCondition(() => expectedAgentIds.every((agentId) => {
 			const run = owner.status(agentId).run;
-			return run.phase === "live" && run.work === "settled";
+			return run.phase === "live" && run.work === "settled" &&
+				run.retentionReasons.length > 0 &&
+				run.retentionReasons.every(
+					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer",
+				);
 		}));
 		for (const agentId of expectedAgentIds) {
 			const run = owner.status(agentId).run;
@@ -1656,29 +1679,18 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 });
 
 test("an active member prevents a closed Request cycle from becoming a Deadlock", async (t) => {
-	const registryKey = Symbol.for("pi-agent-coordination.test.execution-gate");
-	let gateStarted!: () => void;
-	const started = new Promise<void>((resolve) => {
-		gateStarted = resolve;
-	});
-	let releaseGate!: () => void;
-	const released = new Promise<void>((resolve) => {
-		releaseGate = resolve;
-	});
-	(globalThis as Record<PropertyKey, unknown>)[registryKey] = {
-		async execute() {
-			gateStarted();
-			await released;
-		},
-	};
+	const executionGate = await createProcessExecutionGate("active-cycle");
 	let gateReleased = false;
 	let coordinator: WorkflowCoordinator | undefined;
 	let host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>> | undefined;
 	t.after(async () => {
-		if (!gateReleased) releaseGate();
-		delete (globalThis as Record<PropertyKey, unknown>)[registryKey];
-		if (coordinator && host) {
-			await coordinator.shutdown(async () => host!.runtime.dispose());
+		try {
+			if (!gateReleased) await executionGate.release();
+			if (coordinator && host) {
+				await coordinator.shutdown(async () => host!.runtime.dispose());
+			}
+		} finally {
+			executionGate.restoreEnvironment();
 		}
 	});
 
@@ -1796,7 +1808,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 		first.agentId,
 		"Start the active-cycle probe.",
 	);
-	await started;
+	await executionGate.waitUntilStarted();
 	await waitForCondition(() => {
 		const firstRun = owner.status(first.agentId).run;
 		const secondRun = owner.status(second.agentId).run;
@@ -1809,7 +1821,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 	assert.equal((await findModerators(host)).length, 0);
 
 	gateReleased = true;
-	releaseGate();
+	await executionGate.release();
 	await waitForModeratorKind(host, "dependency_deadlock");
 });
 
@@ -2320,6 +2332,60 @@ async function fileExists(path: string): Promise<boolean> {
 		) return false;
 		throw error;
 	}
+}
+
+async function createProcessExecutionGate(name: string): Promise<Readonly<{
+	waitUntilStarted(): Promise<void>;
+	release(): Promise<void>;
+	restoreEnvironment(): void;
+}>> {
+	const root = await mkdtemp(join(tmpdir(), `pi-process-execution-gate-${name}-`));
+	const startedPath = join(root, "started.json");
+	const releasePath = join(root, "release");
+	const previousStartedPath = process.env[EXECUTION_GATE_STARTED_PATH_VARIABLE];
+	const previousReleasePath = process.env[EXECUTION_GATE_RELEASE_PATH_VARIABLE];
+	process.env[EXECUTION_GATE_STARTED_PATH_VARIABLE] = startedPath;
+	process.env[EXECUTION_GATE_RELEASE_PATH_VARIABLE] = releasePath;
+	let released = false;
+
+	return Object.freeze({
+		async waitUntilStarted() {
+			let childPid: number | undefined;
+			await waitForCondition(async () => {
+				if (!await fileExists(startedPath)) return false;
+				let evidence: { pid?: unknown };
+				try {
+					evidence = JSON.parse(await readFile(startedPath, "utf8")) as {
+						pid?: unknown;
+					};
+				} catch (error) {
+					if (error instanceof SyntaxError) return false;
+					throw error;
+				}
+				if (typeof evidence.pid !== "number") return false;
+				childPid = evidence.pid;
+				return true;
+			});
+			assert.notEqual(childPid, process.pid);
+		},
+		async release() {
+			if (released) return;
+			released = true;
+			await writeFile(releasePath, "released\n", { mode: 0o600 });
+		},
+		restoreEnvironment() {
+			if (previousStartedPath === undefined) {
+				delete process.env[EXECUTION_GATE_STARTED_PATH_VARIABLE];
+			} else {
+				process.env[EXECUTION_GATE_STARTED_PATH_VARIABLE] = previousStartedPath;
+			}
+			if (previousReleasePath === undefined) {
+				delete process.env[EXECUTION_GATE_RELEASE_PATH_VARIABLE];
+			} else {
+				process.env[EXECUTION_GATE_RELEASE_PATH_VARIABLE] = previousReleasePath;
+			}
+		},
+	});
 }
 
 async function waitForModeratorKind(

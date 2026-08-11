@@ -7,7 +7,7 @@ import test from "node:test";
 import xtermHeadless from "@xterm/headless";
 
 const SCRIPT = "/usr/bin/script";
-const PTY_WAIT_TIMEOUT_MS = 20_000;
+const PTY_WAIT_TIMEOUT_MS = 5_000;
 const BANNER_ABSENCE_POLL_ATTEMPTS = 20;
 const BANNER_ABSENCE_POLL_INTERVAL_MS = 25;
 const FIXTURE = fileURLToPath(

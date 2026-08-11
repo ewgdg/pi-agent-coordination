@@ -97,7 +97,7 @@ test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Ow
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Viewed child transcript line 59"))
 		);
-		for (const character of DIRECT_AGENT_INPUT) terminal.write(character);
+		terminal.write(DIRECT_AGENT_INPUT);
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
 		);
@@ -107,19 +107,15 @@ test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Ow
 			"first streamed child frame",
 		);
 		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
-		let inspectedSettledFrame = await terminal.screen();
 		for (let notch = 0; notch < 80; notch += 1) {
-			const previousTranscript = transcriptRows(inspectedSettledFrame);
 			terminal.write("\x1b[<64;10;8M");
-			inspectedSettledFrame = await terminal.waitForScreen(
-				(frame) => transcriptRows(frame) !== previousTranscript,
-				"mouse wheel transcript movement",
-			);
-			if (
-				inspectedSettledFrame.some((line) => line.includes("Viewed child transcript line")) &&
-				!inspectedSettledFrame.some((line) => line.includes("Streaming child update 39"))
-			) break;
 		}
+		const inspectedSettledFrame = await terminal.waitForScreen(
+			(frame) =>
+				frame.some((line) => line.includes("Viewed child transcript line")) &&
+				!frame.some((line) => line.includes("Streaming child update 39")),
+			"mouse wheel transcript movement",
+		);
 		assert.ok(
 			inspectedSettledFrame.some((line) => line.includes("Viewed child transcript line")),
 			JSON.stringify(inspectedSettledFrame),
@@ -309,7 +305,7 @@ test("real fullscreen PTY switches one mounted view between two Agent modes", {
 			frame.some((line) => line.includes("Viewed child transcript line 59")) &&
 			!frame.some((line) => line.includes("Tab views"))
 		);
-		for (const character of DIRECT_AGENT_INPUT) terminal.write(character);
+		terminal.write(DIRECT_AGENT_INPUT);
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
 		);
@@ -403,7 +399,7 @@ test("real fullscreen PTY reflows the complete Agent view at 100x30", {
 			!frame.some((line) => line.includes("Tab views"))
 		);
 		assert.equal(agentFrame.length, 30);
-		for (const character of DIRECT_AGENT_INPUT) terminal.write(character);
+		terminal.write(DIRECT_AGENT_INPUT);
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
 		);
@@ -520,13 +516,6 @@ test("interactive /resume retains the compact historical agent_spawn renderer", 
 		terminal.kill();
 	}
 });
-
-function transcriptRows(frame: readonly string[]): string {
-	return frame.filter((line) =>
-		line.includes("Viewed child transcript line") ||
-		line.includes("Streaming child update")
-	).join("\n");
-}
 
 function launchPiCli(options: { agentDir: string; sessionDir: string }): PtyFixture {
 	const command = [

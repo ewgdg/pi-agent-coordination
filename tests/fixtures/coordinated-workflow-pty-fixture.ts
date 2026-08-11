@@ -48,7 +48,7 @@ if (
 
 const host = await createUnboundTestOwnerHost(piAgentCoordination, {
 	persistent: true,
-	fauxTokensPerSecond: 400,
+	fauxTokensPerSecond: 20_000,
 });
 const ownerSession = host.session;
 const mode = new InteractiveMode(host.runtime, {

@@ -1076,11 +1076,12 @@ test("Cancellation Delivery wins the responder lane before a later Answer", asyn
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Answer commit and Cancellation commit remain canonical across crossed Deliveries", async () => {
+test("Answer commit and Cancellation commit remain canonical across crossed Deliveries", async (t) => {
 	const harness = await createDormantChildHarness({
 		beforeDeliveryAdmission: ({ operation }) =>
 			operation === "answer" ? "confirmed_failure" : undefined,
 	});
+	t.after(() => harness.coordinator.shutdown(async () => harness.host.runtime.dispose()));
 	const requestInput = {
 		operation: "request" as const,
 		targetAgentId: harness.childId,
@@ -1215,7 +1216,14 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 					JSON.stringify({ messages: [answerSource] }),
 		),
 	);
-	const crossedEntries = SessionManager.open(childSessionFile).getEntries();
+	const crossedEntries = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.message-delivery" &&
+			JSON.stringify(entry.details) ===
+				JSON.stringify({ messages: [cancellationSource] }),
+	);
 	assert.equal(
 		crossedEntries.some(
 			(entry) =>
@@ -1249,7 +1257,6 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 		},
 	);
 
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
 test("a created-unscheduled Creation Request uses ordinary retry and Answer behavior", async () => {

@@ -401,9 +401,10 @@ test("primary Enter answers literally while Alt+Enter expands a prompt template"
 	}
 });
 
-test("different Agents wait and commit Human Answers independently", async () => {
+test("different Agents wait and commit Human Answers independently", async (t) => {
 	const { host, coordinator, view, child: first, spawnChild } =
 		await createHumanRequestChild();
+	t.after(() => coordinator.shutdown(async () => host.runtime.dispose()));
 	const second = await spawnChild();
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -464,10 +465,9 @@ test("different Agents wait and commit Human Answers independently", async () =>
 		entry.message.role === "toolResult" &&
 		entry.message.toolCallId === "first-independent-human-request"
 	);
+	await waitForCondition(() => view.humanAttention().length === 0);
 	assert.deepEqual(view.humanAttention(), []);
 	await view.openAgentView(view.status().agentId);
-
-	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
 test("a precommit Run fence rejects and restores the provisional Answer", async () => {

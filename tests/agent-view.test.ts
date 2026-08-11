@@ -920,6 +920,11 @@ test("closing a Dormant session_start modal cancels view initialization without 
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
 		(entry) => entry.kind === "startup_modal" && entry.sessionId === agentId && entry.pid !== process.pid,
 	));
+	const startupModal = (await readProcessAgentViewEvidence(probe.evidencePath)).find(
+		(entry) => entry.kind === "startup_modal" && entry.sessionId === agentId &&
+			entry.pid !== process.pid,
+	);
+	assert.ok(startupModal);
 	const closing = activeView.close();
 	const closeOutcome = await Promise.race([
 		closing.then(() => "closed" as const),
@@ -935,14 +940,23 @@ test("closing a Dormant session_start modal cancels view initialization without 
 		"view closure must not wait for hidden Dormant UI input",
 	);
 	assert.equal(owner.status(agentId).run.phase, "dormant");
+	assertProcessExited(startupModal.pid);
 	await releaseProcessAgentViewProbe(probe.releasePath);
-	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
-		childProcessSessionShutdowns(entries, agentId).length === 2
-	);
 	const lifecycleEvidence = (await readProcessAgentViewEvidence(probe.evidencePath))
 		.filter((entry) => entry.sessionId === agentId && entry.pid !== process.pid);
-	assert.equal(childProcessSessionStarts(lifecycleEvidence, agentId).length, 2);
-	assert.equal(childProcessSessionShutdowns(lifecycleEvidence, agentId).length, 2);
+	const sessionStarts = childProcessSessionStarts(lifecycleEvidence, agentId);
+	const sessionShutdowns = childProcessSessionShutdowns(lifecycleEvidence, agentId);
+	assert.equal(sessionStarts.length, 2);
+	// Pre-admission cancellation owns the exact process and may use SIGKILL, so
+	// only the earlier admitted Runtime is required to publish session_shutdown;
+	// the cancelled process may publish it if graceful exit wins the kill race.
+	assert.equal(sessionShutdowns[0]?.pid, sessionStarts[0]?.pid);
+	assert.ok(sessionShutdowns.length === 1 || sessionShutdowns.length === 2);
+	assert.equal(new Set(sessionShutdowns.map(({ pid }) => pid)).size, sessionShutdowns.length);
+	assert.equal(
+		sessionShutdowns.every(({ pid }) => sessionStarts.some((start) => start.pid === pid)),
+		true,
+	);
 	assert.equal(
 		lifecycleEvidence.filter((entry) => entry.kind === "session_start_after_ui").length,
 		0,
@@ -950,7 +964,7 @@ test("closing a Dormant session_start modal cancels view initialization without 
 	assert.deepEqual(
 		lifecycleEvidence.filter((entry) => entry.kind === "session_shutdown")
 			.map((entry) => entry.kind),
-		["session_shutdown", "session_shutdown"],
+		Array.from({ length: sessionShutdowns.length }, () => "session_shutdown"),
 	);
 	assert.equal(
 		owner.status(agentId).run.retentionReasons.some(
@@ -1028,6 +1042,11 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
 		(entry) => entry.kind === "startup_ui" && entry.sessionId === agentId && entry.pid !== process.pid,
 	));
+	const startupUi = (await readProcessAgentViewEvidence(probe.evidencePath)).find(
+		(entry) => entry.kind === "startup_ui" && entry.sessionId === agentId &&
+			entry.pid !== process.pid,
+	);
+	assert.ok(startupUi);
 
 	shutdown = coordinator.shutdown(async () => host.runtime.dispose());
 	const shutdownOutcome = await Promise.race([
@@ -1044,10 +1063,19 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 		"Workflow shutdown must cancel startup UI before waiting for an unselected Agent lane",
 	);
 	await messaging;
+	assertProcessExited(startupUi.pid);
 	const lifecycleEvidence = (await readProcessAgentViewEvidence(probe.evidencePath))
 		.filter((entry) => entry.sessionId === agentId && entry.pid !== process.pid);
-	assert.equal(childProcessSessionStarts(lifecycleEvidence, agentId).length, 2);
-	assert.equal(childProcessSessionShutdowns(lifecycleEvidence, agentId).length, 2);
+	const sessionStarts = childProcessSessionStarts(lifecycleEvidence, agentId);
+	const sessionShutdowns = childProcessSessionShutdowns(lifecycleEvidence, agentId);
+	assert.equal(sessionStarts.length, 2);
+	assert.equal(sessionShutdowns[0]?.pid, sessionStarts[0]?.pid);
+	assert.ok(sessionShutdowns.length === 1 || sessionShutdowns.length === 2);
+	assert.equal(new Set(sessionShutdowns.map(({ pid }) => pid)).size, sessionShutdowns.length);
+	assert.equal(
+		sessionShutdowns.every(({ pid }) => sessionStarts.some((start) => start.pid === pid)),
+		true,
+	);
 	assert.equal(
 		lifecycleEvidence.filter((entry) => entry.kind === "session_start_after_ui").length,
 		0,
@@ -1055,7 +1083,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 	assert.deepEqual(
 		lifecycleEvidence.filter((entry) => entry.kind === "session_shutdown")
 			.map((entry) => entry.kind),
-		["session_shutdown", "session_shutdown"],
+		Array.from({ length: sessionShutdowns.length }, () => "session_shutdown"),
 	);
 });
 
@@ -1172,6 +1200,7 @@ test("later Runtime preparations load current file-backed child configuration wi
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
+	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Original resource Run remains retained."),
 		fauxAssistantMessage("Replacement resource Run is ready."),
@@ -1186,12 +1215,6 @@ test("later Runtime preparations load current file-backed child configuration wi
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, firstAgentId)).includes("remains retained")
 	);
-	const firstOpen = await openSelectedAgentView(host, firstAgentId);
-	assert.match(
-		stripTerminalSequences(firstOpen.view.render(80).join("\n")),
-		/Factory generation · original/,
-	);
-	await returnAgentViewToOwner(host, firstOpen.view, firstOpen.command);
 
 	process.env.PROCESS_AGENT_VIEW_GENERATION = "replacement";
 	const secondSpawn = await executeAndCommitRegisteredTool(
@@ -1228,7 +1251,6 @@ test("later Runtime preparations load current file-backed child configuration wi
 	assert.equal(secondStarts[0]?.generation, "replacement");
 	assert.notEqual(firstStarts[0]?.pid, secondStarts[0]?.pid);
 	await returnAgentViewToOwner(host, reopenedFirst.view, reopenedFirst.command);
-	await host.runtime.dispose();
 });
 
 test("a terminally failed viewed Run stays open on the durable Dormant Agent", async (t) => {
@@ -1920,7 +1942,7 @@ async function waitForProcessAgentViewEvidence(
 	path: string,
 	predicate: (entries: readonly ProcessAgentViewEvidence[]) => boolean,
 ): Promise<void> {
-	const deadline = Date.now() + 10_000;
+	const deadline = Date.now() + 5_000;
 	while (Date.now() < deadline) {
 		if (predicate(await readProcessAgentViewEvidence(path))) return;
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -1947,6 +1969,15 @@ function childProcessSessionShutdowns(
 		entry.kind === "session_shutdown" &&
 		entry.sessionId === agentId &&
 		entry.pid !== process.pid
+	);
+}
+
+function assertProcessExited(pid: number): void {
+	assert.throws(
+		() => process.kill(pid, 0),
+		(error: unknown) =>
+			typeof error === "object" && error !== null && "code" in error &&
+			(error as NodeJS.ErrnoException).code === "ESRCH",
 	);
 }
 

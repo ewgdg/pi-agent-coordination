@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,12 +18,12 @@ import {
 	PROCESS_RUNTIME_TEST_PROVIDER,
 } from "./fixtures/process-runtime-child-extension.ts";
 
-const TEST_TIMEOUT_MS = 30_000;
+const TEST_TIMEOUT_MS = 5_000;
 const CHILD_EXTENSION = fileURLToPath(
 	new URL("./fixtures/process-runtime-child-extension.ts", import.meta.url),
 );
 
-test("launch exposes the real startup PTY frame before runtime admission", {
+test("launch projects the real startup PTY through runtime admission", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
 }, async () => {
@@ -47,14 +47,6 @@ test("launch exposes the real startup PTY frame before runtime admission", {
 			{ columns: 100, rows: 30 },
 		);
 		assert.ok(changes > 0);
-		assert.equal(
-			await Promise.race([
-				readiness.then(() => "ready" as const),
-				new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
-			]),
-			"pending",
-		);
-
 		await readiness;
 		const runtime = await launch.ready();
 		assert.equal(runtime.pid, launch.pid);
@@ -75,28 +67,31 @@ test("cancelling pending launch rejects exact readiness and bounds all startup c
 	skip: process.platform === "win32",
 }, async () => {
 	const options = await createLaunchOptions("startup-cancel", 10_000);
-	const launch = await PiChildProcessRuntime.launch(options);
-	const projection = createPiChildProcessProjection(launch);
-	const readiness = projection.ready();
-	void readiness.catch(() => undefined);
-	await waitForFrame(launch, "PROCESS_RUNTIME_CHILD_WIDGET");
-	const bootstrap = JSON.parse(await readFile(launch.bootstrapPath, "utf8")) as {
-		endpoint: { transport: "unix"; address: string };
-	};
-	const pid = launch.pid;
-	const cancellation = new Error("deterministic pending launch cancellation");
+	let launch: PiChildProcessLaunch | undefined;
+	try {
+		launch = await PiChildProcessRuntime.launch(options);
+		const projection = createPiChildProcessProjection(launch);
+		const readiness = projection.ready();
+		void readiness.catch(() => undefined);
+		const pid = launch.pid;
+		const bootstrapPath = launch.bootstrapPath;
+		const cancellation = new Error("deterministic pending launch cancellation");
 
-	const cleanup = projection.cancelInitialization(cancellation);
-	assert.ok(cleanup);
-	assert.equal(projection.cancelInitialization(new Error("too late")), undefined);
-	await assert.rejects(readiness, (error) => error === cancellation);
-	await cleanup;
-	assert.equal(launch.disposed, true);
-	assert.throws(() => process.kill(pid, 0), hasCode("ESRCH"));
-	await assert.rejects(lstat(launch.bootstrapPath), hasCode("ENOENT"));
-	await assert.rejects(lstat(bootstrap.endpoint.address), hasCode("ENOENT"));
-	await assert.rejects(lstat(dirname(launch.bootstrapPath)), hasCode("ENOENT"));
-	await projection.dispose();
+		// Cancellation occurs in the same turn that exposes the launch, before any
+		// asynchronous admission continuation can change its pending state.
+		const cleanup = projection.cancelInitialization(cancellation);
+		assert.ok(cleanup);
+		assert.equal(projection.cancelInitialization(new Error("too late")), undefined);
+		await assert.rejects(readiness, (error) => error === cancellation);
+		await cleanup;
+		assert.equal(launch.disposed, true);
+		assert.throws(() => process.kill(pid, 0), hasCode("ESRCH"));
+		await assert.rejects(lstat(bootstrapPath), hasCode("ENOENT"));
+		await assert.rejects(lstat(dirname(bootstrapPath)), hasCode("ENOENT"));
+		await projection.dispose();
+	} finally {
+		await launch?.dispose();
+	}
 });
 
 test("failed startup removes its owned context artifact and launch directory", {

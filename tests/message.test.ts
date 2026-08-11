@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -28,6 +30,7 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
+import { REVERSE_BOUNDARY_ROOT_VARIABLE } from "./support/reverse-boundary-tools.ts";
 
 test("an authenticated Agent authors and polls one immutable Deferred Message through recipient proof", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
@@ -1651,38 +1654,28 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 });
 
 test("Steer waits for an already-issued parallel tool batch even when tools finish in reverse", async (t) => {
-	let releaseSlowTool!: () => void;
-	const slowToolGate = new Promise<void>((resolve) => {
-		releaseSlowTool = resolve;
+	const boundaryRoot = await mkdtemp(join(tmpdir(), "pi-reverse-boundary-tools-"));
+	const previousBoundaryRoot = process.env[REVERSE_BOUNDARY_ROOT_VARIABLE];
+	process.env[REVERSE_BOUNDARY_ROOT_VARIABLE] = boundaryRoot;
+	let harness: Awaited<ReturnType<typeof createDormantChildHarness>> | undefined;
+	t.after(async () => {
+		try {
+			await Promise.all([
+				releaseBoundaryTool(boundaryRoot, "slow"),
+				releaseBoundaryTool(boundaryRoot, "fast"),
+			]);
+			if (harness) {
+				await harness.coordinator.shutdown(async () => harness!.host.runtime.dispose());
+			}
+		} finally {
+			if (previousBoundaryRoot === undefined) {
+				delete process.env[REVERSE_BOUNDARY_ROOT_VARIABLE];
+			} else {
+				process.env[REVERSE_BOUNDARY_ROOT_VARIABLE] = previousBoundaryRoot;
+			}
+		}
 	});
-	let releaseFastTool!: () => void;
-	const fastToolGate = new Promise<void>((resolve) => {
-		releaseFastTool = resolve;
-	});
-	let markSlowToolStarted!: () => void;
-	const slowToolStarted = new Promise<void>((resolve) => {
-		markSlowToolStarted = resolve;
-	});
-	let markFastToolStarted!: () => void;
-	const fastToolStarted = new Promise<void>((resolve) => {
-		markFastToolStarted = resolve;
-	});
-	const toolRegistryKey = Symbol.for("pi-agent-coordination.test.reverse-tools");
-	const testGlobals = globalThis as typeof globalThis & Record<PropertyKey, unknown>;
-	testGlobals[toolRegistryKey] = {
-		async slow() {
-			markSlowToolStarted();
-			await slowToolGate;
-		},
-		async fast() {
-			markFastToolStarted();
-			await fastToolGate;
-		},
-	};
-	t.after(() => {
-		delete testGlobals[toolRegistryKey];
-	});
-	const harness = await createDormantChildHarness({}, {
+	harness = await createDormantChildHarness({}, {
 		additionalExtensionPaths: [
 			fileURLToPath(new URL("./support/reverse-boundary-tools.ts", import.meta.url)),
 		],
@@ -1734,7 +1727,10 @@ test("Steer waits for an already-issued parallel tool batch even when tools fini
 		"start-parallel-tools-before-steer",
 		"Run both boundary tools.",
 	);
-	await Promise.all([slowToolStarted, fastToolStarted]);
+	await Promise.all([
+		waitForBoundaryToolStart(boundaryRoot, "slow"),
+		waitForBoundaryToolStart(boundaryRoot, "fast"),
+	]);
 	const steer = await authorMessage(
 		harness,
 		"steer-during-reverse-tool-completion",
@@ -1742,19 +1738,18 @@ test("Steer waits for an already-issued parallel tool batch even when tools fini
 		{ deliveryMode: "steer" },
 	);
 
-	releaseFastTool();
+	await releaseBoundaryTool(boundaryRoot, "fast");
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
 	assert.equal(
 		hasDelivery(SessionManager.open(childSessionFile).getEntries(), steer.source),
 		false,
 	);
-	releaseSlowTool();
+	await releaseBoundaryTool(boundaryRoot, "slow");
 	await waitForDelivery(harness, steer.source);
 	await continuationObserved;
 	if (continuationError) throw continuationError;
 
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
 test("Steer takes the next model turn before an earlier Deferred Message", async () => {
@@ -1995,12 +1990,46 @@ async function waitForDelivery(
 	);
 }
 
-async function waitForCondition(predicate: () => boolean): Promise<void> {
+async function waitForCondition(
+	predicate: () => boolean | Promise<boolean>,
+): Promise<void> {
 	for (let attempt = 0; attempt < 500; attempt += 1) {
-		if (predicate()) return;
+		if (await predicate()) return;
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected condition was not reached");
+}
+
+async function waitForBoundaryToolStart(
+	root: string,
+	tool: "slow" | "fast",
+): Promise<void> {
+	const path = join(root, `${tool}-started.json`);
+	let childPid: number | undefined;
+	await waitForCondition(async () => {
+		let evidence: { pid?: unknown };
+		try {
+			evidence = JSON.parse(await readFile(path, "utf8")) as { pid?: unknown };
+		} catch (error) {
+			if (
+				error instanceof SyntaxError ||
+				(typeof error === "object" && error !== null && "code" in error &&
+					error.code === "ENOENT")
+			) return false;
+			throw error;
+		}
+		if (typeof evidence.pid !== "number") return false;
+		childPid = evidence.pid;
+		return true;
+	});
+	assert.notEqual(childPid, process.pid);
+}
+
+async function releaseBoundaryTool(
+	root: string,
+	tool: "slow" | "fast",
+): Promise<void> {
+	await writeFile(join(root, `${tool}-release`), "released\n", { mode: 0o600 });
 }
 
 function hasDelivery(

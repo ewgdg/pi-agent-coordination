@@ -37,7 +37,10 @@ type ProcessAgentDriver = Readonly<{
 	transcriptPath: string;
 	entries(): ReturnType<SessionManager["getEntries"]>;
 	appendToolCall(toolName: string, toolCallId: string, input: Record<string, unknown>): void;
-	prompt(text: string): Promise<void>;
+	prompt(
+		text: string,
+		options?: Readonly<{ expectedResult?: "commit" | "input_failure" }>,
+	): Promise<void>;
 	sendUserMessage(text: string): Promise<void>;
 	abort(): Promise<void>;
 	waitForIdle(): Promise<void>;
@@ -136,8 +139,9 @@ test("interruption holds one exact settled Run and blocks ordinary Message Deliv
 	await harness.shutdown();
 });
 
-test("interruption keeps an aborted Human Request Run held when Pi reports an error", async () => {
+test("interruption keeps an aborted Human Request Run held when Pi reports an error", async (t) => {
 	const harness = await createRunSupervisionHarness();
+	t.after(() => harness.shutdown());
 	const child = await harness.spawnChild("spawn-aborted-human-request-child");
 	await child.waitForIdle();
 	const input = {
@@ -161,13 +165,15 @@ test("interruption keeps an aborted Human Request Run held when Pi reports an er
 	assert.ok(selectedView);
 	selectedView.projection().dispatchInput("\x1b");
 	await prompt;
+	await waitForCondition(() => child.view.status().run.retentionReasons.some(
+		({ reason }) => reason === "interruption_hold",
+	));
 	assert.equal(child.view.status().run.phase, "live");
 	assert.equal(child.view.status().run.retentionReasons.some(
 		({ reason }) => reason === "interruption_hold",
 	), true);
 	await selectedView.close();
 
-	await harness.shutdown();
 });
 
 test("an unrelated Agent abort does not preempt a later explicit interruption", async () => {
@@ -509,8 +515,9 @@ test("a native human editor Message clears its exact Hold for one isolated turn"
 	await harness.shutdown();
 });
 
-test("a failed native human resume dispatch leaves its exact Hold retryable", async () => {
+test("a failed native human resume dispatch leaves its exact Hold retryable", async (t) => {
 	const harness = await createRunSupervisionHarness();
+	t.after(() => harness.shutdown());
 	const child = await harness.spawnChild("spawn-failed-human-resume-child");
 	await child.waitForIdle();
 	await harness.control("interrupt-before-failed-human-resume", {
@@ -521,7 +528,9 @@ test("a failed native human resume dispatch leaves its exact Hold retryable", as
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The uncommitted process input cycle settled."),
 	]);
-	await child.prompt("PROCESS_RUNTIME_DROP_MESSAGE_COMMIT");
+	await child.prompt("PROCESS_RUNTIME_DROP_MESSAGE_COMMIT", {
+		expectedResult: "input_failure",
+	});
 	// The backgrounded child's input failure renders in its own complete native
 	// mode; it never reaches the Owner's TUI (#59).
 	const agentView = await harness.ownerView.openAgentView(child.agentId);
@@ -570,7 +579,6 @@ test("a failed native human resume dispatch leaves its exact Hold retryable", as
 	);
 	await harness.activeAgentView()?.close();
 
-	await harness.shutdown();
 });
 
 test("supervisory interruption settles an active Human Request through its error result", async () => {
@@ -1163,7 +1171,7 @@ async function createRunSupervisionHarness(options?: {
 			transcriptPath,
 			entries,
 			appendToolCall,
-			async prompt(text: string) {
+			async prompt(text: string, options) {
 				const beforeEntryIds = new Set(entries().map(({ id }) => id));
 				const held = ownerView.status(agentId).run.retentionReasons.some(
 					({ reason }) => reason === "interruption_hold",
@@ -1187,6 +1195,7 @@ async function createRunSupervisionHarness(options?: {
 					);
 					await ownerView.message(toolCallId, input);
 				}
+				const expectedResult = options?.expectedResult ?? "commit";
 				await waitForCondition(() => {
 					const committed = entries().some((entry) =>
 						!beforeEntryIds.has(entry.id) &&
@@ -1195,11 +1204,9 @@ async function createRunSupervisionHarness(options?: {
 					const inputFailure = Boolean(selected && stripTerminalSequences(
 						selected.projection().presentation.render(120).join("\n"),
 					).includes("Agent input failed"));
-					return committed || inputFailure;
+					return expectedResult === "input_failure" ? inputFailure : committed;
 				});
-				if (selected && stripTerminalSequences(
-					selected.projection().presentation.render(120).join("\n"),
-				).includes("Agent input failed")) return;
+				if (expectedResult === "input_failure") return;
 				await waitForCondition(() => {
 					const run = ownerView.status(agentId).run;
 					return run.phase === "dormant" ||
