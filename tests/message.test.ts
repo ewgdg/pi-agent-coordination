@@ -33,6 +33,7 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
+import { capturedAgentSession } from "./support/captured-agent-sessions.ts";
 
 test("an authenticated Agent authors and polls one immutable Deferred Message through recipient proof", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
@@ -943,8 +944,11 @@ test("only the original sender can poll a Message", async () => {
 			beforeModeratorRunStart: () => "confirmed_failure",
 		},
 		spawnBoundaryHooks: {
-			afterRunStart({ identity: childIdentity, session }) {
-				childSessions.set(childIdentity.agentId, session);
+			afterRunStart({ identity: childIdentity }) {
+				childSessions.set(
+					childIdentity.agentId,
+					capturedAgentSession(childIdentity.agentId),
+				);
 			},
 		},
 	});

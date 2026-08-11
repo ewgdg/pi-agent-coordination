@@ -2,11 +2,9 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 import {
 	requireAgentRecord,
-	requireLiveSession,
 	type AgentRecord,
 } from "./agent-record.ts";
 import type { MessageCoordinator } from "./messages.ts";
-import { sendAndAwaitTranscriptCommit } from "../pi-integration/transcript-commit.ts";
 import {
 	createSupervisoryResumeMessage,
 	resolveCommittedRunControl,
@@ -146,24 +144,22 @@ export class RunSupervisor {
 		text: string,
 		images: readonly ImageContent[] | undefined,
 	): Promise<void> {
-		const session = requireLiveSession(record);
 		const content: Array<TextContent | ImageContent> = [
 			{ type: "text", text },
 			...(images ?? []),
 		];
-		const committed = await sendAndAwaitTranscriptCommit({
-			session,
-			matchesCandidate: (event) =>
-				event.type === "message_end" && event.message.role === "user",
-			inspectCommit: () => {
-				const tail = record.transcript.inspect().entries.at(-1);
-				return tail?.type === "message" &&
-					tail.message.role === "user" &&
-					JSON.stringify(tail.message.content) === JSON.stringify(content);
+		const delivery = record.host.deliverInLane(
+			{ kind: "user", content },
+			{
+				inspectCommit: () => {
+					const tail = record.transcript.inspect().entries.at(-1);
+					return tail?.type === "message" &&
+						tail.message.role === "user" &&
+						JSON.stringify(tail.message.content) === JSON.stringify(content);
+				},
 			},
-			send: () => session.sendUserMessage(content),
-			onDispatched: (completion) => record.host.trackOperation(completion),
-		});
+		);
+		const committed = await delivery.transcriptCommit;
 		if (!committed) throw new Error("Human input did not commit");
 	}
 

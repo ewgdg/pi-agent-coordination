@@ -24,6 +24,7 @@ import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
+import { capturedAgentSession } from "./support/captured-agent-sessions.ts";
 
 test("ordinary executions enter and leave one Workflow-wide FIFO capacity", async () => {
 	const policy = new WorkflowPolicyStore(
@@ -199,8 +200,8 @@ test("real ordinary child Runs share fair execution capacity before generation a
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
-			afterRunStart({ session }) {
-				childSessions.push(session);
+			afterRunStart({ identity }) {
+				childSessions.push(capturedAgentSession(identity.agentId));
 			},
 		},
 	});
@@ -286,8 +287,8 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 		moderatorExtensionFactory: (agentId) =>
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
-			afterRunStart({ session }) {
-				childSessions.push(session);
+			afterRunStart({ identity }) {
+				childSessions.push(capturedAgentSession(identity.agentId));
 			},
 		},
 	});

@@ -1,13 +1,7 @@
-import {
-	SessionManager,
-	type AgentSession,
-} from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
-import {
-	requireLiveSession,
-	type AgentRecord,
-} from "./agent-record.ts";
+import type { AgentRecord } from "./agent-record.ts";
 import { MessageCoordinator } from "./messages.ts";
 import { resolveOrdinaryAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
@@ -28,6 +22,7 @@ import {
 } from "../protocol/identities.ts";
 import {
 	InProcessAgentHost,
+	type AgentRunHandle,
 	type RunRetentionReason,
 } from "../runtime/in-process-agent-host.ts";
 import {
@@ -74,7 +69,7 @@ export type SpawnBoundaryHooks = Readonly<{
 	}): void | "confirmation_lost";
 	beforeRunStart?(): void | "confirmed_failure";
 	afterRunStart?(context: {
-		session: AgentSession;
+		handle: AgentRunHandle;
 		identity: ChildAgentIdentity;
 	}): void | "confirmation_lost";
 	beforeDeliveryAdmission?(): void | "confirmed_failure";
@@ -232,9 +227,13 @@ export class DefaultChildSpawner {
 				effectiveConfiguration: prepared.configuration,
 			};
 		}
+		const startedHandle = child.host.currentHandle();
+		if (!startedHandle) {
+			throw new Error("invariant_violation: confirmed child Run has no handle");
+		}
 		if (
 			this.#boundaryHooks.afterRunStart?.({
-				session: child.host.requireLiveSession(),
+				handle: startedHandle,
 				identity,
 			}) === "confirmation_lost"
 		) {

@@ -1,9 +1,6 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import {
-	continueFromCommittedInput,
-	persistCommittedInput,
-} from "../pi-integration/committed-input.ts";
+import { persistCommittedInput } from "../pi-integration/committed-input.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
@@ -246,15 +243,9 @@ export class OperationalIncidentCoordinator {
 			throw new Error("invariant_violation: root tool call source is unavailable");
 		}
 		const toolCalls = entry.message.content.filter((part) => part.type === "toolCall");
-		const classification = toolCalls.some((part) => {
-			const definition = record.host.requireLiveSession().getToolDefinition(part.name);
-			if (!definition) {
-				throw new Error(`invariant_violation: tool definition ${part.name} is unavailable`);
-			}
-			return definition.executionMode === "sequential";
-		})
-			? "blocking"
-			: "asynchronous";
+		const classification = record.host.classifyToolBatch(
+			toolCalls.map(({ name }) => name),
+		);
 		this.#operationReviews.admit({
 			toolCall: source,
 			classification,
@@ -515,8 +506,8 @@ export class OperationalIncidentCoordinator {
 		try {
 			await moderator.host.lane.run(async () => {
 				if (this.#isShuttingDown()) return;
-				const session = await moderator.host.startInLane(["moderator_handling"]);
-				moderator.host.trackOperation(continueFromCommittedInput(session));
+				await moderator.host.startInLane(["moderator_handling"]);
+				moderator.host.continueFromCommittedInputInLane();
 			});
 		} catch (error) {
 			this.#reportError(error);

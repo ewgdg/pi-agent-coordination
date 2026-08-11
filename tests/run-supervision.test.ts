@@ -30,6 +30,7 @@ import {
 	openLiveAgentView,
 	returnAgentViewToOwner,
 } from "./support/agent-session.ts";
+import { capturedAgentSession } from "./support/captured-agent-sessions.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 100;
 
@@ -1116,8 +1117,8 @@ async function createRunSupervisionHarness(options?: {
 			beforeModeratorRunStart: () => "confirmed_failure",
 		},
 		spawnBoundaryHooks: {
-			afterRunStart({ identity, session }) {
-				childSessions.set(identity.agentId, session);
+			afterRunStart({ identity }) {
+				childSessions.set(identity.agentId, capturedAgentSession(identity.agentId));
 			},
 		},
 	});

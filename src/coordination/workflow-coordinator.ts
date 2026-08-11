@@ -8,7 +8,6 @@ import { dirname, resolve } from "node:path";
 
 import {
 	requireAgentRecord,
-	requireLiveServices,
 	statusOf,
 	type AgentRecord,
 	type AgentStatus,
@@ -167,6 +166,7 @@ export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 
 export class WorkflowCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
+	readonly #ownerDiagnostics: AgentSessionRuntime["services"]["diagnostics"];
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
 	readonly #sessionFactory: DefaultChildSessionFactory;
@@ -209,6 +209,7 @@ export class WorkflowCoordinator {
 			projectionHost?: PiNativeProjectionHost;
 		},
 	) {
+		this.#ownerDiagnostics = runtime.services.diagnostics;
 		this.#quarantinedAgentIds = options.recoveredWorkflow?.quarantinedAgentIds ?? new Set();
 		this.#agentIdBySpawnSource = new Map(
 			options.recoveredWorkflow?.agentIdBySpawnSource ?? [],
@@ -222,7 +223,6 @@ export class WorkflowCoordinator {
 		);
 		this.#agents.set(identity.agentId, {
 			identity,
-			services: runtime.services,
 			host: InProcessAgentHost.bindOwner(runtime),
 			transcript: transcriptFromSessionManager(runtime.session.sessionManager),
 			children: [],
@@ -320,7 +320,7 @@ export class WorkflowCoordinator {
 			integrateAgent: (record) => this.#integrateAgent(record),
 			isShuttingDown: () => this.#shuttingDown,
 			reportError: (error) => {
-				runtime.services.diagnostics.push({
+				this.#ownerDiagnostics.push({
 					type: "error",
 					message: error instanceof Error ? error.message : String(error),
 				});
@@ -518,19 +518,15 @@ export class WorkflowCoordinator {
 
 	#rosterStatus(record: AgentRecord): AgentRosterStatus {
 		const status = statusOf(record);
-		const liveSession = record.host.currentHandle()
-			? record.host.requireLiveSession()
-			: undefined;
+		const runtimeSnapshot = record.host.effectiveRuntimeSnapshot();
 		const transcript = record.transcript.inspect();
 		const transcriptContext = transcript.context;
 		const configured = record.effectiveConfiguration ?? record.identity.configuration.baseline;
-		const model = liveSession?.model
-			? { provider: liveSession.model.provider, modelId: liveSession.model.id }
-			: transcriptContext.model ?? configured.model;
+		const model = runtimeSnapshot?.model ?? transcriptContext.model ?? configured.model;
 		const hasRecordedThinking = transcript.activeBranch.some(
 			(entry) => entry.type === "thinking_level_change",
 		);
-		const thinking = liveSession?.thinkingLevel ??
+		const thinking = runtimeSnapshot?.thinking ??
 			(hasRecordedThinking ? transcriptContext.thinkingLevel : configured.thinking);
 		if (!isRuntimeThinkingLevel(thinking)) {
 			throw new Error(`invariant_violation: Agent ${status.agentId} has invalid thinking level`);
@@ -604,11 +600,11 @@ export class WorkflowCoordinator {
 				this.#reportAgentRuntimeReleaseError(error)
 			);
 		});
-		record.host.setRunStartedHandler(async () => {
-			await this.#bindViewedRunInLane(record);
+		record.host.setRunStartedHandler(async (handle) => {
+			await this.#bindViewedRunInLane(record, handle);
 		});
-		record.host.setRunEndingHandler(async (session, _handle, cause) => {
-			await this.#markViewedFailedRunInLane(record, session, cause);
+		record.host.setRunEndingHandler(async (handle, cause) => {
+			await this.#markViewedFailedRunInLane(record, handle, cause);
 		});
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
@@ -670,7 +666,7 @@ export class WorkflowCoordinator {
 		const preparation = record.host.lane.run(() => {
 			if (record.host.currentProjection()) {
 				record.host.addRetentionReason("interactive_selection");
-				return record.host.requirePreparedSession();
+				return;
 			}
 			return record.host.prepareInLane(["interactive_selection"]);
 		});
@@ -806,9 +802,12 @@ export class WorkflowCoordinator {
 		}
 	}
 
-	async #bindViewedRunInLane(record: AgentRecord): Promise<void> {
+	async #bindViewedRunInLane(
+		record: AgentRecord,
+		handle: Readonly<{ sequence: number }>,
+	): Promise<void> {
 		const active = this.#activeAgentView;
-		if (!active || active.record !== record) return;
+		if (!active || active.record !== record || !record.host.isCurrent(handle)) return;
 		const projection = record.host.currentProjection();
 		if (!projection) {
 			throw new Error(
@@ -827,7 +826,7 @@ export class WorkflowCoordinator {
 
 	async #markViewedFailedRunInLane(
 		record: AgentRecord,
-		session: AgentSessionRuntime["session"],
+		handle: Readonly<{ sequence: number }>,
 		cause: "failure" | "termination" | "shutdown",
 	): Promise<void> {
 		const active = this.#activeAgentView;
@@ -835,7 +834,7 @@ export class WorkflowCoordinator {
 			cause !== "failure" ||
 			!active ||
 			active.record !== record ||
-			record.host.requireLiveSession() !== session ||
+			!record.host.isCurrent(handle) ||
 			record.host.currentProjection() !== active.attachment.projection()
 		) return;
 		if (record.host.observe().phase === "starting") {
@@ -849,16 +848,14 @@ export class WorkflowCoordinator {
 	}
 
 	#reportAgentViewError(error: unknown): void {
-		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
-		requireLiveServices(owner).diagnostics.push({
+		this.#ownerDiagnostics.push({
 			type: "error",
 			message: `Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
 		});
 	}
 
 	#reportAgentRuntimeReleaseError(error: unknown): void {
-		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
-		requireLiveServices(owner).diagnostics.push({
+		this.#ownerDiagnostics.push({
 			type: "error",
 			message: `Agent runtime release failed: ${error instanceof Error ? error.message : String(error)}`,
 		});
@@ -905,9 +902,11 @@ export class WorkflowCoordinator {
 		const record = this.#requireAgent(agentId);
 		const run = record.host.observe();
 		if (run.phase !== "live" || run.attention === "input_required") return;
+		const handle = record.host.currentHandle();
+		if (!handle) return;
 		const permit = await this.#executionScheduler.admit(
 			this.#isModerator(agentId) ? "moderator" : "ordinary",
-			record.host.requireLiveSession().agent.signal,
+			record.host.exactRunCancellationSignal(handle),
 		);
 		if (!permit) return;
 		if (this.#shuttingDown) {
@@ -939,11 +938,9 @@ export class WorkflowCoordinator {
 			}
 			return active.record.host.lane.run(async () => {
 				if (this.#activeAgentView !== active) return true;
-				const currentSession = active.record.host.currentHandle()
-					? active.record.host.requireLiveSession()
-					: undefined;
+				const currentHandle = active.record.host.currentHandle();
 				if (
-					currentSession &&
+					currentHandle &&
 					active.attachment.projection() === active.record.host.currentProjection()
 				) {
 					if (active.record.host.currentInterruptionHold()) {
@@ -955,7 +952,7 @@ export class WorkflowCoordinator {
 					}
 					return false;
 				}
-				if (!currentSession) {
+				if (!currentHandle) {
 					await active.record.host.startInLane(["interactive_selection"]);
 				}
 				await this.#runSupervisor.submitFromHumanInLane(active.record, text, images);

@@ -31,6 +31,7 @@ import {
 	createUnboundTestOwnerHost,
 	type TestOwnerHostOptions,
 } from "./support/pi-host.ts";
+import { capturedAgentSession } from "./support/captured-agent-sessions.ts";
 
 test("one native text Answer is the sole result and releases the sequential sibling barrier", async () => {
 	const { host, coordinator, view, child } = await createHumanRequestChild();
@@ -481,8 +482,11 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 		spawnBoundaryHooks: {
-			afterRunStart({ identity: childIdentity, session }) {
-				childSessions.set(childIdentity.agentId, session);
+			afterRunStart({ identity: childIdentity }) {
+				childSessions.set(
+					childIdentity.agentId,
+					capturedAgentSession(childIdentity.agentId),
+				);
 			},
 		},
 	});
@@ -644,8 +648,11 @@ async function createHumanRequestChild(options?: Pick<
 			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 		spawnBoundaryHooks: {
-			afterRunStart({ identity: childIdentity, session }) {
-				childSessions.set(childIdentity.agentId, session);
+			afterRunStart({ identity: childIdentity }) {
+				childSessions.set(
+					childIdentity.agentId,
+					capturedAgentSession(childIdentity.agentId),
+				);
 			},
 		},
 	});

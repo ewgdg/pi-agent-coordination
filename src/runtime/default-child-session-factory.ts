@@ -13,11 +13,7 @@ import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import {
-	requireLiveSession,
-	requireLiveServices,
-	type AgentRecord,
-} from "../coordination/agent-record.ts";
+import type { AgentRecord } from "../coordination/agent-record.ts";
 import {
 	createPiNativeProjectionHost,
 	type PiNativeAgentProjection,
@@ -144,38 +140,30 @@ export class DefaultChildSessionFactory {
 	}
 
 	snapshotRuntimeBaseline(parent: AgentRecord): RuntimeConfigurationBaseline {
-		const parentSession = requireLiveSession(parent);
-		const parentServices = requireLiveServices(parent);
-		const model = parentSession.model;
-		if (!model) throw new Error("Parent model is unavailable");
-		if (!parentServices.modelRuntime.getModel(model.provider, model.id)) {
+		const snapshot = parent.host.effectiveRuntimeSnapshot();
+		if (!snapshot) throw new Error("Parent Runtime snapshot is unavailable");
+		if (!this.#ownerRuntime.services.modelRuntime.getModel(
+			snapshot.model.provider,
+			snapshot.model.modelId,
+		)) {
 			throw new Error("Inherited model is unavailable");
 		}
-		const skills = parentServices.resourceLoader.getSkills().skills;
-		const extensions = parentServices.resourceLoader
-			.getExtensions()
-			.extensions.filter((extension) => !this.#isCoordinationExtension(extension.path, extension.resolvedPath));
 		const baseline = {
-			// SessionManager cwd is the durable transcript header cwd. Services cwd is
-			// the current Run's effective cwd and is what descendants must inherit.
-			cwd: parentServices.cwd,
-			model: { provider: model.provider, modelId: model.id },
-			thinking: parentSession.thinkingLevel,
-			tools: parentSession
-				.getActiveToolNames()
-				.filter(
-					(name) =>
-						!ORDINARY_COORDINATION_TOOLS.includes(
-							name as (typeof ORDINARY_COORDINATION_TOOLS)[number],
-						),
-				),
-			skills: skills.map(({ name }) => name),
-			extensions: extensions.map(({ resolvedPath }) => resolvedPath),
+			cwd: snapshot.cwd,
+			model: snapshot.model,
+			thinking: snapshot.thinking,
+			tools: snapshot.tools.filter(
+				(name) =>
+					!ORDINARY_COORDINATION_TOOLS.includes(
+						name as (typeof ORDINARY_COORDINATION_TOOLS)[number],
+					),
+			),
+			skills: snapshot.skills,
+			extensions: snapshot.fileExtensionPaths.filter(
+				(path) => !this.#isCoordinationExtension(path, path),
+			),
 		} satisfies RuntimeConfigurationBaseline;
-		this.#projectTrustByCwd.set(
-			baseline.cwd,
-			parentServices.settingsManager.isProjectTrusted(),
-		);
+		this.#projectTrustByCwd.set(baseline.cwd, snapshot.projectTrusted);
 		return baseline;
 	}
 
@@ -197,7 +185,6 @@ export class DefaultChildSessionFactory {
 				);
 				firstPrepared = undefined;
 				const startedRun = await this.startSession({ sessionManager, prepared });
-				child.services = prepared.services;
 				child.effectiveConfiguration = prepared.configuration;
 				return startedRun;
 			},
@@ -206,10 +193,7 @@ export class DefaultChildSessionFactory {
 			identity,
 			...(options.firstPrepared === undefined
 				? {}
-				: {
-					services: options.firstPrepared.services,
-					effectiveConfiguration: options.firstPrepared.configuration,
-				}),
+				: { effectiveConfiguration: options.firstPrepared.configuration }),
 			host,
 			transcript: transcriptFromSessionManager(sessionManager),
 			children: [],
@@ -234,7 +218,6 @@ export class DefaultChildSessionFactory {
 				);
 				firstPrepared = undefined;
 				const startedRun = await this.startSession({ sessionManager, prepared });
-				moderator.services = prepared.services;
 				moderator.effectiveConfiguration = prepared.configuration;
 				return startedRun;
 			},
@@ -243,10 +226,7 @@ export class DefaultChildSessionFactory {
 			identity,
 			...(options.firstPrepared === undefined
 				? {}
-				: {
-					services: options.firstPrepared.services,
-					effectiveConfiguration: options.firstPrepared.configuration,
-				}),
+				: { effectiveConfiguration: options.firstPrepared.configuration }),
 			host,
 			transcript: transcriptFromSessionManager(sessionManager),
 			children: [],
@@ -484,7 +464,27 @@ export class DefaultChildSessionFactory {
 			}
 			throw error;
 		}
-		return { session, projection, ready };
+		return {
+			session,
+			projection,
+			ready,
+			inspectRuntimeSnapshot: () => ({
+				cwd: prepared.services.cwd,
+				model: session.model
+					? { provider: session.model.provider, modelId: session.model.id }
+					: prepared.configuration.model,
+				thinking: session.thinkingLevel,
+				tools: [...session.getActiveToolNames()],
+				skills: prepared.services.resourceLoader
+					.getSkills()
+					.skills.map(({ name }) => name),
+				fileExtensionPaths: prepared.services.resourceLoader
+					.getExtensions()
+					.extensions.map(({ resolvedPath }) => resolvedPath),
+				projectTrusted: prepared.services.settingsManager.isProjectTrusted(),
+				sessionId: session.sessionManager.getSessionId(),
+			}),
+		};
 	}
 
 	workflowSessionDirectory(): string {

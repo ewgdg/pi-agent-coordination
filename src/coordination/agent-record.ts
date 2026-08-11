@@ -1,7 +1,3 @@
-import type {
-	AgentSessionServices,
-} from "@earendil-works/pi-coding-agent";
-
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { ModeratorIdentity } from "../protocol/moderator-input.ts";
@@ -16,7 +12,6 @@ export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdenti
 
 export type AgentRecord = {
 	identity: AgentIdentity;
-	services?: AgentSessionServices;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
 	host: InProcessAgentHost;
 	transcript: AgentTranscript;
@@ -73,17 +68,6 @@ export function statusOf(record: AgentRecord): AgentStatus {
 		},
 		run,
 	};
-}
-
-export function requireLiveSession(record: AgentRecord) {
-	return record.host.requireLiveSession();
-}
-
-export function requireLiveServices(record: AgentRecord): AgentSessionServices {
-	if (!record.services || !record.host.currentHandle()) {
-		throw new Error(`Agent Run services are unavailable: ${record.identity.agentId}`);
-	}
-	return record.services;
 }
 
 export function requireAgentRecord(
