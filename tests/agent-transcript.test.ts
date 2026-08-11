@@ -7,6 +7,8 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { commitAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
+import { resolveModeratorAgentMetadata } from "../src/protocol/agent-metadata.ts";
+import { createModelVisibleModeratorInput } from "../src/protocol/moderator-input.ts";
 import {
 	AgentTranscript,
 	type TranscriptInspection,
@@ -110,6 +112,61 @@ test("new Agent transcript materialization commits pre-launch Identity evidence"
 		materializeNewAgentTranscript(prepared),
 		/transcript already exists/,
 	);
+});
+
+test("new Moderator transcript materialization validates its Input bootstrap", async () => {
+	const root = await mkdtemp(join(tmpdir(), "moderator-transcript-materialize-"));
+	const prepared = SessionManager.create(root, join(root, "sessions"), {
+		id: "moderator-materialized",
+	});
+	const baseline = {
+		cwd: root,
+		model: { provider: "anthropic", modelId: "claude-test" },
+		thinking: "off" as const,
+		tools: [],
+		skills: [],
+		extensions: [],
+	};
+	const metadata = resolveModeratorAgentMetadata("operation_review");
+	const identity = {
+		agentId: "moderator-materialized",
+		workflowId: "workflow-materialized",
+		directSpawnerAgentId: null,
+		configuration: { ...metadata, baseline },
+	} as const;
+	const input = {
+		trigger: {
+			kind: "operation_review" as const,
+			toolCall: {
+				agentId: "reviewed-agent",
+				entryId: "reviewed-entry",
+				toolCallId: "reviewed-tool-call",
+			},
+			reviewIntervalMs: 1_000,
+		},
+		inspectedThrough: [{ agentId: "reviewed-agent", entryId: "reviewed-tail" }],
+	};
+	const modelInput = createModelVisibleModeratorInput(identity, input);
+	prepared.appendCustomMessageEntry(
+		modelInput.customType,
+		modelInput.content,
+		modelInput.display,
+		modelInput.details,
+	);
+	commitAgentRuntimeBlueprint(prepared, {
+		agentId: identity.agentId,
+		role: "moderator",
+		configuration: {
+			...baseline,
+			tools: ["agent_message", "moderator_control"],
+		},
+		projectTrusted: false,
+		skillSources: [],
+		agentsFiles: [],
+	});
+
+	const sessionFile = await materializeNewAgentTranscript(prepared);
+	assert.equal(SessionManager.open(sessionFile).getEntries().length, 2);
 });
 
 test("transcript materialization rejects a blueprint without its role bootstrap evidence", async () => {

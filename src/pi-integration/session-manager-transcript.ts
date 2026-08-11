@@ -3,6 +3,8 @@ import { writeFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
 import { resolveCommittedAgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
+import { validateColdChildIdentity } from "../protocol/child-identity.ts";
+import { validateColdModeratorInput } from "../protocol/moderator-input.ts";
 import {
 	AgentTranscript,
 	type TranscriptInspection,
@@ -61,10 +63,20 @@ export async function materializeNewAgentTranscript(
 	if (entries.length === 0) {
 		throw new Error("transcript_materialization_failed: Agent Identity evidence is unavailable");
 	}
-	resolveCommittedAgentRuntimeBlueprint({
+	const blueprint = resolveCommittedAgentRuntimeBlueprint({
 		sessionId: sessionManager.getSessionId(),
 		entries,
 	});
+	const coldIdentityOptions = {
+		sessionId: sessionManager.getSessionId(),
+		sessionCwd: blueprint.configuration.cwd,
+		entries,
+	};
+	if (blueprint.role === "ordinary") {
+		validateColdChildIdentity(coldIdentityOptions);
+	} else {
+		validateColdModeratorInput(coldIdentityOptions);
+	}
 	const body = `${[header, ...entries]
 		.map((entry) => JSON.stringify(entry))
 		.join("\n")}\n`;
