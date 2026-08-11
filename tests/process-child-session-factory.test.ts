@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import {
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
@@ -33,6 +34,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 	});
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: false,
 		additionalExtensionPaths: [broker.extensionPath],
 	});
 	await bindTestOwnerHost(host, "tui");
@@ -170,7 +172,10 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
 }, async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		processVisibleModel: false,
+	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(
 		host.runtime,
@@ -219,9 +224,24 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 	skip: process.platform === "win32",
 }, async () => {
 	const broker = await createProcessModelBroker();
+	const moderatorWidgetExtension = join(
+		broker.runtimeDirectory,
+		"moderator-process-widget.mjs",
+	);
+	await writeFile(moderatorWidgetExtension, [
+		"export default function moderatorProcessWidget(pi) {",
+		"  pi.on('session_start', (_event, ctx) => {",
+		"    ctx.ui.setWidget('moderator-process-widget', [",
+		"      'PROCESS_RUNTIME_CHILD_WIDGET',",
+		"      `PID=${process.pid}`,",
+		"    ]);",
+		"  });",
+		"}",
+	].join("\n"), { mode: 0o600 });
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
-		additionalExtensionPaths: [broker.extensionPath],
+		processVisibleModel: false,
+		additionalExtensionPaths: [broker.extensionPath, moderatorWidgetExtension],
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(
@@ -229,15 +249,26 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		"<inline:pi-agent-coordination>",
 	);
 	let moderatorProviderRequests = 0;
-	broker.setResponses(Array.from({ length: 4 }, () => (context) => {
+	broker.setResponses(Array.from({ length: 6 }, () => (context) => {
 		if (context.tools?.some(({ name }) => name === "moderator_control")) {
 			moderatorProviderRequests += 1;
-			return moderatorProviderRequests === 1
-				? fauxAssistantMessage("First committed Moderator attempt fails.", {
+			if (moderatorProviderRequests === 1) {
+				return fauxAssistantMessage("First committed Moderator attempt fails.", {
 					stopReason: "error",
 					errorMessage: "deterministic committed Moderator process failure",
-				})
-				: fauxAssistantMessage("Linked replacement Moderator process is live.");
+				});
+			}
+			if (moderatorProviderRequests === 2) {
+				return fauxAssistantMessage(
+					fauxToolCall("moderator_control", {
+						operation: "resolve",
+						summary: "The replacement inspected the exact failed process Run.",
+						rationale: "Exercise the Moderator child-to-Owner process proxy.",
+					}, { id: "proxied-moderator-control" }),
+					{ stopReason: "toolUse" },
+				);
+			}
+			return fauxAssistantMessage("Linked replacement Moderator process settled.");
 		}
 		return fauxAssistantMessage("Answer-obligated ordinary process fails.", {
 			stopReason: "error",
@@ -247,6 +278,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 	const coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
+	let replacementPid: number | undefined;
 	try {
 		const owner = coordinator.forAgent(identity.agentId);
 		const input = {
@@ -266,7 +298,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 
 		await waitFor(() =>
 			moderatorStatuses(owner, identity.agentId).length === 2 &&
-			moderatorProviderRequests === 2
+			moderatorProviderRequests === 3
 		);
 		const moderators = moderatorStatuses(owner, identity.agentId);
 		assert.equal(new Set(moderators.map(({ agentId }) => agentId)).size, 2);
@@ -279,7 +311,17 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 				entries,
 			});
 			assert.equal(blueprint.role, "moderator");
-			assert.deepEqual(blueprint.configuration.extensions, [broker.extensionPath]);
+			assert.deepEqual(blueprint.configuration.tools, [
+				"agent_message",
+				"agent_control",
+				"agent_observe",
+				"ask_user_question",
+				"moderator_control",
+			]);
+			assert.deepEqual(blueprint.configuration.extensions, [
+				broker.extensionPath,
+				moderatorWidgetExtension,
+			]);
 			const inputEntry = entries.find(
 				(entry) => entry.type === "custom_message" &&
 					entry.customType === "agent-coordination.moderator-input",
@@ -298,11 +340,57 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		assert.ok(attempts.some(
 			({ status }) => status.agentId === replacement.input.previousAttempt?.agentId,
 		));
-		assert.equal(moderatorProviderRequests, 2);
+		const replacementTranscriptPath = replacement.status.primaryEvidence.transcriptPath;
+		assert.ok(replacementTranscriptPath);
+		await waitFor(() => {
+			const entries = SessionManager.open(replacementTranscriptPath).getEntries();
+			return entries.some(
+				(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
+					entry.message.toolCallId === "proxied-moderator-control",
+			);
+		});
+		const moderatorControlResult = SessionManager.open(replacementTranscriptPath)
+			.getEntries()
+			.find(
+				(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
+					entry.message.toolCallId === "proxied-moderator-control",
+			);
+		assert.ok(
+			moderatorControlResult?.type === "message" &&
+			moderatorControlResult.message.role === "toolResult",
+		);
+		assert.equal(
+			(moderatorControlResult.message.details as { disposition: string }).disposition,
+			"blocked",
+		);
+		await waitFor(() => {
+			const run = owner.status(replacement.status.agentId).run;
+			return run.phase === "live" && run.work === "settled";
+		});
+
+		const view = await owner.openAgentView(replacement.status.agentId);
+		assert.ok(view);
+		await waitFor(() => view.projection().presentation.render(80)
+			.map(stripTerminalSequences)
+			.join("\n")
+			.includes("PROCESS_RUNTIME_CHILD_WIDGET"));
+		const frame = view.projection().presentation.render(80)
+			.map(stripTerminalSequences)
+			.join("\n");
+		const pidMatch = frame.match(/PID=(\d+)/);
+		assert.ok(pidMatch);
+		replacementPid = Number(pidMatch[1]);
+		assert.ok(Number.isSafeInteger(replacementPid) && replacementPid > 1);
+		assert.notEqual(replacementPid, process.pid);
+		await view.close();
+		assert.equal(moderatorProviderRequests, 3);
 	} finally {
 		await coordinator.shutdown(async () => host.runtime.dispose());
 		await broker.close();
 	}
+	assert.ok(replacementPid);
+	assert.throws(() => process.kill(replacementPid, 0), hasCode("ESRCH"));
+	await waitFor(async () => (await runtimeArtifacts(identity.workflowId)).length === 0);
 });
 
 async function runtimeArtifacts(workflowId: string): Promise<string[]> {
@@ -327,4 +415,9 @@ async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<voi
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Timed out waiting for process child evidence");
+}
+
+function hasCode(code: string): (error: unknown) => boolean {
+	return (error) => typeof error === "object" && error !== null && "code" in error &&
+		(error as NodeJS.ErrnoException).code === code;
 }
