@@ -10,7 +10,6 @@ import {
 import {
 	getKeybindings,
 	setKeybindings,
-	type Component,
 	type KeybindingsManager,
 	type Terminal,
 	type TUI,
@@ -19,6 +18,7 @@ import {
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import type { HostedAgentProjection } from "../runtime/hosted-agent-projection.ts";
 import {
 	assertProjectionInteractiveModeInstanceShape,
 	assertPrioritizedTuiInputListenerShape,
@@ -29,20 +29,8 @@ const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 const FALLBACK_TERMINAL_COLUMNS = 80;
 const FALLBACK_TERMINAL_ROWS = 24;
 
-export type PiNativeAgentProjection = Readonly<{
+export type PiNativeAgentProjection = HostedAgentProjection & Readonly<{
 	sessionId: string;
-	presentation: Component;
-	resize(columns: number, rows: number): void;
-	dispatchInput(data: string): void;
-	focusEditor(): void;
-	addChangeHandler(handler: () => void): () => void;
-	addFailureHandler(handler: (error: unknown) => void): () => void;
-	addExitRequestHandler(handler: () => void): () => void;
-	isProcessingInput(): boolean;
-	whenInputIdle(): Promise<void>;
-	ready(): Promise<void>;
-	cancelInitialization(error: unknown): Promise<void> | undefined;
-	dispose(): Promise<void>;
 }>;
 
 export type PiNativeProjectionHost = Readonly<{

@@ -14,7 +14,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 
-import type { PiNativeAgentProjection } from "../src/pi-integration/native-agent-projection.ts";
+import type { TerminalProjection } from "../src/presentation/terminal-projection.ts";
 import {
 	openAgentViewSurface,
 	type DurableAgentView,
@@ -296,10 +296,10 @@ test("projection retargeting keeps one interactive surface and host close settle
 });
 
 function projectionWithFrame(
-	name: string,
+	_name: string,
 	initialFrame: readonly string[],
 	options?: { dispatchInputError?: Error },
-): PiNativeAgentProjection & {
+): TerminalProjection & {
 	setFrame(lines: readonly string[]): void;
 	inputs(): readonly string[];
 	emitFailure(error: unknown): void;
@@ -312,7 +312,6 @@ function projectionWithFrame(
 	const failureHandlers = new Set<(error: unknown) => void>();
 	const exitRequestHandlers = new Set<() => void>();
 	return {
-		sessionId: `${name}-projection-session`,
 		presentation: {
 			render: () => frame,
 			invalidate() {},
@@ -323,10 +322,6 @@ function projectionWithFrame(
 			inputs.push(data);
 		},
 		focusEditor() {},
-		async ready() {},
-		cancelInitialization() {
-			return undefined;
-		},
 		addChangeHandler(handler) {
 			handlers.add(handler);
 			return () => handlers.delete(handler);
@@ -339,8 +334,6 @@ function projectionWithFrame(
 			exitRequestHandlers.add(handler);
 			return () => exitRequestHandlers.delete(handler);
 		},
-		isProcessingInput: () => false,
-		whenInputIdle: async () => undefined,
 		setFrame(lines) {
 			frame = [...lines];
 			for (const handler of handlers) handler();
@@ -357,13 +350,12 @@ function projectionWithFrame(
 			failures: failureHandlers.size,
 			exits: exitRequestHandlers.size,
 		}),
-		async dispose() {},
 	};
 }
 
-function createViewHarness(initialProjection: PiNativeAgentProjection): {
+function createViewHarness(initialProjection: TerminalProjection): {
 	view: DurableAgentView;
-	replaceProjection(projection: PiNativeAgentProjection): void;
+	replaceProjection(projection: TerminalProjection): void;
 	closeFromHost(): Promise<void>;
 	cleanupCount(): number;
 	failures(): readonly unknown[];

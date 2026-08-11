@@ -80,11 +80,9 @@ import type {
 	AgentActivitySnapshot,
 	AgentActivityStatus,
 } from "../presentation/agent-activity-surface.ts";
-import type {
-	PiNativeAgentProjection,
-	PiNativeProjectionHost,
-} from "../pi-integration/native-agent-projection.ts";
+import type { PiNativeProjectionHost } from "../pi-integration/native-agent-projection.ts";
 import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
+import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
@@ -130,7 +128,7 @@ type ActiveDurableAgentView = {
 };
 
 type AgentViewTarget = Readonly<{
-	projection: PiNativeAgentProjection;
+	projection: TerminalProjection;
 	retryIfChanged: boolean;
 }>;
 
@@ -1021,7 +1019,7 @@ export class WorkflowCoordinator {
 
 function waitForInitializingProjection(
 	record: AgentRecord,
-): Promise<PiNativeAgentProjection | undefined> {
+): Promise<TerminalProjection | undefined> {
 	const current = record.host.currentProjection();
 	if (current || record.host.observe().phase !== "starting") {
 		return Promise.resolve(current);
@@ -1039,14 +1037,14 @@ function waitForInitializingProjection(
 function waitForStartupProjection(
 	record: AgentRecord,
 	startup: Promise<unknown>,
-): Promise<PiNativeAgentProjection> {
+): Promise<TerminalProjection> {
 	const current = record.host.currentProjection();
 	if (current) return Promise.resolve(current);
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		let removeHandler: () => void = () => undefined;
 		const settle = (
-			result: { projection: PiNativeAgentProjection } | { error: unknown },
+			result: { projection: TerminalProjection } | { error: unknown },
 		) => {
 			if (settled) return;
 			settled = true;

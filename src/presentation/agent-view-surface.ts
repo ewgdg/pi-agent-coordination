@@ -8,10 +8,8 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 
-import {
-	addPrioritizedTuiInputListener,
-	type PiNativeAgentProjection,
-} from "../pi-integration/native-agent-projection.ts";
+import { addPrioritizedTuiInputListener } from "../pi-integration/native-agent-projection.ts";
+import type { TerminalProjection } from "./terminal-projection.ts";
 
 const ENABLE_MOUSE_REPORTING = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h";
 const DISABLE_MOUSE_REPORTING = "\x1b[?1006l\x1b[?1004l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
@@ -19,7 +17,7 @@ const DISABLE_MOUSE_REPORTING = "\x1b[?1006l\x1b[?1004l\x1b[?1003l\x1b[?1002l\x1
 export type DurableAgentView = Readonly<{
 	agentId: string;
 	label: string;
-	projection(): PiNativeAgentProjection;
+	projection(): TerminalProjection;
 	addChangeHandler(handler: () => void): () => void;
 	addCloseHandler(handler: () => void): () => void;
 	fail(error: unknown): void;
@@ -97,9 +95,9 @@ class AgentViewSurface implements Component {
 	readonly #ownsInput: () => boolean;
 	readonly #ownsMouseReporting: boolean;
 	readonly #failFromSurface: (error: unknown) => void;
-	#observedFailureProjection: PiNativeAgentProjection | undefined;
+	#observedFailureProjection: TerminalProjection | undefined;
 	#removeProjectionFailureHandler: () => void = () => undefined;
-	#observedExitProjection: PiNativeAgentProjection | undefined;
+	#observedExitProjection: TerminalProjection | undefined;
 	#removeProjectionExitRequestHandler: () => void = () => undefined;
 	#shutdownRequested = false;
 	#disposed = false;

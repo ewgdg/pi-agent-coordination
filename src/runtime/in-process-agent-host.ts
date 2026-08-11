@@ -4,7 +4,8 @@ import type {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
-import type { PiNativeAgentProjection } from "../pi-integration/native-agent-projection.ts";
+import type { TerminalProjection } from "../presentation/terminal-projection.ts";
+import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
 import { SerialLane } from "./serial-lane.ts";
 
 export type RunRetentionReason =
@@ -46,14 +47,14 @@ export type InterruptionHoldHandle = Readonly<{
 
 export type StartedAgentRuntime = Readonly<{
 	session: AgentSession;
-	projection: PiNativeAgentProjection;
+	projection: HostedAgentProjection;
 	ready?: Promise<void>;
 }>;
 
 type BoundAgentRuntime = {
 	handle: AgentRunHandle;
 	session: AgentSession;
-	projection: PiNativeAgentProjection | undefined;
+	projection: HostedAgentProjection | undefined;
 	unsubscribe: () => void;
 	admitted: boolean;
 	failed: boolean;
@@ -232,7 +233,7 @@ export class InProcessAgentHost {
 		return this.#runtime?.admitted ? this.#runtime.handle : undefined;
 	}
 
-	currentProjection(): PiNativeAgentProjection | undefined {
+	currentProjection(): TerminalProjection | undefined {
 		return this.#runtime?.projection;
 	}
 
@@ -248,12 +249,12 @@ export class InProcessAgentHost {
 	}
 
 	async cancelRuntimeInitialization(
-		projection: PiNativeAgentProjection,
+		projection: TerminalProjection,
 		error: unknown,
 	): Promise<boolean> {
 		const run = this.#runtime;
 		if (!this.#starting || !run || run.projection !== projection) return false;
-		const cancellation = projection.cancelInitialization(error);
+		const cancellation = run.projection.cancelInitialization(error);
 		if (!cancellation) return false;
 		this.#startingCancellationRequested = true;
 		await cancellation;
@@ -895,7 +896,7 @@ export class InProcessAgentHost {
 
 	#bindRuntime(startedRun: {
 		session: AgentSession;
-		projection: PiNativeAgentProjection | undefined;
+		projection: HostedAgentProjection | undefined;
 	}, admitted = false): void {
 		const { session, projection } = startedRun;
 		if (admitted) this.#runSequence += 1;

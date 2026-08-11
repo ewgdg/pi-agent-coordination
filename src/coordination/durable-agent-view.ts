@@ -1,4 +1,4 @@
-import type { PiNativeAgentProjection } from "../pi-integration/native-agent-projection.ts";
+import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
 
 export class DurableAgentViewAttachment implements DurableAgentView {
@@ -8,14 +8,14 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 	readonly #reportFailure: (error: unknown) => void;
 	readonly #changeHandlers = new Set<() => void>();
 	readonly #closeHandlers = new Set<() => void>();
-	#projection: PiNativeAgentProjection;
+	#projection: TerminalProjection;
 	#removeProjectionChangeHandler: () => void;
 	#closed = false;
 
 	constructor(options: {
 		agentId: string;
 		label: string;
-		projection: PiNativeAgentProjection;
+		projection: TerminalProjection;
 		requestClose(): Promise<void>;
 		reportFailure(error: unknown): void;
 	}) {
@@ -37,7 +37,7 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 		return this.#label;
 	}
 
-	projection(): PiNativeAgentProjection {
+	projection(): TerminalProjection {
 		return this.#projection;
 	}
 
@@ -68,7 +68,7 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 	retarget(options: {
 		agentId: string;
 		label: string;
-		projection: PiNativeAgentProjection;
+		projection: TerminalProjection;
 	}): void {
 		if (this.#closed) return;
 		this.#removeProjectionChangeHandler();
@@ -90,7 +90,7 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 		this.#closeHandlers.clear();
 	}
 
-	#observeProjection(projection: PiNativeAgentProjection): () => void {
+	#observeProjection(projection: TerminalProjection): () => void {
 		return projection.addChangeHandler(() => this.#notifyChanged());
 	}
 
