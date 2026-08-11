@@ -10,7 +10,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
-import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
+import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import {
 	PROCESS_RUNTIME_TEST_MODEL,
@@ -44,7 +44,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 
 	const lifecycle: string[] = [];
 	let runtime: PiChildProcessRuntime | undefined;
-	let projection: ReturnType<typeof createPiChildProcessProjection> | undefined;
+	let projection: ReturnType<typeof createAdmittedPiChildProcessProjection> | undefined;
 	try {
 		runtime = await PiChildProcessRuntime.start({
 			workflowId: "process-runtime-test-workflow",
@@ -76,7 +76,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			columns: 80,
 			rows: 24,
 		});
-		projection = createPiChildProcessProjection(runtime);
+		projection = createAdmittedPiChildProcessProjection(runtime);
 		let projectionChanges = 0;
 		let projectionExits = 0;
 		const projectionFailures: unknown[] = [];

@@ -115,6 +115,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	#cursorVisible = true;
 	#cursorStyle: TerminalCursorStyle = "block";
 	#cursorBlink = false;
+	#failure: Readonly<{ error: unknown }> | undefined;
 	#pendingWrites = 0;
 	#exitObserved = false;
 	#disposing = false;
@@ -214,6 +215,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	addFailureHandler(handler: (error: unknown) => void): () => void {
 		if (this.#disposed) return () => undefined;
 		this.#failureHandlers.add(handler);
+		if (this.#failure !== undefined) handler(this.#failure.error);
 		return () => this.#failureHandlers.delete(handler);
 	}
 
@@ -327,6 +329,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 
 	#notifyFailure(error: unknown): void {
 		if (this.#disposed) return;
+		this.#failure ??= { error };
 		for (const handler of this.#failureHandlers) handler(error);
 	}
 

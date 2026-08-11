@@ -4,9 +4,9 @@ import test from "node:test";
 import { CURSOR_MARKER, stripTerminalSequences, visibleWidth, type Focusable } from "@earendil-works/pi-tui";
 
 import {
-	createPiChildProcessProjection,
-	type PiChildProjectionRuntime,
-} from "../src/process-runtime/pi-child-process-projection.ts";
+	createAdmittedPiChildProcessProjection,
+	type AdmittedPiChildProjectionRuntime,
+} from "../src/process-runtime/admitted-pi-child-process-projection.ts";
 import type { PiChildRuntimeEvent } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type {
 	PtyExit,
@@ -37,7 +37,7 @@ function cell(
 	return { text, width, style };
 }
 
-test("process projection renders exact terminal styling, wide cells, and focused cursor metadata", () => {
+test("admitted process terminal projection renders exact terminal styling, wide cells, and focused cursor metadata", () => {
 	const runtime = new FakeRuntime({
 		columns: 6,
 		rows: 2,
@@ -71,7 +71,7 @@ test("process projection renders exact terminal styling, wide cells, and focused
 			{ text: "", wrapped: false, cells: Array.from({ length: 6 }, () => cell("")) },
 		],
 	});
-	const projection = createPiChildProcessProjection(runtime);
+	const projection = createAdmittedPiChildProcessProjection(runtime);
 	const presentation = projection.presentation as typeof projection.presentation & Focusable;
 
 	const unfocused = presentation.render(6);
@@ -89,7 +89,7 @@ test("process projection renders exact terminal styling, wide cells, and focused
 	assert.equal(visibleWidth(focused[0]!), 4);
 });
 
-test("process projection preserves visible cursor styles and hides cursor presentation", () => {
+test("admitted process terminal projection preserves visible cursor styles and hides cursor presentation", () => {
 	for (const expected of [
 		{ style: "block" as const, text: "X", sgr: /\x1b\[0;7;39;49mX/ },
 		{ style: "underline" as const, text: "X", sgr: /\x1b\[0;4;39;49mX/ },
@@ -100,7 +100,7 @@ test("process projection preserves visible cursor styles and hides cursor presen
 			...frame,
 			cursor: { column: 0, row: 0, visible: true, style: expected.style, blink: false },
 		});
-		const projection = createPiChildProcessProjection(runtime);
+		const projection = createAdmittedPiChildProcessProjection(runtime);
 		const presentation = projection.presentation as typeof projection.presentation & Focusable;
 		presentation.focused = true;
 		const line = presentation.render(2)[0]!;
@@ -110,7 +110,7 @@ test("process projection preserves visible cursor styles and hides cursor presen
 	}
 
 	const hiddenFrame = frameWithText("X", 2, 1);
-	const hidden = createPiChildProcessProjection(new FakeRuntime({
+	const hidden = createAdmittedPiChildProcessProjection(new FakeRuntime({
 		...hiddenFrame,
 		cursor: { ...hiddenFrame.cursor, visible: false },
 	}));
@@ -122,9 +122,58 @@ test("process projection preserves visible cursor styles and hides cursor presen
 	assert.doesNotMatch(line, /\x1b\[0;(?:4|7);/);
 });
 
-test("process projection maps terminal operations and events without render-driven resize", async () => {
+test("admitted process terminal projection bounds emoji and width-zero cursor cells", () => {
+	const unicodeFrames: readonly TerminalProjectionFrame[] = [
+		{
+			columns: 1,
+			rows: 1,
+			buffer: "normal",
+			cursor: { column: 0, row: 0, visible: false, style: "block", blink: false },
+			lines: [{ text: "✈️", wrapped: false, cells: [cell("✈️", 1)] }],
+		},
+		{
+			columns: 1,
+			rows: 1,
+			buffer: "normal",
+			cursor: { column: 0, row: 0, visible: false, style: "block", blink: false },
+			lines: [{ text: "🫠", wrapped: false, cells: [cell("🫠", 1)] }],
+		},
+		{
+			columns: 4,
+			rows: 1,
+			buffer: "normal",
+			cursor: { column: 0, row: 0, visible: false, style: "block", blink: false },
+			lines: [{
+				text: "👨‍👩‍👧‍👦",
+				wrapped: false,
+				cells: [cell("👨‍"), cell("👩‍"), cell("👧‍"), cell("👦")],
+			}],
+		},
+	];
+	for (const frame of unicodeFrames) {
+		const line = createAdmittedPiChildProcessProjection(new FakeRuntime(frame))
+			.presentation.render(frame.columns)[0]!;
+		assert.ok(visibleWidth(line) <= frame.columns);
+	}
+
+	const combiningFrame: TerminalProjectionFrame = {
+		columns: 1,
+		rows: 1,
+		buffer: "normal",
+		cursor: { column: 0, row: 0, visible: true, style: "bar", blink: false },
+		lines: [{ text: "́", wrapped: false, cells: [cell("́", 0)] }],
+	};
+	const combining = createAdmittedPiChildProcessProjection(new FakeRuntime(combiningFrame));
+	const combiningPresentation = combining.presentation as typeof combining.presentation & Focusable;
+	combiningPresentation.focused = true;
+	const combiningLine = combiningPresentation.render(1)[0]!;
+	assert.equal(stripTerminalSequences(combiningLine), "▏");
+	assert.equal(visibleWidth(combiningLine), 1);
+});
+
+test("admitted process terminal projection maps terminal operations and events without render-driven resize", async () => {
 	const runtime = new FakeRuntime(frameWithText("ready", 8, 3));
-	const projection = createPiChildProcessProjection(runtime);
+	const projection = createAdmittedPiChildProcessProjection(runtime);
 	let changes = 0;
 	const failures: unknown[] = [];
 	let exits = 0;
@@ -159,17 +208,6 @@ test("process projection maps terminal operations and events without render-driv
 	assert.equal(failures[0], terminalFailure);
 	assert.match(String(failures[1]), /runtime bridge failed/);
 
-	let writeIdle: Promise<void> | undefined;
-	runtime.observeWrite = () => {
-		assert.equal(projection.isProcessingInput(), true);
-		writeIdle = projection.whenInputIdle();
-	};
-	projection.dispatchInput("observed");
-	assert.equal(projection.isProcessingInput(), false);
-	await writeIdle;
-	await projection.ready();
-	assert.equal(projection.cancelInitialization(new Error("too late")), undefined);
-
 	runtime.settleExit({ exitCode: 0, signal: 0 });
 	await runtime.exited;
 	await Promise.resolve();
@@ -182,7 +220,7 @@ test("process projection maps terminal operations and events without render-driv
 
 test("abnormal process exit is both a projection failure and an exit request", async () => {
 	const runtime = new FakeRuntime(frameWithText("failed", 8, 3));
-	const projection = createPiChildProcessProjection(runtime);
+	const projection = createAdmittedPiChildProcessProjection(runtime);
 	const failures: unknown[] = [];
 	let exits = 0;
 	projection.addFailureHandler((error) => failures.push(error));
@@ -211,8 +249,7 @@ function frameWithText(text: string, columns: number, rows: number): TerminalPro
 	};
 }
 
-class FakeRuntime implements PiChildProjectionRuntime {
-	readonly ready = { sessionId: "session", mode: "tui" as const, hasUI: true as const };
+class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 	readonly inputs: string[] = [];
 	readonly resizes: Array<{ columns: number; rows: number }> = [];
 	readonly #changeHandlers = new Set<() => void>();
@@ -220,7 +257,6 @@ class FakeRuntime implements PiChildProjectionRuntime {
 	readonly #eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
 	#frame: TerminalProjectionFrame;
 	#settleExit!: (exit: PtyExit) => void;
-	observeWrite: (() => void) | undefined;
 	disposeCount = 0;
 	readonly exited = new Promise<PtyExit>((resolve) => this.#settleExit = resolve);
 
@@ -234,7 +270,6 @@ class FakeRuntime implements PiChildProjectionRuntime {
 
 	writeInput(data: string | Buffer): void {
 		this.inputs.push(typeof data === "string" ? data : data.toString("utf8"));
-		this.observeWrite?.();
 	}
 
 	resize(columns: number, rows: number): void {

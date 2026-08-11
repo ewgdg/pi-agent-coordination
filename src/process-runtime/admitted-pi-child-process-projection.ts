@@ -1,14 +1,13 @@
 import {
 	CURSOR_MARKER,
+	truncateToWidth,
+	visibleWidth,
 	type Component,
 	type Focusable,
 } from "@earendil-works/pi-tui";
 
-import type { HostedAgentProjection } from "../runtime/hosted-agent-projection.ts";
-import type {
-	PiChildRuntimeEvent,
-	PiChildRuntimeReady,
-} from "./pi-child-process-runtime.ts";
+import type { TerminalProjection } from "../presentation/terminal-projection.ts";
+import type { PiChildRuntimeEvent } from "./pi-child-process-runtime.ts";
 import type {
 	PtyExit,
 	TerminalCellColor,
@@ -31,9 +30,8 @@ const DEFAULT_CELL_STYLE: TerminalCellStyle = {
 	overline: false,
 };
 
-/** Runtime surface consumed by the terminal Adapter. */
-export type PiChildProjectionRuntime = Readonly<{
-	ready: PiChildRuntimeReady;
+/** Already-admitted Runtime surface consumed by the terminal Adapter. */
+export type AdmittedPiChildProjectionRuntime = Readonly<{
 	exited: Promise<PtyExit>;
 	frame(): TerminalProjectionFrame;
 	writeInput(data: string | Buffer): void;
@@ -44,21 +42,24 @@ export type PiChildProjectionRuntime = Readonly<{
 	dispose(): Promise<void>;
 }>;
 
-export type PiChildProcessProjection = HostedAgentProjection;
+export type AdmittedPiChildProcessProjection = TerminalProjection & Readonly<{
+	dispose(): Promise<void>;
+}>;
 
-/** Adapt one fully admitted real Pi child Runtime to the shared presentation seam. */
-export function createPiChildProcessProjection(
-	runtime: PiChildProjectionRuntime,
-): PiChildProcessProjection {
+/**
+ * Adapt one fully admitted real Pi child Runtime to the terminal seam.
+ * Startup readiness/cancellation requires a future pre-admission launch handle;
+ * this Adapter deliberately does not claim HostedAgentProjection semantics.
+ */
+export function createAdmittedPiChildProcessProjection(
+	runtime: AdmittedPiChildProjectionRuntime,
+): AdmittedPiChildProcessProjection {
 	const changes = new ChangeNotifications();
 	const failures = new FailureNotifications();
 	const exits = new ChangeNotifications();
 	const presentation = new PiChildTerminalComponent(() => runtime.frame());
 	let disposed = false;
 	let disposal: Promise<void> | undefined;
-	let processingInput = false;
-	let inputIdle = Promise.resolve();
-	let settleInputIdle: (() => void) | undefined;
 
 	const removeTerminalChangeHandler = runtime.addChangeHandler(() => changes.notify());
 	const removeTerminalFailureHandler = runtime.addFailureHandler((error) => {
@@ -93,9 +94,6 @@ export function createPiChildProcessProjection(
 			changes.dispose();
 			failures.dispose();
 			exits.dispose();
-			settleInputIdle?.();
-			settleInputIdle = undefined;
-			processingInput = false;
 			await runtime.dispose();
 		})();
 		return disposal;
@@ -109,18 +107,8 @@ export function createPiChildProcessProjection(
 			runtime.resize(columns, rows);
 		},
 		dispatchInput(data) {
-			processingInput = true;
-			inputIdle = new Promise<void>((resolve) => {
-				settleInputIdle = resolve;
-			});
-			try {
-				// node-pty accepts strings without key parsing or newline normalization.
-				runtime.writeInput(data);
-			} finally {
-				processingInput = false;
-				settleInputIdle?.();
-				settleInputIdle = undefined;
-			}
+			// node-pty accepts strings without key parsing or newline normalization.
+			runtime.writeInput(data);
 		},
 		focusEditor() {
 			// The attached PTY already owns Pi's native focus. A synthetic key or
@@ -129,12 +117,6 @@ export function createPiChildProcessProjection(
 		addChangeHandler: (handler) => changes.addHandler(handler),
 		addFailureHandler: (handler) => failures.addHandler(handler),
 		addExitRequestHandler: (handler) => exits.addHandler(handler),
-		isProcessingInput: () => processingInput,
-		whenInputIdle: () => inputIdle,
-		// PiChildProcessRuntime.start() admits only after its bounded startup and
-		// rollback complete, so this Adapter never exposes cancellable initialization.
-		ready: () => Promise.resolve(),
-		cancelInitialization: () => undefined,
 		dispose,
 	});
 }
@@ -200,7 +182,8 @@ function renderTerminalLine(
 			// A nonempty one is a standalone combining sequence and keeps this grid slot.
 			if (cell.text.length > 0) {
 				const styled = renderCursorCell(cell, frameCursor, isCursor, 1);
-				output += `${renderCellStyle(styled.style)}${styled.text} `;
+				const padding = Math.max(0, 1 - visibleWidth(styled.text));
+				output += `${renderCellStyle(styled.style)}${styled.text}${" ".repeat(padding)}`;
 			}
 			column += 1;
 			continue;
@@ -213,7 +196,10 @@ function renderTerminalLine(
 		output += `${renderCellStyle(styled.style)}${styled.text}`;
 		column += cell.width;
 	}
-	return output.length === 0 ? "" : `${output}\x1b[0m`;
+	if (output.length === 0) return "";
+	// xterm and Pi can disagree on newly standardized grapheme widths. The
+	// Component contract is strict, so never leak a wider line to the Owner TUI.
+	return truncateToWidth(`${output}\x1b[0m`, columns, "");
 }
 
 function normalizeCursorColumn(
