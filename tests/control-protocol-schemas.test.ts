@@ -62,38 +62,15 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
 		"run.prompt",
-		"message.deliver",
-		"transcript.append",
-		"queue.inspect",
-		"queue.clear",
-		"queue.restore",
-		"run.interrupt",
 		"runtime.shutdown",
-		"coordination.spawn",
-		"coordination.message",
-		"coordination.observe",
-		"coordination.control",
-		"coordination.moderatorControl",
-		"human.request",
-		"agentView.acquire",
-		"agentView.switch",
-		"agentView.close",
-		"agentView.input",
-		"agentView.resize",
 	]);
 	assert.deepEqual(Object.keys(agentControlEvents), [
 		"runtime.ready",
-		"runtime.configurationChanged",
 		"agent.start",
 		"agent.end",
 		"agent.settled",
-		"session.infoChanged",
 		"session.shutdown",
-		"runtime.attentionChanged",
 		"runtime.fault",
-		"workflow.snapshot",
-		"agentView.frame",
-		"agentView.closed",
 	]);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.snapshot"), true);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.unknown"), false);
