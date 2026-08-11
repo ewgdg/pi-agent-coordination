@@ -10,6 +10,70 @@ import type {
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
 
 test("a post-admission child Runtime fault terminally fences its hosted Run once", async () => {
+	const { runtime, emit } = createFakeRuntime();
+	const hostedEvents: HostedRuntimeEvent[] = [];
+	runtime.subscribe((event) => hostedEvents.push(event));
+	await runtime.ready;
+	const completion = runtime.deliver({ kind: "user", content: "Start the Run." }).completion;
+	emit(controlEvent("agent.start", {
+		runId: "hosted-run-1",
+		queuedInputCount: 0,
+	}));
+	emit(controlEvent("runtime.fault", {
+		code: "participant_lifecycle_failed",
+		message: "Owner rejected the awaited boundary",
+	}));
+
+	assert.equal(runtime.workState(), "unavailable");
+	assert.equal(runtime.cancellationSignal().aborted, true);
+	await assert.rejects(completion, /participant_lifecycle_failed.*Owner rejected/);
+	assert.deepEqual(hostedEvents.slice(-3), [
+		{ type: "agent_end", outcome: "error", willRetry: false },
+		{ type: "state_changed" },
+		{ type: "agent_settled" },
+	]);
+
+	emit(controlEvent("runtime.fault", {
+		code: "duplicate_fault",
+		message: "must not settle twice",
+	}));
+	assert.equal(
+		hostedEvents.filter((event) => event.type === "agent_settled").length,
+		1,
+	);
+	await runtime.dispose();
+});
+
+test("a stale child lifecycle event terminally fences the exact hosted Run once", async () => {
+	const { runtime, emit } = createFakeRuntime();
+	const hostedEvents: HostedRuntimeEvent[] = [];
+	runtime.subscribe((event) => hostedEvents.push(event));
+	await runtime.ready;
+	const completion = runtime.deliver({ kind: "user", content: "Start the exact Run." }).completion;
+	emit(controlEvent("agent.start", {
+		runId: "hosted-run-1",
+		queuedInputCount: 0,
+	}));
+	emit(controlEvent("agent.end", {
+		runId: "stale-hosted-run",
+		outcome: "completed",
+		willRetry: false,
+		queuedInputCount: 0,
+	}));
+
+	assert.equal(runtime.workState(), "unavailable");
+	await assert.rejects(completion, /stale_run.*stale-hosted-run.*hosted-run-1/);
+	assert.equal(
+		hostedEvents.filter((event) => event.type === "agent_settled").length,
+		1,
+	);
+	await runtime.dispose();
+});
+
+function createFakeRuntime(): Readonly<{
+	runtime: PiChildHostedRuntime;
+	emit(event: PiChildRuntimeEvent): void;
+}> {
 	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
 	const admitted = {
 		snapshot: {
@@ -54,42 +118,13 @@ test("a post-admission child Runtime fault terminally fences its hosted Run once
 		},
 		dispose: async () => undefined,
 	} as unknown as PiChildProcessLaunch;
-	const runtime = new PiChildHostedRuntime(launch);
-	const hostedEvents: HostedRuntimeEvent[] = [];
-	runtime.subscribe((event) => hostedEvents.push(event));
-	await runtime.ready;
-	const completion = runtime.deliver({ kind: "user", content: "Start the Run." }).completion;
-	const emit = (event: PiChildRuntimeEvent) => {
-		for (const handler of eventHandlers) handler(event);
+	return {
+		runtime: new PiChildHostedRuntime(launch),
+		emit(event) {
+			for (const handler of eventHandlers) handler(event);
+		},
 	};
-	emit(controlEvent("agent.start", {
-		runId: "hosted-run-1",
-		queuedInputCount: 0,
-	}));
-	emit(controlEvent("runtime.fault", {
-		code: "participant_lifecycle_failed",
-		message: "Owner rejected the awaited boundary",
-	}));
-
-	assert.equal(runtime.workState(), "unavailable");
-	assert.equal(runtime.cancellationSignal().aborted, true);
-	await assert.rejects(completion, /participant_lifecycle_failed.*Owner rejected/);
-	assert.deepEqual(hostedEvents.slice(-3), [
-		{ type: "agent_end", outcome: "error", willRetry: false },
-		{ type: "state_changed" },
-		{ type: "agent_settled" },
-	]);
-
-	emit(controlEvent("runtime.fault", {
-		code: "duplicate_fault",
-		message: "must not settle twice",
-	}));
-	assert.equal(
-		hostedEvents.filter((event) => event.type === "agent_settled").length,
-		1,
-	);
-	await runtime.dispose();
-});
+}
 
 function controlEvent(
 	event: PiChildRuntimeEvent["event"],
