@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { fileURLToPath } from "node:url";
+import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
 	fauxAssistantMessage,
@@ -31,7 +34,6 @@ import {
 	executeAndCommitRegisteredTool,
 	openDormantAgentView,
 	openLiveAgentView,
-	returnAgentViewToOwner,
 } from "./support/agent-session.ts";
 import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
 
@@ -109,17 +111,6 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	assert.deepEqual(moderatorBlueprint.skillSources, []);
 	assert.equal(moderatorInput.parentId, null);
 	assert.equal(moderatorInput.display, true);
-	assert.deepEqual(moderatorInput.details, {
-		agentId: moderator.id,
-		workflowId: host.session.sessionId,
-		configuration: {
-			label: "moderator",
-			description: "obligation stall",
-			baseline: (ownerIdentity.data as {
-				configuration: { baseline: unknown };
-			}).configuration.baseline,
-		},
-	});
 	const input = JSON.parse(moderatorInput.content as string) as {
 		trigger: {
 			kind: string;
@@ -128,6 +119,21 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 		};
 		inspectedThrough: Array<{ agentId: string; entryId: string }>;
 	};
+	const ownerBaseline = (ownerIdentity.data as {
+		configuration: { baseline: Record<string, unknown> };
+	}).configuration.baseline;
+	assert.deepEqual(moderatorInput.details, {
+		agentId: moderator.id,
+		workflowId: host.session.sessionId,
+		configuration: {
+			label: "moderator",
+			description: "obligation stall",
+			baseline: {
+				...ownerBaseline,
+				tools: host.session.getAllTools().map(({ name }) => name),
+			},
+		},
+	});
 	assert.equal(input.trigger.kind, "obligation_stall");
 	assert.equal(input.trigger.obligations.total, 1);
 	assert.deepEqual(input.trigger.obligations.sources, [spawnSource]);
@@ -256,6 +262,7 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 		});
 		assert.equal((await findModerators(host)).length, 0);
 
+		await new Promise<void>((resolve) => setImmediate(resolve));
 		await returnAgentViewToOwner(host, opened);
 		const moderator = await waitForModeratorKind(host, "obligation_stall");
 		assert.equal(moderatorAffectedAgentId(moderator.path), agentId);
@@ -266,37 +273,30 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 });
 
 test("an overdue answer-obligated root call creates one minimal Operation Review Moderator", async (t) => {
-	const registryKey = Symbol.for("pi-agent-coordination.test.execution-gate");
-	let toolStarted!: () => void;
-	const started = new Promise<void>((resolve) => {
-		toolStarted = resolve;
-	});
-	let releaseTool!: () => void;
-	const released = new Promise<void>((resolve) => {
-		releaseTool = resolve;
-	});
-	t.after(() => releaseTool());
+	const cwd = await mkdtemp(join(tmpdir(), "pi-operation-review-"));
+	const toolStartedPath = join(cwd, "execution-gate.started");
+	const toolReleasePath = join(cwd, "execution-gate.released");
+	const executionGateExtensionPath = join(cwd, "execution-gate-tool.mjs");
+	await writeFile(
+		executionGateExtensionPath,
+		renderProcessExecutionGateExtension(toolStartedPath, toolReleasePath),
+		"utf8",
+	);
+	const releaseTool = () => writeFile(toolReleasePath, "released", "utf8");
+	t.after(releaseTool);
 	let releaseModerator!: () => void;
 	const moderatorGate = new Promise<void>((resolve) => {
 		releaseModerator = resolve;
 	});
 	t.after(() => releaseModerator());
-	(globalThis as Record<PropertyKey, unknown>)[registryKey] = {
-		async execute() {
-			toolStarted();
-			await released;
-		},
-	};
-	t.after(() => {
-		delete (globalThis as Record<PropertyKey, unknown>)[registryKey];
-	});
 	const clock = new ControllableOperationReviewClock();
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
+		cwd,
 		additionalExtensionPaths: [
-			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
+			executionGateExtensionPath,
 		],
 	});
 	await bindTestOwnerHost(host, "tui");
@@ -357,24 +357,23 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 		"spawn-operation-review-agent",
 		"Keep the Creation Request open while one root call remains unresolved.",
 	);
-	await started;
+	await waitForCondition(async () => fileExists(toolStartedPath));
 	clock.advanceBy(1_000);
 	await coordinator.forAgent(child.agentId).reachSafeBoundary();
 
 	const moderator = await waitForModeratorKind(host, "operation_review");
-	const ordinaryView = await owner.openAgentView(child.agentId);
-	assert.ok(ordinaryView);
+	const agentView = await owner.openAgentView(child.agentId);
+	assert.ok(agentView);
 	assert.match(
 		stripTerminalSequences(
-			ordinaryView.projection().presentation.render(240).join("\n"),
+			agentView.projection().presentation.render(240).join("\n"),
 		),
 		/Keep the Creation Request open/,
 	);
-	const moderatorView = await owner.openAgentView(moderator.id);
-	assert.ok(moderatorView);
+	assert.equal(await owner.openAgentView(moderator.id), undefined);
 	assert.match(
 		stripTerminalSequences(
-			moderatorView.projection().presentation.render(240).join("\n"),
+			agentView.projection().presentation.render(240).join("\n"),
 		),
 		/operation_review/,
 	);
@@ -433,15 +432,27 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	await coordinator.forAgent(child.agentId).reachSafeBoundary();
 	assert.equal((await findModerators(host)).length, 2);
 
-	releaseTool();
-	await host.runtime.dispose();
+	await releaseTool();
+	await agentView.close();
+	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
 test("one failed provider request creates Run Failure without regenerating an answer-obligated Run", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pi-run-failure-"));
+	const agentDir = join(cwd, ".pi-agent");
+	await mkdir(agentDir, { recursive: true });
+	await writeFile(
+		join(agentDir, "settings.json"),
+		JSON.stringify({ retry: { enabled: false, maxRetries: 0 } }),
+		"utf8",
+	);
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
+		cwd,
+		agentDir,
+		settings: { retry: { enabled: false } },
 	});
 	let failedChildProviderRequests = 0;
 	const routedResponses = Array.from(
@@ -460,7 +471,8 @@ test("one failed provider request creates Run Failure without regenerating an an
 				failedChildProviderRequests += 1;
 				return fauxAssistantMessage("The exact child Run fails before answering.", {
 					stopReason: "error",
-					errorMessage: "connection lost during the exact answer-obligated generation",
+					errorMessage:
+						"400 invalid_request_error: deterministic answer-obligated generation failure",
 				});
 			}
 			return fauxAssistantMessage("The failure case is delegated.");
@@ -2249,6 +2261,72 @@ async function waitForModerator(
 		await waitForConditionPoll();
 	}
 	throw new Error("Expected an Obligation Stall Moderator");
+}
+
+async function returnAgentViewToOwner(
+	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
+	opened: Readonly<{ command: Promise<void> }>,
+): Promise<void> {
+	const returnCommand = host.runtime.session.prompt("/agents");
+	await waitForCondition(() => host.ui.customSurfaces.length === 2);
+	const ownerSelector = host.ui.customSurfaces.at(-1);
+	assert.ok(ownerSelector);
+	assert.match(
+		stripTerminalSequences(ownerSelector.render(80).join("\n")),
+		new RegExp(`→ owner[\\s\\S]*${host.session.sessionId}`),
+	);
+	ownerSelector.handleInput?.("\r");
+	await Promise.all([returnCommand, opened.command]);
+}
+
+function renderProcessExecutionGateExtension(
+	startedPath: string,
+	releasePath: string,
+): string {
+	return `
+import { access, writeFile } from "node:fs/promises";
+
+export default function registerExecutionGateTool(pi) {
+	pi.registerTool({
+		name: "execution_gate",
+		label: "Execution gate",
+		description: "Hold one real hosted Agent execution at an observable tool boundary.",
+		executionMode: "sequential",
+		parameters: { type: "object", properties: {}, additionalProperties: false },
+		async execute() {
+			await writeFile(${JSON.stringify(startedPath)}, "started", "utf8");
+			while (true) {
+				try {
+					await access(${JSON.stringify(releasePath)});
+					break;
+				} catch (error) {
+					if (!error || error.code !== "ENOENT") throw error;
+					await new Promise((resolve) => setTimeout(resolve, 1));
+				}
+			}
+			return {
+				content: [{ type: "text", text: "Execution gate released." }],
+				details: undefined,
+			};
+		},
+	});
+}
+`;
+}
+
+async function fileExists(path: string): Promise<boolean> {
+	try {
+		await access(path);
+		return true;
+	} catch (error) {
+		if (
+			typeof error === "object" &&
+			error !== null &&
+			"code" in error &&
+			error.code === "ENOENT"
+		) return false;
+		throw error;
+	}
 }
 
 async function waitForModeratorKind(

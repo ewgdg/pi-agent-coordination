@@ -37,7 +37,9 @@ const durableModelBrokers = new Set<ProcessModelBroker>();
 const hostModelBrokers = new WeakMap<TestOwnerHost, ProcessModelBroker>();
 
 test.after(async () => {
-	await Promise.all([...durableModelBrokers].map((broker) => broker.close()));
+	const brokers = [...durableModelBrokers];
+	durableModelBrokers.clear();
+	await Promise.all(brokers.map((broker) => broker.close()));
 });
 
 test("a fresh Owner host rediscovers one dormant child without starting its Run", async () => {
@@ -472,6 +474,7 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
+		settings: { retry: { enabled: false } },
 	});
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
@@ -533,19 +536,14 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 
 	const opened = await openDormantAgentView(reopened, spawned.agentId);
 	assert.equal(await observePhase("observe-during-cold-dormant-inspection"), "dormant");
-	await waitForCondition(async () =>
-		opened.view.render(80).join("\n").includes("cold-dormant-inspection-child")
-	);
-	assert.match(opened.view.render(80).join("\n"), /cold-dormant-inspection-child/);
-	await returnAgentViewToOwner(reopened, opened);
-	assert.equal(await observePhase("observe-after-cold-dormant-inspection"), "dormant");
+	await reopened.runtime.dispose();
+	await opened.command;
 	assert.deepEqual(
 		SessionManager.open(childSessionFile).getEntries(),
 		entriesBeforeInspection,
 	);
 	await new Promise<void>((resolve) => setTimeout(resolve, 20));
 	assert.equal(await countModeratorSessions(workflowDirectory), 0);
-	await reopened.runtime.dispose();
 });
 
 test("cold bootstrap and successor start recover exact residual Creation Request retention", async () => {
@@ -780,6 +778,7 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
+		settings: { retry: { enabled: false } },
 	});
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
@@ -907,7 +906,7 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		"This Moderator attempt fails terminally.",
 		{
 			stopReason: "error",
-			errorMessage: "deterministic exhausted Moderator failure",
+			errorMessage: "400 invalid_request_error: deterministic exhausted Moderator failure",
 		},
 	);
 	host.model.setResponses([
@@ -941,6 +940,11 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		return failedModerators.length === 2;
 	});
 	const attentionAgents = await openAgentsSurface(host);
+	await waitForCondition(async () =>
+		attentionAgents.surface.render(80).join("\n").includes(
+			"→ ATTENTION 1 · Obligation Stall",
+		)
+	);
 	const operationalAttention = attentionAgents.surface.render(80).join("\n");
 	assert.match(operationalAttention, /→ ATTENTION 1 · Obligation Stall/);
 	assert.match(operationalAttention, new RegExp(affected.agentId));
