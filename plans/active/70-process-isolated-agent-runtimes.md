@@ -502,7 +502,11 @@ Future-platform extensibility gate:
 - [x] Added exact Pi child CLI launch construction and physical Herdr pane environment isolation.
 - [x] Completed the production Runtime Bridge/Process Runtime vertical slice with real Pi CLI/TUI, offline model lifecycle, exact session, token admission, PTY input/resize, and bounded termination.
 - [x] Routed coordination transcript reads through `AgentTranscript` and added a fresh-file inspection Adapter.
-- [ ] Complete configuration/Runtime Host cutover, coordination tool proxying, and Milestones 4–10.
+- [x] Materialized the exact pre-launch JSONL only after validating committed Agent Identity and immutable Runtime Blueprint evidence.
+- [x] Routed coordination through process-neutral Runtime Host intentions and removed live child `AgentSession`/services reach-through from coordination operations.
+- [x] Extracted handler-driven participant coordination tool schemas, renderers, role sets, and registration without changing local receipts.
+- [x] Adapted real child PTY frames to the Terminal Projection surface, including styled/wide cells, cursor presentation, focus, resize, failure/exit, and final-output drain.
+- [ ] Finish the internal hosted-Runtime Adapter cut, truthful pre-admission launch projection/cancellation, coordination tool proxying, and Milestones 4–10.
 
 ## Surprises and discoveries
 
