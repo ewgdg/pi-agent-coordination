@@ -37,6 +37,7 @@ import {
 import {
 	executeAndCommitRegisteredTool as executeRegisteredTool,
 } from "./support/agent-session.ts";
+import { capturedSessionManager } from "./support/captured-session-managers.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
 const FILE_EXTENSION_FIXTURE = fileURLToPath(
@@ -1223,11 +1224,14 @@ test("lost Delivery confirmation stays indeterminate after confirmed Run start",
 
 test("contradictory child Identity evidence is an invariant violation", async () => {
 	const harness = await createCoordinatorHarness({
-		afterIdentityCommit: ({ sessionManager, identity }) => {
-			sessionManager.appendCustomEntry("agent-coordination.identity", {
+		afterIdentityCommit: ({ identity }) => {
+			capturedSessionManager(identity.agentId).appendCustomEntry(
+				"agent-coordination.identity",
+				{
 				...identity,
-				spawnSource: { ...identity.spawnSource, toolCallId: "contradictory-source" },
-			});
+					spawnSource: { ...identity.spawnSource, toolCallId: "contradictory-source" },
+				},
+			);
 		},
 	});
 
@@ -1241,8 +1245,8 @@ test("contradictory child Identity evidence is an invariant violation", async ()
 
 test("forged Creation Request Delivery evidence is an invariant violation", async () => {
 	const harness = await createCoordinatorHarness({
-		afterIdentityCommit: ({ sessionManager, identity }) => {
-			sessionManager.appendCustomMessageEntry(
+		afterIdentityCommit: ({ identity }) => {
+			capturedSessionManager(identity.agentId).appendCustomMessageEntry(
 				"agent-coordination.message-delivery",
 				JSON.stringify({
 					messages: [

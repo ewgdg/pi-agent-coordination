@@ -63,7 +63,6 @@ export type AgentSpawnReceipt =
 // confirmation; all session, transcript, and Run effects still use the real host.
 export type SpawnBoundaryHooks = Readonly<{
 	afterIdentityCommit?(context: {
-		sessionManager: SessionManager;
 		identity: ChildAgentIdentity;
 	}): void | "confirmation_lost";
 	beforeRunStart?(): void | "confirmed_failure";
@@ -177,10 +176,7 @@ export class DefaultChildSpawner {
 				effectiveConfiguration: prepared.configuration,
 			};
 		}
-		const identityConfirmation = this.#boundaryHooks.afterIdentityCommit?.({
-			sessionManager,
-			identity,
-		});
+		const identityConfirmation = this.#boundaryHooks.afterIdentityCommit?.({ identity });
 		validateCommittedChildIdentity(
 			transcriptFromSessionManager(sessionManager).inspect(),
 			identity,

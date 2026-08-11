@@ -34,6 +34,7 @@ import {
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
 import { capturedAgentSession } from "./support/captured-agent-sessions.ts";
+import { capturedSessionManager } from "./support/captured-session-managers.ts";
 
 test("an authenticated Agent authors and polls one immutable Deferred Message through recipient proof", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
@@ -1916,8 +1917,8 @@ async function createDormantChildHarness(
 			beforeModeratorRunStart: () => "confirmed_failure",
 		},
 		spawnBoundaryHooks: {
-			afterIdentityCommit: ({ sessionManager }) => {
-				childSessionManager = sessionManager;
+			afterIdentityCommit: ({ identity: childIdentity }) => {
+				childSessionManager = capturedSessionManager(childIdentity.agentId);
 			},
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
