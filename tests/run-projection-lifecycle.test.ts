@@ -122,6 +122,28 @@ test("failure, termination, and Workflow shutdown each dispose their exact proje
 	}
 });
 
+test("Workflow shutdown disposes native Owner infrastructure after its Run already ended", async () => {
+	const resource = createRunResource();
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "ended-owner-runtime-agent",
+		startSession: async () => resource.startedRun,
+	});
+	await host.lane.run(() => host.startInLane());
+	await host.lane.run(() => host.discardAndEndInLane("failure"));
+
+	let nativeDisposals = 0;
+	await host.lane.run(() => host.discardAndEndInLane("shutdown", async () => {
+		nativeDisposals += 1;
+	}));
+
+	assert.equal(nativeDisposals, 1);
+	assert.deepEqual(resource.counts(), {
+		projectionDisposals: 1,
+		sessionDisposals: 1,
+		unsubscriptions: 1,
+	});
+});
+
 test("failed startup after Run binding rolls back the projection and session once", async () => {
 	const resource = createRunResource();
 	const host = AgentRuntimeSupervisor.createChild({

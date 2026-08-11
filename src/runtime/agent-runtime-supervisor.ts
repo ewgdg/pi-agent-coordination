@@ -796,6 +796,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		const run = this.#runtime;
 		if (!run) {
 			this.#clearRunScopedState();
+			// The Owner's native Runtime owns process-wide infrastructure beyond its
+			// Agent Run. A terminal Run may already be gone when Workflow shutdown
+			// reaches this boundary, but that infrastructure still must be disposed.
+			if (disposeRuntime) await disposeRuntime();
 			return;
 		}
 		// A failed selected Run becomes Dormant in place so transcript, commands,
