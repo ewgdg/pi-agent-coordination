@@ -112,6 +112,29 @@ test("xterm-generated terminal replies use a separate PTY write path", { timeout
 	await projection.dispose();
 });
 
+test("live disposal parses final PTY output before releasing terminal state", { timeout: TEST_TIMEOUT_MS }, async () => {
+	const projection = await spawnNodeScript(String.raw`
+		process.on("SIGHUP", () => {
+			process.stdout.write("\x1b[2J\x1b[HFINAL_SHUTDOWN_OUTPUT");
+			process.exit(0);
+		});
+		process.stdout.write("READY");
+		setInterval(() => undefined, 1000);
+	`);
+	await waitForText(projection, "READY");
+	let finalOutputObserved = false;
+	projection.addChangeHandler(() => {
+		finalOutputObserved ||= projection.frame().lines.some((line) =>
+			line.text.includes("FINAL_SHUTDOWN_OUTPUT")
+		);
+	});
+
+	await projection.dispose();
+
+	assert.equal(finalOutputObserved, true);
+	assert.equal(projection.disposed, true);
+});
+
 test("explicit signals force a stubborn real PTY child to exact exit", { timeout: TEST_TIMEOUT_MS }, async () => {
 	const projection = await spawnNodeScript(String.raw`
 		process.on("SIGHUP", () => process.stdout.write("IGNORED_SIGHUP"));

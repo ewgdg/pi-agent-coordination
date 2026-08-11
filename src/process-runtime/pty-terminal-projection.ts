@@ -114,6 +114,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	#cursorBlink = false;
 	#pendingWrites = 0;
 	#exitObserved = false;
+	#disposing = false;
 	#disposed = false;
 	#disposePromise: Promise<void> | undefined;
 	readonly exited: Promise<PtyExit>;
@@ -249,7 +250,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 
 	dispose(): Promise<void> {
 		if (this.#disposePromise) return this.#disposePromise;
-		this.#disposed = true;
+		this.#disposing = true;
 		this.#disposePromise = this.#dispose();
 		return this.#disposePromise;
 	}
@@ -326,14 +327,19 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	}
 
 	async #dispose(): Promise<void> {
-		if (!this.#exitObserved) this.#child.kill();
-		await this.exited;
-		await this.#waitForParserDrain();
-		for (const subscription of this.#subscriptions) subscription.dispose();
-		this.#subscriptions.length = 0;
-		this.#changeHandlers.clear();
-		this.#failureHandlers.clear();
-		this.#terminal.dispose();
+		try {
+			if (!this.#exitObserved) this.#child.kill();
+			await this.exited;
+			await this.#waitForParserDrain();
+		} finally {
+			this.#disposed = true;
+			this.#disposing = false;
+			for (const subscription of this.#subscriptions) subscription.dispose();
+			this.#subscriptions.length = 0;
+			this.#changeHandlers.clear();
+			this.#failureHandlers.clear();
+			this.#terminal.dispose();
+		}
 	}
 
 	#requireActive(): void {
@@ -342,6 +348,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 
 	#requireWritable(): void {
 		this.#requireActive();
+		if (this.#disposing) throw new Error("terminal_projection_disposing");
 		if (this.#exitObserved) throw new Error("terminal_projection_exited");
 	}
 }
