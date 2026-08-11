@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,14 +11,22 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	initTheme,
+	type AgentSessionRuntime,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
+import type { AgentRecord } from "../src/coordination/agent-record.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
-import { resolveCommittedAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
+import {
+	commitAgentRuntimeBlueprint,
+	resolveCommittedAgentRuntimeBlueprint,
+} from "../src/protocol/agent-runtime-blueprint.ts";
+import { commitChildAgentIdentity } from "../src/protocol/child-identity.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
+import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -27,6 +35,141 @@ import { createProcessModelBroker } from "./support/process-model-broker.ts";
 
 const TEST_TIMEOUT_MS = 45_000;
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
+
+test("nested spawn snapshots the admitted parent Runtime and only binds skill sources from its blueprint", async () => {
+	const root = await mkdirTestRoot("nested-parent-snapshot");
+	const parentAgentId = "nested-parent-agent";
+	const session = SessionManager.create(root, join(root, "sessions"), {
+		id: parentAgentId,
+	});
+	commitChildAgentIdentity(session, {
+		agentId: parentAgentId,
+		workflowId: "nested-parent-workflow",
+		directSpawnerAgentId: "owner-agent",
+		spawnSource: {
+			agentId: "owner-agent",
+			entryId: "parent-spawn-entry",
+			toolCallId: "parent-spawn-tool",
+		},
+		configuration: {
+			label: "Nested Parent",
+			baseline: runtimeBaseline(root),
+		},
+	});
+	commitAgentRuntimeBlueprint(session, {
+		agentId: parentAgentId,
+		role: "ordinary",
+		configuration: {
+			cwd: join(root, "blueprint-cwd"),
+			model: { provider: "blueprint-provider", modelId: "blueprint-model" },
+			thinking: "off",
+			tools: ["blueprint_tool"],
+			skills: ["shared-skill"],
+			extensions: [join(root, "blueprint-extension.ts")],
+		},
+		projectTrusted: false,
+		skillSources: [{
+			name: "shared-skill",
+			path: join(root, "skills", "shared-skill", "SKILL.md"),
+		}],
+		agentsFiles: [],
+	});
+	const runtimeCwd = join(root, "runtime-cwd");
+	const runtimeExtension = join(root, "runtime-extension.ts");
+	const factory = processFactoryForSnapshot();
+	const parent = {
+		identity: {
+			agentId: parentAgentId,
+		},
+		host: {
+			effectiveRuntimeSnapshot: () => ({
+				cwd: runtimeCwd,
+				model: { provider: "runtime-provider", modelId: "runtime-model" },
+				thinking: "high",
+				tools: ["runtime_tool"],
+				skills: ["shared-skill"],
+				fileExtensionPaths: [runtimeExtension],
+				projectTrusted: true,
+				sessionId: parentAgentId,
+			}),
+		},
+		transcript: transcriptFromSessionManager(session),
+	} as unknown as AgentRecord;
+
+	assert.deepEqual(factory.snapshotParentRuntime(parent), {
+		baseline: {
+			cwd: runtimeCwd,
+			model: { provider: "runtime-provider", modelId: "runtime-model" },
+			thinking: "high",
+			tools: ["runtime_tool"],
+			skills: ["shared-skill"],
+			extensions: [runtimeExtension],
+		},
+		projectTrusted: true,
+		skillSources: [{
+			name: "shared-skill",
+			filePath: join(root, "skills", "shared-skill", "SKILL.md"),
+		}],
+	});
+});
+
+test("nested spawn rejects parent skill names that do not align with committed sources", async () => {
+	const root = await mkdirTestRoot("nested-parent-skill-mismatch");
+	const parentAgentId = "mismatched-parent-agent";
+	const session = SessionManager.create(root, join(root, "sessions"), {
+		id: parentAgentId,
+	});
+	commitChildAgentIdentity(session, {
+		agentId: parentAgentId,
+		workflowId: "mismatched-parent-workflow",
+		directSpawnerAgentId: "owner-agent",
+		spawnSource: {
+			agentId: "owner-agent",
+			entryId: "mismatched-spawn-entry",
+			toolCallId: "mismatched-spawn-tool",
+		},
+		configuration: { label: "Mismatched Parent", baseline: runtimeBaseline(root) },
+	});
+	commitAgentRuntimeBlueprint(session, {
+		agentId: parentAgentId,
+		role: "ordinary",
+		configuration: {
+			cwd: root,
+			model: { provider: "provider", modelId: "model" },
+			thinking: "off",
+			tools: [],
+			skills: ["committed-skill"],
+			extensions: [],
+		},
+		projectTrusted: true,
+		skillSources: [{
+			name: "committed-skill",
+			path: join(root, "skills", "committed-skill", "SKILL.md"),
+		}],
+		agentsFiles: [],
+	});
+	const parent = {
+		identity: { agentId: parentAgentId },
+		host: {
+			effectiveRuntimeSnapshot: () => ({
+				cwd: root,
+				model: { provider: "provider", modelId: "model" },
+				thinking: "off",
+				tools: [],
+				skills: ["uncommitted-skill"],
+				fileExtensionPaths: [],
+				projectTrusted: true,
+				sessionId: parentAgentId,
+			}),
+		},
+		transcript: transcriptFromSessionManager(session),
+	} as unknown as AgentRecord;
+
+	assert.throws(
+		() => processFactoryForSnapshot().snapshotParentRuntime(parent),
+		/Parent Runtime skills do not align with committed blueprint sources/,
+	);
+});
 
 test("ordinary production spawn runs in a real child process over Owner participant RPC", {
 	timeout: TEST_TIMEOUT_MS,
@@ -432,4 +575,36 @@ async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<voi
 function hasCode(code: string): (error: unknown) => boolean {
 	return (error) => typeof error === "object" && error !== null && "code" in error &&
 		(error as NodeJS.ErrnoException).code === code;
+}
+
+function processFactoryForSnapshot(): ProcessChildSessionFactory {
+	return new ProcessChildSessionFactory({
+		ownerRuntime: {} as AgentSessionRuntime,
+		ownerIdentity: {
+			agentId: "owner-agent",
+			workflowId: "snapshot-workflow",
+			directSpawnerAgentId: null,
+			configuration: { label: "owner", baseline: runtimeBaseline(tmpdir()) },
+		},
+		entryModulePath: join(tmpdir(), "package", "src", "index.ts"),
+		packageRoot: join(tmpdir(), "package"),
+		ownerRequestHandlers() {
+			throw new Error("Snapshot test does not launch a Runtime");
+		},
+	});
+}
+
+function runtimeBaseline(cwd: string) {
+	return {
+		cwd,
+		model: { provider: "baseline-provider", modelId: "baseline-model" },
+		thinking: "off" as const,
+		tools: [],
+		skills: [],
+		extensions: [],
+	};
+}
+
+function mkdirTestRoot(name: string): Promise<string> {
+	return mkdtemp(join(tmpdir(), `pi-process-factory-${name}-`));
 }

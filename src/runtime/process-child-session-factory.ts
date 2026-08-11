@@ -20,7 +20,6 @@ import {
 	type ModeratorIdentity,
 } from "../protocol/moderator-input.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
-import type { RuntimeConfigurationBaseline } from "../protocol/runtime-configuration.ts";
 import {
 	PiChildHostedRuntime,
 } from "../process-runtime/pi-child-hosted-runtime.ts";
@@ -103,24 +102,16 @@ export class ProcessChildSessionFactory {
 	}
 
 	snapshotParentRuntime(parent: AgentRecord): ChildRunParentSnapshot {
-		if (parent.identity.agentId !== this.#ownerIdentity.agentId) {
-			const transcript = parent.transcript.inspect();
-			const blueprint = resolveCommittedAgentRuntimeBlueprint({
-				sessionId: parent.identity.agentId,
-				entries: transcript.entries,
-			});
-			return {
-				baseline: configurationBaseline(blueprint.configuration),
-				projectTrusted: blueprint.projectTrusted,
-				skillSources: blueprint.skillSources.map(({ name, path }) => ({
-					name,
-					filePath: path,
-				})),
-			};
-		}
-
 		const snapshot = parent.host.effectiveRuntimeSnapshot();
 		if (!snapshot) throw new Error("Parent Runtime snapshot is unavailable");
+		if (snapshot.sessionId !== parent.identity.agentId) {
+			throw new Error(
+				"invariant_violation: Parent Runtime snapshot does not match Agent Identity",
+			);
+		}
+		const skillSources = parent.identity.agentId === this.#ownerIdentity.agentId
+			? this.#ownerSkillSources(snapshot.skills)
+			: this.#committedChildSkillSources(parent, snapshot.skills);
 		return {
 			baseline: {
 				cwd: snapshot.cwd,
@@ -133,7 +124,7 @@ export class ProcessChildSessionFactory {
 				),
 			},
 			projectTrusted: snapshot.projectTrusted,
-			skillSources: this.#ownerSkillSources(snapshot.skills),
+			skillSources,
 		};
 	}
 
@@ -304,24 +295,36 @@ export class ProcessChildSessionFactory {
 		});
 	}
 
+	#committedChildSkillSources(
+		parent: AgentRecord,
+		selectedNames: readonly string[],
+	): ChildRunParentSnapshot["skillSources"] {
+		const transcript = parent.transcript.inspect();
+		const blueprint = resolveCommittedAgentRuntimeBlueprint({
+			sessionId: parent.identity.agentId,
+			entries: transcript.entries,
+		});
+		if (
+			blueprint.skillSources.length !== selectedNames.length ||
+			blueprint.skillSources.some(
+				(source, index) => source.name !== selectedNames[index],
+			)
+		) {
+			throw new Error(
+				"invariant_violation: Parent Runtime skills do not align with committed blueprint sources",
+			);
+		}
+		return blueprint.skillSources.map(({ name, path }) => ({
+			name,
+			filePath: path,
+		}));
+	}
+
 	#isCoordinationExtension(path: string): boolean {
 		return path === this.#entryModulePath ||
 			path === INLINE_PUBLIC_EXTENSION_PATH ||
 			COORDINATION_EXTENSION_PREFIXES.some((prefix) => path.startsWith(prefix));
 	}
-}
-
-function configurationBaseline(
-	configuration: AgentRuntimeBlueprint["configuration"],
-): RuntimeConfigurationBaseline {
-	return {
-		cwd: configuration.cwd,
-		model: configuration.model,
-		thinking: configuration.thinking,
-		tools: [...configuration.tools],
-		skills: [...configuration.skills],
-		extensions: [...configuration.extensions],
-	};
 }
 
 function skillSource(skill: Skill): Pick<Skill, "name" | "filePath"> {
