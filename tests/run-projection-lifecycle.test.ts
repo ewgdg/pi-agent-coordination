@@ -17,6 +17,7 @@ import {
 	type PiNativeAgentProjection,
 } from "../src/pi-integration/native-agent-projection.ts";
 import { InProcessAgentHost } from "../src/runtime/in-process-agent-host.ts";
+import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
 const PROJECTION_RENDER_WIDTH = 120;
@@ -470,6 +471,56 @@ test("termination keeps the projection subscribed through final Run settlement",
 	assert.equal(eventsAtProjectionDisposal.includes("agent_settled"), true);
 	assert.equal(statusAtProjectionDisposal.includes("Working"), false);
 	assert.match(transcriptAtProjectionDisposal, /Operation aborted/);
+	await ownerHost.runtime.dispose();
+});
+
+test("Runtime Host confirms user and custom Delivery transcript commits", async () => {
+	const ownerHost = await createTestOwnerHost(() => undefined, { persistent: true });
+	ownerHost.model.setResponses([
+		fauxAssistantMessage("User Delivery completed."),
+		fauxAssistantMessage("Custom Delivery completed."),
+	]);
+	const runtimeHost = InProcessAgentHost.bindOwner(ownerHost.runtime);
+	const userContent = [{ type: "text" as const, text: "Commit this user Delivery." }];
+	const userDelivery = runtimeHost.deliverInLane(
+		{ kind: "user", content: userContent },
+		{
+			inspectCommit: () => {
+				const tail = ownerHost.session.sessionManager.getEntries().at(-1);
+				return tail?.type === "message" &&
+					tail.message.role === "user" &&
+					JSON.stringify(tail.message.content) === JSON.stringify(userContent);
+			},
+		},
+	);
+	assert.equal(await userDelivery.transcriptCommit, true);
+	await userDelivery.completion;
+
+	const customMessage = createMessageDelivery([{
+		source: {
+			agentId: ownerHost.session.sessionId,
+			entryId: "host-delivery-source",
+			toolCallId: "host-delivery-tool-call",
+		},
+		projection: {
+			kind: "message",
+			messageId: "host-delivery-message",
+			fromAgentId: ownerHost.session.sessionId,
+			content: "Commit this custom Delivery.",
+		},
+	}]);
+	const customDelivery = runtimeHost.deliverInLane(
+		{ kind: "custom", message: customMessage, triggerTurn: true },
+		{
+			inspectCommit: () => {
+				const tail = ownerHost.session.sessionManager.getEntries().at(-1);
+				return tail?.type === "custom_message" &&
+					tail.customType === customMessage.customType;
+			},
+		},
+	);
+	assert.equal(await customDelivery.transcriptCommit, true);
+	await customDelivery.completion;
 	await ownerHost.runtime.dispose();
 });
 
