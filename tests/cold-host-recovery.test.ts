@@ -3,12 +3,13 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
-	SessionManager,
-	type InlineExtension,
-} from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+	fauxAssistantMessage,
+	fauxToolCall,
+	type Context,
+	type FauxResponseStep,
+} from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
@@ -22,11 +23,22 @@ import {
 } from "./support/agent-session.ts";
 import {
 	bindTestOwnerHost,
-	createUnboundTestOwnerHost,
+	createUnboundTestOwnerHost as createBaseUnboundTestOwnerHost,
 	type TestOwnerHost,
+	type TestOwnerHostOptions,
 } from "./support/pi-host.ts";
+import {
+	createProcessModelBroker,
+	type ProcessModelBroker,
+} from "./support/process-model-broker.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
+const durableModelBrokers = new Set<ProcessModelBroker>();
+const hostModelBrokers = new WeakMap<TestOwnerHost, ProcessModelBroker>();
+
+test.after(async () => {
+	await Promise.all([...durableModelBrokers].map((broker) => broker.close()));
+});
 
 test("a fresh Owner host rediscovers one dormant child without starting its Run", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
@@ -1025,6 +1037,26 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 	await reopened.runtime.dispose();
 });
 
+async function createUnboundTestOwnerHost(
+	extension: typeof piAgentCoordination,
+	options?: TestOwnerHostOptions,
+): Promise<TestOwnerHost> {
+	const broker = await createProcessModelBroker({
+		responseOverride: (context) =>
+			(options?.implicitModeratorResponses ?? true) && isImplicitModeratorRequest(context)
+				? fauxAssistantMessage("I will wait for explicit Moderator work.")
+				: undefined,
+	});
+	durableModelBrokers.add(broker);
+	try {
+		return await createHostWithDurableModelBroker(extension, broker, options);
+	} catch (error) {
+		durableModelBrokers.delete(broker);
+		await broker.close();
+		throw error;
+	}
+}
+
 async function reopenOwner(
 	previous: TestOwnerHost,
 	sessionFile: string,
@@ -1032,14 +1064,57 @@ async function reopenOwner(
 		implicitModeratorResponses?: boolean;
 	},
 ): Promise<TestOwnerHost> {
-	const reopened = await createUnboundTestOwnerHost(piAgentCoordination, {
-		cwd: previous.cwd,
-		agentDir: previous.services.agentDir,
-		sessionFile,
-		implicitModeratorResponses: options?.implicitModeratorResponses,
-	});
+	const broker = hostModelBrokers.get(previous);
+	assert.ok(broker, "Expected the previous host's durable process model broker");
+	const reopened = await createHostWithDurableModelBroker(
+		piAgentCoordination,
+		broker,
+		{
+			cwd: previous.cwd,
+			agentDir: previous.services.agentDir,
+			sessionFile,
+			implicitModeratorResponses: options?.implicitModeratorResponses,
+		},
+	);
 	await bindTestOwnerHost(reopened, "tui");
 	return reopened;
+}
+
+async function createHostWithDurableModelBroker(
+	extension: typeof piAgentCoordination,
+	broker: ProcessModelBroker,
+	options?: TestOwnerHostOptions,
+): Promise<TestOwnerHost> {
+	const host = await createBaseUnboundTestOwnerHost(extension, {
+		...options,
+		processVisibleModel: false,
+		additionalExtensionPaths: [
+			...(options?.additionalExtensionPaths ?? []),
+			broker.extensionPath,
+		],
+	});
+	const processVisibleHost: TestOwnerHost = {
+		...host,
+		model: {
+			setResponses(responses: FauxResponseStep[]) {
+				broker.setResponses(responses);
+			},
+		},
+	};
+	hostModelBrokers.set(processVisibleHost, broker);
+	return processVisibleHost;
+}
+
+function isImplicitModeratorRequest(context: Context): boolean {
+	return context.tools?.some(({ name }) => name === "moderator_control") === true &&
+		context.messages.some((message) =>
+			message.role === "user" &&
+			Array.isArray(message.content) &&
+			message.content.some(
+				(part) => part.type === "text" &&
+					part.text.includes('"kind":"obligation_stall"'),
+			)
+		);
 }
 
 async function countModeratorSessions(directory: string): Promise<number> {
