@@ -1,11 +1,11 @@
 import {
 	createFauxCore,
+	type AssistantMessage,
 	type Context,
 	type FauxProviderState,
 	type FauxResponseStep,
 	type Model,
 	type SimpleStreamOptions,
-	type StreamFunction,
 } from "@earendil-works/pi-ai";
 import { randomBytes } from "node:crypto";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -20,12 +20,20 @@ const DEFAULT_MODEL_ID = "deterministic-owner";
 const DEFAULT_MODEL_NAME = "Deterministic process model";
 const DEFAULT_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
+export type ProcessModelResponseOverride = (
+	context: Context,
+	options: SimpleStreamOptions | undefined,
+	model: Model<string>,
+) => AssistantMessage | undefined | Promise<AssistantMessage | undefined>;
+
 export type ProcessModelBrokerOptions = {
 	providerId?: string;
 	modelId?: string;
 	modelName?: string;
 	maxPayloadBytes?: number;
 	responses?: FauxResponseStep[];
+	responseOverride?: ProcessModelResponseOverride;
+	tokensPerSecond?: number;
 };
 
 export type ProcessModelBroker = {
@@ -52,12 +60,21 @@ export async function createProcessModelBroker(
 		throw new Error("Process model broker maxPayloadBytes must be an integer of at least 256");
 	}
 
-	const faux = createFauxCore({
+	const fauxOptions = {
 		api: providerId,
 		provider: providerId,
 		models: [{ id: modelId, name: modelName }],
-	});
+		tokensPerSecond: options.tokensPerSecond,
+	};
+	const faux = createFauxCore(fauxOptions);
 	if (options.responses) faux.setResponses(options.responses);
+	const resolveMessage: ResolveBrokerMessage = async (model, context, streamOptions) => {
+		const override = await options.responseOverride?.(context, streamOptions, model);
+		if (!override) return faux.streamSimple(model, context, streamOptions).result();
+		const overrideFaux = createFauxCore(fauxOptions);
+		overrideFaux.setResponses([override]);
+		return overrideFaux.streamSimple(model, context, streamOptions).result();
+	};
 	const token = randomBytes(32).toString("base64url");
 	const activeRequests = new Set<AbortController>();
 	const server = createServer((request, response) => {
@@ -68,7 +85,7 @@ export async function createProcessModelBroker(
 			maxPayloadBytes,
 			providerId,
 			modelId,
-			streamSimple: faux.streamSimple,
+			resolveMessage,
 			activeRequests,
 		});
 	});
@@ -137,9 +154,15 @@ type BrokerRequestDependencies = {
 	maxPayloadBytes: number;
 	providerId: string;
 	modelId: string;
-	streamSimple: StreamFunction<string, SimpleStreamOptions>;
+	resolveMessage: ResolveBrokerMessage;
 	activeRequests: Set<AbortController>;
 };
+
+type ResolveBrokerMessage = (
+	model: Model<string>,
+	context: Context,
+	options: SimpleStreamOptions | undefined,
+) => Promise<AssistantMessage>;
 
 async function handleBrokerRequest(dependencies: BrokerRequestDependencies): Promise<void> {
 	const {
@@ -149,7 +172,7 @@ async function handleBrokerRequest(dependencies: BrokerRequestDependencies): Pro
 		maxPayloadBytes,
 		providerId,
 		modelId,
-		streamSimple,
+		resolveMessage,
 		activeRequests,
 	} = dependencies;
 	try {
@@ -189,10 +212,10 @@ async function handleBrokerRequest(dependencies: BrokerRequestDependencies): Pro
 		request.once("aborted", abort);
 		response.once("close", abort);
 		try {
-			const message = await streamSimple(payload.model, payload.context, {
+			const message = await resolveMessage(payload.model, payload.context, {
 				...payload.options,
 				signal: cancellation.signal,
-			}).result();
+			});
 			if (response.destroyed) return;
 			const serialized = JSON.stringify({ message });
 			if (Buffer.byteLength(serialized) > maxPayloadBytes) {

@@ -105,7 +105,6 @@ function streamSimple(requestModel, context, options) {
         headers: {
           authorization: \`Bearer \${token}\`,
           "content-type": "application/json",
-          "content-length": String(Buffer.byteLength(body)),
         },
         body,
         signal: options?.signal,
