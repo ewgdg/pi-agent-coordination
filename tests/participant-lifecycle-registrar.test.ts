@@ -17,6 +17,7 @@ import type {
 	OrdinaryAgentCoordinatorView,
 } from "../src/coordination/workflow-coordinator.ts";
 import {
+	registerParticipantInputLifecycle,
 	registerParticipantLifecycle,
 	type ParticipantLifecycleHandlers,
 } from "../src/pi-integration/participant-lifecycle.ts";
@@ -195,6 +196,30 @@ test("ordinary and Moderator extensions preserve local lifecycle operation order
 			]);
 		});
 	}
+});
+
+test("participant input registration can follow inherited extension preflights", async () => {
+	let submitted = 0;
+	const handlers = lifecycleHandlers({
+		async humanInputSubmitted() {
+			submitted += 1;
+			return false;
+		},
+	});
+	const pi = new CapturedExtensionApi();
+	registerParticipantLifecycle(pi.api, handlers, { registerInput: false });
+	assert.equal(pi.handlers.has("input"), false);
+
+	registerParticipantInputLifecycle(pi.api, handlers);
+	assert.deepEqual(
+		await pi.emit("input", {
+			type: "input",
+			text: "submitted after inherited preflight",
+			source: "interactive",
+		}, createExtensionContext()),
+		{ action: "continue" },
+	);
+	assert.equal(submitted, 1);
 });
 
 test("participant lifecycle registrar preserves native Human Answer recovery", async () => {

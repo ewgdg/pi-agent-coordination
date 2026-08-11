@@ -40,29 +40,12 @@ export type ParticipantLifecycleHandlers = Readonly<{
 export function registerParticipantLifecycle(
 	pi: ExtensionAPI,
 	handlers: ParticipantLifecycleHandlers,
+	options: Readonly<{ registerInput?: boolean }> = {},
 ): void {
 	// agent_start is the one awaited Pi boundary shared by native prompts,
 	// custom Delivery turns, queued continuations, and automatic retries.
 	pi.on("agent_start", () => handlers.executionStarted());
-	pi.on("input", async (event, ctx) => {
-		if (event.source !== "interactive") return { action: "continue" };
-		if (event.streamingBehavior === "followUp") return { action: "continue" };
-		try {
-			const resumed = await handlers.humanInputSubmitted({
-				text: event.text,
-				images: event.images,
-			});
-			return resumed ? { action: "handled" } : { action: "continue" };
-		} catch (error) {
-			const answeringHumanRequest = await handlers.humanInputMode() === "answer";
-			if (answeringHumanRequest) ctx.ui.setEditorText(event.text);
-			ctx.ui.notify(
-				`${answeringHumanRequest ? "Human Answer was not submitted" : "Agent input failed"}: ${error instanceof Error ? error.message : String(error)}`,
-				"error",
-			);
-			return { action: "handled" };
-		}
-	});
+	if (options.registerInput !== false) registerParticipantInputLifecycle(pi, handlers);
 	// message_end is Pi's final awaited hook before it synchronously publishes the
 	// native result. A Run fence can still turn a submitted candidate into the one
 	// interruption result here; attention remains until later transcript proof.
@@ -99,4 +82,29 @@ export function registerParticipantLifecycle(
 	// constructs the next model context, making this the Steer freeze boundary.
 	pi.on("turn_end", () => handlers.safeBoundaryReached());
 	pi.on("agent_end", () => handlers.executionEnded());
+}
+
+export function registerParticipantInputLifecycle(
+	pi: ExtensionAPI,
+	handlers: ParticipantLifecycleHandlers,
+): void {
+	pi.on("input", async (event, ctx) => {
+		if (event.source !== "interactive") return { action: "continue" };
+		if (event.streamingBehavior === "followUp") return { action: "continue" };
+		try {
+			const resumed = await handlers.humanInputSubmitted({
+				text: event.text,
+				images: event.images,
+			});
+			return resumed ? { action: "handled" } : { action: "continue" };
+		} catch (error) {
+			const answeringHumanRequest = await handlers.humanInputMode() === "answer";
+			if (answeringHumanRequest) ctx.ui.setEditorText(event.text);
+			ctx.ui.notify(
+				`${answeringHumanRequest ? "Human Answer was not submitted" : "Agent input failed"}: ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+			return { action: "handled" };
+		}
+	});
 }

@@ -27,7 +27,10 @@ import {
 	type AgentActivitySource,
 } from "../presentation/agent-activity-surface.ts";
 import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
-import { registerParticipantLifecycle } from "../pi-integration/participant-lifecycle.ts";
+import {
+	registerParticipantInputLifecycle,
+	registerParticipantLifecycle,
+} from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
@@ -70,14 +73,17 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		pi,
 		createControlBackedChildPresentationHandlers(participantRequest),
 	);
+	let registerParticipantInput: () => void;
 	if (bootstrap.role === "ordinary") {
 		const handlers = createControlBackedChildParticipantHandlers("ordinary", participantRequest);
-		registerParticipantLifecycle(pi, handlers.lifecycle);
+		registerParticipantLifecycle(pi, handlers.lifecycle, { registerInput: false });
 		registerParticipantCoordinationTools(pi, "ordinary", handlers.coordination);
+		registerParticipantInput = () => registerParticipantInputLifecycle(pi, handlers.lifecycle);
 	} else {
 		const handlers = createControlBackedChildParticipantHandlers("moderator", participantRequest);
-		registerParticipantLifecycle(pi, handlers.lifecycle);
+		registerParticipantLifecycle(pi, handlers.lifecycle, { registerInput: false });
 		registerParticipantCoordinationTools(pi, "moderator", handlers.coordination);
+		registerParticipantInput = () => registerParticipantInputLifecycle(pi, handlers.lifecycle);
 	}
 	pi.on("session_before_fork", (_event, ctx) => cancelNativeSessionReplacement(ctx));
 	pi.on("session_before_switch", (_event, ctx) => cancelNativeSessionReplacement(ctx));
@@ -108,6 +114,10 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			queueIntentionTail: Promise.resolve(),
 			shutdownStarted: false,
 		};
+		// Inherited input preflights must run before coordination consumes an exact
+		// interactive submission, while the other lifecycle and tools must exist
+		// before inherited session_start hooks can initiate work.
+		registerParticipantInput();
 		capture.runtime.session.subscribe((event) => {
 			const current = state;
 			if (!current) return;
