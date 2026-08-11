@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
+import { chmod } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import {
 	WorkflowCoordinator,
@@ -26,14 +29,30 @@ import {
 	openLiveAgentView,
 	returnAgentViewToOwner,
 } from "./support/agent-session.ts";
-import { capturedAgentSession } from "./support/captured-agent-sessions.ts";
+
+type CoordinatorView = ReturnType<WorkflowCoordinator["forAgent"]>;
+type ProcessAgentDriver = Readonly<{
+	agentId: string;
+	view: CoordinatorView;
+	transcriptPath: string;
+	entries(): ReturnType<SessionManager["getEntries"]>;
+	appendToolCall(toolName: string, toolCallId: string, input: Record<string, unknown>): void;
+	prompt(text: string): Promise<void>;
+	sendUserMessage(text: string): Promise<void>;
+	abort(): Promise<void>;
+	waitForIdle(): Promise<void>;
+	readonly isIdle: boolean;
+}>;
 
 const MAX_CONDITION_POLL_ATTEMPTS = 500;
+const PROCESS_RUNTIME_FIXTURE = fileURLToPath(
+	new URL("./fixtures/process-runtime-child-extension.ts", import.meta.url),
+);
 
-test("activity subscriptions publish queued-input changes while a child Run remains active", async () => {
+test("activity subscriptions publish queued Delivery changes while a child Run remains active", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-activity-queue-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 
 	let markGenerationStarted!: () => void;
 	const generationStarted = new Promise<void>((resolve) => {
@@ -55,30 +74,29 @@ test("activity subscriptions publish queued-input changes while a child Run rema
 	const removeActivityHandler = harness.ownerView.addAgentActivityChangeHandler(
 		() => activityChanges += 1,
 	);
-	const activeTurn = child.session.prompt("Remain active while input is queued.");
+	const activeTurn = child.prompt("Remain active while input is queued.");
 	await generationStarted;
 	const changesBeforeQueue = activityChanges;
 
-	await child.session.sendUserMessage("Queued follow-up", { deliverAs: "followUp" });
+	await child.sendUserMessage("Queued follow-up");
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	const changesAfterQueue = activityChanges;
-	const queuedInputCount = harness.ownerView.agentActivity().children.find(
-		({ agentId }) => agentId === child.agentId
-	)?.queuedInputCount;
+	const hasPendingDelivery = harness.ownerView.status(child.agentId).run.retentionReasons
+		.some(({ reason }) => reason === "pending_delivery");
 
 	releaseGeneration();
 	await activeTurn;
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	removeActivityHandler();
 	await harness.shutdown();
 	assert.equal(changesAfterQueue, changesBeforeQueue + 1);
-	assert.equal(queuedInputCount, 1);
+	assert.equal(hasPendingDelivery, true);
 });
 
 test("interruption holds one exact settled Run and blocks ordinary Message Delivery", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-held-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 
 	const interrupted = await harness.control("interrupt-held-child", {
 		operation: "interrupt",
@@ -106,14 +124,14 @@ test("interruption holds one exact settled Run and blocks ordinary Message Deliv
 	await harness.ownerView.reachSafeBoundary();
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.equal(
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "custom_message" &&
 				String(entry.content).includes("This ordinary Message must remain pending"),
 		),
 		false,
 	);
-	assert.equal(child.session.isIdle, true);
+	assert.equal(child.isIdle, true);
 
 	await harness.shutdown();
 });
@@ -121,7 +139,7 @@ test("interruption holds one exact settled Run and blocks ordinary Message Deliv
 test("interruption keeps an aborted Human Request Run held when Pi reports an error", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-aborted-human-request-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	const input = {
 		question: "This request remains unanswered while its Run is held.",
 	};
@@ -133,12 +151,13 @@ test("interruption keeps an aborted Human Request Run held when Pi reports an er
 		),
 		fauxAssistantMessage("The aborted Human Request must not continue before resumption."),
 	]);
-	const prompt = child.session.prompt("Open an interruptible Human Request.");
+	const prompt = child.prompt("Open an interruptible Human Request.");
 	await waitForCondition(() => {
 		const run = child.view.status().run;
 		return run.phase !== "dormant" && run.attention === "input_required";
 	});
-	const selectedView = await harness.ownerView.openAgentView(child.agentId);
+	const selectedView = await harness.ownerView.openAgentView(child.agentId) ??
+		harness.activeAgentView();
 	assert.ok(selectedView);
 	selectedView.projection().dispatchInput("\x1b");
 	await prompt;
@@ -154,9 +173,9 @@ test("interruption keeps an aborted Human Request Run held when Pi reports an er
 test("an unrelated Agent abort does not preempt a later explicit interruption", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-direct-abort-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 
-	child.session.agent.abort();
+	await child.abort();
 	const interrupted = await harness.control("interrupt-after-direct-abort", {
 		operation: "interrupt",
 		agentId: child.agentId,
@@ -172,7 +191,7 @@ test("an unrelated Agent abort does not preempt a later explicit interruption", 
 test("interruption preserves Message admission that wins the target lane first", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-interruption-order-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	let markGenerationStarted!: () => void;
 	const generationStarted = new Promise<void>((resolve) => {
 		markGenerationStarted = resolve;
@@ -188,7 +207,7 @@ test("interruption preserves Message admission that wins the target lane first",
 			return fauxAssistantMessage("The interrupted work reached settlement.");
 		},
 	]);
-	const activeRun = child.session.prompt("Remain active through the admission race.");
+	const activeRun = child.prompt("Remain active through the admission race.");
 	await generationStarted;
 
 	const messageText = "Admission wins the lane, but Delivery waits behind the Hold.";
@@ -210,7 +229,7 @@ test("interruption preserves Message admission that wins the target lane first",
 		disposition: "held",
 	});
 	assert.equal(
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "custom_message" &&
 				String(entry.content).includes(messageText),
@@ -224,7 +243,7 @@ test("interruption preserves Message admission that wins the target lane first",
 test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-held-request-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	const owner = { session: harness.host.session, view: harness.ownerView };
 
 	harness.host.model.setResponses([
@@ -248,7 +267,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 		"Keep this incoming Request unresolved for held Cancellation.",
 	);
 	assert.ok("requestId" in incoming);
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await harness.control("interrupt-request-child", {
 		operation: "interrupt",
 		agentId: child.agentId,
@@ -282,7 +301,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	}
 	await harness.ownerView.reachSafeBoundary();
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	const childEntries = child.session.sessionManager.getEntries();
+	const childEntries = child.entries();
 	for (const blockedText of [heldRequestText, heldAnswerText, heldCancellationText]) {
 		assert.equal(
 			childEntries.some(
@@ -293,7 +312,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 			false,
 		);
 	}
-	assert.equal(child.session.isIdle, true);
+	assert.equal(child.isIdle, true);
 	assert.equal(
 		harness.ownerView.status(child.agentId).run.retentionReasons.some(
 			({ reason }) => reason === "interruption_hold",
@@ -307,7 +326,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 test("one Supervisory Resume Message commits alone before ordinary held backlog", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-resumed-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await harness.control("interrupt-resumed-child", {
 		operation: "interrupt",
 		agentId: child.agentId,
@@ -331,9 +350,9 @@ test("one Supervisory Resume Message commits alone before ordinary held backlog"
 	assert.ok("delivery" in resumed && "messageId" in resumed);
 	assert.equal(resumed.delivery, "pending");
 	assert.equal(typeof resumed.messageId, "string");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await waitForCondition(() =>
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "assistant" &&
@@ -345,7 +364,7 @@ test("one Supervisory Resume Message commits alone before ordinary held backlog"
 		),
 	);
 
-	const deliveries = child.session.sessionManager.getEntries().flatMap(
+	const deliveries = child.entries().flatMap(
 		(entry) =>
 			entry.type === "custom_message" &&
 			entry.customType === "agent-coordination.message-delivery"
@@ -382,29 +401,24 @@ test("one Supervisory Resume Message commits alone before ordinary held backlog"
 test("a failed Supervisory Resume dispatch leaves its exact Hold retryable", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-failed-supervisory-resume-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await harness.control("interrupt-before-failed-supervisory-resume", {
 		operation: "interrupt",
 		agentId: child.agentId,
 	});
 
-	const nativeSendCustomMessage = child.session.sendCustomMessage;
-	let rejectNextDispatch = true;
-	child.session.sendCustomMessage = (message, options) => {
-		if (rejectNextDispatch) {
-			rejectNextDispatch = false;
-			return Promise.reject(new Error("supervisory resume dispatch failed"));
-		}
-		return nativeSendCustomMessage.call(child.session, message, options);
-	};
-	await assert.rejects(
-		() => harness.control("failed-supervisory-resume", {
-			operation: "resume",
-			agentId: child.agentId,
-			content: "This dispatch fails before transcript commitment.",
-		}),
-		/supervisory resume dispatch failed/,
-	);
+	await chmod(child.transcriptPath, 0o400);
+	try {
+		await assert.rejects(
+			() => harness.control("failed-supervisory-resume", {
+				operation: "resume",
+				agentId: child.agentId,
+				content: "This dispatch fails before transcript commitment.",
+			}),
+		);
+	} finally {
+		await chmod(child.transcriptPath, 0o600);
+	}
 	assert.equal(
 		harness.ownerView.status(child.agentId).run.retentionReasons.some(
 			({ reason }) => reason === "interruption_hold",
@@ -422,7 +436,7 @@ test("a failed Supervisory Resume dispatch leaves its exact Hold retryable", asy
 	});
 	assert.ok("delivery" in retried);
 	assert.equal(retried.delivery, "pending");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	assert.equal(
 		harness.ownerView.status(child.agentId).run.retentionReasons.some(
 			({ reason }) => reason === "interruption_hold",
@@ -430,14 +444,13 @@ test("a failed Supervisory Resume dispatch leaves its exact Hold retryable", asy
 		false,
 	);
 
-	child.session.sendCustomMessage = nativeSendCustomMessage;
 	await harness.shutdown();
 });
 
 test("a native human editor Message clears its exact Hold for one isolated turn", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-human-resumed-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await harness.control("interrupt-human-resumed-child", {
 		operation: "interrupt",
 		agentId: child.agentId,
@@ -452,10 +465,10 @@ test("a native human editor Message clears its exact Hold for one isolated turn"
 		fauxAssistantMessage("The isolated native human turn completed."),
 		fauxAssistantMessage("The backlog followed the native human turn."),
 	]);
-	await child.session.prompt("Resume this exact Hold from the native editor.");
-	await child.session.waitForIdle();
+	await child.prompt("Resume this exact Hold from the native editor.");
+	await child.waitForIdle();
 	await waitForCondition(() =>
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "assistant" &&
@@ -467,7 +480,7 @@ test("a native human editor Message clears its exact Hold for one isolated turn"
 		),
 	);
 
-	const entries = child.session.sessionManager.getEntries();
+	const entries = child.entries();
 	const humanIndex = entries.findIndex(
 		(entry) =>
 			entry.type === "message" &&
@@ -499,31 +512,27 @@ test("a native human editor Message clears its exact Hold for one isolated turn"
 test("a failed native human resume dispatch leaves its exact Hold retryable", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-failed-human-resume-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await harness.control("interrupt-before-failed-human-resume", {
 		operation: "interrupt",
 		agentId: child.agentId,
 	});
 
-	const nativeSendUserMessage = child.session.sendUserMessage;
-	let rejectNextDispatch = true;
-	child.session.sendUserMessage = (content, options) => {
-		if (rejectNextDispatch) {
-			rejectNextDispatch = false;
-			return Promise.reject(new Error("human resume dispatch failed"));
-		}
-		return nativeSendUserMessage.call(child.session, content, options);
-	};
-	await child.session.prompt("This human resume fails before commitment.");
+	harness.host.model.setResponses([
+		fauxAssistantMessage("The uncommitted process input cycle settled."),
+	]);
+	await child.prompt("PROCESS_RUNTIME_DROP_MESSAGE_COMMIT");
 	// The backgrounded child's input failure renders in its own complete native
 	// mode; it never reaches the Owner's TUI (#59).
 	const agentView = await harness.ownerView.openAgentView(child.agentId);
-	assert.ok(agentView);
+	const activeAgentView = agentView ?? harness.activeAgentView();
+	assert.ok(activeAgentView);
 	await waitForCondition(() =>
-		agentView.projection().presentation.render(120).join("\n")
-			.includes("human resume dispatch failed")
+		stripTerminalSequences(
+			activeAgentView.projection().presentation.render(120).join("\n"),
+		)
+			.includes("Human input did not commit")
 	);
-	await agentView.close();
 	assert.equal(
 		harness.host.ui.notifications.some(({ message }) =>
 			message.includes("human resume dispatch failed")
@@ -531,12 +540,12 @@ test("a failed native human resume dispatch leaves its exact Hold retryable", as
 		false,
 	);
 	assert.equal(
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "user" &&
 				JSON.stringify(entry.message.content).includes(
-					"This human resume fails before commitment.",
+					"PROCESS_RUNTIME_DROP_MESSAGE_COMMIT",
 				),
 		),
 		false,
@@ -551,23 +560,23 @@ test("a failed native human resume dispatch leaves its exact Hold retryable", as
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The human retry resumed the still-held exact Run."),
 	]);
-	await child.session.prompt("Retry the native human resume against the exact Hold.");
-	await child.session.waitForIdle();
+	await child.prompt("Retry the native human resume against the exact Hold.");
+	await child.waitForIdle();
 	assert.equal(
 		harness.ownerView.status(child.agentId).run.retentionReasons.some(
 			({ reason }) => reason === "interruption_hold",
 		),
 		false,
 	);
+	await harness.activeAgentView()?.close();
 
-	child.session.sendUserMessage = nativeSendUserMessage;
 	await harness.shutdown();
 });
 
 test("supervisory interruption settles an active Human Request through its error result", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-human-request-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	const toolCallId = "human-request-before-supervisor-interrupt";
 	harness.host.model.setResponses([
 		fauxAssistantMessage(
@@ -580,7 +589,7 @@ test("supervisory interruption settles an active Human Request through its error
 		),
 		fauxAssistantMessage("This continuation must not run before explicit resumption."),
 	]);
-	const waitingRun = child.session.prompt("Open a Human Request for interruption.");
+	const waitingRun = child.prompt("Open a Human Request for interruption.");
 	await waitForCondition(() => {
 		const run = harness.ownerView.status(child.agentId).run;
 		return "attention" in run && run.attention === "input_required";
@@ -595,7 +604,7 @@ test("supervisory interruption settles an active Human Request through its error
 		agentId: child.agentId,
 		disposition: "held",
 	});
-	const result = child.session.sessionManager.getEntries().find(
+	const result = child.entries().find(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -604,7 +613,7 @@ test("supervisory interruption settles an active Human Request through its error
 	assert.ok(result && result.type === "message" && result.message.role === "toolResult");
 	assert.equal(result.message.isError, true);
 	assert.equal(
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "assistant" &&
@@ -629,7 +638,7 @@ test("supervisory interruption settles an active Human Request through its error
 test("termination discards exact-Run backlog, reports residual Requests, and permits a successor", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-terminated-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The Owner received the child's residual Request."),
@@ -665,7 +674,7 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 		retentionReasons: [],
 	});
 	assert.equal(
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "custom_message" &&
 				String(entry.content).includes("This uncommitted exact-Run backlog"),
@@ -682,7 +691,7 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 		"Start a successor after exact Run termination.",
 	);
 	await waitForCondition(() =>
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "assistant" &&
@@ -706,9 +715,9 @@ test("authority follows only Owner descendants and immediate Direct-Spawner edge
 		"spawn-authority-grandchild",
 	);
 	await Promise.all([
-		parent.session.waitForIdle(),
-		sibling.session.waitForIdle(),
-		grandchild.session.waitForIdle(),
+		parent.waitForIdle(),
+		sibling.waitForIdle(),
+		grandchild.waitForIdle(),
 	]);
 
 	assert.equal(
@@ -728,7 +737,7 @@ test("authority follows only Owner descendants and immediate Direct-Spawner edge
 		sibling.agentId,
 		"Messaging this sibling must not grant Run control.",
 	);
-	await sibling.session.waitForIdle();
+	await sibling.waitForIdle();
 	await assert.rejects(
 		() => harness.controlAs(parent, "unauthorized-sibling-interrupt", {
 			operation: "interrupt",
@@ -746,7 +755,7 @@ test("authority follows only Owner descendants and immediate Direct-Spawner edge
 		grandchild.agentId,
 		"Remain live for the Direct Spawner's supervision check.",
 	);
-	await grandchild.session.waitForIdle();
+	await grandchild.waitForIdle();
 	assert.equal(harness.ownerView.status(grandchild.agentId).run.phase, "live");
 	const heldByDirectSpawner = await harness.controlAs(
 		parent,
@@ -780,7 +789,7 @@ test("the one resume reservation remains available when ordinary capacity is exh
 		),
 	});
 	const child = await harness.spawnChild("spawn-resume-capacity-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await harness.control("interrupt-resume-capacity-child", {
 		operation: "interrupt",
 		agentId: child.agentId,
@@ -815,9 +824,9 @@ test("the one resume reservation remains available when ordinary capacity is exh
 	});
 	assert.ok("delivery" in resumed);
 	assert.equal(resumed.delivery, "pending");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await waitForCondition(() =>
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "assistant" &&
@@ -835,7 +844,7 @@ test("the one resume reservation remains available when ordinary capacity is exh
 test("a resume bound to an earlier Hold becomes ordinary direction and cannot clear a later Hold", async () => {
 	const harness = await createRunSupervisionHarness({ deferFirstResume: true });
 	const child = await harness.spawnChild("spawn-stale-resume-child");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await harness.control("interrupt-for-stale-resume", {
 		operation: "interrupt",
 		agentId: child.agentId,
@@ -848,7 +857,7 @@ test("a resume bound to an earlier Hold becomes ordinary direction and cannot cl
 	assert.ok("delivery" in stale);
 	assert.equal(stale.delivery, "pending");
 	assert.equal(
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "custom_message" &&
 				String(entry.content).includes("bound only to the earlier Hold"),
@@ -859,8 +868,8 @@ test("a resume bound to an earlier Hold becomes ordinary direction and cannot cl
 	harness.host.model.setResponses([
 		fauxAssistantMessage("Human input cleared the earlier Hold first."),
 	]);
-	await child.session.prompt("Clear the earlier Hold with native human input.");
-	await child.session.waitForIdle();
+	await child.prompt("Clear the earlier Hold with native human input.");
+	await child.waitForIdle();
 	await harness.control("interrupt-after-stale-resume", {
 		operation: "interrupt",
 		agentId: child.agentId,
@@ -873,7 +882,7 @@ test("a resume bound to an earlier Hold becomes ordinary direction and cannot cl
 		true,
 	);
 	assert.equal(
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "custom_message" &&
 				String(entry.content).includes("bound only to the earlier Hold"),
@@ -892,9 +901,9 @@ test("a resume bound to an earlier Hold becomes ordinary direction and cannot cl
 	});
 	assert.ok("delivery" in current);
 	assert.equal(current.delivery, "pending");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	await waitForCondition(() =>
-		child.session.sessionManager.getEntries().some(
+		child.entries().some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "assistant" &&
@@ -905,7 +914,7 @@ test("a resume bound to an earlier Hold becomes ordinary direction and cannot cl
 				),
 		),
 	);
-	const deliveries = child.session.sessionManager.getEntries().flatMap((entry) =>
+	const deliveries = child.entries().flatMap((entry) =>
 		entry.type === "custom_message" &&
 		entry.customType === "agent-coordination.message-delivery"
 			? [String(entry.content)]
@@ -1013,6 +1022,16 @@ test("/agents retains only the viewed exact Run and keeps Owner bound through cl
 		}).run.retentionReasons.some(({ reason }) => reason === "interactive_selection"),
 		true,
 	);
+	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
+		const run = ((await status(`observe-view-settlement-${attempt}`)).details as {
+			run: { phase: string; work?: string };
+		}).run;
+		if (run.phase === "live" && run.work === "settled") break;
+		if (attempt === MAX_CONDITION_POLL_ATTEMPTS - 1) {
+			assert.fail("Viewed process child did not settle");
+		}
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
 
 	await returnAgentViewToOwner(host, opened);
 	assert.equal(host.runtime.session, ownerSession);
@@ -1028,7 +1047,7 @@ test("/agents retains only the viewed exact Run and keeps Owner bound through cl
 test("shutdown fences Run, tool, control, and Human Request admission", async () => {
 	const harness = await createRunSupervisionHarness();
 	const child = await harness.spawnChild("spawn-before-admission-fence");
-	await child.session.waitForIdle();
+	await child.waitForIdle();
 	let markNativeDisposalStarted!: () => void;
 	const nativeDisposalStarted = new Promise<void>((resolve) => {
 		markNativeDisposalStarted = resolve;
@@ -1080,17 +1099,20 @@ async function createRunSupervisionHarness(options?: {
 	workflowPolicy?: WorkflowPolicyStore;
 	deferFirstResume?: boolean;
 }) {
-	let coordinator: WorkflowCoordinator;
 	let deferredResumeRelease: (() => Promise<void>) | undefined;
 	let didDeferResume = false;
-	const childSessions = new Map<string, AgentSession>();
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	let activeAgentView: Awaited<ReturnType<CoordinatorView["openAgentView"]>>;
+	let promptSequence = 0;
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		additionalExtensionPaths: [PROCESS_RUNTIME_FIXTURE],
+	});
 	await bindTestOwnerHost(host, "tui");
 	const ownerIdentity = adoptOrValidateOwnerIdentity(
 		host.runtime,
 		"<inline:pi-agent-coordination>",
 	);
-	coordinator = new WorkflowCoordinator(host.runtime, ownerIdentity, {
+	const coordinator = new WorkflowCoordinator(host.runtime, ownerIdentity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: options?.workflowPolicy,
 		messageBoundaryHooks: options?.deferFirstResume
@@ -1103,76 +1125,183 @@ async function createRunSupervisionHarness(options?: {
 				},
 			}
 			: undefined,
-		// Run-supervision tests intentionally hold unanswered work open. Suppress live
-		// Moderator Runs so exact-Hold assertions stay isolated from stall handling.
-		incidentBoundaryHooks: {
-			beforeModeratorRunStart: () => "confirmed_failure",
-		},
-		spawnBoundaryHooks: {
-			afterRunStart({ identity }) {
-				childSessions.set(identity.agentId, capturedAgentSession(identity.agentId));
-			},
-		},
 	});
 	const ownerView = coordinator.forAgent(ownerIdentity.agentId);
+
+	const selectAgent = async (agentId: string) => {
+		const opened = await ownerView.openAgentView(agentId);
+		if (opened) activeAgentView = opened;
+		assert.ok(activeAgentView);
+		assert.equal(activeAgentView.agentId, agentId);
+		return activeAgentView;
+	};
+	const createDriver = (agentId: string): ProcessAgentDriver => {
+		const transcriptPath = ownerView.status(agentId).primaryEvidence.transcriptPath;
+		assert.ok(transcriptPath);
+		const entries = () => SessionManager.open(transcriptPath).getEntries();
+		const appendToolCall = (
+			toolName: string,
+			toolCallId: string,
+			input: Record<string, unknown>,
+		) => {
+			SessionManager.open(transcriptPath).appendMessage(
+				fauxAssistantMessage(
+					fauxToolCall(toolName, input, { id: toolCallId }),
+					{ stopReason: "toolUse" },
+				),
+			);
+		};
+		const dispatchInteractiveInput = async (text: string) => {
+			const selected = await selectAgent(agentId);
+			selected.projection().dispatchInput(text);
+			selected.projection().dispatchInput("\r");
+			return selected;
+		};
+		const driver = {
+			agentId,
+			view: coordinator.forAgent(agentId),
+			transcriptPath,
+			entries,
+			appendToolCall,
+			async prompt(text: string) {
+				const beforeEntryIds = new Set(entries().map(({ id }) => id));
+				const held = ownerView.status(agentId).run.retentionReasons.some(
+					({ reason }) => reason === "interruption_hold",
+				);
+				let selected: Awaited<ReturnType<typeof dispatchInteractiveInput>> | undefined;
+				if (held) {
+					selected = await dispatchInteractiveInput(text);
+				} else {
+					promptSequence += 1;
+					const toolCallId = `process-prompt-${promptSequence}`;
+					const input = {
+						operation: "send" as const,
+						targetAgentId: agentId,
+						content: text,
+					};
+					host.session.sessionManager.appendMessage(
+						fauxAssistantMessage(
+							fauxToolCall("agent_message", input, { id: toolCallId }),
+							{ stopReason: "toolUse" },
+						),
+					);
+					await ownerView.message(toolCallId, input);
+				}
+				await waitForCondition(() => {
+					const committed = entries().some((entry) =>
+						!beforeEntryIds.has(entry.id) &&
+						JSON.stringify(entry).includes(text)
+					);
+					const inputFailure = selected && stripTerminalSequences(
+						selected.projection().presentation.render(120).join("\n"),
+					).includes("Agent input failed");
+					return committed || inputFailure;
+				});
+				if (selected && stripTerminalSequences(
+					selected.projection().presentation.render(120).join("\n"),
+				).includes("Agent input failed")) return;
+				await waitForCondition(() => {
+					const run = ownerView.status(agentId).run;
+					return run.phase === "dormant" ||
+						(run.phase === "live" && run.work === "settled");
+				});
+			},
+			async sendUserMessage(text: string) {
+				promptSequence += 1;
+				const toolCallId = `process-queued-input-${promptSequence}`;
+				const input = {
+					operation: "send" as const,
+					targetAgentId: agentId,
+					content: text,
+					deliveryMode: "steer" as const,
+				};
+				host.session.sessionManager.appendMessage(
+					fauxAssistantMessage(
+						fauxToolCall("agent_message", input, { id: toolCallId }),
+						{ stopReason: "toolUse" },
+					),
+				);
+				await ownerView.message(toolCallId, input);
+				// Native child queues are process-local; refresh through the public
+				// activity seam after the Owner admits the queued Delivery.
+				ownerView.refreshAgentActivity();
+			},
+			async abort() {
+				const selected = await selectAgent(agentId);
+				selected.projection().dispatchInput("\x03");
+				await selected.projection().whenInputIdle();
+			},
+			waitForIdle: () => waitForCondition(() => {
+				const run = ownerView.status(agentId).run;
+				return run.phase === "dormant" ||
+					(run.phase === "live" && run.work === "settled");
+			}),
+			get isIdle() {
+				const run = ownerView.status(agentId).run;
+				return run.phase === "dormant" ||
+					(run.phase === "live" && run.work === "settled");
+			},
+		} satisfies ProcessAgentDriver;
+		return driver;
+	};
+	type OwnerCaller = { session: typeof host.session; view: CoordinatorView };
+	const appendCallerToolCall = (
+		caller: ProcessAgentDriver | OwnerCaller,
+		toolName: string,
+		toolCallId: string,
+		input: Record<string, unknown>,
+	) => {
+		if ("appendToolCall" in caller) {
+			caller.appendToolCall(toolName, toolCallId, input);
+			return;
+		}
+		caller.session.sessionManager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(toolName, input, { id: toolCallId }),
+				{ stopReason: "toolUse" },
+			),
+		);
+	};
 
 	return {
 		host,
 		coordinator,
 		ownerView,
+		activeAgentView: () => activeAgentView,
 		async spawnChild(toolCallId: string) {
 			host.model.setResponses([
 				fauxAssistantMessage("The child is settled and ready for supervision."),
 			]);
+			const input = { request: "Remain available for exact Run supervision." };
 			host.session.sessionManager.appendMessage(
-				fauxAssistantMessage(
-					fauxToolCall(
-						"agent_spawn",
-						{ request: "Remain available for exact Run supervision." },
-						{ id: toolCallId },
-					),
-					{ stopReason: "toolUse" },
-				),
-			);
-			const receipt = await ownerView.spawn(toolCallId, {
-				request: "Remain available for exact Run supervision.",
-			});
-			assert.ok("agentId" in receipt && typeof receipt.agentId === "string");
-			const session = childSessions.get(receipt.agentId);
-			if (!session) throw new Error("Spawned child session was not captured");
-			return {
-				agentId: receipt.agentId,
-				session,
-				view: coordinator.forAgent(receipt.agentId),
-			};
-		},
-		async spawnChildFrom(
-			parent: {
-				agentId: string;
-				session: AgentSession;
-				view: ReturnType<WorkflowCoordinator["forAgent"]>;
-			},
-			toolCallId: string,
-		) {
-			host.model.setResponses([
-				fauxAssistantMessage("The nested child is settled for supervision."),
-			]);
-			const input = { request: "Remain available as a nested supervised Agent." };
-			parent.session.sessionManager.appendMessage(
 				fauxAssistantMessage(
 					fauxToolCall("agent_spawn", input, { id: toolCallId }),
 					{ stopReason: "toolUse" },
 				),
 			);
+			const receipt = await ownerView.spawn(toolCallId, input);
+			assert.ok("agentId" in receipt && typeof receipt.agentId === "string");
+			await waitForCondition(() => {
+				const run = ownerView.status(receipt.agentId).run;
+				return run.phase === "live" && run.work === "settled" &&
+					run.retentionReasons.some(({ reason }) => reason === "answer_owed");
+			});
+			return createDriver(receipt.agentId);
+		},
+		async spawnChildFrom(parent: ProcessAgentDriver, toolCallId: string) {
+			host.model.setResponses([
+				fauxAssistantMessage("The nested child is settled for supervision."),
+			]);
+			const input = { request: "Remain available as a nested supervised Agent." };
+			parent.appendToolCall("agent_spawn", toolCallId, input);
 			const receipt = await parent.view.spawn(toolCallId, input);
 			assert.ok("agentId" in receipt && typeof receipt.agentId === "string");
-			const session = childSessions.get(receipt.agentId);
-			if (!session) throw new Error("Nested child session was not captured");
-			return {
-				agentId: receipt.agentId,
-				session,
-				view: coordinator.forAgent(receipt.agentId),
-			};
+			await waitForCondition(() => {
+				const run = ownerView.status(receipt.agentId).run;
+				return run.phase === "live" && run.work === "settled" &&
+					run.retentionReasons.some(({ reason }) => reason === "answer_owed");
+			});
+			return createDriver(receipt.agentId);
 		},
 		async control(
 			toolCallId: string,
@@ -1200,60 +1329,36 @@ async function createRunSupervisionHarness(options?: {
 			return ownerView.message(toolCallId, input);
 		},
 		async sendMessageAs(
-			caller: {
-				session: AgentSession;
-				view: ReturnType<WorkflowCoordinator["forAgent"]>;
-			},
+			caller: ProcessAgentDriver,
 			toolCallId: string,
 			targetAgentId: string,
 			content: string,
 		) {
 			const input = { operation: "send" as const, targetAgentId, content };
-			caller.session.sessionManager.appendMessage(
-				fauxAssistantMessage(
-					fauxToolCall("agent_message", input, { id: toolCallId }),
-					{ stopReason: "toolUse" },
-				),
-			);
+			caller.appendToolCall("agent_message", toolCallId, input);
 			return caller.view.message(toolCallId, input);
 		},
 		async messageAs(
-			caller: {
-				session: AgentSession;
-				view: ReturnType<WorkflowCoordinator["forAgent"]>;
-			},
+			caller: ProcessAgentDriver | OwnerCaller,
 			toolCallId: string,
 			input: AgentMessageInput,
 		) {
-			caller.session.sessionManager.appendMessage(
-				fauxAssistantMessage(
-					fauxToolCall("agent_message", input, { id: toolCallId }),
-					{ stopReason: "toolUse" },
-				),
-			);
+			appendCallerToolCall(caller, "agent_message", toolCallId, input);
 			return caller.view.message(toolCallId, input);
 		},
 		async controlAs(
-			caller: {
-				session: AgentSession;
-				view: ReturnType<WorkflowCoordinator["forAgent"]>;
-			},
+			caller: ProcessAgentDriver,
 			toolCallId: string,
 			input:
 				| { operation: "interrupt"; agentId: string }
 				| { operation: "resume"; agentId: string; content: string }
 				| { operation: "terminate"; agentId: string },
 		) {
-			caller.session.sessionManager.appendMessage(
-				fauxAssistantMessage(
-					fauxToolCall("agent_control", input, { id: toolCallId }),
-					{ stopReason: "toolUse" },
-				),
-			);
+			caller.appendToolCall("agent_control", toolCallId, input);
 			return caller.view.control(toolCallId, input);
 		},
 		async requestFromChild(
-			child: { agentId: string; session: AgentSession },
+			child: ProcessAgentDriver,
 			toolCallId: string,
 			question: string,
 		) {
@@ -1262,30 +1367,17 @@ async function createRunSupervisionHarness(options?: {
 				targetAgentId: ownerIdentity.agentId,
 				question,
 			};
-			child.session.sessionManager.appendMessage(
-				fauxAssistantMessage(
-					fauxToolCall("agent_message", input, { id: toolCallId }),
-					{ stopReason: "toolUse" },
-				),
-			);
-			return coordinator.forAgent(child.agentId).message(toolCallId, input);
+			child.appendToolCall("agent_message", toolCallId, input);
+			return child.view.message(toolCallId, input);
 		},
 		async requestAs(
-			caller: {
-				session: AgentSession;
-				view: ReturnType<WorkflowCoordinator["forAgent"]>;
-			},
+			caller: ProcessAgentDriver | OwnerCaller,
 			toolCallId: string,
 			targetAgentId: string,
 			question: string,
 		) {
 			const input = { operation: "request" as const, targetAgentId, question };
-			caller.session.sessionManager.appendMessage(
-				fauxAssistantMessage(
-					fauxToolCall("agent_message", input, { id: toolCallId }),
-					{ stopReason: "toolUse" },
-				),
-			);
+			appendCallerToolCall(caller, "agent_message", toolCallId, input);
 			return caller.view.message(toolCallId, input);
 		},
 		async releaseDeferredResume() {
