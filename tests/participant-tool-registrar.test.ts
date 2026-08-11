@@ -50,7 +50,7 @@ const agentStatus = {
 		transcriptPath: null,
 		inspectedThrough: { agentId: "child-agent", entryId: "entry-1" },
 	},
-	run: { phase: "dormant" },
+	run: { phase: "dormant", retentionReasons: [] },
 } as const;
 
 const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
