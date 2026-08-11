@@ -73,6 +73,7 @@ export interface PtyTerminalProjection {
 	writeInput(data: string | Buffer): void;
 	resize(columns: number, rows: number): void;
 	kill(signal: NodeJS.Signals): void;
+	killProcessGroup(signal: NodeJS.Signals): void;
 	drain(): Promise<void>;
 	dispose(): Promise<void>;
 }
@@ -252,6 +253,11 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		this.#child.kill(signal);
 	}
 
+	killProcessGroup(signal: NodeJS.Signals): void {
+		this.#requireActive();
+		signalOwnedProcessGroup(this.#child.pid, signal);
+	}
+
 	drain(): Promise<void> {
 		this.#requireActive();
 		return this.#waitForParserDrain();
@@ -348,10 +354,19 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 
 	async #dispose(): Promise<void> {
 		try {
-			if (!this.#exitObserved) this.#child.kill();
+			if (!this.#exitObserved) signalOwnedProcessGroup(this.#child.pid, "SIGHUP");
 			await this.exited;
 			await this.#waitForParserDrain();
 		} finally {
+			let processGroupCleanupError: unknown;
+			try {
+				// forkpty makes the child a process-group leader. The leader can exit while
+				// a signal-ignoring descendant remains, so terminate the owned group before
+				// releasing the only process handle.
+				signalOwnedProcessGroup(this.#child.pid, "SIGKILL");
+			} catch (error) {
+				processGroupCleanupError = error;
+			}
 			this.#disposed = true;
 			this.#disposing = false;
 			for (const subscription of this.#subscriptions) subscription.dispose();
@@ -359,6 +374,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			this.#changeHandlers.clear();
 			this.#failureHandlers.clear();
 			this.#terminal.dispose();
+			if (processGroupCleanupError) throw processGroupCleanupError;
 		}
 	}
 
@@ -444,6 +460,20 @@ function emptyCell(): TerminalProjectionCell {
 			overline: false,
 		},
 	};
+}
+
+function signalOwnedProcessGroup(pid: number, signal: NodeJS.Signals): void {
+	try {
+		process.kill(-pid, signal);
+	} catch (error) {
+		if (hasCode(error, "ESRCH")) return;
+		throw error;
+	}
+}
+
+function hasCode(error: unknown, code: string): boolean {
+	return typeof error === "object" && error !== null && "code" in error
+		&& (error as NodeJS.ErrnoException).code === code;
 }
 
 function requireDimension(name: string, value: number): void {

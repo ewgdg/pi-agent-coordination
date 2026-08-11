@@ -601,9 +601,9 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promis
 
 function forceKillProjection(projection: PtyTerminalProjection): void {
 	try {
-		projection.kill("SIGKILL");
+		projection.killProcessGroup("SIGKILL");
 	} catch {
-		// A concurrent exit is success for cleanup; exact settlement is observed via exited.
+		// A concurrent group exit is success; exact leader settlement is observed via exited.
 	}
 }
 
