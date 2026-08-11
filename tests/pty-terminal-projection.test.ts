@@ -138,6 +138,39 @@ test("live disposal parses final PTY output before releasing terminal state", { 
 	assert.equal(projection.disposed, true);
 });
 
+test("PTY disposal terminates stubborn descendants in the owned process group", { timeout: TEST_TIMEOUT_MS }, async () => {
+	const projection = await spawnNodeScript(String.raw`
+		const { spawn } = require("node:child_process");
+		const descendantScript = [
+			'process.on("SIGHUP", () => undefined);',
+			'process.stdout.write("READY");',
+			'setInterval(() => undefined, 1000);',
+		].join("");
+		const descendant = spawn(process.execPath, ["-e", descendantScript], {
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		descendant.stdout.once("data", () => {
+			process.stdout.write("DESCENDANT_PID=" + descendant.pid);
+		});
+		setInterval(() => undefined, 1000);
+	`);
+	await waitForText(projection, "DESCENDANT_PID=");
+	const rendered = projection.frame().lines.map((line) => line.text).join("\n");
+	const descendantPid = Number(/DESCENDANT_PID=(\d+)/.exec(rendered)?.[1]);
+	assert.ok(Number.isSafeInteger(descendantPid) && descendantPid > 0);
+
+	try {
+		await projection.dispose();
+		await waitForProcessExit(descendantPid);
+	} finally {
+		try {
+			process.kill(descendantPid, "SIGKILL");
+		} catch {
+			// The process-group cleanup under test already won.
+		}
+	}
+});
+
 test("explicit signals force a stubborn real PTY child to exact exit", { timeout: TEST_TIMEOUT_MS }, async () => {
 	const projection = await spawnNodeScript(String.raw`
 		process.on("SIGHUP", () => process.stdout.write("IGNORED_SIGHUP"));
@@ -232,6 +265,20 @@ test("resize updates xterm before notifying the real PTY", { timeout: TEST_TIMEO
 	assert.equal(projection.frame().lines[0]?.text, "PTY_SIZE=40x9");
 	await projection.dispose();
 });
+
+async function waitForProcessExit(pid: number): Promise<void> {
+	const deadline = Date.now() + 1_000;
+	while (Date.now() < deadline) {
+		try {
+			process.kill(pid, 0);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+			throw error;
+		}
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error(`PTY descendant ${pid} remained alive after disposal`);
+}
 
 async function waitForText(
 	projection: PtyTerminalProjection,

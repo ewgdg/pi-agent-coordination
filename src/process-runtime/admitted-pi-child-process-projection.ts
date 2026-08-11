@@ -48,8 +48,8 @@ export type AdmittedPiChildProcessProjection = TerminalProjection & Readonly<{
 
 /**
  * Adapt one fully admitted real Pi child Runtime to the terminal seam.
- * Startup readiness/cancellation requires a future pre-admission launch handle;
- * this Adapter deliberately does not claim HostedAgentProjection semantics.
+ * Pre-admission readiness and cancellation are composed by
+ * createPiChildProcessProjection; this lower Adapter stays terminal-only.
  */
 export function createAdmittedPiChildProcessProjection(
 	runtime: AdmittedPiChildProjectionRuntime,
