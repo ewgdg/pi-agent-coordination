@@ -14,6 +14,10 @@ import {
 	validateAgentSpawnInput,
 } from "../protocol/agent-spawn-input.ts";
 import {
+	resolveCommittedAgentRuntimeBlueprint,
+	type AgentRuntimeBlueprint,
+} from "../protocol/agent-runtime-blueprint.ts";
+import {
 	validateColdChildIdentity,
 	type ChildAgentIdentity,
 } from "../protocol/child-identity.ts";
@@ -28,20 +32,24 @@ import {
 	toolCallPointerKey,
 } from "../protocol/identities.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
-import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
+import {
+	transcriptFromSessionFile,
+	transcriptFromSessionManager,
+} from "../pi-integration/session-manager-transcript.ts";
 import { workflowSessionDirectory } from "../runtime/workflow-session-directory.ts";
 
 export type RecoveredOrdinaryAgent = Readonly<{
 	role: "ordinary";
 	identity: ChildAgentIdentity;
-	sessionManager: SessionManager;
-	spawnInput: AgentSpawnInput;
+	blueprint: AgentRuntimeBlueprint;
+	sessionPath: string;
 }>;
 
 export type RecoveredModeratorAgent = Readonly<{
 	role: "moderator";
 	identity: ModeratorIdentity;
-	sessionManager: SessionManager;
+	blueprint: AgentRuntimeBlueprint;
+	sessionPath: string;
 }>;
 
 export type RecoveredAgent = RecoveredOrdinaryAgent | RecoveredModeratorAgent;
@@ -56,7 +64,8 @@ export type ColdWorkflowRecovery = Readonly<{
 
 type CandidateBase = {
 	path: string;
-	sessionManager: SessionManager;
+	entries: readonly SessionEntry[];
+	blueprint: AgentRuntimeBlueprint;
 	invalid: boolean;
 };
 
@@ -153,8 +162,21 @@ export async function discoverColdWorkflow(options: {
 		}
 		if (candidate.role === "moderator") continue;
 		const parent = candidate.identity.directSpawnerAgentId === ownerIdentity.agentId
-			? ownerSessionManager
-			: uniqueByAgentId.get(candidate.identity.directSpawnerAgentId)?.sessionManager;
+			? {
+				transcript: transcriptFromSessionManager(ownerSessionManager),
+				entries: ownerSessionManager.getEntries(),
+			}
+			: (() => {
+				const parentCandidate = uniqueByAgentId.get(
+					candidate.identity.directSpawnerAgentId,
+				);
+				return parentCandidate
+					? {
+						transcript: transcriptFromSessionFile(parentCandidate.path),
+						entries: parentCandidate.entries,
+					}
+					: undefined;
+			})();
 		if (!parent) {
 			candidate.invalid = true;
 			quarantinedAgentIds.add(candidate.identity.agentId);
@@ -163,7 +185,7 @@ export async function discoverColdWorkflow(options: {
 		try {
 			const committed = resolveCommittedSpawnSource({
 				agentId: candidate.identity.directSpawnerAgentId,
-				transcript: transcriptFromSessionManager(parent).inspect(),
+				transcript: parent.transcript.inspect(),
 				toolCallId: candidate.identity.spawnSource.toolCallId,
 			});
 			if (!sameToolCallPointer(committed.source, candidate.identity.spawnSource)) {
@@ -185,7 +207,11 @@ export async function discoverColdWorkflow(options: {
 				throw new Error("child metadata contradicts its spawn source");
 			}
 			candidate.spawnInput = input;
-			candidate.spawnOrder = physicalSpawnOrder(parent, committed.source.entryId, committed.source.toolCallId);
+			candidate.spawnOrder = physicalSpawnOrder(
+				parent.entries,
+				committed.source.entryId,
+				committed.source.toolCallId,
+			);
 		} catch {
 			candidate.invalid = true;
 			quarantinedAgentIds.add(candidate.identity.agentId);
@@ -263,13 +289,14 @@ export async function discoverColdWorkflow(options: {
 			...ordered.map((candidate) => ({
 				role: "ordinary" as const,
 				identity: candidate.identity,
-				sessionManager: candidate.sessionManager,
-				spawnInput: candidate.spawnInput!,
+				blueprint: candidate.blueprint,
+				sessionPath: candidate.path,
 			})),
 			...moderators.map((candidate) => ({
 				role: "moderator" as const,
 				identity: candidate.identity,
-				sessionManager: candidate.sessionManager,
+				blueprint: candidate.blueprint,
+				sessionPath: candidate.path,
 			})),
 		],
 		transcriptPathByAgentId,
@@ -359,6 +386,27 @@ async function readCandidate(path: string): Promise<Candidate> {
 			header.id,
 		);
 	}
+	let blueprint: AgentRuntimeBlueprint;
+	try {
+		blueprint = resolveCommittedAgentRuntimeBlueprint({
+			sessionId: header.id,
+			entries,
+		});
+		if (blueprint.role !== candidateIdentity.role) {
+			throw new Error("candidate Runtime blueprint role contradicts its Identity");
+		}
+		if (blueprint.agentId !== candidateIdentity.identity.agentId) {
+			throw new Error("candidate Runtime blueprint agentId contradicts its Identity");
+		}
+		if (header.cwd !== blueprint.configuration.cwd) {
+			throw new Error("candidate header cwd contradicts its Runtime blueprint");
+		}
+	} catch (error) {
+		throw new CandidateError(
+			error instanceof Error ? error.message : "candidate Runtime blueprint is invalid",
+			header.id,
+		);
+	}
 	let sessionManager: SessionManager;
 	try {
 		sessionManager = SessionManager.open(path);
@@ -374,7 +422,8 @@ async function readCandidate(path: string): Promise<Candidate> {
 	return {
 		path,
 		...candidateIdentity,
-		sessionManager,
+		entries,
+		blueprint,
 		invalid: false,
 	};
 }
@@ -428,11 +477,10 @@ function validateNativeEntries(values: readonly unknown[]): void {
 }
 
 function physicalSpawnOrder(
-	parent: SessionManager,
+	entries: readonly SessionEntry[],
 	entryId: string,
 	toolCallId: string,
 ): Readonly<{ entry: number; part: number }> {
-	const entries = parent.getEntries();
 	const entry = entries.findIndex((candidate) => candidate.id === entryId);
 	const source = entries[entry];
 	if (entry < 0 || source?.type !== "message" || source.message.role !== "assistant") {

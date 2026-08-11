@@ -1,4 +1,5 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { uuidv7 } from "@earendil-works/pi-ai";
 import { isDeepStrictEqual } from "node:util";
 
 import type { AgentRecord } from "./agent-record.ts";
@@ -8,7 +9,10 @@ import {
 	type AgentSpawnInput,
 	validateAgentSpawnInput,
 } from "../protocol/agent-spawn-input.ts";
-import { commitAgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
+import {
+	commitAgentRuntimeBlueprint,
+	resolveCommittedAgentRuntimeBlueprint,
+} from "../protocol/agent-runtime-blueprint.ts";
 import {
 	commitChildAgentIdentity,
 	type ChildAgentIdentity,
@@ -25,12 +29,12 @@ import type {
 	AgentRunHandle,
 	RunRetentionReason,
 } from "../runtime/agent-runtime-host.ts";
-import {
-	DefaultChildSessionFactory,
-	type PreparedAgentRun,
-} from "../runtime/default-child-session-factory.ts";
+import { ProcessChildSessionFactory } from "../runtime/process-child-session-factory.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
-import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
+import {
+	materializeNewAgentTranscript,
+	transcriptFromSessionFile,
+} from "../pi-integration/session-manager-transcript.ts";
 
 export type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 
@@ -77,7 +81,7 @@ export type SpawnBoundaryHooks = Readonly<{
 
 export class DefaultChildSpawner {
 	readonly #agents: Map<string, AgentRecord>;
-	readonly #sessionFactory: DefaultChildSessionFactory;
+	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #boundaryHooks: SpawnBoundaryHooks;
 	readonly #isShuttingDown: () => boolean;
 	readonly #messages: MessageCoordinator;
@@ -87,7 +91,7 @@ export class DefaultChildSpawner {
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		agentIdBySpawnSource?: Map<string, string>;
-		sessionFactory: DefaultChildSessionFactory;
+		sessionFactory: ProcessChildSessionFactory;
 		messages: MessageCoordinator;
 		integrateAgent(record: AgentRecord): void;
 		boundaryHooks?: SpawnBoundaryHooks;
@@ -122,35 +126,28 @@ export class DefaultChildSpawner {
 		}
 		this.#assertUnclaimedSpawnSource(source);
 
-		let baseline: ReturnType<DefaultChildSessionFactory["snapshotRuntimeBaseline"]>;
 		let metadata: ReturnType<typeof resolveOrdinaryAgentMetadata>;
+		const agentId = uuidv7();
+		const requestId = deriveMessageIdentity(source);
+		let prepared: Awaited<
+			ReturnType<ProcessChildSessionFactory["prepareOrdinaryRun"]>
+		>;
+		let sessionManager: SessionManager;
 		try {
+			this.#sessionFactory.admitProcessRuntimePlatform();
 			metadata = resolveOrdinaryAgentMetadata({
 				explicitLabel: input.label,
 				explicitDescription: input.description,
 				templateName: input.template,
 			});
-			baseline = this.#sessionFactory.snapshotRuntimeBaseline(parent);
-		} catch {
-			return { disposition: "not_created", failedStage: "identity_commit" };
-		}
-
-		let sessionManager: SessionManager;
-		try {
-			sessionManager = SessionManager.create(
-				baseline.cwd,
-				this.#sessionFactory.workflowSessionDirectory(),
-			);
-		} catch {
-			return { disposition: "not_created", failedStage: "identity_commit" };
-		}
-		const agentId = sessionManager.getSessionId();
-		const requestId = deriveMessageIdentity(source);
-		const blueprint = { baseline, spawnInput: input } as const;
-		let prepared: PreparedAgentRun;
-		try {
-			prepared = await this.#sessionFactory.prepareRun(agentId, blueprint);
-		} catch {
+			prepared = await this.#sessionFactory.prepareOrdinaryRun({
+				agentId,
+				parent,
+				spawnInput: input,
+			});
+			sessionManager = this.#sessionFactory.createStagingSession(prepared.blueprint);
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
 			return { disposition: "not_created", failedStage: "identity_commit" };
 		}
 		if (this.#isShuttingDown()) {
@@ -164,50 +161,56 @@ export class DefaultChildSpawner {
 			spawnSource: source,
 			configuration: {
 				...metadata,
-				baseline,
+				baseline: prepared.parentSnapshot.baseline,
 			},
 		};
 		try {
 			commitChildAgentIdentity(sessionManager, identity);
-			commitAgentRuntimeBlueprint(
-				sessionManager,
-				this.#sessionFactory.runtimeBlueprintForPreparedRun({
-					agentId,
-					role: "ordinary",
-					prepared,
-				}),
-			);
-		} catch {
-			return {
-				disposition: "indeterminate",
-				agentId,
-				requestId,
-				effectiveConfiguration: prepared.configuration,
-			};
+			commitAgentRuntimeBlueprint(sessionManager, prepared.blueprint);
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			return { disposition: "not_created", failedStage: "identity_commit" };
+		}
+
+		let sessionPath: string;
+		let materializationUncertain = false;
+		try {
+			sessionPath = await materializeNewAgentTranscript(sessionManager);
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			const candidatePath = sessionManager.getSessionFile();
+			if (!candidatePath || !this.#hasExactDurableEvidence(
+				candidatePath,
+				identity,
+				prepared.blueprint,
+			)) {
+				return { disposition: "not_created", failedStage: "identity_commit" };
+			}
+			sessionPath = candidatePath;
+			materializationUncertain = true;
 		}
 		const identityConfirmation = this.#boundaryHooks.afterIdentityCommit?.({ identity });
 		validateCommittedChildIdentity(
-			transcriptFromSessionManager(sessionManager).inspect(),
+			transcriptFromSessionFile(sessionPath).inspect(),
 			identity,
 		);
 
 		const child = this.#sessionFactory.createAgentRecord({
 			identity,
-			sessionManager,
-			blueprint,
-			firstPrepared: prepared,
+			blueprint: prepared.blueprint,
+			sessionPath,
 		});
 		this.#agents.set(agentId, child);
 		this.#agentIdBySpawnSource.set(toolCallPointerKey(source), agentId);
 		parent.children.push(agentId);
 		this.#integrateAgent(child);
 		this.#addRetentionReason(parent, "awaiting_answer", requestId);
-		if (identityConfirmation === "confirmation_lost") {
+		if (materializationUncertain || identityConfirmation === "confirmation_lost") {
 			return {
 				disposition: "indeterminate",
 				agentId,
 				requestId,
-				effectiveConfiguration: prepared.configuration,
+				effectiveConfiguration: prepared.blueprint.configuration,
 			};
 		}
 
@@ -228,7 +231,7 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				failedStage: "run_start",
-				effectiveConfiguration: prepared.configuration,
+				effectiveConfiguration: prepared.blueprint.configuration,
 			};
 		}
 		const startedHandle = child.host.currentHandle();
@@ -246,7 +249,7 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				lastConfirmedStage: "identity",
-				effectiveConfiguration: prepared.configuration,
+				effectiveConfiguration: prepared.blueprint.configuration,
 			};
 		}
 
@@ -271,7 +274,7 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				failedStage: "delivery_admission",
-				effectiveConfiguration: prepared.configuration,
+				effectiveConfiguration: prepared.blueprint.configuration,
 			};
 		}
 		if (this.#boundaryHooks.afterDeliveryAdmission?.() === "confirmation_lost") {
@@ -280,15 +283,38 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				lastConfirmedStage: "run_start",
-				effectiveConfiguration: prepared.configuration,
+				effectiveConfiguration: prepared.blueprint.configuration,
 			};
 		}
 		return {
 			disposition: "pending",
 			agentId,
 			requestId,
-			effectiveConfiguration: prepared.configuration,
+			effectiveConfiguration: prepared.blueprint.configuration,
 		};
+	}
+
+	#hasExactDurableEvidence(
+		sessionPath: string,
+		identity: ChildAgentIdentity,
+		blueprint: Awaited<
+			ReturnType<ProcessChildSessionFactory["prepareOrdinaryRun"]>
+		>["blueprint"],
+	): boolean {
+		try {
+			const transcript = transcriptFromSessionFile(sessionPath).inspect();
+			validateCommittedChildIdentity(transcript, identity);
+			return isDeepStrictEqual(
+				resolveCommittedAgentRuntimeBlueprint({
+					sessionId: identity.agentId,
+					entries: transcript.entries,
+				}),
+				blueprint,
+			);
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			return false;
+		}
 	}
 
 	#assertUnclaimedSpawnSource(source: ToolCallPointer): void {

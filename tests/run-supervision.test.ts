@@ -1107,10 +1107,6 @@ async function createRunSupervisionHarness(options?: {
 				},
 			}
 			: undefined,
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// Run-supervision tests intentionally hold unanswered work open. Suppress live
 		// Moderator Runs so exact-Hold assertions stay isolated from stall handling.
 		incidentBoundaryHooks: {

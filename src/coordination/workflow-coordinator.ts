@@ -1,6 +1,5 @@
 import type {
 	AgentSessionRuntime,
-	ExtensionFactory,
 	MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
@@ -33,8 +32,8 @@ import {
 import { AgentRuntimeSupervisor } from "../runtime/agent-runtime-supervisor.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
-	DefaultChildSessionFactory,
-} from "../runtime/default-child-session-factory.ts";
+	ProcessChildSessionFactory,
+} from "../runtime/process-child-session-factory.ts";
 import {
 	HumanRequestCoordinator,
 	type GuardedHumanToolResult,
@@ -75,12 +74,12 @@ import {
 	configureCoordinatedSession,
 	type AutomaticGenerationReconciliationAdapter,
 } from "../pi-integration/automatic-reconciliation.ts";
-import { createAgentActivityExtension } from "../bootstrap/agent-extension.ts";
+import { participantLifecycleHandlers } from "../bootstrap/agent-extension.ts";
 import type {
 	AgentActivitySnapshot,
 	AgentActivityStatus,
 } from "../presentation/agent-activity-surface.ts";
-import type { PiNativeProjectionHost } from "../pi-integration/native-agent-projection.ts";
+import { participantCoordinatorHandlers } from "../tools/owner-surfaces.ts";
 import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
@@ -169,7 +168,7 @@ export class WorkflowCoordinator {
 	readonly #ownerDiagnostics: AgentSessionRuntime["services"]["diagnostics"];
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
-	readonly #sessionFactory: DefaultChildSessionFactory;
+	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #messages: MessageCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
 	readonly #runSupervisor: RunSupervisor;
@@ -195,8 +194,6 @@ export class WorkflowCoordinator {
 				baselineCwd: string,
 				projectTrusted: boolean,
 			): readonly AgentTemplateRoot[];
-			childExtensionFactory(agentId: string): ExtensionFactory;
-			moderatorExtensionFactory(agentId: string): ExtensionFactory;
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
 			messageBoundaryHooks?: MessageBoundaryHooks;
 			incidentBoundaryHooks?: OperationalIncidentBoundaryHooks;
@@ -206,7 +203,6 @@ export class WorkflowCoordinator {
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
-			projectionHost?: PiNativeProjectionHost;
 		},
 	) {
 		this.#ownerDiagnostics = runtime.services.diagnostics;
@@ -227,26 +223,33 @@ export class WorkflowCoordinator {
 			transcript: transcriptFromSessionManager(runtime.session.sessionManager),
 			children: [],
 		});
-		const sessionFactory = new DefaultChildSessionFactory({
+		const sessionFactory = new ProcessChildSessionFactory({
 			ownerRuntime: runtime,
 			ownerIdentity: identity,
 			entryModulePath: options.entryModulePath,
 			packageRoot: options.packageRoot ?? resolve(dirname(options.entryModulePath), ".."),
 			templateRoots: options.templateRoots,
-			childExtensionFactory: options.childExtensionFactory,
-			moderatorExtensionFactory: options.moderatorExtensionFactory,
-			activityExtensionFactory: (agentId) =>
-				createAgentActivityExtension(() => this.#agentView(agentId)),
-			projectionHost: options.projectionHost,
-			automaticGenerationReconciliation:
-				options.automaticGenerationReconciliation,
+			ownerRequestHandlers: (role, agentId) => {
+				if (role === "ordinary") {
+					const resolveView = () => this.forAgent(agentId);
+					return {
+						coordination: participantCoordinatorHandlers("ordinary", resolveView),
+						lifecycle: participantLifecycleHandlers(resolveView),
+					};
+				}
+				const resolveView = () => this.forModerator(agentId);
+				return {
+					coordination: participantCoordinatorHandlers("moderator", resolveView),
+					lifecycle: participantLifecycleHandlers(resolveView),
+				};
+			},
 		});
 		this.#sessionFactory = sessionFactory;
 		for (const recovered of options.recoveredWorkflow?.agents ?? []) {
 			if (
 				options.recoveredWorkflow?.transcriptPathByAgentId.get(
 					recovered.identity.agentId,
-				) !== recovered.sessionManager.getSessionFile()
+				) !== recovered.sessionPath
 			) {
 				throw new Error(
 					`invariant_violation: recovered Agent ${recovered.identity.agentId} has inconsistent transcript location`,
@@ -255,15 +258,13 @@ export class WorkflowCoordinator {
 			const record = recovered.role === "moderator"
 				? sessionFactory.createModeratorRecord({
 					identity: recovered.identity,
-					sessionManager: recovered.sessionManager,
+					blueprint: recovered.blueprint,
+					sessionPath: recovered.sessionPath,
 				})
 				: sessionFactory.createAgentRecord({
 					identity: recovered.identity,
-					sessionManager: recovered.sessionManager,
-					blueprint: {
-						baseline: recovered.identity.configuration.baseline,
-						spawnInput: recovered.spawnInput,
-					},
+					blueprint: recovered.blueprint,
+					sessionPath: recovered.sessionPath,
 				});
 			this.#agents.set(recovered.identity.agentId, record);
 			if (recovered.role === "moderator") continue;
@@ -518,7 +519,9 @@ export class WorkflowCoordinator {
 
 	#rosterStatus(record: AgentRecord): AgentRosterStatus {
 		const status = statusOf(record);
-		const runtimeSnapshot = record.host.effectiveRuntimeSnapshot();
+		const runtimeSnapshot = status.run.phase === "starting"
+			? undefined
+			: record.host.effectiveRuntimeSnapshot();
 		const transcript = record.transcript.inspect();
 		const transcriptContext = transcript.context;
 		const configured = record.effectiveConfiguration ?? record.identity.configuration.baseline;

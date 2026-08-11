@@ -12,6 +12,7 @@ import { Type } from "typebox";
 
 import piAgentCoordination from "../src/index.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { commitAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import {
 	executeRegisteredTool,
@@ -90,6 +91,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 			baseline: { ...childBaseline, cwd: effectiveCwd },
 		},
 	});
+	commitColdOrdinaryBlueprint(grandchildTranscript, effectiveCwd);
 	grandchildTranscript.appendMessage(
 		fauxAssistantMessage("Persist recovered grandchild evidence."),
 	);
@@ -170,92 +172,6 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		[spawned.agentId],
 	);
 	await reopenedAgain.runtime.dispose();
-});
-
-test("a cold-recovered Agent stays durable and dormant when its named inline factory is unavailable", async () => {
-	const requiredInline: InlineExtension = {
-		name: "cold-required-inline",
-		factory(pi) {
-			pi.registerTool({
-				name: "cold_inline_probe",
-				label: "Cold inline probe",
-				description: "Requires the named inline factory for every Runtime preparation.",
-				parameters: Type.Object({}, { additionalProperties: false }),
-				async execute() {
-					return {
-						content: [{ type: "text", text: "cold inline available" }],
-						details: { available: true },
-					};
-				},
-			});
-		},
-	};
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
-		persistent: true,
-		additionalExtensionFactories: [requiredInline],
-	});
-	await bindTestOwnerHost(host, "tui");
-	host.model.setResponses([
-		fauxAssistantMessage("The child committed durable work before host loss."),
-	]);
-	const spawned = await executeTool(
-		host,
-		"agent_spawn",
-		"spawn-before-inline-factory-loss",
-		{ request: "Persist this Agent before its required factory disappears." },
-	) as { disposition: string; agentId: string };
-	assert.equal(spawned.disposition, "pending");
-	const childSessionFile = await waitForSessionFile(
-		workflowSessionDirectory(host),
-		spawned.agentId,
-	);
-	const ownerSessionFile = host.session.sessionManager.getSessionFile();
-	assert.ok(ownerSessionFile);
-	await host.runtime.dispose();
-
-	const reopened = await reopenOwner(host, ownerSessionFile);
-	const observe = reopened.session.getToolDefinition("agent_observe");
-	assert.ok(observe);
-	const observeStatus = async (toolCallId: string) => {
-		const result = await observe.execute(
-			toolCallId,
-			{ operation: "status", agentId: spawned.agentId },
-			undefined,
-			undefined,
-			reopened.session.extensionRunner.createContext(),
-		);
-		return result.details as { run: { phase: string } };
-	};
-	assert.equal((await observeStatus("observe-cold-inline-before-start")).run.phase, "dormant");
-	const identityCountBefore = SessionManager.open(childSessionFile).getEntries().filter(
-		(entry) =>
-			entry.type === "custom" &&
-			entry.customType === "agent-coordination.identity",
-	).length;
-	const unavailable = await executeTool(
-		reopened,
-		"agent_message",
-		"start-cold-agent-without-inline-factory",
-		{
-			operation: "send",
-			targetAgentId: spawned.agentId,
-			content: "Attempt successor startup without the required named factory.",
-		},
-	) as { delivery: string; rejectionReason: string };
-	assert.deepEqual(
-		{ delivery: unavailable.delivery, rejectionReason: unavailable.rejectionReason },
-		{ delivery: "rejected", rejectionReason: "target_unavailable" },
-	);
-	assert.equal((await observeStatus("observe-cold-inline-after-start")).run.phase, "dormant");
-	assert.equal(
-		SessionManager.open(childSessionFile).getEntries().filter(
-			(entry) =>
-				entry.type === "custom" &&
-				entry.customType === "agent-coordination.identity",
-		).length,
-		identityCountBefore,
-	);
-	await reopened.runtime.dispose();
 });
 
 test("duplicate spawn claims quarantine only their dependent authority subtree", async () => {
@@ -354,6 +270,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 			},
 		},
 	});
+	commitColdOrdinaryBlueprint(foreignTranscript, host.cwd);
 	foreignTranscript.appendMessage(fauxAssistantMessage("Persist foreign candidate evidence."));
 
 	const firstTranscript = SessionManager.open(firstFile);
@@ -428,6 +345,10 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 			baseline: firstIdentityData.configuration.baseline,
 		},
 	});
+	commitColdOrdinaryBlueprint(
+		nestedTranscript,
+		firstIdentityData.configuration.baseline.cwd,
+	);
 	nestedTranscript.appendMessage(fauxAssistantMessage("Persist nested candidate evidence."));
 
 	const duplicateTranscript = SessionManager.create(host.cwd, directory);
@@ -436,6 +357,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		...(firstIdentity.data as Record<string, unknown>),
 		agentId: duplicateAgentId,
 	});
+	commitColdOrdinaryBlueprint(duplicateTranscript, host.cwd);
 	duplicateTranscript.appendMessage(fauxAssistantMessage("Persist duplicate claim evidence."));
 	const malformedAgentId = "malformed-agent";
 	await writeFile(
@@ -1227,6 +1149,30 @@ async function waitForCondition(predicate: () => Promise<boolean>): Promise<void
 	throw new Error("Expected condition was not reached");
 }
 
+function commitColdOrdinaryBlueprint(session: SessionManager, cwd: string): void {
+	commitAgentRuntimeBlueprint(session, {
+		agentId: session.getSessionId(),
+		role: "ordinary",
+		configuration: {
+			cwd,
+			model: { provider: "coordination-test", modelId: "deterministic-owner" },
+			thinking: "off",
+			tools: [
+				"agent_message",
+				"agent_control",
+				"agent_observe",
+				"agent_spawn",
+				"ask_user_question",
+			],
+			skills: [],
+			extensions: [],
+		},
+		projectTrusted: true,
+		skillSources: [],
+		agentsFiles: [],
+	});
+}
+
 async function writeCyclicCandidates(
 	directory: string,
 	workflowId: string,
@@ -1289,10 +1235,35 @@ async function writeCyclicCandidates(
 				configuration: { label: "agent", baseline },
 			},
 		};
+		const blueprintEntryId = `${candidate.agentId}-runtime-blueprint`;
+		const blueprint = {
+			type: "custom",
+			id: blueprintEntryId,
+			parentId: candidate.identityEntryId,
+			timestamp,
+			customType: "agent-coordination.runtime-blueprint",
+			data: {
+				agentId: candidate.agentId,
+				role: "ordinary",
+				configuration: {
+					...baseline,
+					tools: [
+						"agent_message",
+						"agent_control",
+						"agent_observe",
+						"agent_spawn",
+						"ask_user_question",
+					],
+				},
+				projectTrusted: true,
+				skillSources: [],
+				agentsFiles: [],
+			},
+		};
 		const spawn = {
 			type: "message",
 			id: candidate.spawnEntryId,
-			parentId: candidate.identityEntryId,
+			parentId: blueprintEntryId,
 			timestamp,
 			message: fauxAssistantMessage(
 				fauxToolCall(
@@ -1305,7 +1276,7 @@ async function writeCyclicCandidates(
 		};
 		await writeFile(
 			join(directory, `${candidate.agentId}.jsonl`),
-			`${JSON.stringify(header)}\n${JSON.stringify(identity)}\n${JSON.stringify(spawn)}\n`,
+			`${JSON.stringify(header)}\n${JSON.stringify(identity)}\n${JSON.stringify(blueprint)}\n${JSON.stringify(spawn)}\n`,
 			"utf8",
 		);
 	}

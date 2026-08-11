@@ -462,10 +462,6 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
 		incidentBoundaryHooks: {
@@ -935,10 +931,6 @@ test("only the original sender can poll a Message", async () => {
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// This test needs a live unanswered child to exercise poll authorization.
 		// Keep any incidental Moderator attempt dormant so it cannot steal replies.
 		incidentBoundaryHooks: {
@@ -1907,10 +1899,6 @@ async function createDormantChildHarness(
 	let childSessionManager: SessionManager | undefined;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
 		incidentBoundaryHooks: {

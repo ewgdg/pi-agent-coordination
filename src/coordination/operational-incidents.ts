@@ -1,7 +1,9 @@
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { uuidv7 } from "@earendil-works/pi-ai";
 
-import { persistCommittedInput } from "../pi-integration/committed-input.ts";
-import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
+import {
+	materializeNewAgentTranscript,
+	transcriptFromSessionFile,
+} from "../pi-integration/session-manager-transcript.ts";
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
 import { commitAgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
 import {
@@ -14,10 +16,7 @@ import {
 	type ModeratorInput,
 	type ModeratorTrigger,
 } from "../protocol/moderator-input.ts";
-import type {
-	OwnerIdentity,
-	RuntimeConfigurationBaseline,
-} from "../protocol/owner-identity.ts";
+import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type {
 	ModeratorControlInput,
 	ModeratorControlReceipt,
@@ -32,7 +31,8 @@ import {
 	toolCallPointerKey,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
-import type { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
+import type { ChildRunParentSnapshot } from "../runtime/child-run-blueprint-resolver.ts";
+import type { ProcessChildSessionFactory } from "../runtime/process-child-session-factory.ts";
 import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
@@ -114,7 +114,7 @@ export type OperationalIncidentBoundaryHooks = Readonly<{
 export class OperationalIncidentCoordinator {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #ownerIdentity: OwnerIdentity;
-	readonly #sessionFactory: DefaultChildSessionFactory;
+	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #messages: MessageCoordinator;
 	readonly #integrateAgent: (record: AgentRecord) => void;
 	readonly #isShuttingDown: () => boolean;
@@ -129,12 +129,12 @@ export class OperationalIncidentCoordinator {
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
 	readonly #integratedAgentIds = new Set<string>();
 	readonly #reconciliationLane = new SerialLane();
-	#ownerRuntimeBaseline: RuntimeConfigurationBaseline;
+	#ownerRuntimeSnapshot: ChildRunParentSnapshot;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		ownerIdentity: OwnerIdentity;
-		sessionFactory: DefaultChildSessionFactory;
+		sessionFactory: ProcessChildSessionFactory;
 		messages: MessageCoordinator;
 		workflowPolicy: WorkflowPolicyStore;
 		integrateAgent(record: AgentRecord): void;
@@ -168,7 +168,7 @@ export class OperationalIncidentCoordinator {
 		});
 		const owner = options.agents.get(options.ownerIdentity.agentId);
 		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
-		this.#ownerRuntimeBaseline = options.sessionFactory.snapshotRuntimeBaseline(owner);
+		this.#ownerRuntimeSnapshot = options.sessionFactory.snapshotParentRuntime(owner);
 	}
 
 	integrate(record: AgentRecord): void {
@@ -432,16 +432,17 @@ export class OperationalIncidentCoordinator {
 	): Promise<void> {
 		const owner = this.#agents.get(this.#ownerIdentity.agentId);
 		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
-		const baseline = owner.host.currentHandle()
-			? this.#sessionFactory.snapshotRuntimeBaseline(owner)
-			: this.#ownerRuntimeBaseline;
-		this.#ownerRuntimeBaseline = baseline;
-		const sessionManager = SessionManager.create(
-			baseline.cwd,
-			this.#sessionFactory.workflowSessionDirectory(),
-		);
-		const agentId = sessionManager.getSessionId();
-		const prepared = await this.#sessionFactory.prepareModeratorRun(agentId, baseline);
+		this.#sessionFactory.admitProcessRuntimePlatform();
+		const parentSnapshot = owner.host.currentHandle()
+			? this.#sessionFactory.snapshotParentRuntime(owner)
+			: this.#ownerRuntimeSnapshot;
+		this.#ownerRuntimeSnapshot = parentSnapshot;
+		const agentId = uuidv7();
+		const prepared = await this.#sessionFactory.prepareModeratorRun({
+			agentId,
+			parentSnapshot,
+		});
+		const sessionManager = this.#sessionFactory.createStagingSession(prepared.blueprint);
 		if (this.#isShuttingDown()) return;
 		if (!this.#conditionRemains(handling.snapshot)) {
 			this.#handlingByKey.delete(handling.snapshot.key);
@@ -453,7 +454,7 @@ export class OperationalIncidentCoordinator {
 			agentId,
 			workflowId: this.#ownerIdentity.workflowId,
 			directSpawnerAgentId: null,
-			configuration: { ...metadata, baseline },
+			configuration: { ...metadata, baseline: parentSnapshot.baseline },
 		};
 		const input: ModeratorInput = {
 			trigger: this.#triggerFor(handling.snapshot),
@@ -475,17 +476,10 @@ export class OperationalIncidentCoordinator {
 			modelInput.display,
 			modelInput.details,
 		);
-		commitAgentRuntimeBlueprint(
-			sessionManager,
-			this.#sessionFactory.runtimeBlueprintForPreparedRun({
-				agentId,
-				role: "moderator",
-				prepared,
-			}),
-		);
-		persistCommittedInput(sessionManager);
+		commitAgentRuntimeBlueprint(sessionManager, prepared.blueprint);
+		const sessionPath = await materializeNewAgentTranscript(sessionManager);
 		validateCommittedModeratorInput({
-			transcript: transcriptFromSessionManager(sessionManager).inspect(),
+			transcript: transcriptFromSessionFile(sessionPath).inspect(),
 			identity,
 			input,
 		});
@@ -500,8 +494,8 @@ export class OperationalIncidentCoordinator {
 
 		const moderator = this.#sessionFactory.createModeratorRecord({
 			identity,
-			sessionManager,
-			firstPrepared: prepared,
+			blueprint: prepared.blueprint,
+			sessionPath,
 		});
 		this.#agents.set(agentId, moderator);
 		this.#integrateAgent(moderator);

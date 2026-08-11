@@ -472,196 +472,6 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 	await returnAgentViewToOwner(host, view, command);
 });
 
-test("a selected Agent whose runtime initialization fails closes the invalid view", async (t) => {
-	let coordinator!: WorkflowCoordinator;
-	let ownerAgentId = "";
-	const host = await createUnboundTestOwnerHost((pi) => {
-		registerAgentsCommand(pi, () => coordinator.forAgent(ownerAgentId));
-	}, { persistent: true });
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	ownerAgentId = identity.agentId;
-	const nativeProjectionHost = createPiNativeProjectionHost({
-		ownerRuntime: host.runtime,
-	});
-	let failLiveReadiness!: () => void;
-	const liveReadinessGate = new Promise<void>((resolve) => {
-		failLiveReadiness = resolve;
-	});
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-		projectionHost: {
-			async createProjection(options) {
-				const projection = await nativeProjectionHost.createProjection(options);
-				return {
-					...projection,
-					async ready() {
-						await projection.ready();
-						await liveReadinessGate;
-						throw new Error("deterministic selected projection startup failure");
-					},
-				};
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-	});
-	await bindTestOwnerHost(host, "tui");
-	t.after(async () => coordinator.shutdown(async () => host.runtime.dispose()));
-	const spawnInput = {
-		request: "Fail startup only after the Owner selects this Agent.",
-		label: "Startup Failure Worker",
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", spawnInput, {
-				id: "spawn-selected-startup-failure",
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const spawning = coordinator.forAgent(ownerAgentId).spawn(
-		"spawn-selected-startup-failure",
-		spawnInput,
-	);
-
-	let command!: Promise<void>;
-	let selector!: Component;
-	const selectorDeadline = Date.now() + SURFACE_WAIT_TIMEOUT_MS;
-	while (Date.now() < selectorDeadline) {
-		({ command, surface: selector } = await openAgentsSurface(host));
-		if (
-			stripTerminalSequences(selector.render(80).join("\n")).includes(
-				"Startup Failure Worker",
-			)
-		) break;
-		selector.handleInput?.("\x1b");
-		await command;
-		await new Promise<void>((resolve) => setTimeout(resolve, 1));
-	}
-	const agentId = selectAgentByLabel(selector, "Startup Failure Worker");
-	assert.ok(agentId);
-	await waitForCondition(() =>
-		host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
-	);
-	const view = host.ui.customSurfaces[0]!;
-	assert.doesNotMatch(
-		stripTerminalSequences(view.render(80).join("\n")),
-		/Startup Failure Worker.*(?:Live|Dormant)/,
-	);
-	failLiveReadiness();
-	const spawn = await spawning;
-	assert.deepEqual(
-		{
-			disposition: spawn.disposition,
-			failedStage: "failedStage" in spawn ? spawn.failedStage : undefined,
-		},
-		{ disposition: "created_unscheduled", failedStage: "run_start" },
-	);
-	await command;
-	assert.equal(host.ui.customSurfaces.length, 0);
-	assert.equal(coordinator.forAgent(ownerAgentId).status(agentId).run.phase, "dormant");
-});
-
-test("passive Runtime readiness failure closes the exact selected view", async (t) => {
-	let coordinator!: WorkflowCoordinator;
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	const nativeProjectionHost = createPiNativeProjectionHost({
-		ownerRuntime: host.runtime,
-	});
-	let failNextPreparation = false;
-	let releasePassiveFailure!: () => void;
-	const passiveFailureGate = new Promise<void>((resolve) => {
-		releasePassiveFailure = resolve;
-	});
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-		projectionHost: {
-			async createProjection(options) {
-				const projection = await nativeProjectionHost.createProjection(options);
-				if (!failNextPreparation) return projection;
-				return {
-					...projection,
-					async ready() {
-						await projection.ready();
-						await passiveFailureGate;
-						throw new Error("deterministic passive Runtime readiness failure");
-					},
-				};
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-	});
-	await bindTestOwnerHost(host, "tui");
-	const owner = coordinator.forAgent(identity.agentId);
-	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
-	t.after(async () => {
-		releasePassiveFailure();
-		await activeView?.close();
-		await coordinator.shutdown(async () => host.runtime.dispose());
-	});
-	const spawnInput = {
-		request: "Become Dormant before passive Runtime preparation fails.",
-		label: "Passive Failure Worker",
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", spawnInput, { id: "spawn-passive-failure-worker" }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	host.model.setResponses([
-		fauxAssistantMessage("The initial passive-failure Run settles."),
-	]);
-	const spawn = await owner.spawn("spawn-passive-failure-worker", spawnInput);
-	assert.ok("agentId" in spawn && spawn.agentId);
-	const agentId = spawn.agentId;
-	await waitForCondition(() => {
-		const run = owner.status(agentId).run;
-		return run.phase === "live" && run.work === "settled";
-	});
-	const terminateInput = {
-		operation: "terminate" as const,
-		agentId,
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_control", terminateInput, {
-				id: "terminate-passive-failure-worker",
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	await owner.control("terminate-passive-failure-worker", terminateInput);
-
-	failNextPreparation = true;
-	activeView = await owner.openAgentView(agentId);
-	assert.ok(activeView);
-	let closed = false;
-	activeView.addCloseHandler(() => {
-		closed = true;
-	});
-	releasePassiveFailure();
-
-	await waitForCondition(() => closed);
-	assert.equal(owner.status(agentId).run.phase, "dormant");
-	assert.match(
-		JSON.stringify(host.services.diagnostics),
-		/deterministic passive Runtime readiness failure/,
-	);
-});
-
 test("a submitted Dormant Agent turn survives returning to the Owner during prompt preflight", async (t) => {
 	const submittedInput = "Continue after the Owner leaves this Agent view.";
 	let markInputPreflightStarted!: () => void;
@@ -713,10 +523,6 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 	);
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
@@ -1148,10 +954,6 @@ test("closing a Dormant session_start modal cancels view initialization without 
 				selectedAgentId = childIdentity.agentId;
 			},
 		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
@@ -1285,10 +1087,6 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 				childAgentId = childIdentity.agentId;
 			},
 		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);

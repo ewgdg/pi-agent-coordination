@@ -195,10 +195,6 @@ test("real ordinary child Runs share fair execution capacity before generation a
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			afterRunStart({ identity }) {
 				childSessions.push(capturedAgentSession(identity.agentId));
@@ -282,10 +278,6 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			afterRunStart({ identity }) {
 				childSessions.push(capturedAgentSession(identity.agentId));

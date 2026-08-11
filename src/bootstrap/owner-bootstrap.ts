@@ -21,8 +21,6 @@ import {
 import {
 	assertOwnerAgentExtensionBindingReady,
 	bindHiddenOwnerAgentExtension,
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
 	installResolvedAgentActivityDock,
 } from "./agent-extension.ts";
 import { discoverColdWorkflow } from "./cold-host-discovery.ts";
@@ -50,7 +48,7 @@ export async function initializeOwnerWorkflow(options: {
 	event: SessionStartEvent;
 }): Promise<() => OrdinaryAgentCoordinatorView> {
 	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event } = options;
-	const { runtime, projectionHost } = await bridge.capture(
+	const { runtime } = await bridge.capture(
 		ctx.sessionManager as AgentSession["sessionManager"],
 	);
 	const existing = initializedWorkflows.get(runtime.session);
@@ -95,15 +93,9 @@ export async function initializeOwnerWorkflow(options: {
 			"warning",
 		);
 	}
-	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(runtime, identity, {
+	const coordinator = new WorkflowCoordinator(runtime, identity, {
 		entryModulePath,
 		operationalIncidentPresentation: new OperationalIncidentSurface(),
-		projectionHost,
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		workflowPolicy: policy,
 		recoveredWorkflow,
 	});
