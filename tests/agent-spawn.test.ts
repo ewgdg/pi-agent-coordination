@@ -1009,6 +1009,17 @@ test("effective cwd honors Pi's default project-trust policy", async () => {
 
 	assert.equal(receipt.disposition, "pending");
 	assert.deepEqual(receipt.effectiveConfiguration?.skills, ["trusted-skill"]);
+	assert.ok(receipt.agentId);
+	const childSession = capturedSessionManager(receipt.agentId);
+	const runtimeBlueprint = resolveCommittedAgentRuntimeBlueprint({
+		sessionId: childSession.getSessionId(),
+		entries: childSession.getEntries(),
+	});
+	assert.deepEqual(runtimeBlueprint.skillSources, [{
+		name: "trusted-skill",
+		path: join(skillDirectory, "SKILL.md"),
+	}]);
+	assert.equal(runtimeBlueprint.projectTrusted, true);
 
 	await harness.shutdown();
 });

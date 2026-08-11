@@ -3,6 +3,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { persistCommittedInput } from "../pi-integration/committed-input.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
+import { commitAgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
 import {
 	createModelVisibleModeratorInput,
 	isModeratorIdentity,
@@ -473,6 +474,14 @@ export class OperationalIncidentCoordinator {
 			modelInput.content,
 			modelInput.display,
 			modelInput.details,
+		);
+		commitAgentRuntimeBlueprint(
+			sessionManager,
+			this.#sessionFactory.runtimeBlueprintForPreparedRun({
+				agentId,
+				role: "moderator",
+				prepared,
+			}),
 		);
 		persistCommittedInput(sessionManager);
 		validateCommittedModeratorInput({

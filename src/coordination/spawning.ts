@@ -8,6 +8,7 @@ import {
 	type AgentSpawnInput,
 	validateAgentSpawnInput,
 } from "../protocol/agent-spawn-input.ts";
+import { commitAgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
 import {
 	commitChildAgentIdentity,
 	type ChildAgentIdentity,
@@ -168,6 +169,14 @@ export class DefaultChildSpawner {
 		};
 		try {
 			commitChildAgentIdentity(sessionManager, identity);
+			commitAgentRuntimeBlueprint(
+				sessionManager,
+				this.#sessionFactory.runtimeBlueprintForPreparedRun({
+					agentId,
+					role: "ordinary",
+					prepared,
+				}),
+			);
 		} catch {
 			return {
 				disposition: "indeterminate",

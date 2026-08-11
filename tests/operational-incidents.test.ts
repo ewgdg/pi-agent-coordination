@@ -19,6 +19,7 @@ import {
 	createModeratorBoundExtension,
 } from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
+import { resolveCommittedAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
 import {
 	WorkflowPolicyStore,
 	parseWorkflowPolicy,
@@ -100,6 +101,20 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 			entry.customType === "agent-coordination.moderator-input",
 	);
 	assert.ok(moderatorInput && moderatorInput.type === "custom_message");
+	const moderatorBlueprint = resolveCommittedAgentRuntimeBlueprint({
+		sessionId: moderatorTranscript.getSessionId(),
+		entries: moderatorTranscript.getEntries(),
+	});
+	assert.equal(moderatorBlueprint.agentId, moderator.id);
+	assert.equal(moderatorBlueprint.role, "moderator");
+	assert.deepEqual(moderatorBlueprint.configuration.tools, [
+		"agent_message",
+		"agent_control",
+		"agent_observe",
+		"ask_user_question",
+		"moderator_control",
+	]);
+	assert.deepEqual(moderatorBlueprint.skillSources, []);
 	assert.equal(moderatorInput.parentId, null);
 	assert.equal(moderatorInput.display, true);
 	assert.deepEqual(moderatorInput.details, {

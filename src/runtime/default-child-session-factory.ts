@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import type { AgentRecord } from "../coordination/agent-record.ts";
 import {
@@ -27,6 +27,7 @@ import {
 } from "../pi-integration/run-admission.ts";
 import { resolveRunExtensions } from "../pi-integration/named-inline-extension-factories.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
+import type { AgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
 import type {
 	OwnerIdentity,
@@ -394,6 +395,39 @@ export class DefaultChildSessionFactory {
 				...configuration,
 				extensions: verifiedExtensions,
 			},
+		};
+	}
+
+	runtimeBlueprintForPreparedRun(options: {
+		agentId: string;
+		role: AgentRuntimeBlueprint["role"];
+		prepared: PreparedAgentRun;
+	}): AgentRuntimeBlueprint {
+		const { agentId, role, prepared } = options;
+		const loadedSkills = prepared.services.resourceLoader.getSkills().skills;
+		const skillSources = prepared.configuration.skills.map((name) => {
+			const matching = loadedSkills.filter((skill) => skill.name === name);
+			if (matching.length !== 1) {
+				throw new ProtocolInvariantError(
+					`prepared Agent Runtime has ${matching.length} sources for selected skill ${name}`,
+				);
+			}
+			return { name, path: matching[0]!.filePath };
+		});
+		return {
+			agentId,
+			role,
+			configuration: {
+				...prepared.configuration,
+				// Inline factories are reconstructed by Pi's own CLI composition root;
+				// only canonical file-backed resources cross the process boundary.
+				extensions: prepared.configuration.extensions.filter(isAbsolute),
+			},
+			projectTrusted: prepared.services.settingsManager.isProjectTrusted(),
+			skillSources,
+			agentsFiles: prepared.services.resourceLoader
+				.getAgentsFiles()
+				.agentsFiles.map(({ path, content }) => ({ path, content })),
 		};
 	}
 

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
+import { AGENT_RUNTIME_BLUEPRINT_CUSTOM_TYPE } from "./custom-entry-types.ts";
 
 import {
 	currentCoordinationScope,
@@ -169,6 +170,10 @@ function readMessageDeliveries(options: {
 	for (const entry of currentCoordinationScope(transcript, recipientAgentId)) {
 		if (entry.type !== "custom" && entry.type !== "custom_message") continue;
 		if (!entry.customType.startsWith("agent-coordination.")) continue;
+		if (
+			entry.type === "custom" &&
+			entry.customType === AGENT_RUNTIME_BLUEPRINT_CUSTOM_TYPE
+		) continue;
 		if (
 			entry.type !== "custom_message" ||
 			entry.customType !== MESSAGE_DELIVERY_CUSTOM_TYPE
