@@ -153,19 +153,6 @@ test("Control Channel rejects already-aborted requests without writing a frame",
 	await channel.close();
 });
 
-test("Control Channel carries one validated hello descriptor and rejects duplicates", async (t) => {
-	const { owner, child } = createChannels();
-	t.after(async () => Promise.all([owner.close(), child.close()]));
-	let hello: { connectionToken: string; expectedSessionId: string } | undefined;
-	child.onHello((received) => { hello = received; });
-	await owner.sendHello({ connectionToken: "token", expectedSessionId: "session" });
-	await waitUntil(() => hello !== undefined);
-	assert.deepEqual(hello, { connectionToken: "token", expectedSessionId: "session" });
-	const closed = closesWith(child, /control_channel_duplicate_hello/);
-	await owner.sendHello({ connectionToken: "token", expectedSessionId: "session" });
-	await closed;
-});
-
 test("Control Channel sends and validates monotonically sequenced events", async (t) => {
 	const { owner, child } = createChannels({ fragmentSizes: [3] });
 	t.after(async () => Promise.all([owner.close(), child.close()]));
@@ -286,15 +273,64 @@ test("Control Channel rejects an oversized line before dispatching a valid coale
 	assert.equal(dispatched, false);
 });
 
-test("Control Channel rejects an oversized outgoing frame without poisoning later writes", async (t) => {
+test("Control Channel rejects an oversized outgoing frame without poisoning later delivery", async (t) => {
 	const { owner, child } = createChannels({ maximumFrameBytes: 220 });
 	t.after(async () => Promise.all([owner.close(), child.close()]));
-	child.onEvent(() => undefined);
+	const received: Array<{ sequence: number; value: string }> = [];
+	child.onEvent(({ sequence, payload }) => {
+		received.push({ sequence, value: payload.value });
+	});
+	child.onRequest(({ method, payload }) => {
+		if (method !== "test.echo") throw new Error("unexpected method");
+		return { echoed: payload.value };
+	});
 	await assert.rejects(
 		owner.sendEvent("test.changed", { value: "x".repeat(500) }),
 		/control_channel_frame_too_large/,
 	);
 	await owner.sendEvent("test.changed", { value: "small" });
+	await waitUntil(() => received.length === 1);
+	assert.deepEqual(received, [{ sequence: 1, value: "small" }]);
+	assert.deepEqual(await owner.request("test.echo", { value: "healthy" }), { echoed: "healthy" });
+});
+
+test("Control Channel keeps ancient terminal response and cancellation frames idempotent with bounded state", async (t) => {
+	const { owner, child, ownerTransport, childTransport } = createChannels();
+	t.after(async () => Promise.all([owner.close(), child.close()]));
+	child.onRequest(({ method, payload }) => {
+		if (method !== "test.echo") throw new Error("unexpected method");
+		return { echoed: payload.value };
+	});
+	for (let index = 0; index < 1_100; index += 1) {
+		assert.deepEqual(await owner.request("test.echo", { value: String(index) }), { echoed: String(index) });
+	}
+	const ancientRequestId = `${identity.agentId}:1`;
+	await childTransport.write(new TextEncoder().encode(`${JSON.stringify({
+		...identity,
+		type: "response",
+		requestId: ancientRequestId,
+		ok: true,
+		result: { echoed: "late" },
+	})}\n`));
+	await ownerTransport.write(new TextEncoder().encode(`${JSON.stringify({
+		...identity,
+		type: "cancel",
+		requestId: ancientRequestId,
+	})}\n`));
+	assert.deepEqual(await owner.request("test.echo", { value: "healthy" }), { echoed: "healthy" });
+});
+
+test("Control Channel isolates throwing close observers and still closes its transport", async () => {
+	const transport = new RecordingTransport();
+	const channel = new FramedAgentControlChannel({ identity, protocol, transport });
+	let remainingObserverCalled = false;
+	channel.onClose(() => { throw new Error("observer failed"); });
+	channel.onClose(() => { remainingObserverCalled = true; });
+
+	await channel.close();
+
+	assert.equal(remainingObserverCalled, true);
+	assert.equal(transport.closed, true);
 });
 
 test("Control Channel deterministically rejects outstanding requests on local and peer close", async () => {
@@ -340,6 +376,7 @@ test("Control Channel validates local payloads, JSON safety, and remote results"
 
 class RecordingTransport implements ControlTransport {
 	readonly writes: Uint8Array[] = [];
+	closed = false;
 	#closeHandlers = new Set<(cause?: Error) => void>();
 
 	async write(data: Uint8Array): Promise<void> { this.writes.push(data.slice()); }
@@ -349,6 +386,7 @@ class RecordingTransport implements ControlTransport {
 		return () => this.#closeHandlers.delete(handler);
 	}
 	async close(): Promise<void> {
+		this.closed = true;
 		for (const handler of this.#closeHandlers) handler();
 	}
 }

@@ -1,4 +1,4 @@
-import type { ControlTransport } from "./control-transport.ts";
+import type { ControlTransport, ControlTransportListener } from "./control-transport.ts";
 import type { ControlEndpoint } from "./control-protocol-schemas.ts";
 import {
 	connectUnixControlTransport,
@@ -16,12 +16,7 @@ const UNIX_PLATFORMS: ReadonlySet<NodeJS.Platform> = new Set([
 	"sunos",
 ]);
 
-/** Platform-neutral listener contract consumed by future process-host code. */
-export interface ControlTransportListener {
-	readonly endpoint: ControlEndpoint;
-	accept(signal?: AbortSignal): Promise<ControlTransport>;
-	close(): Promise<void>;
-}
+export type { ControlTransportListener } from "./control-transport.ts";
 
 export function admitControlTransportPlatform(
 	platform: NodeJS.Platform = process.platform,

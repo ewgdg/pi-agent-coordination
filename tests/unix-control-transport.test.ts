@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { lstat, mkdtemp, rmdir, stat } from "node:fs/promises";
+import { lstat, mkdtemp, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -11,6 +11,7 @@ import {
 	FramedAgentControlChannel,
 	type AgentControlProtocol,
 } from "../src/control/agent-control-channel.ts";
+import { AgentControlAdmissionBroker } from "../src/control/agent-control-admission.ts";
 import {
 	admitControlTransportPlatform,
 	connectControlTransport,
@@ -78,6 +79,152 @@ unixOnly("Control Channel contract runs unchanged over connected Unix socket Ada
 	await rmdir(root);
 });
 
+unixOnly("admission broker routes out-of-order children by one-time validated Hello tokens", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-control-admission-"));
+	const listener = await createPlatformControlListener({ workflowId: identity.workflowId, runtimeDirectory: root });
+	const broker = new AgentControlAdmissionBroker({
+		listener,
+		protocol,
+		workflowId: identity.workflowId,
+	});
+	const firstAdmission = broker.admit({
+		agentId: "first-agent",
+		connectionToken: "first-token",
+		expectedSessionId: "first-session",
+	}, (channel) => {
+		channel.onRequest(({ payload }) => ({ value: `first:${payload.value}` }));
+	});
+	const secondAdmission = broker.admit({
+		agentId: "second-agent",
+		connectionToken: "second-token",
+		expectedSessionId: "second-session",
+	}, (channel) => {
+		channel.onRequest(({ payload }) => ({ value: `second:${payload.value}` }));
+	});
+	const secondIdentity = { ...identity, agentId: "second-agent" };
+	const secondChild = new FramedAgentControlChannel({
+		identity: secondIdentity,
+		protocol,
+		transport: await connectControlTransport(listener.endpoint),
+	});
+	await secondChild.sendHello({ connectionToken: "second-token", expectedSessionId: "second-session" });
+	const firstIdentity = { ...identity, agentId: "first-agent" };
+	const firstChild = new FramedAgentControlChannel({
+		identity: firstIdentity,
+		protocol,
+		transport: await connectControlTransport(listener.endpoint),
+	});
+	await firstChild.sendHello({ connectionToken: "first-token", expectedSessionId: "first-session" });
+	await Promise.all([firstAdmission, secondAdmission]);
+	assert.deepEqual(await firstChild.request("test.echo", { value: "bound" }), { value: "first:bound" });
+	assert.deepEqual(await secondChild.request("test.echo", { value: "bound" }), { value: "second:bound" });
+
+	const duplicate = new FramedAgentControlChannel({
+		identity: firstIdentity,
+		protocol,
+		transport: await connectControlTransport(listener.endpoint),
+	});
+	const duplicateClosed = new Promise<Error>((resolve) => duplicate.onClose(resolve));
+	await duplicate.sendHello({ connectionToken: "first-token", expectedSessionId: "first-session" });
+	assert.match((await duplicateClosed).message, /control_channel_closed/);
+
+	await Promise.all([firstChild.close(), secondChild.close(), duplicate.close()]);
+	await broker.close();
+	await rmdir(root);
+});
+
+unixOnly("admission broker binds handlers before releasing a coalesced post-Hello request", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-control-handoff-"));
+	const listener = await createPlatformControlListener({ workflowId: identity.workflowId, runtimeDirectory: root });
+	const broker = new AgentControlAdmissionBroker({ listener, protocol, workflowId: identity.workflowId });
+	const admission = broker.admit({
+		agentId: identity.agentId,
+		connectionToken: "handoff-token",
+		expectedSessionId: "handoff-session",
+	}, (channel) => {
+		channel.onRequest(({ payload }) => ({ value: `handled:${payload.value}` }));
+	});
+	const child = await connectControlTransport(listener.endpoint);
+	let responseBytes = "";
+	const responseReceived = new Promise<void>((resolve) => child.onData((bytes) => {
+		responseBytes += new TextDecoder().decode(bytes);
+		if (responseBytes.includes("\n")) resolve();
+	}));
+	const hello = { ...identity, type: "hello", connectionToken: "handoff-token", expectedSessionId: "handoff-session" };
+	const request = {
+		...identity,
+		type: "request",
+		requestId: `${identity.agentId}:1`,
+		method: "test.echo",
+		payload: { value: "coalesced" },
+	};
+	await child.write(new TextEncoder().encode(`${JSON.stringify(hello)}\n${JSON.stringify(request)}\n`));
+	await admission;
+	await responseReceived;
+	assert.deepEqual(JSON.parse(responseBytes.trim()), {
+		...identity,
+		type: "response",
+		requestId: `${identity.agentId}:1`,
+		ok: true,
+		result: { value: "handled:coalesced" },
+	});
+
+	await child.close();
+	await broker.close();
+	await rmdir(root);
+});
+
+unixOnly("admission broker fail-closes non-Hello, unknown-token, and mismatched identities", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-control-reject-"));
+	const listener = await createPlatformControlListener({ workflowId: identity.workflowId, runtimeDirectory: root });
+	const broker = new AgentControlAdmissionBroker({ listener, protocol, workflowId: identity.workflowId });
+
+	const nonHello = await connectControlTransport(listener.endpoint);
+	const nonHelloClosed = new Promise<void>((resolve) => nonHello.onClose(() => resolve()));
+	await nonHello.write(new TextEncoder().encode(`${JSON.stringify({
+		...identity,
+		type: "event",
+		sequence: 1,
+		event: "test.changed",
+		payload: { value: "early" },
+	})}\n`));
+	await nonHelloClosed;
+
+	const unknown = new FramedAgentControlChannel({
+		identity,
+		protocol,
+		transport: await connectControlTransport(listener.endpoint),
+	});
+	const unknownClosed = new Promise<Error>((resolve) => unknown.onClose(resolve));
+	await unknown.sendHello({ connectionToken: "unknown", expectedSessionId: "session" });
+	await unknownClosed;
+
+	for (const [name, alteredIdentity, expectedSessionId] of [
+		["workflow", { ...identity, workflowId: "other-workflow" }, "session"],
+		["agent", { ...identity, agentId: "other-agent" }, "session"],
+		["session", identity, "other-session"],
+	] as const) {
+		const connectionToken = `${name}-token`;
+		const admission = broker.admit({
+			agentId: identity.agentId,
+			connectionToken,
+			expectedSessionId: "session",
+		}, () => undefined);
+		const child = new FramedAgentControlChannel({
+			identity: alteredIdentity,
+			protocol,
+			transport: await connectControlTransport(listener.endpoint),
+		});
+		await child.sendHello({ connectionToken, expectedSessionId });
+		await assert.rejects(admission, /control_admission_identity_mismatch/);
+		await child.close();
+	}
+
+	await Promise.all([nonHello.close(), unknown.close()]);
+	await broker.close();
+	await rmdir(root);
+});
+
 unixOnly("Unix listener shutdown closes accepted sockets before closing the server", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-control-shutdown-"));
 	const listener = await createUnixControlListener({ workflowId: "shutdown", runtimeDirectory: root });
@@ -88,6 +235,69 @@ unixOnly("Unix listener shutdown closes accepted sockets before closing the serv
 	await listener.close();
 	await clientClosed;
 	await Promise.all([client.close(), serverSide.close()]);
+	await rmdir(root);
+});
+
+unixOnly("Unix listener skips queued sockets that close before acceptance", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pi-control-queued-close-"));
+	const listener = await createUnixControlListener({ workflowId: "queued-close", runtimeDirectory: root });
+	const transports: Array<{ close(): Promise<void> }> = [];
+	t.after(async () => {
+		await Promise.allSettled(transports.map((transport) => transport.close()));
+		await listener.close().catch(() => undefined);
+		await rmdir(root).catch(() => undefined);
+	});
+	const exited = await connectUnixControlTransport(listener.endpoint);
+	transports.push(exited);
+	await exited.close();
+	// Allow the listener side to observe the peer FIN and remove its queued Adapter.
+	await new Promise((resolve) => setTimeout(resolve, 20));
+
+	const accepted = listener.accept();
+	const liveClient = await connectUnixControlTransport(listener.endpoint);
+	transports.push(liveClient);
+	const liveServer = await accepted;
+	transports.push(liveServer);
+	const received = new Promise<string>((resolve) => liveClient.onData((bytes) => resolve(new TextDecoder().decode(bytes))));
+	await liveServer.write(new TextEncoder().encode("live"));
+	assert.equal(await received, "live");
+
+	await Promise.all([liveClient.close(), liveServer.close(), listener.close()]);
+	await rmdir(root);
+});
+
+unixOnly("Unix transport isolates throwing close observers", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pi-control-observers-"));
+	const listener = await createUnixControlListener({ workflowId: "observers", runtimeDirectory: root });
+	t.after(async () => {
+		await listener.close().catch(() => undefined);
+		await rmdir(root).catch(() => undefined);
+	});
+	const accepted = listener.accept();
+	const client = await connectUnixControlTransport(listener.endpoint);
+	const serverSide = await accepted;
+	let remainingObserverCalled = false;
+	serverSide.onClose(() => { throw new Error("observer failed"); });
+	serverSide.onClose(() => { remainingObserverCalled = true; });
+
+	await serverSide.close();
+	await waitUntil(() => remainingObserverCalled);
+	await Promise.all([serverSide.close(), listener.close()]);
+	await rmdir(root);
+});
+
+unixOnly("Unix listener continues endpoint cleanup when owned-directory removal fails", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-control-cleanup-"));
+	const listener = await createUnixControlListener({ workflowId: "cleanup", runtimeDirectory: root });
+	const directory = dirname(listener.endpoint.address);
+	const retained = join(directory, "retained");
+	await writeFile(retained, "force ENOTEMPTY");
+
+	await assert.rejects(listener.close(), /ENOTEMPTY/);
+	await assert.rejects(lstat(listener.endpoint.address), hasFsCode("ENOENT"));
+
+	await unlink(retained);
+	await rmdir(directory);
 	await rmdir(root);
 });
 
@@ -106,7 +316,6 @@ unixOnly("Unix listener cleans a stale socket but refuses an active or non-socke
 	await staleListener.close();
 
 	const occupiedAddress = join(root, "occupied.sock");
-	const { writeFile, unlink } = await import("node:fs/promises");
 	await writeFile(occupiedAddress, "not a socket");
 	await assert.rejects(
 		listenUnixControlEndpoint({ transport: "unix", address: occupiedAddress }),

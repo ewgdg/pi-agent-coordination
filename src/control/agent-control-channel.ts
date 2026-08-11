@@ -9,7 +9,6 @@ import {
 	type CancelFrame,
 	type ControlFrame,
 	type EventFrame,
-	type HelloFrame,
 	type RequestFrame,
 	type ResponseFrame,
 } from "./control-protocol-schemas.ts";
@@ -88,6 +87,48 @@ type IncomingRequest = Readonly<{
 	abortController: AbortController;
 }>;
 
+const MAXIMUM_NONCANONICAL_TERMINAL_IDS = 1_024;
+
+class TerminalRequestIds {
+	readonly #canonicalPrefix: string;
+	readonly #noncanonical = new Set<string>();
+	#canonicalHighWater = 0;
+
+	constructor(agentId: string) {
+		this.#canonicalPrefix = `${agentId}:`;
+	}
+
+	has(requestId: string): boolean {
+		const sequence = this.#canonicalSequence(requestId);
+		return sequence === undefined
+			? this.#noncanonical.has(requestId)
+			: sequence <= this.#canonicalHighWater;
+	}
+
+	add(requestId: string): void {
+		const sequence = this.#canonicalSequence(requestId);
+		if (sequence !== undefined) {
+			this.#canonicalHighWater = Math.max(this.#canonicalHighWater, sequence);
+			return;
+		}
+		this.#noncanonical.delete(requestId);
+		this.#noncanonical.add(requestId);
+		if (this.#noncanonical.size > MAXIMUM_NONCANONICAL_TERMINAL_IDS) {
+			const oldest = this.#noncanonical.values().next().value as string;
+			this.#noncanonical.delete(oldest);
+		}
+	}
+
+	#canonicalSequence(requestId: string): number | undefined {
+		if (!requestId.startsWith(this.#canonicalPrefix)) return undefined;
+		const suffix = requestId.slice(this.#canonicalPrefix.length);
+		const sequence = Number(suffix);
+		return Number.isSafeInteger(sequence) && sequence > 0 && String(sequence) === suffix
+			? sequence
+			: undefined;
+	}
+}
+
 /** Ordered, validated NDJSON request/response/event channel over any byte stream. */
 export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 	readonly #identity: AgentControlIdentity;
@@ -97,9 +138,9 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 	readonly #writer = new SerialLane();
 	readonly #reader = new SerialLane();
 	readonly #pending = new Map<string, PendingRequest>();
-	readonly #outboundTerminal = new Set<string>();
+	readonly #outboundTerminal: TerminalRequestIds;
 	readonly #incoming = new Map<string, IncomingRequest>();
-	readonly #incomingTerminal = new Set<string>();
+	readonly #incomingTerminal: TerminalRequestIds;
 	readonly #closeHandlers = new Set<(cause: Error) => void>();
 	#buffer: Uint8Array = new Uint8Array();
 	#closed = false;
@@ -107,10 +148,8 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 	#nextRequestSequence = 0;
 	#nextEventSequence = 0;
 	#expectedEventSequence = 1;
-	#receivedHello = false;
 	#requestHandler: ControlRequestHandler<P> | undefined;
 	#eventHandler: ControlEventHandler<P> | undefined;
-	#helloHandler: ((hello: ControlHello) => Promise<void> | void) | undefined;
 	#unsubscribeData: (() => void) | undefined;
 	#unsubscribeClose: (() => void) | undefined;
 	#transportClosePromise: Promise<void> | undefined;
@@ -129,6 +168,8 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		this.#protocol = options.protocol;
 		this.#transport = options.transport;
 		this.#maximumFrameBytes = options.maximumFrameBytes ?? DEFAULT_MAXIMUM_CONTROL_FRAME_BYTES;
+		this.#outboundTerminal = new TerminalRequestIds(this.#identity.agentId);
+		this.#incomingTerminal = new TerminalRequestIds(this.#identity.agentId);
 		this.#unsubscribeData = this.#transport.onData((chunk) => {
 			void this.#reader.run(() => this.#receive(chunk)).catch((error: unknown) => {
 				void this.#failClose(asError(error));
@@ -161,20 +202,9 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		};
 	}
 
-	onHello(handler: (hello: ControlHello) => Promise<void> | void): () => void {
-		this.#assertOpen();
-		if (this.#helloHandler) {
-			throw new Error("control_channel_handler_exists: hello handler already registered");
-		}
-		this.#helloHandler = handler;
-		return () => {
-			if (this.#helloHandler === handler) this.#helloHandler = undefined;
-		};
-	}
-
 	onClose(handler: (cause: Error) => void): () => void {
 		if (this.#closeCause) {
-			queueMicrotask(() => handler(this.#closeCause as Error));
+			queueMicrotask(() => notifyCloseObserver(handler, this.#closeCause as Error));
 			return () => undefined;
 		}
 		this.#closeHandlers.add(handler);
@@ -240,13 +270,29 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		if (!definition || !Check(definition.payload, payload)) {
 			throw new Error(`control_channel_invalid_event: ${event}`);
 		}
-		await this.#send({
-			...this.#identity,
-			type: "event",
-			sequence: ++this.#nextEventSequence,
-			event,
-			payload,
-		});
+		let admitted = false;
+		try {
+			await this.#writer.run(async () => {
+				this.#assertOpen();
+				const sequence = this.#nextEventSequence + 1;
+				const bytes = this.#serialize({
+					...this.#identity,
+					type: "event",
+					sequence,
+					event,
+					payload,
+				});
+				// Sequence is committed only after the frame passes local admission.
+				this.#nextEventSequence = sequence;
+				admitted = true;
+				await this.#transport.write(bytes);
+			});
+		} catch (error) {
+			const cause = asError(error);
+			if (!admitted) throw cause;
+			await this.#failClose(cause);
+			throw cause;
+		}
 	}
 
 	async close(): Promise<void> {
@@ -309,26 +355,12 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 
 	async #handleFrame(frame: ControlFrame): Promise<void> {
 		switch (frame.type) {
-			case "hello": await this.#handleHello(frame); return;
+			case "hello": throw new Error("control_channel_unexpected_hello: Hello is consumed during admission");
 			case "request": this.#handleRequest(frame); return;
 			case "response": this.#handleResponse(frame); return;
 			case "event": await this.#handleEvent(frame); return;
 			case "cancel": this.#handleCancel(frame); return;
 		}
-	}
-
-	async #handleHello(frame: HelloFrame): Promise<void> {
-		if (this.#receivedHello) {
-			throw new Error("control_channel_duplicate_hello: hello was already received");
-		}
-		this.#receivedHello = true;
-		if (!this.#helloHandler) {
-			throw new Error("control_channel_handler_unavailable: no hello handler is registered");
-		}
-		await this.#helloHandler({
-			connectionToken: frame.connectionToken,
-			expectedSessionId: frame.expectedSessionId,
-		});
 	}
 
 	#handleRequest(frame: RequestFrame): void {
@@ -463,6 +495,20 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 
 	async #send(frame: ControlFrame): Promise<void> {
 		this.#assertOpen();
+		const bytes = this.#serialize(frame);
+		try {
+			await this.#writer.run(() => {
+				this.#assertOpen();
+				return this.#transport.write(bytes);
+			});
+		} catch (error) {
+			const cause = asError(error);
+			await this.#failClose(cause);
+			throw cause;
+		}
+	}
+
+	#serialize(frame: ControlFrame): Uint8Array {
 		let serialized: string;
 		try {
 			serialized = JSON.stringify(frame);
@@ -479,16 +525,7 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		const bytes = new Uint8Array(content.byteLength + 1);
 		bytes.set(content);
 		bytes[bytes.byteLength - 1] = 0x0a;
-		try {
-			await this.#writer.run(() => {
-				this.#assertOpen();
-				return this.#transport.write(bytes);
-			});
-		} catch (error) {
-			const cause = asError(error);
-			await this.#failClose(cause);
-			throw cause;
-		}
+		return bytes;
 	}
 
 	#assertIdentity(frame: AgentControlIdentity): void {
@@ -530,8 +567,9 @@ export class FramedAgentControlChannel<P extends AgentControlProtocol> {
 		this.#pending.clear();
 		for (const incoming of this.#incoming.values()) incoming.abortController.abort();
 		this.#incoming.clear();
-		for (const handler of this.#closeHandlers) handler(this.#closeCause);
+		const closeHandlers = [...this.#closeHandlers];
 		this.#closeHandlers.clear();
+		for (const handler of closeHandlers) notifyCloseObserver(handler, this.#closeCause);
 	}
 }
 
@@ -554,6 +592,14 @@ function normalizeCloseCause(cause: Error): Error {
 
 function asError(error: unknown): Error {
 	return error instanceof Error ? error : new Error(String(error));
+}
+
+function notifyCloseObserver(handler: (cause: Error) => void, cause: Error): void {
+	try {
+		handler(cause);
+	} catch {
+		// Observers cannot take ownership of channel cleanup or block one another.
+	}
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

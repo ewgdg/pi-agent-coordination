@@ -17,7 +17,7 @@ import {
 } from "node:net";
 
 import { SerialLane } from "../runtime/serial-lane.ts";
-import type { ControlTransport } from "./control-transport.ts";
+import type { ControlTransport, ControlTransportListener } from "./control-transport.ts";
 import {
 	type UnixControlEndpoint,
 	validateControlEndpoint,
@@ -27,10 +27,8 @@ import {
 export const MAXIMUM_UNIX_SOCKET_PATH_BYTES = 100;
 const STALE_SOCKET_PROBE_MILLISECONDS = 250;
 
-export interface UnixControlListener {
+export interface UnixControlListener extends ControlTransportListener {
 	readonly endpoint: UnixControlEndpoint;
-	accept(signal?: AbortSignal): Promise<ControlTransport>;
-	close(): Promise<void>;
 }
 
 export type CreateUnixControlListenerOptions = Readonly<{
@@ -49,6 +47,7 @@ export class UnixSocketControlTransport implements ControlTransport {
 	readonly #socket: Socket;
 	readonly #writer = new SerialLane();
 	readonly #dataHandlers = new Set<(chunk: Uint8Array) => void>();
+	readonly #bufferedData: Uint8Array[] = [];
 	readonly #closeHandlers = new Set<(cause?: Error) => void>();
 	#closed = false;
 	#closeCause: Error | undefined;
@@ -57,8 +56,12 @@ export class UnixSocketControlTransport implements ControlTransport {
 		this.#socket = socket;
 		this.#socket.pause();
 		this.#socket.on("data", (chunk: Buffer) => {
-			const bytes = new Uint8Array(chunk);
-			for (const handler of this.#dataHandlers) handler(bytes.slice());
+			const bytes = new Uint8Array(chunk).slice();
+			if (this.#dataHandlers.size === 0) {
+				this.#bufferedData.push(bytes);
+				return;
+			}
+			this.#notifyData(bytes);
 		});
 		this.#socket.on("error", (error) => {
 			this.#closeCause = error;
@@ -66,6 +69,9 @@ export class UnixSocketControlTransport implements ControlTransport {
 		this.#socket.on("close", () => {
 			this.#finishClose(this.#closeCause ?? new Error("control_transport_closed: Unix socket closed"));
 		});
+		// Read continuously so queued peers that exit are observable; bytes remain
+		// transport-owned until a data subscriber is installed.
+		this.#socket.resume();
 	}
 
 	write(data: Uint8Array): Promise<void> {
@@ -75,16 +81,13 @@ export class UnixSocketControlTransport implements ControlTransport {
 	onData(handler: (chunk: Uint8Array) => void): () => void {
 		if (this.#closed) return () => undefined;
 		this.#dataHandlers.add(handler);
-		this.#socket.resume();
-		return () => {
-			this.#dataHandlers.delete(handler);
-			if (this.#dataHandlers.size === 0) this.#socket.pause();
-		};
+		for (const chunk of this.#bufferedData.splice(0)) this.#notifyData(chunk);
+		return () => this.#dataHandlers.delete(handler);
 	}
 
 	onClose(handler: (cause?: Error) => void): () => void {
 		if (this.#closed) {
-			queueMicrotask(() => handler(this.#closeCause));
+			queueMicrotask(() => notifyCloseObserver(handler, this.#closeCause));
 			return () => undefined;
 		}
 		this.#closeHandlers.add(handler);
@@ -145,13 +148,25 @@ export class UnixSocketControlTransport implements ControlTransport {
 		});
 	}
 
+	#notifyData(bytes: Uint8Array): void {
+		for (const handler of this.#dataHandlers) {
+			try {
+				handler(bytes.slice());
+			} catch {
+				// Transport observers cannot disrupt socket lifecycle processing.
+			}
+		}
+	}
+
 	#finishClose(cause: Error): void {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#closeCause = cause;
-		for (const handler of this.#closeHandlers) handler(cause);
-		this.#dataHandlers.clear();
+		const closeHandlers = [...this.#closeHandlers];
 		this.#closeHandlers.clear();
+		for (const handler of closeHandlers) notifyCloseObserver(handler, cause);
+		this.#bufferedData.splice(0);
+		this.#dataHandlers.clear();
 	}
 }
 
@@ -205,27 +220,52 @@ class NodeUnixControlListener implements UnixControlListener {
 	}
 
 	close(): Promise<void> {
+		return this.#shutdown();
+	}
+
+	#shutdown(primaryError?: Error): Promise<void> {
 		if (this.#closePromise) return this.#closePromise;
 		this.#closed = true;
-		const cause = new Error("control_listener_closed: listener closed");
+		const waiterCause = primaryError ?? new Error("control_listener_closed: listener closed");
 		for (const waiter of this.#waiters.splice(0)) {
 			waiter.removeAbortListener();
-			waiter.reject(cause);
+			waiter.reject(waiterCause);
 		}
 		this.#queued.splice(0);
 		const connections = [...this.#connections];
 		this.#connections.clear();
 		this.#closePromise = (async () => {
+			const errors: Error[] = primaryError ? [primaryError] : [];
 			// A listener owns every admitted socket, including connections already
 			// accepted by a caller, so shutdown cannot wait forever on open peers.
-			await Promise.all(connections.map((transport) => transport.close()));
-			if (this.#server.listening) {
-				await new Promise<void>((resolve, reject) => {
-					this.#server.close((error) => error ? reject(error) : resolve());
-				});
+			const connectionResults = await Promise.allSettled(
+				connections.map((transport) => Promise.resolve().then(() => transport.close())),
+			);
+			for (const result of connectionResults) {
+				if (result.status === "rejected") errors.push(asError(result.reason));
 			}
-			await unlinkIfExists(this.endpoint.address);
-			if (this.#ownedDirectory) await removeEmptyDirectory(this.#ownedDirectory);
+			if (this.#server.listening) {
+				try {
+					await new Promise<void>((resolve, reject) => {
+						this.#server.close((error) => error ? reject(error) : resolve());
+					});
+				} catch (error) {
+					errors.push(asError(error));
+				}
+			}
+			try {
+				await unlinkIfExists(this.endpoint.address);
+			} catch (error) {
+				errors.push(asError(error));
+			}
+			if (this.#ownedDirectory) {
+				try {
+					await removeEmptyDirectory(this.#ownedDirectory);
+				} catch (error) {
+					errors.push(asError(error));
+				}
+			}
+			throwCleanupErrors(errors);
 		})();
 		return this.#closePromise;
 	}
@@ -233,7 +273,11 @@ class NodeUnixControlListener implements UnixControlListener {
 	#admit(socket: Socket): void {
 		const transport = new UnixSocketControlTransport(socket);
 		this.#connections.add(transport);
-		transport.onClose(() => this.#connections.delete(transport));
+		transport.onClose(() => {
+			this.#connections.delete(transport);
+			const queuedIndex = this.#queued.indexOf(transport);
+			if (queuedIndex >= 0) this.#queued.splice(queuedIndex, 1);
+		});
 		if (this.#closed) {
 			void transport.close();
 			return;
@@ -249,11 +293,7 @@ class NodeUnixControlListener implements UnixControlListener {
 
 	#fail(error: Error): void {
 		if (this.#closed) return;
-		this.#closed = true;
-		for (const waiter of this.#waiters.splice(0)) {
-			waiter.removeAbortListener();
-			waiter.reject(error);
-		}
+		void this.#shutdown(error).catch(() => undefined);
 	}
 }
 
@@ -278,9 +318,20 @@ export async function createUnixControlListener(
 		assertUnixSocketPath(endpoint.address);
 		return await listenUnixControlEndpoint(endpoint, { ownedDirectory });
 	} catch (error) {
-		await unlinkIfExists(endpoint.address);
-		await removeEmptyDirectory(ownedDirectory);
-		throw error;
+		const primary = asError(error);
+		const errors = [primary];
+		try {
+			await unlinkIfExists(endpoint.address);
+		} catch (cleanupError) {
+			errors.push(asError(cleanupError));
+		}
+		try {
+			await removeEmptyDirectory(ownedDirectory);
+		} catch (cleanupError) {
+			errors.push(asError(cleanupError));
+		}
+		throwCleanupErrors(errors);
+		throw primary;
 	}
 }
 
@@ -313,8 +364,13 @@ export async function listenUnixControlEndpoint(
 		await chmod(endpoint.address, 0o600);
 		return listener;
 	} catch (error) {
-		await listener.close().catch(() => undefined);
-		throw error;
+		const primary = asError(error);
+		try {
+			await listener.close();
+		} catch (cleanupError) {
+			throw combinePrimaryAndCleanup(primary, asError(cleanupError));
+		}
+		throw primary;
 	}
 }
 
@@ -414,6 +470,29 @@ async function removeEmptyDirectory(path: string): Promise<void> {
 function hasCode(error: unknown, code: string): boolean {
 	return typeof error === "object" && error !== null && "code" in error
 		&& (error as NodeJS.ErrnoException).code === code;
+}
+
+function notifyCloseObserver(handler: (cause?: Error) => void, cause?: Error): void {
+	try {
+		handler(cause);
+	} catch {
+		// Observers cannot take ownership of socket cleanup or block one another.
+	}
+}
+
+function throwCleanupErrors(errors: readonly Error[]): void {
+	if (errors.length === 1) throw errors[0];
+	if (errors.length > 1) throw new AggregateError(errors, "control_listener_cleanup_failed");
+}
+
+function combinePrimaryAndCleanup(primary: Error, cleanup: Error): Error {
+	if (cleanup === primary) return primary;
+	if (cleanup instanceof AggregateError && cleanup.errors.includes(primary)) return cleanup;
+	return new AggregateError([primary, cleanup], "control_listener_cleanup_failed");
+}
+
+function asError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
 }
 
 function abortError(): Error {
