@@ -51,7 +51,7 @@ Treat cold admission as a one-shot evidence projection, not runtime restoration.
 
 ## Surprises & Discoveries
 
-- `SessionManager.list(cwd, customDirectory)` filters custom directories by header cwd, so it omits valid Agents whose immutable baseline cwd differs from the Owner. Candidate discovery must enumerate the Workflow directory without that filter.
+- `SessionManager.list(cwd, customDirectory)` filters custom directories by header cwd, so it omits valid Agents whose native session cwd differs from the Owner. Candidate discovery must enumerate the Workflow directory without that filter.
 - Pi's discovery/parser skips malformed lines and accepts an unterminated tail, while opening older session versions may rewrite them. Admission therefore needs a strict raw completeness/current-version check before `SessionManager.open` can be used without violating no-mutation.
 - Existing Owner validation rejects all later `agent-coordination.*` evidence after the Owner Identity. A valid resumed Owner necessarily may contain such evidence; the matching Identity is the current-scope cutoff, not a prohibition on later coordination.
 - Request evidence already scans the complete physical current scope, so sibling branches and pre-compaction facts are available. The missing capability is exact relationship projection at every Run start.

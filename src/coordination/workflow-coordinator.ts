@@ -192,7 +192,7 @@ export class WorkflowCoordinator {
 			entryModulePath: string;
 			packageRoot?: string;
 			templateRoots?(
-				baselineCwd: string,
+				parentCwd: string,
 				projectTrusted: boolean,
 			): readonly AgentTemplateRoot[];
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
@@ -230,6 +230,7 @@ export class WorkflowCoordinator {
 			entryModulePath: options.entryModulePath,
 			packageRoot: options.packageRoot ?? resolve(dirname(options.entryModulePath), ".."),
 			templateRoots: options.templateRoots,
+			resolveAgent: (agentId) => this.#agents.get(agentId),
 			ownerRequestHandlers: (role, agentId) => {
 				if (role === "ordinary") {
 					const resolveView = () => this.forAgent(agentId);
@@ -258,25 +259,26 @@ export class WorkflowCoordinator {
 					`invariant_violation: recovered Agent ${recovered.identity.agentId} has inconsistent transcript location`,
 				);
 			}
-			const record = recovered.role === "moderator"
-				? sessionFactory.createModeratorRecord({
+			if (recovered.role === "moderator") {
+				this.#agents.set(recovered.identity.agentId, sessionFactory.createModeratorRecord({
 					identity: recovered.identity,
-					blueprint: recovered.blueprint,
 					sessionPath: recovered.sessionPath,
-				})
-				: sessionFactory.createAgentRecord({
-					identity: recovered.identity,
-					blueprint: recovered.blueprint,
-					sessionPath: recovered.sessionPath,
-				});
-			this.#agents.set(recovered.identity.agentId, record);
-			if (recovered.role === "moderator") continue;
+				}));
+				continue;
+			}
 			const parent = this.#agents.get(recovered.identity.directSpawnerAgentId);
 			if (!parent) {
 				throw new Error(
 					`invariant_violation: recovered Agent ${recovered.identity.agentId} has no verified Direct Spawner`,
 				);
 			}
+			const record = sessionFactory.createAgentRecord({
+				identity: recovered.identity,
+				spawnInput: recovered.creationInput,
+				parent,
+				sessionPath: recovered.sessionPath,
+			});
+			this.#agents.set(recovered.identity.agentId, record);
 			parent.children.push(recovered.identity.agentId);
 		}
 		this.#messages = new MessageCoordinator({
@@ -527,13 +529,20 @@ export class WorkflowCoordinator {
 			: record.host.effectiveRuntimeSnapshot();
 		const transcript = record.transcript.inspect();
 		const transcriptContext = transcript.context;
-		const configured = record.effectiveConfiguration ?? record.identity.configuration.baseline;
-		const model = runtimeSnapshot?.model ?? transcriptContext.model ?? configured.model;
+		const configured = record.effectiveConfiguration;
+		const ownerSnapshot = this.#agents.get(this.#ownerIdentity.agentId)
+			?.host.effectiveRuntimeSnapshot();
+		const model = runtimeSnapshot?.model ?? transcriptContext.model ?? configured?.model ??
+			ownerSnapshot?.model;
+		if (!model) {
+			throw new Error(`invariant_violation: Agent ${status.agentId} has no resolvable model`);
+		}
 		const hasRecordedThinking = transcript.activeBranch.some(
 			(entry) => entry.type === "thinking_level_change",
 		);
 		const thinking = runtimeSnapshot?.thinking ??
-			(hasRecordedThinking ? transcriptContext.thinkingLevel : configured.thinking);
+			(hasRecordedThinking ? transcriptContext.thinkingLevel : undefined) ??
+			configured?.thinking ?? ownerSnapshot?.thinking;
 		if (!isRuntimeThinkingLevel(thinking)) {
 			throw new Error(`invariant_violation: Agent ${status.agentId} has invalid thinking level`);
 		}
@@ -635,7 +644,7 @@ export class WorkflowCoordinator {
 			let attachment!: DurableAgentViewAttachment;
 			attachment = new DurableAgentViewAttachment({
 				agentId,
-				label: record.identity.configuration.label,
+				label: record.identity.metadata.label,
 				projection: target.projection,
 				requestClose: () => this.#closeAgentView(attachment),
 				reportFailure: (error) => this.#reportAgentViewError(error),
@@ -729,7 +738,7 @@ export class WorkflowCoordinator {
 				active.failed = false;
 				active.attachment.retarget({
 					agentId: record.identity.agentId,
-					label: record.identity.configuration.label,
+					label: record.identity.metadata.label,
 					projection: target.projection,
 				});
 			});

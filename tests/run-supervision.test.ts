@@ -1116,10 +1116,7 @@ async function createRunSupervisionHarness(options?: {
 		additionalExtensionPaths: [PROCESS_RUNTIME_FIXTURE],
 	});
 	await bindTestOwnerHost(host, "tui");
-	const ownerIdentity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
 	const coordinator = new WorkflowCoordinator(host.runtime, ownerIdentity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: options?.workflowPolicy,

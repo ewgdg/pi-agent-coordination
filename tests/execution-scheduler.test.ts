@@ -158,10 +158,7 @@ test("real ordinary child Runs share fair execution capacity before generation a
 		persistent: true,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const policy = new WorkflowPolicyStore(
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);
@@ -227,10 +224,7 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 		persistent: true,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const policy = new WorkflowPolicyStore(
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);

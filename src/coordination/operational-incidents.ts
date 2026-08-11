@@ -1,16 +1,9 @@
 import { uuidv7 } from "@earendil-works/pi-ai";
-import { isDeepStrictEqual } from "node:util";
-
 import {
 	materializeNewAgentTranscript,
 	transcriptFromSessionFile,
 } from "../pi-integration/session-manager-transcript.ts";
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
-import {
-	commitAgentRuntimeBlueprint,
-	resolveCommittedAgentRuntimeBlueprint,
-	type AgentRuntimeBlueprint,
-} from "../protocol/agent-runtime-blueprint.ts";
 import {
 	createModelVisibleModeratorInput,
 	isModeratorIdentity,
@@ -37,7 +30,6 @@ import {
 	toolCallPointerKey,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
-import type { ChildRunParentSnapshot } from "../runtime/child-run-blueprint-resolver.ts";
 import type { ProcessChildSessionFactory } from "../runtime/process-child-session-factory.ts";
 import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
@@ -135,7 +127,6 @@ export class OperationalIncidentCoordinator {
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
 	readonly #integratedAgentIds = new Set<string>();
 	readonly #reconciliationLane = new SerialLane();
-	#ownerRuntimeSnapshot: ChildRunParentSnapshot;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
@@ -172,9 +163,9 @@ export class OperationalIncidentCoordinator {
 			},
 			onReviewStateChanged: () => this.#scheduleReconciliation(),
 		});
-		const owner = options.agents.get(options.ownerIdentity.agentId);
-		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
-		this.#ownerRuntimeSnapshot = options.sessionFactory.snapshotParentRuntime(owner);
+		if (!options.agents.has(options.ownerIdentity.agentId)) {
+			throw new Error("invariant_violation: Workflow Owner is unavailable");
+		}
 	}
 
 	integrate(record: AgentRecord): void {
@@ -436,19 +427,13 @@ export class OperationalIncidentCoordinator {
 	async #createModerator(
 		handling: OperationalIncidentHandling,
 	): Promise<void> {
-		const owner = this.#agents.get(this.#ownerIdentity.agentId);
-		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
+		if (!this.#agents.has(this.#ownerIdentity.agentId)) {
+			throw new Error("invariant_violation: Workflow Owner is unavailable");
+		}
 		this.#sessionFactory.admitProcessRuntimePlatform();
-		const parentSnapshot = owner.host.currentHandle()
-			? this.#sessionFactory.snapshotParentRuntime(owner)
-			: this.#ownerRuntimeSnapshot;
-		this.#ownerRuntimeSnapshot = parentSnapshot;
 		const agentId = uuidv7();
-		const prepared = await this.#sessionFactory.prepareModeratorRun({
-			agentId,
-			parentSnapshot,
-		});
-		const sessionManager = this.#sessionFactory.createStagingSession(prepared.blueprint);
+		const prepared = await this.#sessionFactory.prepareModeratorRun({ agentId });
+		const sessionManager = this.#sessionFactory.createStagingSession(prepared);
 		if (this.#isShuttingDown()) return;
 		if (!this.#conditionRemains(handling.snapshot)) {
 			this.#handlingByKey.delete(handling.snapshot.key);
@@ -460,7 +445,7 @@ export class OperationalIncidentCoordinator {
 			agentId,
 			workflowId: this.#ownerIdentity.workflowId,
 			directSpawnerAgentId: null,
-			configuration: { ...metadata, baseline: parentSnapshot.baseline },
+			metadata,
 		};
 		const input: ModeratorInput = {
 			trigger: this.#triggerFor(handling.snapshot),
@@ -482,7 +467,6 @@ export class OperationalIncidentCoordinator {
 			modelInput.display,
 			modelInput.details,
 		);
-		commitAgentRuntimeBlueprint(sessionManager, prepared.blueprint);
 		let sessionPath: string;
 		try {
 			sessionPath = await materializeNewAgentTranscript(sessionManager);
@@ -493,7 +477,6 @@ export class OperationalIncidentCoordinator {
 				sessionPath: candidatePath,
 				identity,
 				input,
-				blueprint: prepared.blueprint,
 			})) throw error;
 			sessionPath = candidatePath;
 		}
@@ -513,7 +496,7 @@ export class OperationalIncidentCoordinator {
 
 		const moderator = this.#sessionFactory.createModeratorRecord({
 			identity,
-			blueprint: prepared.blueprint,
+			initialPreparation: prepared,
 			sessionPath,
 		});
 		this.#agents.set(agentId, moderator);
@@ -841,22 +824,14 @@ function hasExactDurableModeratorEvidence(options: {
 	sessionPath: string;
 	identity: ModeratorIdentity;
 	input: ModeratorInput;
-	blueprint: AgentRuntimeBlueprint;
 }): boolean {
 	try {
-		const transcript = transcriptFromSessionFile(options.sessionPath).inspect();
 		validateCommittedModeratorInput({
-			transcript,
+			transcript: transcriptFromSessionFile(options.sessionPath).inspect(),
 			identity: options.identity,
 			input: options.input,
 		});
-		return isDeepStrictEqual(
-			resolveCommittedAgentRuntimeBlueprint({
-				sessionId: options.identity.agentId,
-				entries: transcript.entries,
-			}),
-			options.blueprint,
-		);
+		return true;
 	} catch (error) {
 		if (error instanceof ProtocolInvariantError) throw error;
 		return false;

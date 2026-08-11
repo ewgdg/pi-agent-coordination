@@ -80,7 +80,7 @@ export async function initializeOwnerWorkflow(options: {
 		throw new Error(initialPolicy.diagnostic.message);
 	}
 	const policy = new WorkflowPolicyStore(initialPolicy.snapshot);
-	const identity = adoptOrValidateOwnerIdentity(runtime, entryModulePath, {
+	const identity = adoptOrValidateOwnerIdentity(runtime, {
 		allowCopiedCoordinationContext: event.reason === "fork",
 	});
 	const recoveredWorkflow = await discoverColdWorkflow({

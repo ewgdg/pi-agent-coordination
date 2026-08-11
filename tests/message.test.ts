@@ -451,10 +451,7 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 test("a Message to a dormant child starts a successor Run and releases it after Delivery settles", async () => {
 	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -922,10 +919,7 @@ test("poll rejects a hidden custom message as Delivery evidence", async () => {
 test("only the original sender can poll a Message", async () => {
 	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -1882,10 +1876,7 @@ async function createDormantChildHarness(
 		additionalExtensionPaths: options.additionalExtensionPaths,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",

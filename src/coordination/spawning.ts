@@ -10,10 +10,6 @@ import {
 	validateAgentSpawnInput,
 } from "../protocol/agent-spawn-input.ts";
 import {
-	commitAgentRuntimeBlueprint,
-	resolveCommittedAgentRuntimeBlueprint,
-} from "../protocol/agent-runtime-blueprint.ts";
-import {
 	commitChildAgentIdentity,
 	type ChildAgentIdentity,
 	validateCommittedChildIdentity,
@@ -145,7 +141,7 @@ export class DefaultChildSpawner {
 				parent,
 				spawnInput: input,
 			});
-			sessionManager = this.#sessionFactory.createStagingSession(prepared.blueprint);
+			sessionManager = this.#sessionFactory.createStagingSession(prepared);
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
 			return { disposition: "not_created", failedStage: "identity_commit" };
@@ -159,14 +155,10 @@ export class DefaultChildSpawner {
 			workflowId: parent.identity.workflowId,
 			directSpawnerAgentId: callerAgentId,
 			spawnSource: source,
-			configuration: {
-				...metadata,
-				baseline: prepared.parentSnapshot.baseline,
-			},
+			metadata,
 		};
 		try {
 			commitChildAgentIdentity(sessionManager, identity);
-			commitAgentRuntimeBlueprint(sessionManager, prepared.blueprint);
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
 			return { disposition: "not_created", failedStage: "identity_commit" };
@@ -182,7 +174,6 @@ export class DefaultChildSpawner {
 			if (!candidatePath || !this.#hasExactDurableEvidence(
 				candidatePath,
 				identity,
-				prepared.blueprint,
 			)) {
 				return { disposition: "not_created", failedStage: "identity_commit" };
 			}
@@ -197,7 +188,9 @@ export class DefaultChildSpawner {
 
 		const child = this.#sessionFactory.createAgentRecord({
 			identity,
-			blueprint: prepared.blueprint,
+			spawnInput: input,
+			parent,
+			initialPreparation: prepared,
 			sessionPath,
 		});
 		this.#agents.set(agentId, child);
@@ -210,7 +203,7 @@ export class DefaultChildSpawner {
 				disposition: "indeterminate",
 				agentId,
 				requestId,
-				effectiveConfiguration: prepared.blueprint.configuration,
+				effectiveConfiguration: prepared.configuration,
 			};
 		}
 
@@ -231,7 +224,7 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				failedStage: "run_start",
-				effectiveConfiguration: prepared.blueprint.configuration,
+				effectiveConfiguration: prepared.configuration,
 			};
 		}
 		const startedHandle = child.host.currentHandle();
@@ -249,7 +242,7 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				lastConfirmedStage: "identity",
-				effectiveConfiguration: prepared.blueprint.configuration,
+				effectiveConfiguration: prepared.configuration,
 			};
 		}
 
@@ -274,7 +267,7 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				failedStage: "delivery_admission",
-				effectiveConfiguration: prepared.blueprint.configuration,
+				effectiveConfiguration: prepared.configuration,
 			};
 		}
 		if (this.#boundaryHooks.afterDeliveryAdmission?.() === "confirmation_lost") {
@@ -283,34 +276,27 @@ export class DefaultChildSpawner {
 				agentId,
 				requestId,
 				lastConfirmedStage: "run_start",
-				effectiveConfiguration: prepared.blueprint.configuration,
+				effectiveConfiguration: prepared.configuration,
 			};
 		}
 		return {
 			disposition: "pending",
 			agentId,
 			requestId,
-			effectiveConfiguration: prepared.blueprint.configuration,
+			effectiveConfiguration: prepared.configuration,
 		};
 	}
 
 	#hasExactDurableEvidence(
 		sessionPath: string,
 		identity: ChildAgentIdentity,
-		blueprint: Awaited<
-			ReturnType<ProcessChildSessionFactory["prepareOrdinaryRun"]>
-		>["blueprint"],
 	): boolean {
 		try {
-			const transcript = transcriptFromSessionFile(sessionPath).inspect();
-			validateCommittedChildIdentity(transcript, identity);
-			return isDeepStrictEqual(
-				resolveCommittedAgentRuntimeBlueprint({
-					sessionId: identity.agentId,
-					entries: transcript.entries,
-				}),
-				blueprint,
+			validateCommittedChildIdentity(
+				transcriptFromSessionFile(sessionPath).inspect(),
+				identity,
 			);
+			return true;
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
 			return false;

@@ -10,6 +10,7 @@ const snapshot = {
 	thinking: "off" as const,
 	tools: [],
 	skills: [],
+	skillSources: [],
 	fileExtensionPaths: [],
 	projectTrusted: true,
 	sessionId: "async-clear-runtime",

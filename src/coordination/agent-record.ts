@@ -1,3 +1,4 @@
+import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { ModeratorIdentity } from "../protocol/moderator-input.ts";
@@ -12,6 +13,7 @@ export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdenti
 
 export type AgentRecord = {
 	identity: AgentIdentity;
+	creationInput?: AgentSpawnInput;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
 	host: AgentRuntimeHost;
 	transcript: AgentTranscript;
@@ -42,7 +44,7 @@ export class EvidenceUnavailableError extends Error {
 }
 
 export function statusOf(record: AgentRecord): AgentStatus {
-	const configuration = record.identity.configuration;
+	const metadata = record.identity.metadata;
 	const run: AgentRunState = record.host.observe();
 	const transcript = record.transcript.inspect();
 	const transcriptTail = transcript.entries.at(-1);
@@ -54,10 +56,10 @@ export function statusOf(record: AgentRecord): AgentStatus {
 	return {
 		agentId: record.identity.agentId,
 		workflowId: record.identity.workflowId,
-		label: configuration.label,
-		...(!("description" in configuration) || configuration.description === undefined
+		label: metadata.label,
+		...(!("description" in metadata) || metadata.description === undefined
 			? {}
-			: { description: configuration.description }),
+			: { description: metadata.description }),
 		directSpawnerAgentId: record.identity.directSpawnerAgentId,
 		primaryEvidence: {
 			transcriptPath: transcript.transcriptPath,

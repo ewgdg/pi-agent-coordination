@@ -52,13 +52,13 @@ This matrix records the production process-backed Agent-view contract and its re
 
 | Contract | Evidence |
 |---|---|
-| Agent Identity and one immutable Runtime Blueprint commit before process launch | spawn, transcript, and process factory tests |
+| Only Agent Identity or Moderator Input commits before process launch; resolved configuration remains volatile | spawn, transcript, and process factory tests |
 | Dormant selection can prepare a Runtime without inventing model work | cold-recovery and Dormant Agent-view tests |
 | Extension, editor, command, Message, and `session_start` input activate exact Runs normally | Agent-view activation tests |
 | `agent_settled` is authoritative; prompt acceptance is not settlement | hosted Runtime lifecycle and retry tests |
 | Selected failure, termination, interruption, and Workflow shutdown preserve exact Run identity | Runtime supervisor and process fault tests |
-| Successor and cold Runtimes reuse the committed blueprint | process factory, successor, and cold discovery tests |
-| Nested spawning uses the admitted parent Runtime snapshot and committed skill sources | nested parent snapshot tests and fullscreen nested-child flow |
+| Successor and cold Runtimes re-resolve current Templates, resources, trust, Project Context, and ancestry | process factory, successor, and cold discovery tests |
+| Nested spawning uses the admitted live parent Runtime or recursively resolves a dormant parent from canonical creation inputs | dynamic parent preparation and fullscreen nested-child tests |
 
 ## Release gates
 

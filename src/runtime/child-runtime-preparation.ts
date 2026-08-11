@@ -7,11 +7,13 @@ import {
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
-import type { AgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
-import type { RuntimeConfigurationBaseline } from "../protocol/runtime-configuration.ts";
+import type {
+	InheritableRuntimeConfiguration,
+} from "../protocol/runtime-configuration.ts";
 import {
 	resolveAgentRunConfiguration,
 	type AgentSpawnConfigurationInput,
+	type EffectiveAgentRunConfiguration,
 } from "../templates/agent-configuration.ts";
 import type { AgentTemplate } from "../templates/agent-templates.ts";
 
@@ -35,33 +37,43 @@ const COORDINATION_TOOL_NAMES = new Set<string>(
 	Object.values(COORDINATION_TOOLS_BY_ROLE).flat(),
 );
 
-export type ChildRunParentSnapshot = Readonly<{
-	baseline: RuntimeConfigurationBaseline;
+export type AgentRuntimeRole = "ordinary" | "moderator";
+
+export type ResolvedParentRuntime = Readonly<{
+	configuration: InheritableRuntimeConfiguration;
 	projectTrusted: boolean;
 	skillSources: readonly Readonly<Pick<Skill, "name" | "filePath">>[];
 }>;
 
-/** Resolve the complete immutable blueprint once, before Child Identity commitment. */
-export async function resolveChildRunBlueprint(options: {
+export type PreparedChildRuntime = Readonly<{
 	agentId: string;
-	role: AgentRuntimeBlueprint["role"];
+	role: AgentRuntimeRole;
+	configuration: EffectiveAgentRunConfiguration;
+	projectTrusted: boolean;
+	skillSources: readonly Readonly<{ name: string; path: string }>[];
+	agentsFiles: readonly Readonly<{ path: string; content: string }>[];
+}>;
+
+export async function prepareChildRuntime(options: {
+	agentId: string;
+	role: AgentRuntimeRole;
 	agentDir: string;
-	parentSnapshot: ChildRunParentSnapshot;
+	parentRuntime: ResolvedParentRuntime;
 	template?: AgentTemplate;
 	overrides?: AgentSpawnConfigurationInput;
-}): Promise<AgentRuntimeBlueprint> {
+}): Promise<PreparedChildRuntime> {
 	validateExtensionSelection(options.template?.extensions);
 	validateExtensionSelection(options.overrides?.extensions);
-	validateParentSkillSources(options.parentSnapshot);
+	validateParentSkillSources(options.parentRuntime);
 	const inheritedExtensions = inheritsParentExtensions(
 		options.template?.extensions,
 		options.overrides?.extensions,
 	)
-		? await canonicalFileExtensions(options.parentSnapshot.baseline.extensions)
+		? await canonicalFileExtensions(options.parentRuntime.configuration.extensions)
 		: [];
 	const resolvedConfiguration = resolveAgentRunConfiguration({
-		baseline: {
-			...options.parentSnapshot.baseline,
+		inherited: {
+			...options.parentRuntime.configuration,
 			extensions: inheritedExtensions,
 		},
 		template: options.template,
@@ -80,9 +92,9 @@ export async function resolveChildRunBlueprint(options: {
 	await requireDirectory(configuration.cwd);
 
 	const projectTrusted = await resolveProjectTrust({
-		baselineCwd: options.parentSnapshot.baseline.cwd,
+		parentCwd: options.parentRuntime.configuration.cwd,
 		effectiveCwd: configuration.cwd,
-		parentProjectTrusted: options.parentSnapshot.projectTrusted,
+		parentProjectTrusted: options.parentRuntime.projectTrusted,
 		agentDir: options.agentDir,
 	});
 	const settingsManager = SettingsManager.create(
@@ -94,11 +106,11 @@ export async function resolveChildRunBlueprint(options: {
 		cwd: configuration.cwd,
 		agentDir: options.agentDir,
 		settingsManager,
-		additionalSkillPaths: options.parentSnapshot.skillSources.map(
+		additionalSkillPaths: options.parentRuntime.skillSources.map(
 			({ filePath }) => filePath,
 		),
-		// Extension modules belong to the fresh child process. Blueprint
-		// resolution only snapshots paths and must never import or invoke them.
+		// Extension modules belong to the fresh child process. Runtime preparation
+		// resolves paths but never imports or invokes child extension factories.
 		noExtensions: true,
 		noPromptTemplates: true,
 		noThemes: true,
@@ -153,16 +165,16 @@ function inheritsParentExtensions(
 	return template !== "none";
 }
 
-function validateParentSkillSources(snapshot: ChildRunParentSnapshot): void {
+function validateParentSkillSources(parentRuntime: ResolvedParentRuntime): void {
 	if (
-		snapshot.skillSources.length !== snapshot.baseline.skills.length ||
-		snapshot.skillSources.some(
-			(source, index) => source.name !== snapshot.baseline.skills[index],
+		parentRuntime.skillSources.length !== parentRuntime.configuration.skills.length ||
+		parentRuntime.skillSources.some(
+			(source, index) => source.name !== parentRuntime.configuration.skills[index],
 		)
 	) {
 		throw new Error("Parent Runtime skill sources do not match its selected skills");
 	}
-	for (const source of snapshot.skillSources) {
+	for (const source of parentRuntime.skillSources) {
 		if (!isAbsolute(source.filePath)) {
 			throw new Error(`Parent Runtime skill source is not absolute: ${source.name}`);
 		}
@@ -192,16 +204,16 @@ async function requireDirectory(path: string): Promise<void> {
 }
 
 async function resolveProjectTrust(options: {
-	baselineCwd: string;
+	parentCwd: string;
 	effectiveCwd: string;
 	parentProjectTrusted: boolean;
 	agentDir: string;
 }): Promise<boolean> {
-	const [effectiveCwd, baselineCwd] = await Promise.all([
+	const [effectiveCwd, parentCwd] = await Promise.all([
 		realpath(options.effectiveCwd),
-		realpath(options.baselineCwd),
+		realpath(options.parentCwd),
 	]);
-	if (effectiveCwd === baselineCwd) return options.parentProjectTrusted;
+	if (effectiveCwd === parentCwd) return options.parentProjectTrusted;
 	const saved = new ProjectTrustStore(options.agentDir).get(options.effectiveCwd);
 	if (saved !== null) return saved;
 	const globalSettings = SettingsManager.create(

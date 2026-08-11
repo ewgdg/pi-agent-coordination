@@ -14,10 +14,6 @@ import {
 	validateAgentSpawnInput,
 } from "../protocol/agent-spawn-input.ts";
 import {
-	resolveCommittedAgentRuntimeBlueprint,
-	type AgentRuntimeBlueprint,
-} from "../protocol/agent-runtime-blueprint.ts";
-import {
 	validateColdChildIdentity,
 	type ChildAgentIdentity,
 } from "../protocol/child-identity.ts";
@@ -41,14 +37,13 @@ import { workflowSessionDirectory } from "../runtime/workflow-session-directory.
 export type RecoveredOrdinaryAgent = Readonly<{
 	role: "ordinary";
 	identity: ChildAgentIdentity;
-	blueprint: AgentRuntimeBlueprint;
+	creationInput: AgentSpawnInput;
 	sessionPath: string;
 }>;
 
 export type RecoveredModeratorAgent = Readonly<{
 	role: "moderator";
 	identity: ModeratorIdentity;
-	blueprint: AgentRuntimeBlueprint;
 	sessionPath: string;
 }>;
 
@@ -64,7 +59,6 @@ export type ColdWorkflowRecovery = Readonly<{
 
 type CandidateBase = {
 	path: string;
-	blueprint: AgentRuntimeBlueprint;
 	invalid: boolean;
 };
 
@@ -192,10 +186,10 @@ export async function discoverColdWorkflow(options: {
 				templateName: input.template,
 			});
 			const identityMetadata = {
-				label: candidate.identity.configuration.label,
-				...(candidate.identity.configuration.description === undefined
+				label: candidate.identity.metadata.label,
+				...(candidate.identity.metadata.description === undefined
 					? {}
-					: { description: candidate.identity.configuration.description }),
+					: { description: candidate.identity.metadata.description }),
 			};
 			if (!isDeepStrictEqual(metadata, identityMetadata)) {
 				throw new Error("child metadata contradicts its spawn source");
@@ -283,13 +277,12 @@ export async function discoverColdWorkflow(options: {
 			...ordered.map((candidate) => ({
 				role: "ordinary" as const,
 				identity: candidate.identity,
-				blueprint: candidate.blueprint,
+				creationInput: candidate.spawnInput!,
 				sessionPath: candidate.path,
 			})),
 			...moderators.map((candidate) => ({
 				role: "moderator" as const,
 				identity: candidate.identity,
-				blueprint: candidate.blueprint,
 				sessionPath: candidate.path,
 			})),
 		],
@@ -380,27 +373,6 @@ async function readCandidate(path: string): Promise<Candidate> {
 			header.id,
 		);
 	}
-	let blueprint: AgentRuntimeBlueprint;
-	try {
-		blueprint = resolveCommittedAgentRuntimeBlueprint({
-			sessionId: header.id,
-			entries,
-		});
-		if (blueprint.role !== candidateIdentity.role) {
-			throw new Error("candidate Runtime blueprint role contradicts its Identity");
-		}
-		if (blueprint.agentId !== candidateIdentity.identity.agentId) {
-			throw new Error("candidate Runtime blueprint agentId contradicts its Identity");
-		}
-		if (header.cwd !== blueprint.configuration.cwd) {
-			throw new Error("candidate header cwd contradicts its Runtime blueprint");
-		}
-	} catch (error) {
-		throw new CandidateError(
-			error instanceof Error ? error.message : "candidate Runtime blueprint is invalid",
-			header.id,
-		);
-	}
 	let sessionManager: SessionManager;
 	try {
 		sessionManager = SessionManager.open(path);
@@ -416,7 +388,6 @@ async function readCandidate(path: string): Promise<Candidate> {
 	return {
 		path,
 		...candidateIdentity,
-		blueprint,
 		invalid: false,
 	};
 }

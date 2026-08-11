@@ -27,26 +27,11 @@ test("interactive Pi boots one observable Owner while preserving native interact
 			(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
 		);
 	assert.ok(ownerIdentity && ownerIdentity.type === "custom");
-	const processExtensions = host.services.resourceLoader
-		.getExtensions()
-		.extensions
-		.map(({ resolvedPath }) => resolvedPath)
-		.filter((path) => path.includes("process-model-broker-extension"));
 	assert.deepEqual(ownerIdentity.data, {
 		agentId: host.session.sessionId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: null,
-		configuration: {
-			label: "owner",
-			baseline: {
-				cwd: host.cwd,
-				model: { provider: "coordination-test", modelId: "deterministic-owner" },
-				thinking: "off",
-				tools: [],
-				skills: [],
-				extensions: processExtensions,
-			},
-		},
+		metadata: { label: "owner" },
 	});
 
 	const observe = host.session.getToolDefinition("agent_observe");

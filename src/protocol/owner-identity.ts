@@ -1,20 +1,9 @@
-import type {
-	AgentSessionRuntime,
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 
-import {
-	isRuntimeThinkingLevel,
-	type ModelReference,
-	type RuntimeConfigurationBaseline,
-	validateRuntimeConfigurationBaseline,
-} from "./runtime-configuration.ts";
 import {
 	AGENT_IDENTITY_CUSTOM_TYPE,
 	MODERATOR_INPUT_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
-
-export type { ModelReference, RuntimeConfigurationBaseline } from "./runtime-configuration.ts";
 
 export { AGENT_IDENTITY_CUSTOM_TYPE } from "./custom-entry-types.ts";
 const OWNER_LABEL = "owner";
@@ -23,9 +12,8 @@ export type OwnerIdentity = Readonly<{
 	agentId: string;
 	workflowId: string;
 	directSpawnerAgentId: null;
-	configuration: Readonly<{
+	metadata: Readonly<{
 		label: "owner";
-		baseline: RuntimeConfigurationBaseline;
 	}>;
 }>;
 
@@ -38,7 +26,6 @@ export class InvalidOwnerIdentityError extends Error {
 
 export function adoptOrValidateOwnerIdentity(
 	runtime: AgentSessionRuntime,
-	entryModulePath: string,
 	options?: { allowCopiedCoordinationContext?: boolean },
 ): OwnerIdentity {
 	const sessionManager = runtime.session.sessionManager;
@@ -68,7 +55,7 @@ export function adoptOrValidateOwnerIdentity(
 	if (matchingIdentityEntries.length === 1) {
 		const entry = matchingIdentityEntries[0];
 		if (entry.type !== "custom") throw new Error("Identity entry narrowing failed");
-		return validateOwnerIdentity(entry.data, sessionId, sessionManager);
+		return validateOwnerIdentity(entry.data, sessionId);
 	}
 	if (
 		!options?.allowCopiedCoordinationContext &&
@@ -85,55 +72,17 @@ export function adoptOrValidateOwnerIdentity(
 		);
 	}
 
-	const identity = createOwnerIdentity(runtime, entryModulePath);
+	const identity: OwnerIdentity = {
+		agentId: sessionId,
+		workflowId: sessionId,
+		directSpawnerAgentId: null,
+		metadata: { label: OWNER_LABEL },
+	};
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, identity);
 	return identity;
 }
 
-function createOwnerIdentity(runtime: AgentSessionRuntime, entryModulePath: string): OwnerIdentity {
-	const session = runtime.session;
-	const agentId = session.sessionManager.getSessionId();
-	const model = session.model;
-	if (!model) throw new InvalidOwnerIdentityError("AgentConfiguration.baseline.model is unavailable");
-
-	const thinking = session.thinkingLevel;
-	if (!isRuntimeThinkingLevel(thinking)) {
-		throw new InvalidOwnerIdentityError("AgentConfiguration.baseline.thinking is invalid");
-	}
-	const resources = runtime.services.resourceLoader;
-	const skills = resources.getSkills().skills.map(({ name }) => name);
-	const extensions = resources
-		.getExtensions()
-		.extensions.filter(
-			(extension) =>
-				extension.resolvedPath !== entryModulePath &&
-				extension.path !== "<inline:pi-agent-coordination>",
-		)
-		.map(({ resolvedPath }) => resolvedPath);
-
-	return {
-		agentId,
-		workflowId: agentId,
-		directSpawnerAgentId: null,
-		configuration: {
-			label: OWNER_LABEL,
-			baseline: {
-				cwd: session.sessionManager.getCwd(),
-				model: { provider: model.provider, modelId: model.id },
-				thinking,
-				tools: session.getActiveToolNames(),
-				skills,
-				extensions,
-			},
-		},
-	};
-}
-
-function validateOwnerIdentity(
-	value: unknown,
-	sessionId: string,
-	sessionManager: SessionManager,
-): OwnerIdentity {
+function validateOwnerIdentity(value: unknown, sessionId: string): OwnerIdentity {
 	if (
 		isRecord(value) &&
 		(value.workflowId !== sessionId ||
@@ -146,7 +95,7 @@ function validateOwnerIdentity(
 		"agentId",
 		"workflowId",
 		"directSpawnerAgentId",
-		"configuration",
+		"metadata",
 	]);
 	if (identity.agentId !== sessionId || identity.workflowId !== sessionId) {
 		throw new InvalidOwnerIdentityError("current Pi session is a child Agent");
@@ -154,28 +103,15 @@ function validateOwnerIdentity(
 	if (identity.directSpawnerAgentId !== null) {
 		throw new InvalidOwnerIdentityError("Owner directSpawnerAgentId must be null");
 	}
-
-	const configuration = requireExactRecord(identity.configuration, ["label", "baseline"]);
-	if (configuration.label !== OWNER_LABEL) {
+	const metadata = requireExactRecord(identity.metadata, ["label"]);
+	if (metadata.label !== OWNER_LABEL) {
 		throw new InvalidOwnerIdentityError('Owner label must be "owner"');
 	}
-	let baseline: RuntimeConfigurationBaseline;
-	try {
-		baseline = validateRuntimeConfigurationBaseline(configuration.baseline);
-	} catch (error) {
-		throw new InvalidOwnerIdentityError(
-			error instanceof Error ? error.message : "AgentConfiguration.baseline is invalid",
-		);
-	}
-	if (baseline.cwd !== sessionManager.getCwd()) {
-		throw new InvalidOwnerIdentityError("Owner baseline cwd does not match the Pi session cwd");
-	}
-
 	return {
 		agentId: sessionId,
 		workflowId: sessionId,
 		directSpawnerAgentId: null,
-		configuration: { label: OWNER_LABEL, baseline },
+		metadata: { label: OWNER_LABEL },
 	};
 }
 

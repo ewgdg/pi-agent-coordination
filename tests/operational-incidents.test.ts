@@ -18,7 +18,6 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import piAgentCoordination from "../src/index.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
-import { resolveCommittedAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
 import {
 	WorkflowPolicyStore,
 	parseWorkflowPolicy,
@@ -72,12 +71,6 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	await host.session.waitForIdle();
 
 	const moderator = await waitForModerator(host);
-	const ownerIdentity = host.session.sessionManager.getEntries().find(
-		(entry) =>
-			entry.type === "custom" &&
-			entry.customType === "agent-coordination.identity",
-	);
-	assert.ok(ownerIdentity && ownerIdentity.type === "custom");
 	const spawnSourceEntry = host.session.sessionManager.getEntries().find(
 		(entry) =>
 			entry.type === "message" &&
@@ -99,20 +92,6 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 			entry.customType === "agent-coordination.moderator-input",
 	);
 	assert.ok(moderatorInput && moderatorInput.type === "custom_message");
-	const moderatorBlueprint = resolveCommittedAgentRuntimeBlueprint({
-		sessionId: moderatorTranscript.getSessionId(),
-		entries: moderatorTranscript.getEntries(),
-	});
-	assert.equal(moderatorBlueprint.agentId, moderator.id);
-	assert.equal(moderatorBlueprint.role, "moderator");
-	assert.deepEqual(moderatorBlueprint.configuration.tools, [
-		"agent_message",
-		"agent_control",
-		"agent_observe",
-		"ask_user_question",
-		"moderator_control",
-	]);
-	assert.deepEqual(moderatorBlueprint.skillSources, []);
 	assert.equal(moderatorInput.parentId, null);
 	assert.equal(moderatorInput.display, true);
 	const input = JSON.parse(moderatorInput.content as string) as {
@@ -123,19 +102,12 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 		};
 		inspectedThrough: Array<{ agentId: string; entryId: string }>;
 	};
-	const ownerBaseline = (ownerIdentity.data as {
-		configuration: { baseline: Record<string, unknown> };
-	}).configuration.baseline;
 	assert.deepEqual(moderatorInput.details, {
 		agentId: moderator.id,
 		workflowId: host.session.sessionId,
-		configuration: {
+		metadata: {
 			label: "moderator",
 			description: "obligation stall",
-			baseline: {
-				...ownerBaseline,
-				tools: host.session.getActiveToolNames(),
-			},
 		},
 	});
 	assert.equal(input.trigger.kind, "obligation_stall");
@@ -303,10 +275,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 		],
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -525,8 +494,8 @@ test("one failed provider request creates Run Failure without regenerating an an
 		entryId: await transcriptTailFor(host, input.trigger.agentId),
 	}]);
 	assert.equal(
-		(moderatorInput.details as { configuration: { description: string } })
-			.configuration.description,
+		(moderatorInput.details as { metadata: { description: string } })
+			.metadata.description,
 		"run failure",
 	);
 	assert.deepEqual((await observeStatus(host, input.trigger.agentId)).run, {
@@ -1417,10 +1386,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 		],
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectNextCreationDelivery = true;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -1513,10 +1479,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 		implicitModeratorResponses: false,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectedCreationDeliveries = 0;
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
@@ -1703,10 +1666,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 		],
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectedCreationDeliveries = 0;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -1832,10 +1792,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 		implicitModeratorResponses: false,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -2071,12 +2028,8 @@ test("a post-commit Moderator startup failure creates one linked replacement", a
 		retentionReasons: [],
 	});
 	const firstEntries = SessionManager.open(first.path).getEntries();
-	assert.equal(firstEntries.length, 2);
+	assert.equal(firstEntries.length, 1);
 	assert.equal(firstEntries[0]?.type, "custom_message");
-	assert.equal(
-		firstEntries[1]?.type === "custom" ? firstEntries[1].customType : undefined,
-		"agent-coordination.runtime-blueprint",
-	);
 	const replacementInput = SessionManager.open(replacement.path).getEntries().find(
 		(entry) =>
 			entry.type === "custom_message" &&
@@ -2557,10 +2510,7 @@ async function createIncidentBoundaryHarness(
 		implicitModeratorResponses: false,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",

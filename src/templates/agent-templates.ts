@@ -1,6 +1,6 @@
 import type {
 	ModelReference,
-	RuntimeConfigurationBaseline,
+	RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 
 export type ProjectContextMode = "append" | "replace";
@@ -8,7 +8,7 @@ export type ProjectContextMode = "append" | "replace";
 export type AgentTemplate = Readonly<{
 	name: string;
 	model?: ModelReference;
-	thinking?: RuntimeConfigurationBaseline["thinking"];
+	thinking?: RuntimeThinkingLevel;
 	tools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none" | readonly string[];

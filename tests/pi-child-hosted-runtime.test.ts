@@ -96,6 +96,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 			thinking: "off",
 			tools: [],
 			skills: [],
+			skillSources: [],
 			fileExtensionPaths: [CHILD_EXTENSION],
 			projectTrusted: true,
 			sessionId: expectedSessionId,

@@ -289,7 +289,7 @@ export class HumanRequestCoordinator {
 			.map((pending) => ({
 				requestId: pending.request.requestId,
 				agentId: pending.request.requesterAgentId,
-				agentLabel: pending.record.identity.configuration.label,
+				agentLabel: pending.record.identity.metadata.label,
 				question: pending.request.question,
 			}));
 	}

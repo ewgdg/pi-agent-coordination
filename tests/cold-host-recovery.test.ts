@@ -13,7 +13,6 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
-import { commitAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import {
 	executeRegisteredTool,
@@ -82,13 +81,6 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 			{ stopReason: "toolUse" },
 		),
 	);
-	const childIdentityEntry = childTranscript.getEntries().find(
-		(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
-	);
-	assert.ok(childIdentityEntry?.type === "custom");
-	const childBaseline = (childIdentityEntry.data as {
-		configuration: { baseline: Record<string, unknown> };
-	}).configuration.baseline;
 	const grandchildTranscript = SessionManager.create(effectiveCwd, workflowDirectory);
 	const grandchildAgentId = grandchildTranscript.getSessionId();
 	grandchildTranscript.appendCustomEntry("agent-coordination.identity", {
@@ -100,12 +92,8 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 			entryId: nestedSpawnEntryId,
 			toolCallId: "spawn-nested-before-reopen",
 		},
-		configuration: {
-			label: "recovered-grandchild",
-			baseline: { ...childBaseline, cwd: effectiveCwd },
-		},
+		metadata: { label: "recovered-grandchild" },
 	});
-	commitColdOrdinaryBlueprint(grandchildTranscript, effectiveCwd);
 	grandchildTranscript.appendMessage(
 		fauxAssistantMessage("Persist recovered grandchild evidence."),
 	);
@@ -272,19 +260,8 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 			entryId: foreignSpawnEntryId,
 			toolCallId: "spawn-foreign-candidate",
 		},
-		configuration: {
-			label: "agent",
-			baseline: {
-				cwd: host.cwd,
-				model: { provider: "coordination-test", modelId: "deterministic-owner" },
-				thinking: "off",
-				tools: [],
-				skills: [],
-				extensions: [],
-			},
-		},
+		metadata: { label: "agent" },
 	});
-	commitColdOrdinaryBlueprint(foreignTranscript, host.cwd);
 	foreignTranscript.appendMessage(fauxAssistantMessage("Persist foreign candidate evidence."));
 
 	const firstTranscript = SessionManager.open(firstFile);
@@ -328,7 +305,6 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	assert.ok(firstIdentity?.type === "custom");
 	const firstIdentityData = firstIdentity.data as {
 		spawnSource: { agentId: string; entryId: string; toolCallId: string };
-		configuration: { baseline: { cwd: string } };
 	};
 	const nestedSpawnEntryId = firstTranscript.appendMessage(
 		fauxAssistantMessage(
@@ -341,7 +317,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		),
 	);
 	const nestedTranscript = SessionManager.create(
-		firstIdentityData.configuration.baseline.cwd,
+		firstTranscript.getHeader()?.cwd ?? host.cwd,
 		directory,
 	);
 	const nestedAgentId = nestedTranscript.getSessionId();
@@ -354,15 +330,8 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 			entryId: nestedSpawnEntryId,
 			toolCallId: "spawn-dependent-grandchild",
 		},
-		configuration: {
-			label: "agent",
-			baseline: firstIdentityData.configuration.baseline,
-		},
+		metadata: { label: "agent" },
 	});
-	commitColdOrdinaryBlueprint(
-		nestedTranscript,
-		firstIdentityData.configuration.baseline.cwd,
-	);
 	nestedTranscript.appendMessage(fauxAssistantMessage("Persist nested candidate evidence."));
 
 	const duplicateTranscript = SessionManager.create(host.cwd, directory);
@@ -371,7 +340,6 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		...(firstIdentity.data as Record<string, unknown>),
 		agentId: duplicateAgentId,
 	});
-	commitColdOrdinaryBlueprint(duplicateTranscript, host.cwd);
 	duplicateTranscript.appendMessage(fauxAssistantMessage("Persist duplicate claim evidence."));
 	const malformedAgentId = "malformed-agent";
 	await writeFile(
@@ -546,14 +514,22 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 	assert.equal(await countModeratorSessions(workflowDirectory), 0);
 });
 
-test("cold bootstrap and successor start recover exact residual Creation Request retention", async () => {
+test("cold successor re-resolves current configuration and recovers residual Creation Request retention", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+	const templateDirectory = join(host.services.agentDir, "agents");
+	const templatePath = join(templateDirectory, "residual.md");
+	await mkdir(templateDirectory, { recursive: true });
+	await writeFile(
+		templatePath,
+		"---\nname: residual-agent\ntools: read\n---\nInitial context",
+	);
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage("Initial work settled without answering the Creation Request."),
 	]);
 	const spawned = await executeTool(host, "agent_spawn", "spawn-residual-request-child", {
 		request: "Keep this Creation Request unresolved across host loss.",
+		template: "residual-agent",
 		label: "residual-child",
 	}) as { agentId: string };
 	const childSessionFile = await waitForSessionFile(
@@ -567,6 +543,10 @@ test("cold bootstrap and successor start recover exact residual Creation Request
 	const ownerSessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
+	await writeFile(
+		templatePath,
+		"---\nname: residual-agent\ntools:\n  - read\n  - bash\n---\nCurrent context",
+	);
 
 	const reopened = await reopenOwner(host, ownerSessionFile);
 	const observe = reopened.session.getToolDefinition("agent_observe");
@@ -598,15 +578,19 @@ test("cold bootstrap and successor start recover exact residual Creation Request
 		{ phase: "dormant", retentionReasons: [] },
 	);
 
+	let successorTools: string[] = [];
 	reopened.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall(
-				"ask_user_question",
-				{ question: "Keep this successor Run observable." },
-				{ id: "hold-recovered-child-run" },
-			),
-			{ stopReason: "toolUse" },
-		),
+		(context) => {
+			successorTools = context.tools?.map(({ name }) => name) ?? [];
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"ask_user_question",
+					{ question: "Keep this successor Run observable." },
+					{ id: "hold-recovered-child-run" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		},
 	]);
 	await executeTool(reopened, "agent_message", "start-residual-child", {
 		operation: "send",
@@ -638,6 +622,8 @@ test("cold bootstrap and successor start recover exact residual Creation Request
 		),
 		1,
 	);
+	assert.equal(successorTools.includes("read"), true);
+	assert.equal(successorTools.includes("bash"), true);
 	await reopened.runtime.dispose();
 });
 
@@ -1007,9 +993,6 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 			entry.customType === "agent-coordination.identity",
 	);
 	assert.ok(ownerIdentity?.type === "custom");
-	const baseline = (ownerIdentity.data as {
-		configuration: { baseline: Record<string, unknown> };
-	}).configuration.baseline;
 	const candidateDirectory = workflowSessionDirectory(host);
 	await mkdir(candidateDirectory, { recursive: true });
 	const malformed = SessionManager.create(host.cwd, candidateDirectory);
@@ -1030,10 +1013,9 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 		{
 			agentId: malformedAgentId,
 			workflowId: host.session.sessionId,
-			configuration: {
+			metadata: {
 				label: "moderator",
 				description: "obligation stall",
-				baseline,
 			},
 		},
 	);
@@ -1258,30 +1240,6 @@ async function waitForCondition(predicate: () => Promise<boolean>): Promise<void
 	throw new Error("Expected condition was not reached");
 }
 
-function commitColdOrdinaryBlueprint(session: SessionManager, cwd: string): void {
-	commitAgentRuntimeBlueprint(session, {
-		agentId: session.getSessionId(),
-		role: "ordinary",
-		configuration: {
-			cwd,
-			model: { provider: "coordination-test", modelId: "deterministic-owner" },
-			thinking: "off",
-			tools: [
-				"agent_message",
-				"agent_control",
-				"agent_observe",
-				"agent_spawn",
-				"ask_user_question",
-			],
-			skills: [],
-			extensions: [],
-		},
-		projectTrusted: true,
-		skillSources: [],
-		agentsFiles: [],
-	});
-}
-
 async function writeCyclicCandidates(
 	directory: string,
 	workflowId: string,
@@ -1290,14 +1248,6 @@ async function writeCyclicCandidates(
 	const agentA = "cyclic-agent-a";
 	const agentB = "cyclic-agent-b";
 	const timestamp = new Date().toISOString();
-	const baseline = {
-		cwd,
-		model: { provider: "coordination-test", modelId: "deterministic-owner" },
-		thinking: "off",
-		tools: [],
-		skills: [],
-		extensions: [],
-	};
 	const candidates = [
 		{
 			agentId: agentA,
@@ -1341,38 +1291,13 @@ async function writeCyclicCandidates(
 					entryId: candidate.claimedSourceEntryId,
 					toolCallId: candidate.claimedSourceToolCallId,
 				},
-				configuration: { label: "agent", baseline },
-			},
-		};
-		const blueprintEntryId = `${candidate.agentId}-runtime-blueprint`;
-		const blueprint = {
-			type: "custom",
-			id: blueprintEntryId,
-			parentId: candidate.identityEntryId,
-			timestamp,
-			customType: "agent-coordination.runtime-blueprint",
-			data: {
-				agentId: candidate.agentId,
-				role: "ordinary",
-				configuration: {
-					...baseline,
-					tools: [
-						"agent_message",
-						"agent_control",
-						"agent_observe",
-						"agent_spawn",
-						"ask_user_question",
-					],
-				},
-				projectTrusted: true,
-				skillSources: [],
-				agentsFiles: [],
+				metadata: { label: "agent" },
 			},
 		};
 		const spawn = {
 			type: "message",
 			id: candidate.spawnEntryId,
-			parentId: blueprintEntryId,
+			parentId: candidate.identityEntryId,
 			timestamp,
 			message: fauxAssistantMessage(
 				fauxToolCall(
@@ -1385,7 +1310,7 @@ async function writeCyclicCandidates(
 		};
 		await writeFile(
 			join(directory, `${candidate.agentId}.jsonl`),
-			`${JSON.stringify(header)}\n${JSON.stringify(identity)}\n${JSON.stringify(blueprint)}\n${JSON.stringify(spawn)}\n`,
+			`${JSON.stringify(header)}\n${JSON.stringify(identity)}\n${JSON.stringify(spawn)}\n`,
 			"utf8",
 		);
 	}

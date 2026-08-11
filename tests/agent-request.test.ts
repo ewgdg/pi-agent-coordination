@@ -1457,10 +1457,7 @@ async function createDormantChildHarness(
 		persistent: true,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",

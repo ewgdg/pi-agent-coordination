@@ -14,7 +14,7 @@ Keep Pi authoritative. Coordination adds one durable Owner Identity entry and on
 - Verify the complete structural Pi integration shape before creating a runtime resource or installing a partial bridge. Report the first missing or malformed seam by canonical member name.
 - Use the running Pi module world for constructors and runtime values. Pi packages are peers; concrete development versions are conformance fixtures only.
 - Adopt a transcript with no current-scope coordination bootstrap by appending exactly one strict `agent-coordination.identity` entry. Validate an existing matching Owner bootstrap exactly. Reject child or Moderator bootstrap evidence instead of reclassifying it.
-- Owner metadata is fixed to label `owner` with no description. The immutable baseline captures the current cwd, model, thinking level, ordinary active tools, skills, and extensions.
+- Owner metadata is fixed to label `owner` with no description. Current cwd, model, thinking, tools, skills, and extensions remain Runtime state rather than Identity evidence.
 - Keep the raw Pi runtime, session, services, and transcript manager private. Tools and presentation receive only a role-bound `WorkflowCoordinator` view.
 - Preserve native transcript, editor, history, queues, tool rendering, footer, and session interaction.
 - Fence new admissions during orderly shutdown and memoize the one Owner disposal path. Make no graceful-end claim for abrupt process loss.

@@ -10,7 +10,7 @@ A child process owns its transcript components, editor, footer, statuses, widget
 
 The child TUI writes ANSI output to its PTY. The Owner reconstructs the active terminal frame with `@xterm/headless` and presents it through the common Terminal Projection interface. Physical input, paste, mouse bytes, generated terminal replies, and resize use the PTY path; structured coordination never enters terminal traffic.
 
-Opening an Agent view attaches the Workflow-global human attachment to the existing process projection. It does not rebind the Owner session or copy child UI state into the Owner TUI. Closing the view removes `interactive_selection` retention. A retained child process can continue running while unselected; an eligible settled Runtime exits and is recreated from its committed blueprint when later work arrives.
+Opening an Agent view attaches the Workflow-global human attachment to the existing process projection. It does not rebind the Owner session or copy child UI state into the Owner TUI. Closing the view removes `interactive_selection` retention. A retained child process can continue running while unselected; an eligible settled Runtime exits and later work creates a fresh process from a newly resolved launch specification.
 
 ## Child `/agents`
 
@@ -28,7 +28,7 @@ Input and resize continue through the newly selected projection after retargetin
 
 ## Runtime preparation and Run admission
 
-Agent Identity, the role bootstrap, and one immutable Runtime Blueprint commit before process launch. The Owner materializes that evidence to the exact session JSONL, drops its staging writer, and then launches the exact installed Pi CLI with explicit cwd, model, thinking, tools, skill paths, file-backed extensions, context artifact, trust decision, and session path.
+Only Agent Identity or Moderator Input bootstrap evidence commits before process launch. The Owner dynamically resolves the current parent configuration, Template, explicit spawn input, resources, trust, and Project Context into a volatile launch specification. It materializes the bootstrap evidence to the exact session JSONL, drops its staging writer, and launches the exact installed Pi CLI with the prepared cwd, model, thinking, tools, skill paths, file-backed extensions, context artifact, trust decision, and session path. That launch specification is not transcript evidence and is resolved again for every successor Runtime.
 
 The process may be prepared before model work. Extension `session_start` behavior remains native: dialogs and overlays can appear before Run admission, and extension-emitted user input activates work normally. Prompt acceptance is not settlement; the Owner changes Run state only from the awaited child lifecycle and durable transcript evidence, with `agent_settled` as the authoritative settlement boundary.
 

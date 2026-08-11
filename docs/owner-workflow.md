@@ -4,7 +4,7 @@ Loading `pi-agent-coordination` in an interactive Pi TUI establishes the current
 
 Before creating the coordination runtime, bootstrap loads and validates the optional user [Workflow Policy](workflow-policy.md). Invalid initial policy prevents runtime creation without appending Owner Identity.
 
-On first activation, the package appends one non-model-visible `agent-coordination.identity` entry. The Pi session identity is both the Agent identity and Workflow identity. Owner metadata is fixed to the label `owner`, and the entry records the immutable runtime baseline used for later coordination.
+On first activation, the package appends one non-model-visible `agent-coordination.identity` entry. The Pi session identity is both the Agent identity and Workflow identity, and Owner metadata is fixed to the label `owner`. Resolved Owner Runtime configuration and resources are not copied into Identity.
 
 On later activation, the package validates the existing current-scope Owner Identity exactly. A session identified as a child Agent or Moderator is not reclassified.
 
@@ -37,7 +37,7 @@ See [Human Requests](human-requests.md) for the request and Answer shapes, trans
 
 ## Activation modes
 
-Coordination activates only when Pi reports interactive TUI mode with UI support. Print, JSON, RPC, and rejected interactive sessions retain the registered tool definitions for transcript rendering but keep them inactive; they register no coordination command and create no coordinator. During interactive admission, the Owner tools remain inactive while the immutable runtime baseline is captured, then become active only after the identity-bound coordinator is ready. A factory-time `before_agent_start` gate holds any model turn launched by an earlier extension's `session_start` handler until that admission outcome settles, so the turn sees either the complete Owner coordination surface or inactive Owner tools.
+Coordination activates only when Pi reports interactive TUI mode with UI support. Print, JSON, RPC, and rejected interactive sessions retain the registered tool definitions for transcript rendering but keep them inactive; they register no coordination command and create no coordinator. During interactive admission, the Owner tools remain inactive until the identity-bound coordinator is ready. A factory-time `before_agent_start` gate holds any model turn launched by an earlier extension's `session_start` handler until that admission outcome settles, so the turn sees either the complete Owner coordination surface or inactive Owner tools.
 
 ## Host compatibility
 

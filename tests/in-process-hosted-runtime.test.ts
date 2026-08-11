@@ -12,6 +12,7 @@ const snapshot = {
 	thinking: "high" as const,
 	tools: ["read"],
 	skills: ["skill"],
+	skillSources: [{ name: "skill", filePath: "/runtime/skill/SKILL.md" }],
 	fileExtensionPaths: ["/runtime/extension.ts"],
 	projectTrusted: true,
 	sessionId: "runtime-session",

@@ -2,7 +2,7 @@ import type { AgentSpawnConfigurationInput } from "../templates/agent-configurat
 import { isAgentTemplateName } from "../templates/agent-template-name.ts";
 import {
 	isRuntimeThinkingLevel,
-	type RuntimeConfigurationBaseline,
+	type RuntimeThinkingLevel,
 } from "./runtime-configuration.ts";
 
 
@@ -112,7 +112,7 @@ function validateModel(value: unknown): Readonly<{ provider: string; modelId: st
 	};
 }
 
-function validateThinking(value: unknown): RuntimeConfigurationBaseline["thinking"] {
+function validateThinking(value: unknown): RuntimeThinkingLevel {
 	if (!isRuntimeThinkingLevel(value)) {
 		throw new Error("invalid_input: Agent Spawn config.thinking is invalid");
 	}

@@ -1,9 +1,10 @@
 import { resolve } from "node:path";
 
 import type {
+	InheritableRuntimeConfiguration,
 	ModelReference,
-	RuntimeConfigurationBaseline,
-} from "../protocol/owner-identity.ts";
+	RuntimeThinkingLevel,
+} from "../protocol/runtime-configuration.ts";
 import type {
 	AgentTemplate,
 	ProjectContextMode,
@@ -11,7 +12,7 @@ import type {
 
 export type AgentSpawnConfigurationInput = Readonly<{
 	model?: ModelReference;
-	thinking?: RuntimeConfigurationBaseline["thinking"];
+	thinking?: RuntimeThinkingLevel;
 	cwd?: string;
 	tools?: readonly string[];
 	skills?: readonly string[];
@@ -23,7 +24,7 @@ export type AgentSpawnConfigurationInput = Readonly<{
 export type EffectiveAgentRunConfiguration = Readonly<{
 	cwd: string;
 	model: ModelReference;
-	thinking: RuntimeConfigurationBaseline["thinking"];
+	thinking: RuntimeThinkingLevel;
 	tools: readonly string[];
 	skills: readonly string[];
 	extensions: readonly string[];
@@ -34,24 +35,28 @@ export type EffectiveAgentRunConfiguration = Readonly<{
 }>;
 
 export function resolveAgentRunConfiguration(options: {
-	baseline: RuntimeConfigurationBaseline;
+	inherited: InheritableRuntimeConfiguration;
 	template?: AgentTemplate;
 	overrides?: AgentSpawnConfigurationInput;
 	fixedTools: readonly string[];
 }): EffectiveAgentRunConfiguration {
-	const { baseline, template, overrides } = options;
-	const configuredTools = overrides?.tools ?? template?.tools ?? baseline.tools;
-	const configuredSkills = overrides?.skills ?? template?.skills ?? baseline.skills;
-	const templateExtensions = resolveExtensions(template?.extensions, baseline.extensions);
-	const configuredExtensions = resolveExtensions(overrides?.extensions, templateExtensions, baseline.extensions);
+	const { inherited, template, overrides } = options;
+	const configuredTools = overrides?.tools ?? template?.tools ?? inherited.tools;
+	const configuredSkills = overrides?.skills ?? template?.skills ?? inherited.skills;
+	const templateExtensions = resolveExtensions(template?.extensions, inherited.extensions);
+	const configuredExtensions = resolveExtensions(
+		overrides?.extensions,
+		templateExtensions,
+		inherited.extensions,
+	);
 	const projectContext = resolveProjectContext(template, overrides);
 
 	return {
-		cwd: resolve(baseline.cwd, overrides?.cwd ?? baseline.cwd),
+		cwd: resolve(inherited.cwd, overrides?.cwd ?? inherited.cwd),
 		model: {
-			...(overrides?.model ?? template?.model ?? baseline.model),
+			...(overrides?.model ?? template?.model ?? inherited.model),
 		},
-		thinking: overrides?.thinking ?? template?.thinking ?? baseline.thinking,
+		thinking: overrides?.thinking ?? template?.thinking ?? inherited.thinking,
 		tools: unique([...configuredTools, ...options.fixedTools]),
 		skills: [...configuredSkills],
 		extensions: [...configuredExtensions],
@@ -62,10 +67,10 @@ export function resolveAgentRunConfiguration(options: {
 function resolveExtensions(
 	selection: "inherit" | "none" | readonly string[] | undefined,
 	inherited: readonly string[],
-	baseline: readonly string[] = inherited,
+	parentExtensions: readonly string[] = inherited,
 ): readonly string[] {
 	if (selection === undefined) return inherited;
-	if (selection === "inherit") return baseline;
+	if (selection === "inherit") return parentExtensions;
 	if (selection === "none") return [];
 	return selection;
 }

@@ -1,7 +1,6 @@
 import {
 	type AgentSessionRuntime,
 	SessionManager,
-	type Skill,
 } from "@earendil-works/pi-coding-agent";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -10,10 +9,6 @@ import type { AgentRecord } from "../coordination/agent-record.ts";
 import { admitControlTransportPlatform } from "../control/control-platform.ts";
 import { transcriptFromSessionFile } from "../pi-integration/session-manager-transcript.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
-import {
-	resolveCommittedAgentRuntimeBlueprint,
-	type AgentRuntimeBlueprint,
-} from "../protocol/agent-runtime-blueprint.ts";
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import {
 	isModeratorIdentity,
@@ -36,9 +31,11 @@ import {
 } from "../templates/agent-templates.ts";
 import { AgentRuntimeSupervisor } from "./agent-runtime-supervisor.ts";
 import {
-	resolveChildRunBlueprint,
-	type ChildRunParentSnapshot,
-} from "./child-run-blueprint-resolver.ts";
+	prepareChildRuntime,
+	type AgentRuntimeRole,
+	type PreparedChildRuntime,
+	type ResolvedParentRuntime,
+} from "./child-runtime-preparation.ts";
 import { workflowSessionDirectory } from "./workflow-session-directory.ts";
 
 const COORDINATION_EXTENSION_PREFIXES = [
@@ -48,30 +45,24 @@ const COORDINATION_EXTENSION_PREFIXES = [
 ] as const;
 const INLINE_PUBLIC_EXTENSION_PATH = "<inline:pi-agent-coordination>";
 
-export type ProcessChildRunPreparation = Readonly<{
-	agentId: string;
-	parentSnapshot: ChildRunParentSnapshot;
-	blueprint: AgentRuntimeBlueprint;
-}>;
+export type ProcessChildRunPreparation = PreparedChildRuntime;
 
 type ParticipantHandlers =
 	| OwnerParticipantRequestHandlers<"ordinary">
 	| OwnerParticipantRequestHandlers<"moderator">;
 
-/**
- * Owns immutable child evidence and launches every non-Owner Runtime in a real
- * Pi process. Owner remains the only in-process Agent Runtime.
- */
+/** Launches every non-Owner Runtime in a fresh Pi process. */
 export class ProcessChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #entryModulePath: string;
 	readonly #packageRoot: string;
 	readonly #templateRoots:
-		| ((baselineCwd: string, projectTrusted: boolean) => readonly AgentTemplateRoot[])
+		| ((parentCwd: string, projectTrusted: boolean) => readonly AgentTemplateRoot[])
 		| undefined;
+	readonly #resolveAgent: (agentId: string) => AgentRecord | undefined;
 	readonly #ownerRequestHandlers: (
-		role: AgentRuntimeBlueprint["role"],
+		role: AgentRuntimeRole,
 		agentId: string,
 	) => ParticipantHandlers;
 
@@ -81,11 +72,12 @@ export class ProcessChildSessionFactory {
 		entryModulePath: string;
 		packageRoot?: string;
 		templateRoots?(
-			baselineCwd: string,
+			parentCwd: string,
 			projectTrusted: boolean,
 		): readonly AgentTemplateRoot[];
+		resolveAgent(agentId: string): AgentRecord | undefined;
 		ownerRequestHandlers(
-			role: AgentRuntimeBlueprint["role"],
+			role: AgentRuntimeRole,
 			agentId: string,
 		): ParticipantHandlers;
 	}) {
@@ -94,6 +86,7 @@ export class ProcessChildSessionFactory {
 		this.#entryModulePath = options.entryModulePath;
 		this.#packageRoot = options.packageRoot ?? resolve(dirname(options.entryModulePath), "..");
 		this.#templateRoots = options.templateRoots;
+		this.#resolveAgent = options.resolveAgent;
 		this.#ownerRequestHandlers = options.ownerRequestHandlers;
 	}
 
@@ -101,100 +94,110 @@ export class ProcessChildSessionFactory {
 		admitControlTransportPlatform();
 	}
 
-	snapshotParentRuntime(parent: AgentRecord): ChildRunParentSnapshot {
-		const snapshot = parent.host.effectiveRuntimeSnapshot();
-		if (!snapshot) throw new Error("Parent Runtime snapshot is unavailable");
-		if (snapshot.sessionId !== parent.identity.agentId) {
-			throw new Error(
-				"invariant_violation: Parent Runtime snapshot does not match Agent Identity",
-			);
-		}
-		const skillSources = parent.identity.agentId === this.#ownerIdentity.agentId
-			? this.#ownerSkillSources(snapshot.skills)
-			: this.#committedChildSkillSources(parent, snapshot.skills);
-		return {
-			baseline: {
-				cwd: snapshot.cwd,
-				model: snapshot.model,
-				thinking: snapshot.thinking,
-				tools: [...snapshot.tools],
-				skills: [...snapshot.skills],
-				extensions: snapshot.fileExtensionPaths.filter(
-					(path) => !this.#isCoordinationExtension(path),
-				),
-			},
-			projectTrusted: snapshot.projectTrusted,
-			skillSources,
-		};
-	}
-
+	/**
+	 * Dynamic preparation is deliberate product behavior: every new Runtime
+	 * re-resolves its current parent ancestry, selected Template, resources,
+	 * trust, and Project Context. Never persist or reuse this resolved launch
+	 * specification for a later Runtime unless the product semantics are
+	 * explicitly changed at the user's request.
+	 */
 	async prepareOrdinaryRun(options: {
 		agentId: string;
 		parent: AgentRecord;
 		spawnInput: AgentSpawnInput;
 	}): Promise<ProcessChildRunPreparation> {
-		const parentSnapshot = this.snapshotParentRuntime(options.parent);
-		const template = await this.#resolveSelectedTemplate(
-			parentSnapshot,
-			options.spawnInput.template,
-		);
-		const blueprint = await resolveChildRunBlueprint({
-			agentId: options.agentId,
-			role: "ordinary",
-			agentDir: this.#ownerRuntime.services.agentDir,
-			parentSnapshot,
-			...(template === undefined ? {} : { template }),
-			...(options.spawnInput.config === undefined
-				? {}
-				: { overrides: options.spawnInput.config }),
-		});
-		return { agentId: options.agentId, parentSnapshot, blueprint };
+		return this.#prepareOrdinaryRun(options, new Set());
 	}
 
 	async prepareModeratorRun(options: {
 		agentId: string;
-		parentSnapshot: ChildRunParentSnapshot;
 	}): Promise<ProcessChildRunPreparation> {
-		const template = await this.#resolveSelectedTemplate(
-			options.parentSnapshot,
-			"moderator",
-		);
-		const blueprint = await resolveChildRunBlueprint({
+		const owner = this.#resolveAgent(this.#ownerIdentity.agentId);
+		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
+		const parentRuntime = await this.#resolveCurrentRuntime(owner, new Set());
+		const template = await this.#resolveSelectedTemplate(parentRuntime, "moderator");
+		return prepareChildRuntime({
 			agentId: options.agentId,
 			role: "moderator",
 			agentDir: this.#ownerRuntime.services.agentDir,
-			parentSnapshot: options.parentSnapshot,
+			parentRuntime,
 			...(template === undefined ? {} : { template }),
 		});
-		return {
-			agentId: options.agentId,
-			parentSnapshot: options.parentSnapshot,
-			blueprint,
-		};
 	}
 
-	createStagingSession(blueprint: AgentRuntimeBlueprint): SessionManager {
+	createStagingSession(prepared: PreparedChildRuntime): SessionManager {
 		return SessionManager.create(
-			blueprint.configuration.cwd,
+			prepared.configuration.cwd,
 			this.workflowSessionDirectory(),
-			{ id: blueprint.agentId },
+			{ id: prepared.agentId },
 		);
 	}
 
 	createAgentRecord(options: {
 		identity: ChildAgentIdentity;
-		blueprint: AgentRuntimeBlueprint;
+		spawnInput: AgentSpawnInput;
+		parent: AgentRecord;
+		initialPreparation?: PreparedChildRuntime;
 		sessionPath: string;
 	}): AgentRecord {
-		return this.#createProcessRecord(options);
+		const { identity, spawnInput, parent, sessionPath } = options;
+		let firstPreparation = options.initialPreparation;
+		let record!: AgentRecord;
+		const host = AgentRuntimeSupervisor.createChild({
+			agentId: identity.agentId,
+			startSession: async () => {
+				const prepared = firstPreparation ?? await this.prepareOrdinaryRun({
+					agentId: identity.agentId,
+					parent,
+					spawnInput,
+				});
+				firstPreparation = undefined;
+				record.effectiveConfiguration = prepared.configuration;
+				return this.#launchPreparedRuntime(identity, prepared, sessionPath);
+			},
+		});
+		record = {
+			identity,
+			creationInput: spawnInput,
+			...(options.initialPreparation === undefined
+				? {}
+				: { effectiveConfiguration: options.initialPreparation.configuration }),
+			host,
+			transcript: transcriptFromSessionFile(sessionPath),
+			children: [],
+		};
+		return record;
 	}
 
 	createModeratorRecord(options: {
 		identity: ModeratorIdentity;
-		blueprint: AgentRuntimeBlueprint;
+		initialPreparation?: PreparedChildRuntime;
 		sessionPath: string;
 	}): AgentRecord {
-		return this.#createProcessRecord(options);
+		const { identity, sessionPath } = options;
+		let firstPreparation = options.initialPreparation;
+		let record!: AgentRecord;
+		const host = AgentRuntimeSupervisor.createChild({
+			agentId: identity.agentId,
+			startSession: async () => {
+				const prepared = firstPreparation ?? await this.prepareModeratorRun({
+					agentId: identity.agentId,
+				});
+				firstPreparation = undefined;
+				record.effectiveConfiguration = prepared.configuration;
+				return this.#launchPreparedRuntime(identity, prepared, sessionPath);
+			},
+		});
+		record = {
+			identity,
+			...(options.initialPreparation === undefined
+				? {}
+				: { effectiveConfiguration: options.initialPreparation.configuration }),
+			host,
+			transcript: transcriptFromSessionFile(sessionPath),
+			children: [],
+		};
+		return record;
 	}
 
 	workflowSessionDirectory(): string {
@@ -204,64 +207,158 @@ export class ProcessChildSessionFactory {
 		);
 	}
 
-	#createProcessRecord(options: {
-		identity: ChildAgentIdentity | ModeratorIdentity;
-		blueprint: AgentRuntimeBlueprint;
-		sessionPath: string;
-	}): AgentRecord {
-		const { identity, blueprint, sessionPath } = options;
-		if (identity.agentId !== blueprint.agentId) {
-			throw new Error("invariant_violation: Agent Identity and Runtime blueprint differ");
-		}
-		const identityRole = isModeratorIdentity(identity) ? "moderator" : "ordinary";
-		if (identityRole !== blueprint.role) {
-			throw new Error("invariant_violation: Agent Identity and Runtime blueprint roles differ");
-		}
-		const host = AgentRuntimeSupervisor.createChild({
-			agentId: identity.agentId,
-			startSession: async () => {
-				const launch = await PiChildProcessRuntime.launch({
-					workflowId: identity.workflowId,
-					agentId: identity.agentId,
-					role: blueprint.role,
-					expectedSessionId: identity.agentId,
-					sessionPath,
-					configuration: blueprint.configuration,
-					skillPaths: blueprint.skillSources.map(({ path }) => path),
-					projectTrusted: blueprint.projectTrusted,
-					agentsFiles: blueprint.agentsFiles,
-					ownerRequestHandlers: this.#ownerRequestHandlers(
-						blueprint.role,
-						identity.agentId,
-					) as StartPiChildProcessRuntimeOptions["ownerRequestHandlers"],
-				});
-				const runtime = new PiChildHostedRuntime(launch);
-				return { runtime, ready: runtime.ready };
-			},
+	async #prepareOrdinaryRun(
+		options: {
+			agentId: string;
+			parent: AgentRecord;
+			spawnInput: AgentSpawnInput;
+		},
+		resolving: Set<string>,
+	): Promise<PreparedChildRuntime> {
+		const parentRuntime = await this.#resolveCurrentRuntime(options.parent, resolving);
+		const template = await this.#resolveSelectedTemplate(
+			parentRuntime,
+			options.spawnInput.template,
+		);
+		return prepareChildRuntime({
+			agentId: options.agentId,
+			role: "ordinary",
+			agentDir: this.#ownerRuntime.services.agentDir,
+			parentRuntime,
+			...(template === undefined ? {} : { template }),
+			...(options.spawnInput.config === undefined
+				? {}
+				: { overrides: options.spawnInput.config }),
 		});
+	}
+
+	async #resolveCurrentRuntime(
+		record: AgentRecord,
+		resolving: Set<string>,
+	): Promise<ResolvedParentRuntime> {
+		const snapshot = record.host.effectiveRuntimeSnapshot();
+		if (snapshot) {
+			if (snapshot.sessionId !== record.identity.agentId) {
+				throw new Error(
+					"invariant_violation: Parent Runtime snapshot does not match Agent Identity",
+				);
+			}
+			return {
+				configuration: {
+					cwd: snapshot.cwd,
+					model: snapshot.model,
+					thinking: snapshot.thinking,
+					tools: [...snapshot.tools],
+					skills: [...snapshot.skills],
+					extensions: snapshot.fileExtensionPaths.filter(
+						(path) => !this.#isCoordinationExtension(path),
+					),
+				},
+				projectTrusted: snapshot.projectTrusted,
+				skillSources: snapshot.skillSources.map(({ name, filePath }) => ({
+					name,
+					filePath,
+				})),
+			};
+		}
+		if (record.identity.agentId === this.#ownerIdentity.agentId) {
+			return this.#resolveCurrentOwnerRuntime();
+		}
+		if (isModeratorIdentity(record.identity)) {
+			throw new Error("Moderator cannot be an Agent Spawn parent");
+		}
+		if (resolving.has(record.identity.agentId)) {
+			throw new Error("invariant_violation: Agent Runtime preparation ancestry contains a cycle");
+		}
+		if (!record.creationInput || record.identity.directSpawnerAgentId === null) {
+			throw new Error("invariant_violation: Child Agent creation input is unavailable");
+		}
+		const parent = this.#resolveAgent(record.identity.directSpawnerAgentId);
+		if (!parent) {
+			throw new Error("invariant_violation: Child Agent Direct Spawner is unavailable");
+		}
+		resolving.add(record.identity.agentId);
+		try {
+			const prepared = await this.#prepareOrdinaryRun({
+				agentId: record.identity.agentId,
+				parent,
+				spawnInput: record.creationInput,
+			}, resolving);
+			return {
+				configuration: prepared.configuration,
+				projectTrusted: prepared.projectTrusted,
+				skillSources: prepared.skillSources.map(({ name, path }) => ({
+					name,
+					filePath: path,
+				})),
+			};
+		} finally {
+			resolving.delete(record.identity.agentId);
+		}
+	}
+
+	#resolveCurrentOwnerRuntime(): ResolvedParentRuntime {
+		const session = this.#ownerRuntime.session;
+		const model = session.model;
+		if (!model) throw new Error("Parent Owner Runtime model is unavailable");
+		const skills = this.#ownerRuntime.services.resourceLoader.getSkills().skills;
 		return {
-			identity,
-			effectiveConfiguration: blueprint.configuration,
-			host,
-			transcript: transcriptFromSessionFile(sessionPath),
-			children: [],
+			configuration: {
+				cwd: this.#ownerRuntime.services.cwd,
+				model: { provider: model.provider, modelId: model.id },
+				thinking: session.thinkingLevel,
+				tools: session.getActiveToolNames(),
+				skills: skills.map(({ name }) => name),
+				extensions: this.#ownerRuntime.services.resourceLoader
+					.getExtensions()
+					.extensions.map(({ resolvedPath }) => resolvedPath)
+					.filter((path) => !this.#isCoordinationExtension(path)),
+			},
+			projectTrusted: this.#ownerRuntime.services.settingsManager.isProjectTrusted(),
+			skillSources: skills.map(({ name, filePath }) => ({ name, filePath })),
 		};
 	}
 
+	async #launchPreparedRuntime(
+		identity: ChildAgentIdentity | ModeratorIdentity,
+		prepared: PreparedChildRuntime,
+		sessionPath: string,
+	) {
+		if (identity.agentId !== prepared.agentId) {
+			throw new Error("invariant_violation: Agent Identity and Runtime preparation differ");
+		}
+		const identityRole = isModeratorIdentity(identity) ? "moderator" : "ordinary";
+		if (identityRole !== prepared.role) {
+			throw new Error("invariant_violation: Agent Identity and Runtime preparation roles differ");
+		}
+		const launch = await PiChildProcessRuntime.launch({
+			workflowId: identity.workflowId,
+			agentId: identity.agentId,
+			role: prepared.role,
+			expectedSessionId: identity.agentId,
+			sessionPath,
+			configuration: prepared.configuration,
+			skillPaths: prepared.skillSources.map(({ path }) => path),
+			projectTrusted: prepared.projectTrusted,
+			agentsFiles: prepared.agentsFiles,
+			ownerRequestHandlers: this.#ownerRequestHandlers(
+				prepared.role,
+				identity.agentId,
+			) as StartPiChildProcessRuntimeOptions["ownerRequestHandlers"],
+		});
+		const runtime = new PiChildHostedRuntime(launch);
+		return { runtime, ready: runtime.ready };
+	}
+
 	async #resolveSelectedTemplate(
-		parentSnapshot: ChildRunParentSnapshot,
+		parentRuntime: ResolvedParentRuntime,
 		selectedName: string | undefined,
 	): Promise<AgentTemplate | undefined> {
 		if (selectedName === undefined) return undefined;
+		const parentCwd = parentRuntime.configuration.cwd;
 		const roots = this.#templateRoots
-			? this.#templateRoots(
-				parentSnapshot.baseline.cwd,
-				parentSnapshot.projectTrusted,
-			)
-			: this.#defaultTemplateRoots(
-				parentSnapshot.baseline.cwd,
-				parentSnapshot.projectTrusted,
-			);
+			? this.#templateRoots(parentCwd, parentRuntime.projectTrusted)
+			: this.#defaultTemplateRoots(parentCwd, parentRuntime.projectTrusted);
 		return selectAgentTemplateForRun(
 			await discoverAgentTemplates(roots),
 			selectedName,
@@ -269,7 +366,7 @@ export class ProcessChildSessionFactory {
 	}
 
 	#defaultTemplateRoots(
-		baselineCwd: string,
+		parentCwd: string,
 		projectTrusted: boolean,
 	): readonly AgentTemplateRoot[] {
 		return [
@@ -277,47 +374,9 @@ export class ProcessChildSessionFactory {
 			{ scope: "pi-user", path: join(this.#ownerRuntime.services.agentDir, "agents") },
 			{ scope: "user-agent-resource", path: join(homedir(), ".agents", "agents") },
 			...(projectTrusted
-				? [{ scope: "trusted-project", path: join(baselineCwd, ".agents", "agents") }]
+				? [{ scope: "trusted-project", path: join(parentCwd, ".agents", "agents") }]
 				: []),
 		];
-	}
-
-	#ownerSkillSources(selectedNames: readonly string[]): ChildRunParentSnapshot["skillSources"] {
-		const loaded = this.#ownerRuntime.services.resourceLoader.getSkills().skills;
-		return selectedNames.map((name) => {
-			const matching = loaded.filter((skill) => skill.name === name);
-			if (matching.length !== 1) {
-				throw new Error(
-					`Parent Runtime has ${matching.length} sources for selected skill ${name}`,
-				);
-			}
-			return skillSource(matching[0]!);
-		});
-	}
-
-	#committedChildSkillSources(
-		parent: AgentRecord,
-		selectedNames: readonly string[],
-	): ChildRunParentSnapshot["skillSources"] {
-		const transcript = parent.transcript.inspect();
-		const blueprint = resolveCommittedAgentRuntimeBlueprint({
-			sessionId: parent.identity.agentId,
-			entries: transcript.entries,
-		});
-		if (
-			blueprint.skillSources.length !== selectedNames.length ||
-			blueprint.skillSources.some(
-				(source, index) => source.name !== selectedNames[index],
-			)
-		) {
-			throw new Error(
-				"invariant_violation: Parent Runtime skills do not align with committed blueprint sources",
-			);
-		}
-		return blueprint.skillSources.map(({ name, path }) => ({
-			name,
-			filePath: path,
-		}));
 	}
 
 	#isCoordinationExtension(path: string): boolean {
@@ -325,8 +384,4 @@ export class ProcessChildSessionFactory {
 			path === INLINE_PUBLIC_EXTENSION_PATH ||
 			COORDINATION_EXTENSION_PREFIXES.some((prefix) => path.startsWith(prefix));
 	}
-}
-
-function skillSource(skill: Skill): Pick<Skill, "name" | "filePath"> {
-	return { name: skill.name, filePath: skill.filePath };
 }

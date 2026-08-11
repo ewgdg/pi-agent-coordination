@@ -50,7 +50,7 @@ The Terminal Channel carries ANSI output, input bytes, generated terminal replie
 - Preserve `/agents` navigation and activity presentation when input currently targets a child Pi process.
 - Preserve durable Agent Identity and transcript evidence. Do not introduce a second durable event store.
 - Preserve exact Run state and ordering. A prompt-acceptance response is not settlement; `agent_settled` remains the settlement event.
-- Preserve immutable spawn baselines for cwd, model, thinking, ordinary tools, skills, file-backed extensions, and Project Context.
+- Preserve dynamic Runtime preparation from canonical Agent Spawn inputs and current parent configuration; process isolation must not freeze configuration lifecycle.
 - Keep all Workflow authority in the Owner process. A child tool sends domain intent to the Owner; it does not own a second coordinator.
 
 ### Architectural constraints
@@ -123,11 +123,11 @@ The launch command supplies:
 - effective cwd;
 - effective model and thinking level;
 - effective ordinary tool selection;
-- `--no-extensions` plus captured file-backed extension paths;
+- `--no-extensions` plus file-backed extension paths prepared for this Runtime;
 - the file-backed Runtime Bridge extension;
-- `--no-skills` plus captured selected skill paths;
-- captured project-trust decision;
-- an immutable generated Project Context file where required;
+- `--no-skills` plus selected skill paths prepared for this Runtime;
+- the current project-trust decision;
+- a generated Project Context file for this Runtime where required;
 - fullscreen TUI mode.
 
 The child process owns its real Pi Runtime and native process lifecycle. Unlike the old embedded mode, it may install normal Pi signal handlers because it is an actual process owner.
@@ -158,7 +158,7 @@ Terminal-generated replies emitted by `@xterm/headless` must be written back to 
 Exactly one process mutates a child session JSONL:
 
 1. While no child process is live, the Owner may create, inspect, and mutate the dormant transcript through a local transcript Adapter.
-2. Before launch, the Owner commits Agent Identity and immutable startup evidence, closes its writable session handle, and passes the exact session to Pi.
+2. Before launch, the Owner commits only Agent Identity or Moderator Input bootstrap evidence, closes its writable session handle, and passes the exact session to Pi.
 3. After child handshake, the child process is transcript authority. All live evidence mutations use Control Channel operations mapped to the child-local `SessionManager` or `ExtensionAPI.appendEntry()`.
 4. After clean child exit and channel closure, the Owner reopens the transcript for dormant inspection/recovery.
 
@@ -330,16 +330,16 @@ Also provide the child bootstrap descriptor path and normal PTY terminal variabl
 
 ## Resource inheritance
 
-Snapshot effective resource references automatically; no user-maintained allowlist is introduced.
+Resolve effective resource references for every new Runtime; no user-maintained allowlist is introduced.
 
-- File-backed extensions: capture canonical resolved paths, exclude this package's Owner entry module by package identity, and pass the remaining paths as repeated explicit `-e` arguments after `--no-extensions`.
-- Pi built-in inline extensions: reconstruct automatically through the fresh Pi CLI; do not serialize factories or include `<inline:...>` in the durable extension baseline.
+- File-backed extensions: resolve current canonical paths, exclude this package's Owner entry module by package identity, and pass the remaining paths as repeated explicit `-e` arguments after `--no-extensions`.
+- Pi built-in inline extensions: reconstruct automatically through the fresh Pi CLI; do not serialize factories or include `<inline:...>` in durable evidence.
 - Runtime Bridge: add its file path explicitly and separately from inherited external extensions.
-- Skills: snapshot selected skill source paths and pass them explicitly after `--no-skills`.
-- Project Context and effective AGENTS content: materialize one immutable Run context artifact and pass it through Pi's supported prompt options while disabling rediscovery that would violate the baseline.
-- Model, thinking, tools, cwd, trust, and session: pass explicit CLI arguments derived from the immutable configuration.
+- Skills: resolve current selected skill source paths and pass them explicitly after `--no-skills`.
+- Project Context and effective AGENTS content: materialize one context artifact for the prepared Runtime and pass it through Pi's supported prompt options.
+- Model, thinking, tools, cwd, trust, and session: pass explicit CLI arguments from the volatile launch specification.
 
-After handshake, ask the child for `runtime.snapshot` and compare the effective result to the launch blueprint before admitting model work. Mismatch fails startup and cleans up the process before Child Identity becomes externally usable.
+After handshake, ask the child for `runtime.snapshot` and compare the effective result to that launch specification before admitting model work. Mismatch fails startup and cleans up the process.
 
 ## Work plan
 
@@ -382,7 +382,7 @@ Checkpoint: production behavior is unchanged, but coordination modules no longer
 3. Connect and complete hello/session/TUI readiness handshake.
 4. Map local Pi lifecycle, queue, interruption, configuration snapshot, transcript append, and shutdown operations to the Control Channel.
 5. Register ordinary and Moderator tool sets as child-side Adapters to Owner-owned domain operations.
-6. Build the exact Pi CLI command from the immutable Run blueprint.
+6. Build the exact Pi CLI command from the volatile Runtime launch specification.
 7. Build the child environment through the isolated Herdr ownership Adapter.
 8. Add startup rollback for CLI failure, trust failure, extension failure, handshake timeout, configuration mismatch, and early process exit.
 
@@ -412,7 +412,7 @@ Checkpoint: complete physical Owner interaction with ordinary and Moderator chil
 ### Milestone 7 — Complete remote coordination and child-originated views
 
 1. Route all ordinary and Moderator coordination tools through typed domain methods and preserve current receipts/errors.
-2. Preserve nested spawn and immutable descendant-baseline capture through `runtime.snapshot` rather than parent access to child services.
+2. Preserve nested spawn by reading an admitted live parent through `runtime.snapshot` and dynamically resolving dormant ancestry from canonical creation inputs.
 3. Preserve Messages, Requests, cancellation, answer retention, human questions, moderation, and Operational Incident behavior.
 4. Stream Workflow activity state to each Runtime Bridge.
 5. Implement child-native `/agents` selector/activity UI, awaited Owner selection actions, direct physical attachment retargeting, Agent-to-Agent switching, and return to Owner.
@@ -422,7 +422,7 @@ Checkpoint: all public coordination and complete Agent-view tests pass against p
 
 ### Milestone 8 — Cold recovery, races, and shutdown
 
-1. Respawn cold-recovered Agents on their exact verified transcript and immutable Identity configuration.
+1. Respawn cold-recovered Agents on their exact verified transcript after dynamically resolving current configuration from canonical creation inputs.
 2. Cover Owner shutdown during spawn, handshake, startup dialog, model work, tool request, remote view, input processing, and transcript handoff.
 3. Cover child crash, protocol violation, socket loss, PTY failure, model failure, extension failure, and forced kill.
 4. Verify no orphan processes, socket files, listeners, PTYs, timers, watchers, or stale transcript writers remain.
@@ -500,9 +500,9 @@ Future-platform extensibility gate:
 - [x] Added exact Pi child CLI launch construction and physical Herdr pane environment isolation.
 - [x] Completed the production Runtime Bridge/Process Runtime vertical slice with real Pi CLI/TUI, offline model lifecycle, exact session, token admission, PTY input/resize, and bounded termination.
 - [x] Routed coordination transcript reads through `AgentTranscript` and added a fresh-file inspection Adapter.
-- [x] Materialized the exact pre-launch JSONL only after validating committed Agent Identity and immutable Runtime Blueprint evidence.
-- [x] Committed role-bound immutable Runtime Blueprint evidence for ordinary and Moderator admissions, including exact selected skill sources, trust, and effective context files.
-- [x] Added a process-safe one-shot child blueprint resolver that uses public Pi resource APIs without evaluating inherited extension factories and rejects arbitrary per-child extension paths.
+- [x] Materialized the exact pre-launch JSONL after validating Agent Identity or Moderator Input bootstrap evidence.
+- [x] Kept resolved launch configuration volatile and dynamically prepared current skill sources, trust, and effective context files for every new Runtime.
+- [x] Added a process-safe child Runtime preparation module that uses public Pi resource APIs without evaluating inherited extension factories and rejects arbitrary per-child extension paths.
 - [x] Routed coordination through process-neutral Runtime Host intentions and removed live child `AgentSession`/services reach-through from coordination operations.
 - [x] Extracted handler-driven participant coordination tool schemas, renderers, role sets, and registration without changing local receipts.
 - [x] Adapted real child PTY frames to the Terminal Projection surface, including styled/wide cells, cursor presentation, focus, resize, failure/exit, final-output drain, and owned process-group cleanup.
@@ -536,8 +536,8 @@ Future-platform extensibility gate:
 - Keep Workflow authority and Run supervision in the Owner process.
 - Make the child process sole transcript authority while live.
 - Reconstruct Pi-owned inline factories locally and remove arbitrary named-inline inheritance.
-- Snapshot file-backed extensions and skill paths automatically; do not introduce user-maintained lists.
-- Resolve Template and resources once before Agent Identity; successor and cold Runtimes reuse that one committed immutable blueprint rather than rerunning mutable Template/resource discovery.
+- Resolve file-backed extensions and skill paths automatically for every new Runtime; do not introduce user-maintained lists.
+- Persist only canonical creation inputs. Successor and cold Runtimes dynamically resolve current parent configuration, Templates, resources, trust, and Project Context.
 - Strip Herdr physical-pane ownership through one isolated environment Adapter.
 - Preserve complete TUI behavior and `/agents`; do not replace it with RPC or read-only rendering.
 - Fail closed on protocol/channel loss and recover by starting a fresh process from durable evidence, not by reconnecting.

@@ -36,13 +36,13 @@ The key suppresses duplicates only while that exact continuous predicate remains
 Before starting a Moderator Run, the host commits one visible `agent-coordination.moderator-input` as the first transcript entry. It contains:
 
 - the fresh Agent and Workflow relationship;
-- fixed `moderator` metadata and the Owner-derived runtime baseline;
+- fixed `moderator` metadata;
 - one trigger snapshot;
 - up to 16 exact qualifying Request sources;
 - inspection watermarks for every affected Agent;
 - for a replacement, the previous attempt's terminal transcript pointer.
 
-Failure before this commit creates no Agent and consumes no attempt. A committed Input creates a standalone Moderator with no Direct Spawner, even if startup or its Run then fails.
+Failure before this commit creates no Agent and consumes no attempt. A committed Input creates a standalone Moderator with no Direct Spawner, even if startup or its Run then fails. Each new Moderator Runtime dynamically resolves the current Owner Runtime, current reserved `moderator` Template, resources, trust, and Project Context; those resolved values are not part of Moderator Input.
 
 An Operation Review trigger contains only `kind`, the exact `toolCall` pointer, and the elapsed `reviewIntervalMs`. It carries no inferred outcome, internal-stage details, deadline timestamp, adapter state, or eager diagnostics.
 

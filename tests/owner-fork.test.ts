@@ -62,10 +62,9 @@ test("native fork is cancelled for a matching Moderator bootstrap", async () => 
 		{
 			agentId: host.session.sessionId,
 			workflowId: "source-workflow",
-			configuration: {
+			metadata: {
 				label: "moderator",
 				description: "run failure",
-				baseline: ownerBaseline(host),
 			},
 		},
 	);
@@ -108,10 +107,7 @@ test("offline fork preparation cannot reclassify copied child evidence as Owner"
 			entryId: "source-spawn-entry",
 			toolCallId: "source-spawn-call",
 		},
-		configuration: {
-			label: "source-child",
-			baseline: ownerBaseline(source),
-		},
+		metadata: { label: "source-child" },
 	});
 	source.session.sessionManager.appendMessage(
 		fauxAssistantMessage("Keep copied child conversation as native context."),
@@ -263,10 +259,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 				agentId: forkOwner.sessionId,
 				workflowId: forkOwner.sessionId,
 				directSpawnerAgentId: null,
-				configuration: {
-					label: "owner",
-					baseline: ownerBaseline(host),
-				},
+				metadata: { label: "owner" },
 			},
 		);
 		const copiedContext = JSON.stringify(
@@ -579,17 +572,4 @@ async function assertSourceIdentityIsUnavailable(
 			/unknown_identity|wrong_workflow|wrong_participant/,
 		);
 	}
-}
-
-function ownerBaseline(host: TestOwnerHost) {
-	return {
-		cwd: host.cwd,
-		model: { provider: "coordination-test", modelId: "deterministic-owner" },
-		thinking: "off" as const,
-		tools: [],
-		skills: [],
-		extensions: host.services.resourceLoader.getExtensions().extensions
-			.filter(({ path }) => path !== "<inline:pi-agent-coordination>")
-			.map(({ resolvedPath }) => resolvedPath),
-	};
 }

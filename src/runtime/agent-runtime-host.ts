@@ -52,6 +52,7 @@ export type EffectiveRuntimeSnapshot = Readonly<{
 	thinking: RuntimeThinkingLevel;
 	tools: readonly string[];
 	skills: readonly string[];
+	skillSources: readonly Readonly<{ name: string; filePath: string }>[];
 	fileExtensionPaths: readonly string[];
 	projectTrusted: boolean;
 	sessionId: string;

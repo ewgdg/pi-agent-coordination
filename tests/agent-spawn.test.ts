@@ -19,7 +19,6 @@ import {
 	type SpawnBoundaryHooks,
 } from "../src/coordination/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
-import { resolveCommittedAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
 import { ProtocolInvariantError } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -201,22 +200,9 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: host.session.sessionId,
 		spawnSource,
-		configuration: {
+		metadata: {
 			label: "agent",
 			description: "Inspects one coordination boundary",
-			baseline: {
-				cwd: host.cwd,
-				model: { provider: "coordination-test", modelId: "deterministic-owner" },
-				thinking: "off",
-				tools: [
-					"agent_message",
-					"agent_spawn",
-					"agent_observe",
-					"agent_control",
-				],
-				skills: [],
-				extensions: processExtensions,
-			},
 		},
 	});
 	const delivery = childEntries.find(
@@ -245,13 +231,13 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	await host.runtime.dispose();
 });
 
-test("a selected Template and immutable overrides resolve against baseline cwd for a real child Run", async () => {
+test("a successor Runtime re-resolves its current Template and project resources", async () => {
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const templateRoot = join(host.cwd, "template-root");
 	const effectiveCwd = join(host.cwd, "subproject");
 	await mkdir(templateRoot, { recursive: true });
@@ -280,8 +266,8 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		packageRoot: host.cwd,
-		templateRoots: (baselineCwd, projectTrusted) => {
-			assert.equal(baselineCwd, host.cwd);
+		templateRoots: (parentCwd, projectTrusted) => {
+			assert.equal(parentCwd, host.cwd);
 			assert.equal(projectTrusted, true);
 			return [{ scope: "trusted-project", path: templateRoot }];
 		},
@@ -360,36 +346,18 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 	);
 	assert.ok(childIdentity && childIdentity.type === "custom");
 	assert.deepEqual(
-		(childIdentity.data as { configuration: object }).configuration,
+		(childIdentity.data as { metadata: object }).metadata,
 		{
 			label: "research-agent",
 			description: "Research specialist",
-			baseline: {
-				cwd: host.cwd,
-				model: { provider: "coordination-test", modelId: "deterministic-owner" },
-				thinking: "off",
-				tools: [],
-				skills: [],
-				extensions: processExtensions,
-			},
 		},
 	);
-	const runtimeBlueprint = resolveCommittedAgentRuntimeBlueprint({
-		sessionId: configuredChildTranscript.getSessionId(),
-		entries: configuredChildEntries,
-	});
-	assert.equal(runtimeBlueprint.agentId, receipt.agentId);
-	assert.equal(runtimeBlueprint.role, "ordinary");
-	assert.deepEqual(runtimeBlueprint.configuration, receipt.effectiveConfiguration);
-	assert.equal(runtimeBlueprint.projectTrusted, true);
-	assert.deepEqual(runtimeBlueprint.skillSources, []);
-	assert.deepEqual(runtimeBlueprint.agentsFiles, [
-		{ path: join(effectiveCwd, "AGENTS.md"), content: "Native effective-cwd context" },
-		{
-			path: `<agent-configuration:${receipt.agentId}>`,
-			content: "Template context\n\nSpawn context",
-		},
-	]);
+	assert.deepEqual(
+		configuredChildEntries.flatMap(
+			(entry) => entry.type === "custom" ? [entry.customType] : [],
+		),
+		["agent-coordination.identity"],
+	);
 
 	const agentId = receipt.agentId;
 	await waitForCondition(() => {
@@ -420,13 +388,13 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 	host.model.setResponses([
 		(context) => {
 			successorSystemPrompt = context.systemPrompt ?? "";
-			return fauxAssistantMessage("Committed blueprint successor observed.");
+			return fauxAssistantMessage("Dynamically prepared successor observed.");
 		},
 	]);
 	const successorInput = {
 		operation: "send" as const,
 		targetAgentId: agentId,
-		content: "Start a successor from the already committed blueprint.",
+		content: "Start a successor from current configuration and resources.",
 	};
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -441,17 +409,10 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 	assert.ok("delivery" in successorReceipt);
 	assert.equal(successorReceipt.delivery, "pending");
 	await waitForCondition(() => successorSystemPrompt.length > 0);
-	assert.match(successorSystemPrompt, /Native effective-cwd context/);
-	assert.match(successorSystemPrompt, /Template context/);
+	assert.match(successorSystemPrompt, /Changed effective-cwd context/);
+	assert.match(successorSystemPrompt, /Changed Template context/);
 	assert.match(successorSystemPrompt, /Spawn context/);
-	assert.doesNotMatch(successorSystemPrompt, /Changed (?:Template|effective-cwd) context/);
-	assert.deepEqual(
-		resolveCommittedAgentRuntimeBlueprint({
-			sessionId: agentId,
-			entries: SessionManager.open(childSessionFile).getEntries(),
-		}),
-		runtimeBlueprint,
-	);
+	assert.doesNotMatch(successorSystemPrompt, /Native effective-cwd context/);
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
@@ -600,21 +561,11 @@ test("effective cwd honors Pi's default project-trust policy", async () => {
 	assert.equal(receipt.disposition, "pending");
 	assert.deepEqual(receipt.effectiveConfiguration?.skills, ["trusted-skill"]);
 	assert.ok(receipt.agentId);
-	const childSession = capturedSessionManager(receipt.agentId);
-	const runtimeBlueprint = resolveCommittedAgentRuntimeBlueprint({
-		sessionId: childSession.getSessionId(),
-		entries: childSession.getEntries(),
-	});
-	assert.deepEqual(runtimeBlueprint.skillSources, [{
-		name: "trusted-skill",
-		path: join(skillDirectory, "SKILL.md"),
-	}]);
-	assert.equal(runtimeBlueprint.projectTrusted, true);
 
 	await harness.shutdown();
 });
 
-test("unavailable inherited tools remain in the committed blueprint when process startup rejects them", async () => {
+test("unavailable inherited tools remain visible in the startup-failure receipt", async () => {
 	const ownerOnlyTool: ExtensionFactory = (pi) => {
 		pi.registerTool({
 			name: "owner_only_probe",
@@ -636,16 +587,10 @@ test("unavailable inherited tools remain in the committed blueprint when process
 		phase: "dormant",
 		retentionReasons: [],
 	});
-	const childSession = capturedSessionManager(receipt.agentId);
-	const runtimeBlueprint = resolveCommittedAgentRuntimeBlueprint({
-		sessionId: receipt.agentId,
-		entries: childSession.getEntries(),
-	});
-	assert.deepEqual(runtimeBlueprint.configuration, receipt.effectiveConfiguration);
-	assert.ok(runtimeBlueprint.configuration.tools.includes("owner_only_probe"));
-	assert.equal(runtimeBlueprint.configuration.extensions.length, 1);
+	assert.ok(receipt.effectiveConfiguration.tools.includes("owner_only_probe"));
+	assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
 	assert.match(
-		runtimeBlueprint.configuration.extensions[0]!,
+		receipt.effectiveConfiguration.extensions[0]!,
 		/process-model-broker-extension\.mjs$/,
 	);
 
@@ -976,7 +921,7 @@ async function createCoordinatorHarness(
 		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",

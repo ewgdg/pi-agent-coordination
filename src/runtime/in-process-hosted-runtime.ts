@@ -216,6 +216,10 @@ function inspectInProcessRuntime(
 		thinking: session.thinkingLevel,
 		tools: [...session.getActiveToolNames()],
 		skills: services.resourceLoader.getSkills().skills.map(({ name }) => name),
+		skillSources: services.resourceLoader.getSkills().skills.map(({ name, filePath }) => ({
+			name,
+			filePath,
+		})),
 		fileExtensionPaths: services.resourceLoader
 			.getExtensions()
 			.extensions.map(({ resolvedPath }) => resolvedPath),

@@ -6,13 +6,13 @@ import test from "node:test";
 
 import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
 
-import { resolveChildRunBlueprint } from "../src/runtime/child-run-blueprint-resolver.ts";
+import { prepareChildRuntime } from "../src/runtime/child-runtime-preparation.ts";
 
-test("resolves one process-safe ordinary child creation blueprint without evaluating inherited extensions", async () => {
-	const fixture = await mkdtemp(join(tmpdir(), "child-run-blueprint-"));
+test("resolves one process-safe ordinary child creation preparation without evaluating inherited extensions", async () => {
+	const fixture = await mkdtemp(join(tmpdir(), "child-run-preparation-"));
 	const agentDir = join(fixture, "agent");
-	const baselineCwd = join(fixture, "workspace");
-	const effectiveCwd = join(baselineCwd, "subproject");
+	const parentCwd = join(fixture, "workspace");
+	const effectiveCwd = join(parentCwd, "subproject");
 	const inheritedSkillPath = join(fixture, "inherited-review", "SKILL.md");
 	const projectSkillPath = join(effectiveCwd, ".pi", "skills", "project-audit", "SKILL.md");
 	const extensionPath = join(fixture, "sentinel-extension.ts");
@@ -28,7 +28,7 @@ test("resolves one process-safe ordinary child creation blueprint without evalua
 	]);
 	await Promise.all([
 		writeFile(join(agentDir, "AGENTS.md"), "Global instructions"),
-		writeFile(join(baselineCwd, "AGENTS.md"), "Workspace instructions"),
+		writeFile(join(parentCwd, "AGENTS.md"), "Workspace instructions"),
 		writeFile(join(effectiveCwd, "CLAUDE.md"), "Subproject instructions"),
 		writeFile(
 			inheritedSkillPath,
@@ -59,13 +59,13 @@ test("resolves one process-safe ordinary child creation blueprint without evalua
 	);
 	new ProjectTrustStore(agentDir).set(effectiveCwd, true);
 
-	const blueprint = await resolveChildRunBlueprint({
+	const preparation = await prepareChildRuntime({
 		agentId: "ordinary-child",
 		role: "ordinary",
 		agentDir,
-		parentSnapshot: {
-			baseline: {
-				cwd: baselineCwd,
+		parentRuntime: {
+			configuration: {
+				cwd: parentCwd,
 				model: { provider: "parent", modelId: "parent-model" },
 				thinking: "low",
 				tools: ["bash"],
@@ -95,7 +95,7 @@ test("resolves one process-safe ordinary child creation blueprint without evalua
 		},
 	});
 
-	assert.deepEqual(blueprint, {
+	assert.deepEqual(preparation, {
 		agentId: "ordinary-child",
 		role: "ordinary",
 		configuration: {
@@ -125,7 +125,7 @@ test("resolves one process-safe ordinary child creation blueprint without evalua
 		],
 		agentsFiles: [
 			{ path: join(agentDir, "AGENTS.md"), content: "Global instructions" },
-			{ path: join(baselineCwd, "AGENTS.md"), content: "Workspace instructions" },
+			{ path: join(parentCwd, "AGENTS.md"), content: "Workspace instructions" },
 			{ path: join(effectiveCwd, "CLAUDE.md"), content: "Subproject instructions" },
 			{
 				path: "<agent-configuration:ordinary-child>",
@@ -146,12 +146,12 @@ test("extensions none does not inspect or carry inherited extension paths", asyn
 		mkdir(cwd, { recursive: true }),
 	]);
 
-	const blueprint = await resolveChildRunBlueprint({
+	const preparation = await prepareChildRuntime({
 		agentId: "extension-free-child",
 		role: "ordinary",
 		agentDir,
-		parentSnapshot: {
-			baseline: {
+		parentRuntime: {
+			configuration: {
 				cwd,
 				model: { provider: "test", modelId: "model" },
 				thinking: "off",
@@ -165,7 +165,7 @@ test("extensions none does not inspect or carry inherited extension paths", asyn
 		overrides: { extensions: "none" },
 	});
 
-	assert.deepEqual(blueprint.configuration.extensions, []);
+	assert.deepEqual(preparation.configuration.extensions, []);
 });
 
 test("rejects arbitrary per-child extension paths instead of carrying inline inheritance forward", async () => {
@@ -182,8 +182,8 @@ test("rejects arbitrary per-child extension paths instead of carrying inline inh
 		agentId: "extension-selection-child",
 		role: "ordinary" as const,
 		agentDir,
-		parentSnapshot: {
-			baseline: {
+		parentRuntime: {
+			configuration: {
 				cwd,
 				model: { provider: "test", modelId: "model" },
 				thinking: "off" as const,
@@ -197,14 +197,14 @@ test("rejects arbitrary per-child extension paths instead of carrying inline inh
 	};
 
 	await assert.rejects(
-		resolveChildRunBlueprint({
+		prepareChildRuntime({
 			...common,
 			overrides: { extensions: [arbitraryExtension] },
 		}),
 		/extension selection must be inherit or none/,
 	);
 	await assert.rejects(
-		resolveChildRunBlueprint({
+		prepareChildRuntime({
 			...common,
 			template: {
 				name: "arbitrary-extension-template",
@@ -218,21 +218,21 @@ test("rejects arbitrary per-child extension paths instead of carrying inline inh
 	);
 });
 
-test("uses the immutable parent trust for the same cwd and saved or global trust for a new cwd", async () => {
+test("uses current parent trust for the same cwd and saved or global trust for a new cwd", async () => {
 	const fixture = await mkdtemp(join(tmpdir(), "child-run-trust-"));
 	const agentDir = join(fixture, "agent");
-	const baselineCwd = join(fixture, "workspace");
-	const baselineCwdAlias = join(fixture, "workspace-alias");
+	const parentCwd = join(fixture, "workspace");
+	const parentCwdAlias = join(fixture, "workspace-alias");
 	const newCwd = join(fixture, "other-workspace");
 	const extensionPath = join(fixture, "must-not-load.ts");
 	await Promise.all([
 		mkdir(agentDir, { recursive: true }),
-		mkdir(baselineCwd, { recursive: true }),
+		mkdir(parentCwd, { recursive: true }),
 		mkdir(newCwd, { recursive: true }),
-		writeFile(join(baselineCwd, "AGENTS.md"), "Ordinary context to replace"),
+		writeFile(join(parentCwd, "AGENTS.md"), "Ordinary context to replace"),
 		writeFile(extensionPath, 'throw new Error("extension was evaluated");\n'),
 	]);
-	await symlink(baselineCwd, baselineCwdAlias, "dir");
+	await symlink(parentCwd, parentCwdAlias, "dir");
 	await writeFile(
 		join(agentDir, "settings.json"),
 		`${JSON.stringify({
@@ -240,10 +240,10 @@ test("uses the immutable parent trust for the same cwd and saved or global trust
 			extensions: [extensionPath],
 		}, null, 2)}\n`,
 	);
-	new ProjectTrustStore(agentDir).set(baselineCwd, true);
-	const parentSnapshot = {
-		baseline: {
-			cwd: baselineCwd,
+	new ProjectTrustStore(agentDir).set(parentCwd, true);
+	const parentRuntime = {
+		configuration: {
+			cwd: parentCwd,
 			model: { provider: "parent", modelId: "model" },
 			thinking: "minimal" as const,
 			tools: ["read"],
@@ -254,11 +254,11 @@ test("uses the immutable parent trust for the same cwd and saved or global trust
 		skillSources: [],
 	};
 
-	const sameCwd = await resolveChildRunBlueprint({
+	const sameCwd = await prepareChildRuntime({
 		agentId: "moderator-child",
 		role: "moderator",
 		agentDir,
-		parentSnapshot,
+		parentRuntime,
 		template: {
 			name: "moderator",
 			extensions: "none",
@@ -269,7 +269,7 @@ test("uses the immutable parent trust for the same cwd and saved or global trust
 	});
 	assert.equal(sameCwd.projectTrusted, false);
 	assert.deepEqual(sameCwd.configuration, {
-		cwd: baselineCwd,
+		cwd: parentCwd,
 		model: { provider: "parent", modelId: "model" },
 		thinking: "minimal",
 		tools: [
@@ -289,23 +289,23 @@ test("uses the immutable parent trust for the same cwd and saved or global trust
 		content: "Moderator-only context",
 	}]);
 
-	const sameCwdAlias = await resolveChildRunBlueprint({
+	const sameCwdAlias = await prepareChildRuntime({
 		agentId: "ordinary-same-cwd-alias",
 		role: "ordinary",
 		agentDir,
-		parentSnapshot,
-		overrides: { cwd: baselineCwdAlias, extensions: "none" },
+		parentRuntime,
+		overrides: { cwd: parentCwdAlias, extensions: "none" },
 	});
 	assert.equal(sameCwdAlias.projectTrusted, false);
 
-	const newCwdBlueprint = await resolveChildRunBlueprint({
+	const newCwdPreparation = await prepareChildRuntime({
 		agentId: "ordinary-new-cwd",
 		role: "ordinary",
 		agentDir,
-		parentSnapshot,
+		parentRuntime,
 		overrides: { cwd: newCwd, extensions: "none" },
 	});
-	assert.equal(newCwdBlueprint.projectTrusted, true);
+	assert.equal(newCwdPreparation.projectTrusted, true);
 });
 
 test("replaces inherited or configured coordination tools with the exact child role set", async () => {
@@ -316,12 +316,12 @@ test("replaces inherited or configured coordination tools with the exact child r
 		mkdir(agentDir, { recursive: true }),
 		mkdir(cwd, { recursive: true }),
 	]);
-	const blueprint = await resolveChildRunBlueprint({
+	const preparation = await prepareChildRuntime({
 		agentId: "ordinary-role-tools",
 		role: "ordinary",
 		agentDir,
-		parentSnapshot: {
-			baseline: {
+		parentRuntime: {
+			configuration: {
 				cwd,
 				model: { provider: "test", modelId: "model" },
 				thinking: "off",
@@ -337,7 +337,7 @@ test("replaces inherited or configured coordination tools with the exact child r
 		},
 	});
 
-	assert.deepEqual(blueprint.configuration.tools, [
+	assert.deepEqual(preparation.configuration.tools, [
 		"read",
 		"agent_message",
 		"agent_control",

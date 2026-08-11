@@ -2,9 +2,11 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { writeFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
-import { resolveCommittedAgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
 import { validateColdChildIdentity } from "../protocol/child-identity.ts";
-import { validateColdModeratorInput } from "../protocol/moderator-input.ts";
+import {
+	MODERATOR_INPUT_CUSTOM_TYPE,
+	validateColdModeratorInput,
+} from "../protocol/moderator-input.ts";
 import {
 	AgentTranscript,
 	type TranscriptInspection,
@@ -63,28 +65,22 @@ export async function materializeNewAgentTranscript(
 	if (entries.length === 0) {
 		throw new Error("transcript_materialization_failed: Agent Identity evidence is unavailable");
 	}
-	const blueprint = resolveCommittedAgentRuntimeBlueprint({
-		sessionId: sessionManager.getSessionId(),
-		entries,
-	});
-	if (header.id !== blueprint.agentId) {
+	if (header.id !== sessionManager.getSessionId()) {
 		throw new Error(
-			"transcript_materialization_failed: header does not match the Runtime blueprint Agent",
-		);
-	}
-	if (header.cwd !== blueprint.configuration.cwd) {
-		throw new Error(
-			"transcript_materialization_failed: header does not use the effective Runtime cwd",
+			"transcript_materialization_failed: header does not match the Agent session",
 		);
 	}
 	const coldIdentityOptions = {
 		sessionId: sessionManager.getSessionId(),
 		entries,
 	};
-	if (blueprint.role === "ordinary") {
-		validateColdChildIdentity(coldIdentityOptions);
-	} else {
+	if (
+		entries[0]?.type === "custom_message" &&
+		entries[0].customType === MODERATOR_INPUT_CUSTOM_TYPE
+	) {
 		validateColdModeratorInput(coldIdentityOptions);
+	} else {
+		validateColdChildIdentity(coldIdentityOptions);
 	}
 	const body = `${[header, ...entries]
 		.map((entry) => JSON.stringify(entry))

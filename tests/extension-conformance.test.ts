@@ -117,7 +117,7 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 			args: { operation: "status", agentId: "child-agent" },
 			details: {
 				agentId: "child-agent",
-				configuration: { label: "Researcher" },
+				metadata: { label: "Researcher" },
 				run: { phase: "live", work: "settled" },
 			},
 			summary: /child-agent/,

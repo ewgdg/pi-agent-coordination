@@ -5,7 +5,7 @@ This context defines durable Agent identities and their transient live coordinat
 ## Language
 
 **Agent Identity**:
-The immutable transcript bootstrap facts for one Agent, bound to its expected Pi session identity. The ordinary Identity entry creates a Workflow Owner when its Agent ID equals its Workflow ID, or a spawned Agent when it names a Direct Spawner and matching Agent Spawn source. A runtime-created Moderator instead receives one atomic Moderator Input bootstrap containing its Workflow relationship, Agent Configuration, and model-visible creation reason.
+The immutable transcript bootstrap facts for one Agent, bound to its expected Pi session identity. The ordinary Identity entry creates a Workflow Owner when its Agent ID equals its Workflow ID, or a spawned Agent when it names a Direct Spawner, matching Agent Spawn source, and display metadata. A runtime-created Moderator instead receives one atomic Moderator Input bootstrap containing its Workflow relationship, display metadata, and model-visible creation reason. Resolved Runtime configuration is not Agent Identity.
 
 **Owner Fork**:
 A native Pi fork or clone of a Workflow Owner into a fresh independent Workflow. Its fresh Owner Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no Message, Request, authority, or child relationship in the new Workflow. Forking a child Agent or Moderator is not admitted.
@@ -54,18 +54,18 @@ One operation available to each authenticated ordinary Agent—a Workflow Owner 
 The ordinary Agent Request authored by an Agent Spawn invocation as its child's initial work. Its identity derives from that invocation as a Message, while the matching child Agent Identity supplies its recipient and makes it canonical. It then uses ordinary fixed-mode delivery, retry, cancellation, Answer, and Answer Retrieval semantics without becoming an Agent lifecycle result.
 
 **Agent Template**:
-A user-authored named partial Agent runtime configuration that may be selected during Agent Spawn. Apart from its name, it can prefill only the template-enabled parts of Agent Spawn configuration; working directory and Agent display metadata remain spawn-owned. Its current complete definition is re-resolved whenever an Agent Runtime is prepared, overlays the Agent's immutable creation baseline, and remains overridable by that spawn without changing protocol identity or role relationships. A retained Runtime keeps its resolved configuration across successive exact Runs. Project-scoped discovery remains anchored to the Agent's Baseline Working Directory.
+A user-authored named partial Agent Runtime configuration selected by name during Agent Spawn. Its current complete definition is re-resolved whenever a new Runtime is prepared. It overlays the current resolved configuration of the Direct Spawner, remains overridable by the canonical Agent Spawn configuration, and changes neither protocol identity nor role relationships. Project-scoped Template discovery follows the current parent Runtime working directory. A retained Runtime keeps its already resolved configuration across its exact Runs.
 _Avoid_: Agent profile, Agent role
 
-**Agent Configuration**:
-The immutable Agent label, optional description, and creation baseline committed during Agent bootstrap. For a spawned Agent the baseline snapshots the spawning parent's inheritable runtime properties at creation, while every Runtime preparation freshly applies the currently resolved selected Agent Template, canonical spawn overrides, and fixed role requirements.
-_Avoid_: Agent settings, runtime state
+**Agent Spawn Configuration**:
+The optional caller-authored `config` object in the canonical Agent Spawn tool call. It is the only durable child Runtime configuration input and may override model, thinking, working directory, ordinary tools, skills, extension inheritance, and Project Context. It is never expanded into durable effective configuration.
+_Avoid_: Agent settings, runtime state, inheritance snapshot
 
-**Baseline Working Directory**:
-The immutable working directory inherited from the Direct Spawner's Effective Run Working Directory at Agent Spawn admission. A Moderator instead inherits the Workflow Owner's Effective Run Working Directory at Moderator creation. It anchors project-scoped Agent Template discovery and relative template or per-spawn working-directory values on every Runtime preparation.
+**Runtime Preparation**:
+The volatile resolution performed immediately before one new Agent Runtime starts. For an ordinary Agent it recursively obtains the current parent Runtime configuration, resolves the Agent's current selected Template and canonical Agent Spawn Configuration, adds fixed role requirements, and discovers current resources, trust, and Project Context. A Moderator instead resolves the current Owner Runtime and current reserved `moderator` Template. The fully resolved launch specification may be serialized for that process launch but is never transcript evidence or recovery configuration.
 
 **Effective Run Working Directory**:
-The working directory obtained for one Run by applying the immutable per-spawn override over the Baseline Working Directory. Pi discovers ordinary Project Context and cwd-scoped resources from this directory. It never redirects that Agent's template discovery.
+The working directory obtained during Runtime Preparation by resolving the canonical per-spawn `cwd` against the current parent Runtime working directory. It anchors that Agent's project-scoped Template discovery for descendants and Pi's ordinary Project Context and cwd-scoped resource discovery for the prepared Runtime.
 
 **Workflow Policy**:
 The Owner-scoped configuration snapshot governing new host admissions, limits, and operation review. Owner resource reload may replace it prospectively without making it transcript state or changing already-admitted work.
@@ -146,7 +146,7 @@ A bounded runtime response to an exactly recognized model-generation fault, avai
 A fresh runtime-created normal Agent with no direct Spawner, running the predefined diagnostic role and role-scoped toolset for one Operational Incident and never reused. Moderator Input foregrounds the affected Agents, while trusted workflow-wide pull visibility permits broader diagnosis without eagerly loading unrelated context. Its separate Pi session keeps automatic operational investigation out of ordinary Agent working context.
 
 **Moderator Input**:
-The atomic model-visible identity bootstrap that creates and initializes one Moderator with its Workflow relationship, Agent Configuration, trigger snapshot, bounded qualifying Request sources, affected-Agent inspection watermarks, and any previous Moderator-attempt watermark. Native entry metadata supplies its time, and the entry itself truthfully establishes runtime creation with no Direct Spawner. It is the sole durable projection of why that Moderator exists, not an Incident identity, mutable status, scope, or authority grant.
+The atomic model-visible identity bootstrap that creates and initializes one Moderator with its Workflow relationship, fixed display metadata, trigger snapshot, bounded qualifying Request sources, affected-Agent inspection watermarks, and any previous Moderator-attempt watermark. Native entry metadata supplies its time, and the entry itself truthfully establishes runtime creation with no Direct Spawner. It is the sole durable projection of why that Moderator exists, not an Incident identity, mutable status, scope, or authority grant.
 
 **Moderator Behavioral Boundary**:
 The trusted rule that a Moderator uses its role-scoped messaging, inspection, and non-Owner supervisory controls only to restore safe progress, records its rationale, and asks the Workflow Owner for task intent, policy, value, or risk judgment. Structural invariants still prohibit Agent creation, impersonation, acting on another Agent's Requests, transcript or identity mutation, control of the Owner Run, and machinery retries without adapter-declared safe reconciliation.

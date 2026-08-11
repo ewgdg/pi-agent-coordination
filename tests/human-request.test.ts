@@ -480,7 +480,7 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 		}),
 		{ persistent: true },
 	);
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -591,7 +591,7 @@ test("Human Request fails before input_required when no interactive Agent editor
 			return view;
 		})(pi),
 	);
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -642,7 +642,7 @@ async function createHumanRequestChild(options?: Pick<
 		}),
 		{ persistent: true, ...options },
 	);
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",

@@ -494,10 +494,7 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
@@ -865,10 +862,7 @@ test("closing a Dormant session_start modal cancels view initialization without 
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
@@ -981,10 +975,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",

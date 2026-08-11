@@ -4,13 +4,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
-import {
-	AGENT_IDENTITY_CUSTOM_TYPE,
-	type RuntimeConfigurationBaseline,
-} from "./owner-identity.ts";
+import { AGENT_IDENTITY_CUSTOM_TYPE } from "./owner-identity.ts";
 import type { ToolCallPointer } from "./identities.ts";
 import { ProtocolInvariantError } from "./identities.ts";
-import { validateRuntimeConfigurationBaseline } from "./runtime-configuration.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 export type ChildAgentIdentity = Readonly<{
@@ -18,10 +14,9 @@ export type ChildAgentIdentity = Readonly<{
 	workflowId: string;
 	directSpawnerAgentId: string;
 	spawnSource: ToolCallPointer;
-	configuration: Readonly<{
+	metadata: Readonly<{
 		label: string;
 		description?: string;
-		baseline: RuntimeConfigurationBaseline;
 	}>;
 }>;
 
@@ -83,7 +78,7 @@ export function validateColdChildIdentity(options: {
 		"workflowId",
 		"directSpawnerAgentId",
 		"spawnSource",
-		"configuration",
+		"metadata",
 	]);
 	if (identity.agentId !== options.sessionId) {
 		throw new ProtocolInvariantError("child Identity does not match its Pi session identity");
@@ -107,29 +102,17 @@ export function validateColdChildIdentity(options: {
 	) {
 		throw new ProtocolInvariantError("child Identity spawn source is invalid");
 	}
-	const configuration = requireExactRecord(identity.configuration, [
+	const metadata = requireExactRecord(identity.metadata, [
 		"label",
-		...(isRecord(identity.configuration) && identity.configuration.description !== undefined
+		...(isRecord(identity.metadata) && identity.metadata.description !== undefined
 			? ["description"]
 			: []),
-		"baseline",
 	]);
-	if (!isIdentifier(configuration.label)) {
+	if (!isIdentifier(metadata.label)) {
 		throw new ProtocolInvariantError("child Identity label is invalid");
 	}
-	if (
-		configuration.description !== undefined &&
-		!isIdentifier(configuration.description)
-	) {
+	if (metadata.description !== undefined && !isIdentifier(metadata.description)) {
 		throw new ProtocolInvariantError("child Identity description is invalid");
-	}
-	let baseline;
-	try {
-		baseline = validateRuntimeConfigurationBaseline(configuration.baseline);
-	} catch (error) {
-		throw new ProtocolInvariantError(
-			error instanceof Error ? error.message : "child Identity baseline is invalid",
-		);
 	}
 	return {
 		agentId: options.sessionId,
@@ -140,12 +123,11 @@ export function validateColdChildIdentity(options: {
 			entryId: spawnSource.entryId,
 			toolCallId: spawnSource.toolCallId,
 		},
-		configuration: {
-			label: configuration.label,
-			...(configuration.description === undefined
+		metadata: {
+			label: metadata.label,
+			...(metadata.description === undefined
 				? {}
-				: { description: configuration.description }),
-			baseline,
+				: { description: metadata.description }),
 		},
 	};
 }

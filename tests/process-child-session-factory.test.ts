@@ -11,21 +11,16 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	initTheme,
-	type AgentSessionRuntime,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
-import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
+import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
-import {
-	commitAgentRuntimeBlueprint,
-	resolveCommittedAgentRuntimeBlueprint,
-} from "../src/protocol/agent-runtime-blueprint.ts";
-import { commitChildAgentIdentity } from "../src/protocol/child-identity.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
+import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
 import {
 	bindTestOwnerHost,
@@ -36,139 +31,89 @@ import { createProcessModelBroker } from "./support/process-model-broker.ts";
 const TEST_TIMEOUT_MS = 45_000;
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 
-test("nested spawn snapshots the admitted parent Runtime and only binds skill sources from its blueprint", async () => {
-	const root = await mkdirTestRoot("nested-parent-snapshot");
-	const parentAgentId = "nested-parent-agent";
-	const session = SessionManager.create(root, join(root, "sessions"), {
-		id: parentAgentId,
-	});
-	commitChildAgentIdentity(session, {
-		agentId: parentAgentId,
-		workflowId: "nested-parent-workflow",
-		directSpawnerAgentId: "owner-agent",
-		spawnSource: {
-			agentId: "owner-agent",
-			entryId: "parent-spawn-entry",
-			toolCallId: "parent-spawn-tool",
-		},
-		configuration: {
-			label: "Nested Parent",
-			baseline: runtimeBaseline(root),
-		},
-	});
-	commitAgentRuntimeBlueprint(session, {
-		agentId: parentAgentId,
-		role: "ordinary",
-		configuration: {
-			cwd: join(root, "blueprint-cwd"),
-			model: { provider: "blueprint-provider", modelId: "blueprint-model" },
-			thinking: "off",
-			tools: ["blueprint_tool"],
-			skills: ["shared-skill"],
-			extensions: [join(root, "blueprint-extension.ts")],
-		},
-		projectTrusted: false,
-		skillSources: [{
-			name: "shared-skill",
-			path: join(root, "skills", "shared-skill", "SKILL.md"),
-		}],
-		agentsFiles: [],
-	});
-	const runtimeCwd = join(root, "runtime-cwd");
-	const runtimeExtension = join(root, "runtime-extension.ts");
-	const factory = processFactoryForSnapshot();
-	const parent = {
-		identity: {
-			agentId: parentAgentId,
-		},
-		host: {
-			effectiveRuntimeSnapshot: () => ({
-				cwd: runtimeCwd,
-				model: { provider: "runtime-provider", modelId: "runtime-model" },
-				thinking: "high",
-				tools: ["runtime_tool"],
-				skills: ["shared-skill"],
-				fileExtensionPaths: [runtimeExtension],
-				projectTrusted: true,
-				sessionId: parentAgentId,
-			}),
-		},
-		transcript: transcriptFromSessionManager(session),
-	} as unknown as AgentRecord;
-
-	assert.deepEqual(factory.snapshotParentRuntime(parent), {
-		baseline: {
-			cwd: runtimeCwd,
-			model: { provider: "runtime-provider", modelId: "runtime-model" },
-			thinking: "high",
-			tools: ["runtime_tool"],
-			skills: ["shared-skill"],
-			extensions: [runtimeExtension],
-		},
-		projectTrusted: true,
-		skillSources: [{
-			name: "shared-skill",
-			filePath: join(root, "skills", "shared-skill", "SKILL.md"),
-		}],
-	});
-});
-
-test("nested spawn rejects parent skill names that do not align with committed sources", async () => {
-	const root = await mkdirTestRoot("nested-parent-skill-mismatch");
-	const parentAgentId = "mismatched-parent-agent";
-	const session = SessionManager.create(root, join(root, "sessions"), {
-		id: parentAgentId,
-	});
-	commitChildAgentIdentity(session, {
-		agentId: parentAgentId,
-		workflowId: "mismatched-parent-workflow",
-		directSpawnerAgentId: "owner-agent",
-		spawnSource: {
-			agentId: "owner-agent",
-			entryId: "mismatched-spawn-entry",
-			toolCallId: "mismatched-spawn-tool",
-		},
-		configuration: { label: "Mismatched Parent", baseline: runtimeBaseline(root) },
-	});
-	commitAgentRuntimeBlueprint(session, {
-		agentId: parentAgentId,
-		role: "ordinary",
-		configuration: {
-			cwd: root,
-			model: { provider: "provider", modelId: "model" },
-			thinking: "off",
-			tools: [],
-			skills: ["committed-skill"],
-			extensions: [],
-		},
-		projectTrusted: true,
-		skillSources: [{
-			name: "committed-skill",
-			path: join(root, "skills", "committed-skill", "SKILL.md"),
-		}],
-		agentsFiles: [],
-	});
-	const parent = {
-		identity: { agentId: parentAgentId },
-		host: {
-			effectiveRuntimeSnapshot: () => ({
-				cwd: root,
-				model: { provider: "provider", modelId: "model" },
-				thinking: "off",
-				tools: [],
-				skills: ["uncommitted-skill"],
-				fileExtensionPaths: [],
-				projectTrusted: true,
-				sessionId: parentAgentId,
-			}),
-		},
-		transcript: transcriptFromSessionManager(session),
-	} as unknown as AgentRecord;
-
-	assert.throws(
-		() => processFactoryForSnapshot().snapshotParentRuntime(parent),
-		/Parent Runtime skills do not align with committed blueprint sources/,
+test("a dormant parent is dynamically re-resolved before each descendant Runtime preparation", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-dynamic-parent-runtime-"));
+	const templateRoot = join(root, "templates");
+	await mkdir(templateRoot);
+	const templatePath = join(templateRoot, "parent.md");
+	await writeFile(
+		templatePath,
+		"---\nname: dynamic-parent\ntools:\n  - read\n  - bash\n---\n",
 	);
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	await bindTestOwnerHost(host, "tui");
+	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
+	const ownerRecord: AgentRecord = {
+		identity: ownerIdentity,
+		host: AgentRuntimeSupervisor.bindOwner(host.runtime),
+		transcript: transcriptFromSessionManager(host.session.sessionManager),
+		children: ["dormant-parent"],
+	};
+	const parentSession = SessionManager.inMemory(host.cwd, { id: "dormant-parent" });
+	parentSession.appendCustomEntry("agent-coordination.identity", { marker: true });
+	const parentRecord = {
+		identity: {
+			agentId: "dormant-parent",
+			workflowId: ownerIdentity.workflowId,
+			directSpawnerAgentId: ownerIdentity.agentId,
+			spawnSource: {
+				agentId: ownerIdentity.agentId,
+				entryId: "parent-spawn-entry",
+				toolCallId: "parent-spawn-call",
+			},
+			metadata: { label: "dynamic-parent" },
+		},
+		creationInput: {
+			request: "Act as the dynamically configured parent.",
+			template: "dynamic-parent",
+		},
+		host: {
+			effectiveRuntimeSnapshot: () => undefined,
+		} as unknown as AgentRecord["host"],
+		transcript: transcriptFromSessionManager(parentSession),
+		children: [],
+	} satisfies AgentRecord;
+	const agents = new Map([
+		[ownerIdentity.agentId, ownerRecord],
+		[parentRecord.identity.agentId, parentRecord],
+	]);
+	const factory = new ProcessChildSessionFactory({
+		ownerRuntime: host.runtime,
+		ownerIdentity,
+		entryModulePath: "<inline:pi-agent-coordination>",
+		packageRoot: root,
+		templateRoots: () => [{ scope: "test", path: templateRoot }],
+		resolveAgent: (agentId) => agents.get(agentId),
+		ownerRequestHandlers() {
+			throw new Error("Preparation test must not launch a child process");
+		},
+	});
+	try {
+		const first = await factory.prepareOrdinaryRun({
+			agentId: "descendant",
+			parent: parentRecord,
+			spawnInput: { request: "Inherit the current parent configuration." },
+		});
+		assert.equal(first.configuration.tools.includes("read"), true);
+		assert.equal(first.configuration.tools.includes("bash"), true);
+
+		await writeFile(
+			templatePath,
+			"---\nname: dynamic-parent\ntools: read\n---\n",
+		);
+		const second = await factory.prepareOrdinaryRun({
+			agentId: "descendant",
+			parent: parentRecord,
+			spawnInput: { request: "Inherit the current parent configuration." },
+		});
+		assert.equal(second.configuration.tools.includes("read"), true);
+		assert.equal(second.configuration.tools.includes("bash"), false);
+	} finally {
+		await host.runtime.dispose();
+	}
 });
 
 test("ordinary production spawn runs in a real child process over Owner participant RPC", {
@@ -185,10 +130,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		additionalExtensionPaths: [broker.extensionPath],
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const effectiveCwd = join(host.cwd, "process-child-cwd");
 	await mkdir(effectiveCwd);
 	const pidEvidence = join(effectiveCwd, "child-pid.txt");
@@ -254,12 +196,10 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		assert.equal(initialTranscript.getHeader()?.cwd, effectiveCwd);
 		const initialEntries = initialTranscript.getEntries();
 		assert.equal(initialEntries[0]?.type, "custom");
-		const blueprint = resolveCommittedAgentRuntimeBlueprint({
-			sessionId: receipt.agentId,
-			entries: initialEntries,
-		});
-		assert.equal(blueprint.configuration.cwd, effectiveCwd);
-		assert.deepEqual(blueprint.configuration.extensions, [broker.extensionPath]);
+		assert.deepEqual(
+			initialEntries.flatMap((entry) => entry.type === "custom" ? [entry.customType] : []),
+			["agent-coordination.identity"],
+		);
 
 		await waitFor(() => {
 			const entries = SessionManager.open(sessionPath).getEntries();
@@ -278,12 +218,12 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		await waitFor(() => owner.status(receipt.agentId).run.phase === "dormant");
 		const entriesBeforeSuccessor = SessionManager.open(sessionPath).getEntries().length;
 		broker.appendResponses([
-			fauxAssistantMessage("Exact committed blueprint successor used the same transcript."),
+			fauxAssistantMessage("Dynamically prepared successor used the same transcript."),
 		]);
 		const successorInput = {
 			operation: "send" as const,
 			targetAgentId: receipt.agentId,
-			content: "Start one exact successor without re-resolving resources.",
+			content: "Start one successor after re-resolving current resources.",
 		};
 		host.session.sessionManager.appendMessage(
 			fauxAssistantMessage(
@@ -302,7 +242,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 			return entries.length > entriesBeforeSuccessor && entries.some(
 				(entry) => entry.type === "message" && entry.message.role === "assistant" &&
 					entry.message.content.some(
-						(part) => part.type === "text" && part.text.includes("Exact committed blueprint successor"),
+						(part) => part.type === "text" && part.text.includes("Dynamically prepared successor"),
 					),
 			);
 		});
@@ -324,10 +264,7 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 		processVisibleModel: false,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
@@ -356,10 +293,12 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 		assert.ok(status.primaryEvidence.transcriptPath);
 		const durable = SessionManager.open(status.primaryEvidence.transcriptPath);
 		assert.equal(durable.getSessionId(), receipt.agentId);
-		assert.equal(resolveCommittedAgentRuntimeBlueprint({
-			sessionId: receipt.agentId,
-			entries: durable.getEntries(),
-		}).agentId, receipt.agentId);
+		assert.deepEqual(
+			durable.getEntries().flatMap(
+				(entry) => entry.type === "custom" ? [entry.customType] : [],
+			),
+			["agent-coordination.identity"],
+		);
 		await waitFor(async () => (await runtimeArtifacts(identity.workflowId)).length === 0);
 	} finally {
 		await coordinator.shutdown(async () => host.runtime.dispose());
@@ -394,10 +333,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		additionalExtensionPaths: [broker.extensionPath, moderatorWidgetExtension],
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let moderatorProviderRequests = 0;
 	broker.setResponses(Array.from({ length: 6 }, () => (context) => {
 		if (context.tools?.some(({ name }) => name === "moderator_control")) {
@@ -456,22 +392,10 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 			assert.ok(status.primaryEvidence.transcriptPath);
 			const transcript = SessionManager.open(status.primaryEvidence.transcriptPath);
 			const entries = transcript.getEntries();
-			const blueprint = resolveCommittedAgentRuntimeBlueprint({
-				sessionId: status.agentId,
-				entries,
-			});
-			assert.equal(blueprint.role, "moderator");
-			assert.deepEqual(blueprint.configuration.tools, [
-				"agent_message",
-				"agent_control",
-				"agent_observe",
-				"ask_user_question",
-				"moderator_control",
-			]);
-			assert.deepEqual(blueprint.configuration.extensions, [
-				broker.extensionPath,
-				moderatorWidgetExtension,
-			]);
+			assert.equal(
+				entries.some((entry) => entry.type === "custom"),
+				false,
+			);
 			const inputEntry = entries.find(
 				(entry) => entry.type === "custom_message" &&
 					entry.customType === "agent-coordination.moderator-input",
@@ -575,36 +499,4 @@ async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<voi
 function hasCode(code: string): (error: unknown) => boolean {
 	return (error) => typeof error === "object" && error !== null && "code" in error &&
 		(error as NodeJS.ErrnoException).code === code;
-}
-
-function processFactoryForSnapshot(): ProcessChildSessionFactory {
-	return new ProcessChildSessionFactory({
-		ownerRuntime: {} as AgentSessionRuntime,
-		ownerIdentity: {
-			agentId: "owner-agent",
-			workflowId: "snapshot-workflow",
-			directSpawnerAgentId: null,
-			configuration: { label: "owner", baseline: runtimeBaseline(tmpdir()) },
-		},
-		entryModulePath: join(tmpdir(), "package", "src", "index.ts"),
-		packageRoot: join(tmpdir(), "package"),
-		ownerRequestHandlers() {
-			throw new Error("Snapshot test does not launch a Runtime");
-		},
-	});
-}
-
-function runtimeBaseline(cwd: string) {
-	return {
-		cwd,
-		model: { provider: "baseline-provider", modelId: "baseline-model" },
-		thinking: "off" as const,
-		tools: [],
-		skills: [],
-		extensions: [],
-	};
-}
-
-function mkdirTestRoot(name: string): Promise<string> {
-	return mkdtemp(join(tmpdir(), `pi-process-factory-${name}-`));
 }
