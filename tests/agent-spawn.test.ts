@@ -727,15 +727,17 @@ test("lost Run-start confirmation stays indeterminate after confirmed Identity",
 			return "confirmation_lost";
 		},
 	});
-	const receipt = await harness.spawn("spawn-run-start-confirmation-lost");
+	try {
+		const receipt = await harness.spawn("spawn-run-start-confirmation-lost");
 
-	assert.equal(receipt.disposition, "indeterminate");
-	assert.equal(receipt.lastConfirmedStage, "identity");
-	assert.equal(typeof receipt.agentId, "string");
-	assert.equal(typeof receipt.requestId, "string");
-	assert.equal(harness.view.children()[0]?.run.phase, "live");
-
-	await harness.shutdown();
+		assert.equal(receipt.disposition, "indeterminate");
+		assert.equal(receipt.lastConfirmedStage, "identity");
+		assert.equal(typeof receipt.agentId, "string");
+		assert.equal(typeof receipt.requestId, "string");
+		assert.equal(harness.view.children()[0]?.run.phase, "live");
+	} finally {
+		await shutdownAfterLostRunStart(harness);
+	}
 });
 
 test("lost Identity confirmation stays indeterminate with a canonical dormant child", async () => {
@@ -774,7 +776,7 @@ test("lost Delivery confirmation stays indeterminate after confirmed Run start",
 test("contradictory child Identity evidence is an invariant violation", async () => {
 	const harness = await createCoordinatorHarness({
 		afterIdentityCommit: ({ identity }) => {
-			capturedSessionManager(identity.agentId).appendCustomEntry(
+			openDurableCapturedSession(identity.agentId).appendCustomEntry(
 				"agent-coordination.identity",
 				{
 				...identity,
@@ -783,19 +785,20 @@ test("contradictory child Identity evidence is an invariant violation", async ()
 			);
 		},
 	});
-
-	await assert.rejects(
-		() => harness.spawn("spawn-contradictory-identity"),
-		/invariant_violation: child transcript contains 2 ordinary Identity entries/,
-	);
-
-	await harness.shutdown();
+	try {
+		await assert.rejects(
+			() => harness.spawn("spawn-contradictory-identity"),
+			/invariant_violation: child transcript contains 2 ordinary Identity entries/,
+		);
+	} finally {
+		await harness.shutdown();
+	}
 });
 
 test("forged Creation Request Delivery evidence is an invariant violation", async () => {
 	const harness = await createCoordinatorHarness({
 		afterIdentityCommit: ({ identity }) => {
-			capturedSessionManager(identity.agentId).appendCustomMessageEntry(
+			openDurableCapturedSession(identity.agentId).appendCustomMessageEntry(
 				"agent-coordination.message-delivery",
 				JSON.stringify({
 					messages: [
@@ -812,13 +815,14 @@ test("forged Creation Request Delivery evidence is an invariant violation", asyn
 			);
 		},
 	});
-
-	await assert.rejects(
-		() => harness.spawn("spawn-with-forged-creation-request-delivery"),
-		/Creation Request .* Delivery differs from its source/,
-	);
-
-	await harness.shutdown();
+	try {
+		await assert.rejects(
+			() => harness.spawn("spawn-with-forged-creation-request-delivery"),
+			/Creation Request .* Delivery differs from its source/,
+		);
+	} finally {
+		await harness.shutdown();
+	}
 });
 
 test("direct children remain in physical Agent Spawn call order", async () => {
@@ -835,6 +839,12 @@ test("direct children remain in physical Agent Spawn call order", async () => {
 
 	await harness.shutdown();
 });
+
+function openDurableCapturedSession(agentId: string): SessionManager {
+	const sessionFile = capturedSessionManager(agentId).getSessionFile();
+	assert.ok(sessionFile, `SessionManager ${agentId} has no durable session file`);
+	return SessionManager.open(sessionFile);
+}
 
 async function waitForChildSessionFile(
 	cwd: string,
@@ -937,6 +947,24 @@ function findSpawnReceipt(sessionManager: SessionManager): AgentSpawnReceipt {
 		);
 	assert.ok(result && result.type === "message" && result.message.role === "toolResult");
 	return result.message.details as AgentSpawnReceipt;
+}
+
+async function shutdownAfterLostRunStart(
+	harness: Awaited<ReturnType<typeof createCoordinatorHarness>>,
+): Promise<void> {
+	try {
+		await harness.shutdown();
+	} catch (error) {
+		assert.ok(error instanceof AggregateError);
+		assert.equal(error.message, "Workflow shutdown failed");
+		assert.deepEqual(
+			error.errors.map((failure) => String(failure)).sort(),
+			[
+				"Error: child_runtime_run_unavailable: no Run has been admitted",
+				"Error: child_runtime_run_unavailable: no Run has been admitted",
+			],
+		);
+	}
 }
 
 async function createCoordinatorHarness(
