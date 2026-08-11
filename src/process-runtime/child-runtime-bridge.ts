@@ -145,6 +145,16 @@ async function handleOwnerRequest(
 				state.runtime,
 				request.payload.delivery,
 			);
+			const cancel = () => {
+				commit.reject(requestCancellationError(request.signal));
+				if (state.currentRunId !== request.payload.runId) return;
+				state.runtime.session.clearQueue();
+				void state.runtime.session.abort().catch((error: unknown) =>
+					reportFault(state.channel, "run_cancellation_failed", error)
+				);
+			};
+			if (request.signal.aborted) cancel();
+			else request.signal.addEventListener("abort", cancel, { once: true });
 			if (!wasActive) {
 				void completion.then(
 					() => queueMicrotask(() => commit.settle(false)),
@@ -155,24 +165,33 @@ async function handleOwnerRequest(
 				commit.reject(error);
 				await failCurrentRun(state, request.payload.runId, error);
 			});
-			const transcriptCommitted = await commit.result;
-			if (
-				!transcriptCommitted &&
-				state.runtime.session.isIdle &&
-				state.currentRunId === request.payload.runId
-			) state.currentRunId = undefined;
-			return {
-				accepted: true,
-				transcriptCommitted,
-				queuedInputCount: state.runtime.session.pendingMessageCount,
-			};
+			try {
+				const transcriptCommitted = await commit.result;
+				const modelCycleStarted = wasActive || !state.runtime.session.isIdle;
+				if (
+					!modelCycleStarted &&
+					state.currentRunId === request.payload.runId
+				) state.currentRunId = undefined;
+				return {
+					accepted: true,
+					transcriptCommitted,
+					modelCycleStarted,
+					queuedInputCount: state.runtime.session.pendingMessageCount,
+				};
+			} finally {
+				request.signal.removeEventListener("abort", cancel);
+			}
 		}
 		case "run.continue": {
+			if (request.signal.aborted) throw requestCancellationError(request.signal);
 			if (state.currentRunId) {
 				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
 			}
 			state.currentRunId = request.payload.runId;
 			state.currentRunOutcome = "completed";
+			// The Control response owns dispatch acceptance only. Exact completion and
+			// cancellation remain the agent lifecycle events and run.interrupt request;
+			// no long-running request is left pretending to own the model cycle.
 			void continueFromCommittedInput(state.runtime.session).catch((error: unknown) =>
 				failCurrentRun(state, request.payload.runId, error)
 			);
@@ -186,10 +205,7 @@ async function handleOwnerRequest(
 			};
 		}
 		case "run.interrupt": {
-			if (
-				request.payload.runId !== undefined &&
-				request.payload.runId !== state.currentRunId
-			) {
+			if (request.payload.runId !== state.currentRunId) {
 				throw new Error(
 					`stale_run: ${request.payload.runId} does not target the current child Run`,
 				);
@@ -436,13 +452,12 @@ async function readBootstrapDescriptor(): Promise<ChildProcessBootstrap> {
 	return validateChildProcessBootstrap(value);
 }
 
-function requireState(state: RuntimeState | undefined): RuntimeState {
-	if (!state) throw new Error("child_runtime_unavailable: bridge is not connected");
-	return state;
-}
-
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function requestCancellationError(signal: AbortSignal): unknown {
+	return signal.reason ?? new DOMException("The Control request was cancelled", "AbortError");
 }
 
 function assertUnreachable(value: never): never {

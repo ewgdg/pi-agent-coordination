@@ -50,6 +50,10 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		pi.on("session_shutdown", () => new Promise<void>(() => undefined));
 	}
 
+	pi.on("input", (event) => {
+		if (event.text === "PROCESS_RUNTIME_HANDLED_INPUT") return { action: "handled" };
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setWidget("process-runtime-test", [
 			"PROCESS_RUNTIME_CHILD_WIDGET",

@@ -96,6 +96,7 @@ export const agentControlMethods = {
 		response: closed({
 			accepted: Type.Boolean(),
 			transcriptCommitted: Type.Boolean(),
+			modelCycleStarted: Type.Boolean(),
 			queuedInputCount: QueuedInputCountSchema,
 		}),
 	},
@@ -112,7 +113,7 @@ export const agentControlMethods = {
 		}),
 	},
 	"run.interrupt": {
-		request: closed({ runId: Type.Optional(NonEmptyStringSchema) }),
+		request: closed({ runId: NonEmptyStringSchema }),
 		response: AcknowledgementSchema,
 	},
 	"runtime.shutdown": {

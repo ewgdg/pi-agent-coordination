@@ -146,6 +146,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		}), {
 			accepted: true,
 			transcriptCommitted: true,
+			modelCycleStarted: true,
 			queuedInputCount: 0,
 		});
 		assert.equal(
@@ -172,6 +173,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.deepEqual(await queuedDelivery, {
 			accepted: true,
 			transcriptCommitted: false,
+			modelCycleStarted: true,
 			queuedInputCount: 0,
 		});
 		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 3);
@@ -181,6 +183,38 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			event.payload.outcome === "interrupted" &&
 			event.payload.willRetry === false
 		), true);
+
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "process-runtime-cancelled-delivery-run",
+			delivery: {
+				kind: "user",
+				content: "Start work before the queued Control request is cancelled.",
+			},
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			modelCycleStarted: true,
+			queuedInputCount: 0,
+		});
+		const cancellation = new AbortController();
+		const cancelledDelivery = runtime.channel.request("message.deliver", {
+			runId: "process-runtime-cancelled-delivery-run",
+			delivery: {
+				kind: "user",
+				content: "This cancelled queued direction must never commit.",
+				deliverAs: "steer",
+			},
+		}, cancellation.signal);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		cancellation.abort();
+		await assert.rejects(cancelledDelivery, (error: unknown) =>
+			error instanceof Error && error.name === "AbortError"
+		);
+		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 4);
+		assert.doesNotMatch(
+			JSON.stringify(SessionManager.open(sessionPath).getEntries()),
+			/This cancelled queued direction must never commit/,
+		);
 
 		projection.resize(100, 30);
 		projection.dispatchInput("/runtime-probe OWNER_INPUT_OK\r");

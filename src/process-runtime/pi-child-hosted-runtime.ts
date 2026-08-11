@@ -10,6 +10,7 @@ import type {
 	HostedAgentRuntime,
 	HostedRuntimeEvent,
 } from "../runtime/hosted-agent-runtime.ts";
+import type { HostedAgentProjection } from "../runtime/hosted-agent-projection.ts";
 import { createPiChildProcessProjection } from "./pi-child-process-projection.ts";
 import {
 	type PiChildProcessLaunch,
@@ -27,25 +28,35 @@ type SettlementWaiter = {
 
 /** Adapt one pending/admitted real Pi child to the common Runtime supervisor. */
 export class PiChildHostedRuntime implements HostedAgentRuntime {
-	readonly projection;
+	readonly projection: HostedAgentProjection;
 	readonly ready: Promise<void>;
 	readonly #launch: PiChildProcessLaunch;
 	readonly #admitted: Promise<PiChildProcessRuntime>;
 	readonly #handlers = new Set<(event: HostedRuntimeEvent) => void>();
 	readonly #settlementWaiters = new Set<SettlementWaiter>();
 	readonly #removeEventHandler: () => void;
+	#removeChannelCloseHandler: () => void = () => undefined;
 	#snapshot: EffectiveRuntimeSnapshot | undefined;
 	#workState: AgentRuntimeWorkState = "settled";
 	#queuedInputCount = 0;
 	#currentRunId: string | undefined;
 	#runSequence = 0;
+	#runObserved = false;
 	#cancellation = new AbortController();
 	#unavailable: unknown;
+	#shutdownExpected = false;
 	#disposePromise: Promise<void> | undefined;
 
 	constructor(launch: PiChildProcessLaunch) {
 		this.#launch = launch;
-		this.projection = createPiChildProcessProjection(launch);
+		const projection = createPiChildProcessProjection(launch);
+		this.projection = Object.freeze({
+			...projection,
+			dispose: () => {
+				this.#shutdownExpected = true;
+				return projection.dispose();
+			},
+		});
 		this.#removeEventHandler = launch.onEvent((event) => this.#handleEvent(event));
 		this.#admitted = launch.ready();
 		this.ready = this.#admitted.then((runtime) => {
@@ -59,15 +70,18 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 				projectTrusted: runtime.snapshot.projectTrusted,
 				sessionId: runtime.snapshot.sessionId,
 			};
+			this.#removeChannelCloseHandler = runtime.channel.onClose((cause) => {
+				if (this.#shutdownExpected) return;
+				this.#fail(cause ?? new Error("child_runtime_channel_closed"));
+			});
 		});
 		void this.ready.catch((error: unknown) => this.#fail(error));
 		void launch.exited.then(
 			(exit) => {
-				if (exit.exitCode !== 0 || exit.signal !== 0) {
-					this.#fail(new Error(
-						`child_runtime_unexpected_exit: code ${exit.exitCode} signal ${exit.signal}`,
-					));
-				}
+				if (this.#shutdownExpected) return;
+				this.#fail(new Error(
+					`child_runtime_unexpected_exit: code ${exit.exitCode} signal ${exit.signal}`,
+				));
 			},
 			(error: unknown) => this.#fail(error),
 		);
@@ -114,6 +128,10 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			})
 		).then((result) => {
 			this.#updateQueuedInputCount(result.queuedInputCount);
+			if (!result.modelCycleStarted) {
+				if (this.#currentRunId === runId) this.#currentRunId = undefined;
+				settlement.resolve();
+			}
 			return result;
 		});
 		const completion = Promise.all([
@@ -157,10 +175,9 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	async abort(): Promise<void> {
 		const runId = this.#currentRunId;
+		if (!runId) return;
 		await this.#admitted.then((runtime) =>
-			runtime.channel.request("run.interrupt", {
-				...(runId === undefined ? {} : { runId }),
-			})
+			runtime.channel.request("run.interrupt", { runId })
 		);
 	}
 
@@ -171,9 +188,11 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	dispose(): Promise<void> {
 		this.#disposePromise ??= (async () => {
+			this.#shutdownExpected = true;
 			try {
 				await this.#launch.dispose();
 			} finally {
+				this.#removeChannelCloseHandler();
 				this.#removeEventHandler();
 				this.#handlers.clear();
 			}
@@ -197,7 +216,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			return;
 		}
 		if (event.event === "agent.end") {
-			this.#cancellation.abort();
+			if (event.payload.outcome === "interrupted") this.#cancellation.abort();
 			this.#emit({
 				type: "agent_end",
 				outcome: event.payload.outcome === "completed"
@@ -230,6 +249,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		if (this.#unavailable) throw this.#unavailable;
 		if (this.#currentRunId) return this.#currentRunId;
 		this.#runSequence += 1;
+		this.#runObserved = true;
 		this.#currentRunId = `hosted-run-${this.#runSequence}`;
 		return this.#currentRunId;
 	}
@@ -270,10 +290,17 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	#fail(error: unknown): void {
 		if (this.#unavailable) return;
+		const terminalRun = this.#runObserved;
 		this.#unavailable = error;
 		this.#cancellation.abort();
+		this.#workState = "settled";
+		this.#currentRunId = undefined;
 		for (const waiter of [...this.#settlementWaiters]) waiter.reject(error);
+		if (terminalRun) {
+			this.#emit({ type: "agent_end", outcome: "error", willRetry: false });
+		}
 		this.#emit({ type: "state_changed" });
+		if (terminalRun) this.#emit({ type: "agent_settled" });
 	}
 
 	#emit(event: HostedRuntimeEvent): void {
