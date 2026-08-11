@@ -133,7 +133,9 @@ export async function returnAgentViewToOwner(
 				await opened.command;
 				return;
 			}
+			const previousFrame = opened.view.render(80).join("\n");
 			opened.view.handleInput?.("k");
+			await waitForFrameChange(opened.view, previousFrame);
 			if (stripTerminalSequences(opened.view.render(80).join("\n")) === firstFrame) break;
 		}
 		opened.view.handleInput?.("\t");
@@ -187,4 +189,12 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
 		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error("Timed out waiting for the /agents custom surface");
+}
+
+async function waitForFrameChange(view: Component, previousFrame: string): Promise<void> {
+	const deadline = Date.now() + 250;
+	while (Date.now() < deadline) {
+		if (view.render(80).join("\n") !== previousFrame) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
+	}
 }

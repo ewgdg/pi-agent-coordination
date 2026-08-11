@@ -356,6 +356,13 @@ for (const failure of ["channel_loss", "process_kill"] as const) {
 
 function ordinaryOwnerHandlers(): OwnerParticipantRequestHandlers<"ordinary"> {
 	return {
+		presentation: {
+			snapshot: () => ({
+				live: [], dormant: [], selectedAgentId: "hosted-child",
+				humanAttention: [], operationalAttention: [],
+			}),
+			async select() {},
+		},
 		lifecycle: {
 			async executionStarted() {},
 			async humanInputSubmitted() { return false; },

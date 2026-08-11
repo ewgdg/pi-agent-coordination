@@ -6,6 +6,8 @@ import {
 	agentControlMethods,
 	agentControlProtocol,
 	type AgentControlMethod,
+	type RemoteAgentSelectorAction,
+	type RemoteAgentSelectorSnapshot,
 } from "../control/agent-control-protocol.ts";
 import type { ParticipantLifecycleHandlers } from "../pi-integration/participant-lifecycle.ts";
 import type {
@@ -31,6 +33,17 @@ export type ChildParticipantControlRequester = <M extends AgentControlMethod>(
 export type OwnerParticipantRequestHandlers<Role extends RemoteParticipantRole> = Readonly<{
 	lifecycle: ParticipantLifecycleHandlers;
 	coordination: ParticipantCoordinationToolHandlers<Role>;
+	presentation: OwnerParticipantPresentationHandlers;
+}>;
+
+export type OwnerParticipantPresentationHandlers = Readonly<{
+	snapshot(): RemoteAgentSelectorSnapshot;
+	select(action: RemoteAgentSelectorAction, signal: AbortSignal): Promise<void>;
+}>;
+
+export type ControlBackedChildPresentationHandlers = Readonly<{
+	snapshot(): Promise<RemoteAgentSelectorSnapshot>;
+	select(action: RemoteAgentSelectorAction, signal?: AbortSignal): Promise<void>;
 }>;
 
 export type ControlBackedChildParticipantHandlers<Role extends RemoteParticipantRole> = Readonly<{
@@ -42,6 +55,17 @@ type CommonChildCoordinationHandlers = Pick<
 	ParticipantCoordinationToolHandlers<"ordinary">,
 	"observe" | "message" | "control"
 >;
+
+export function createControlBackedChildPresentationHandlers(
+	request: ChildParticipantControlRequester,
+): ControlBackedChildPresentationHandlers {
+	return {
+		snapshot: () => request("presentation.agents.snapshot", {}),
+		async select(action, signal) {
+			await request("presentation.agents.select", action, signal);
+		},
+	};
+}
 
 /** Build the child registrars' process-neutral proxies over one Control requester. */
 export function createControlBackedChildParticipantHandlers(
@@ -191,6 +215,13 @@ export async function dispatchParticipantRequestToOwner(
 				request.payload.toolCallId,
 				request.payload.input,
 			);
+			break;
+		case "presentation.agents.snapshot":
+			response = handlers.presentation.snapshot();
+			break;
+		case "presentation.agents.select":
+			await handlers.presentation.select(request.payload, request.signal);
+			response = {};
 			break;
 		default:
 			throw new Error(`child_runtime_owner_request_unavailable: ${request.method}`);

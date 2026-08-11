@@ -74,6 +74,8 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		"coordination.spawn",
 		"coordination.askHuman",
 		"coordination.moderatorControl",
+		"presentation.agents.snapshot",
+		"presentation.agents.select",
 		"run.prompt",
 		"message.deliver",
 		"run.continue",
@@ -163,6 +165,59 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	}), true);
 	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
 		children: [{ agentId: "child" }],
+	}), false);
+	const selectorSnapshot = {
+		live: [{
+			agentId: "workflow",
+			workflowId: "workflow",
+			label: "Owner",
+			directSpawnerAgentId: null,
+			primaryEvidence: {
+				transcriptPath: "/sessions/workflow.jsonl",
+				inspectedThrough: { agentId: "workflow", entryId: "owner-entry" },
+			},
+			run: {
+				phase: "live",
+				work: "settled",
+				attention: "none",
+				retentionReasons: [{ reason: "owner_host_binding", count: 1 }],
+			},
+			model: { provider: "provider", modelId: "model" },
+			thinking: "high",
+			queuedInputCount: 0,
+		}],
+		dormant: [],
+		selectedAgentId: "child",
+		humanAttention: [{
+			requestId: "human-request",
+			agentId: "child",
+			agentLabel: "Child",
+			question: "Proceed?",
+		}],
+		operationalAttention: [{
+			trigger: {
+				kind: "operation_review",
+				toolCall: { agentId: "child", entryId: "entry", toolCallId: "tool" },
+				reviewIntervalMs: 1_000,
+			},
+			affectedAgentIds: ["child"],
+			diagnostics: [{ agentId: "moderator", entryId: "diagnostic" }],
+		}],
+	} as const;
+	assert.equal(Check(agentControlMethods["presentation.agents.snapshot"].response, selectorSnapshot), true);
+	assert.equal(Check(agentControlMethods["presentation.agents.snapshot"].response, {
+		...selectorSnapshot,
+		channelId: "must-not-cross-domain-boundary",
+	}), false);
+	assert.equal(Check(agentControlMethods["presentation.agents.select"].request, {
+		kind: "decide",
+		requestId: "human-request",
+		agentId: "child",
+	}), true);
+	assert.equal(Check(agentControlMethods["presentation.agents.select"].request, {
+		kind: "select_agent",
+		agentId: "child",
+		unixPath: "/tmp/control.sock",
 	}), false);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
 		runId: "run-1",

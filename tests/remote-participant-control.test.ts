@@ -5,6 +5,7 @@ import type { ControlRequest } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import {
 	createControlBackedChildParticipantHandlers,
+	createControlBackedChildPresentationHandlers,
 	dispatchParticipantRequestToOwner,
 	type ChildParticipantControlRequester,
 	type OwnerParticipantRequestHandlers,
@@ -120,9 +121,42 @@ test("aborting a tool call cancels its askHuman Control request", async () => {
 	assert.equal(receivedSignal?.aborted, true);
 });
 
+test("Control-backed child presentation requests preserve exact selector snapshot and action", async () => {
+	const calls: unknown[] = [];
+	const snapshot = {
+		live: [],
+		dormant: [],
+		selectedAgentId: "remote-agent",
+		humanAttention: [],
+		operationalAttention: [],
+	};
+	const cancellation = new AbortController();
+	const request = (async (method: string, payload: unknown, signal?: AbortSignal) => {
+		calls.push([method, payload, signal]);
+		return method === "presentation.agents.snapshot" ? snapshot : {};
+	}) as ChildParticipantControlRequester;
+	const presentation = createControlBackedChildPresentationHandlers(request);
+
+	assert.equal(await presentation.snapshot(), snapshot);
+	await presentation.select({ kind: "select_agent", agentId: "owner" }, cancellation.signal);
+	assert.deepEqual(calls, [
+		["presentation.agents.snapshot", {}, undefined],
+		["presentation.agents.select", { kind: "select_agent", agentId: "owner" }, cancellation.signal],
+	]);
+});
+
 test("Owner dispatch invokes scoped process-neutral handlers and returns exact receipts", async () => {
 	const calls: unknown[] = [];
 	const handlers: OwnerParticipantRequestHandlers<"moderator"> = {
+		presentation: {
+			snapshot() {
+				return {
+					live: [], dormant: [], selectedAgentId: "remote-agent",
+					humanAttention: [], operationalAttention: [],
+				};
+			},
+			async select(action, signal) { calls.push(["select", action, signal]); },
+		},
 		lifecycle: {
 			async executionStarted() { calls.push(["begin"]); },
 			async humanInputSubmitted(input) { calls.push(["input", input]); return true; },
@@ -171,4 +205,38 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 		"owner-call",
 		{ operation: "poll", messageId: "message-0" },
 	]]);
+});
+
+test("Owner dispatch awaits the authenticated child's presentation selection with cancellation", async () => {
+	const cancellation = new AbortController();
+	let receivedSignal: AbortSignal | undefined;
+	const handlers = {
+		presentation: {
+			snapshot: () => ({
+				live: [], dormant: [], selectedAgentId: "remote-agent",
+				humanAttention: [], operationalAttention: [],
+			}),
+			select: async (_action: unknown, signal: AbortSignal) => {
+				receivedSignal = signal;
+				await new Promise<void>((_resolve, reject) => signal.addEventListener(
+					"abort",
+					() => reject(new DOMException("cancelled", "AbortError")),
+					{ once: true },
+				));
+			},
+		},
+		lifecycle: {},
+		coordination: {},
+	} as unknown as OwnerParticipantRequestHandlers<"ordinary">;
+	const pending = dispatchParticipantRequestToOwner(handlers, {
+		method: "presentation.agents.select",
+		payload: { kind: "select_agent", agentId: "owner" },
+		signal: cancellation.signal,
+	});
+	cancellation.abort();
+
+	await assert.rejects(pending, (error: unknown) =>
+		error instanceof Error && error.name === "AbortError"
+	);
+	assert.equal(receivedSignal, cancellation.signal);
 });

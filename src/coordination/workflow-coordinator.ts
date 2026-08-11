@@ -80,6 +80,7 @@ import type {
 	AgentActivityStatus,
 } from "../presentation/agent-activity-surface.ts";
 import { participantCoordinatorHandlers } from "../tools/owner-surfaces.ts";
+import { createOwnerAgentPresentationHandlers } from "../process-runtime/remote-agent-selector.ts";
 import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
@@ -235,12 +236,14 @@ export class WorkflowCoordinator {
 					return {
 						coordination: participantCoordinatorHandlers("ordinary", resolveView),
 						lifecycle: participantLifecycleHandlers(resolveView),
+						presentation: createOwnerAgentPresentationHandlers(resolveView, agentId),
 					};
 				}
 				const resolveView = () => this.forModerator(agentId);
 				return {
 					coordination: participantCoordinatorHandlers("moderator", resolveView),
 					lifecycle: participantLifecycleHandlers(resolveView),
+					presentation: createOwnerAgentPresentationHandlers(resolveView, agentId),
 				};
 			},
 		});

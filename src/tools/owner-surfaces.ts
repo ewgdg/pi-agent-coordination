@@ -8,6 +8,10 @@ import type {
 import { openAgentSelectorSurface } from "../presentation/agent-selector-surface.ts";
 import { openAgentViewSurface } from "../presentation/agent-view-surface.ts";
 import {
+	createAgentSelectionSession,
+	createAgentSelectorSnapshot,
+} from "../process-runtime/remote-agent-selector.ts";
+import {
 	registerParticipantCoordinationTools,
 	type ParticipantCoordinationRole,
 	type ParticipantCoordinationToolHandlers,
@@ -45,47 +49,11 @@ export function registerAgentsCommand(
 		description: "Show Agents in the current Workflow",
 		handler: async (_args, ctx) => {
 			const view = resolveView();
-			const roster = view.selectionRoster();
-			const selectedAgent = view.status();
-			const isPendingDecision = (decision: {
-				requestId: string;
-				agentId: string;
-			}) => view.humanAttention().some(
-				(item) =>
-					item.requestId === decision.requestId &&
-					item.agentId === decision.agentId,
-			);
-			let preparedAgentView:
-				| Awaited<ReturnType<typeof view.openAgentView>>
-				| undefined;
-			const restorePreviousSelection = async () => {
-				if (preparedAgentView) await preparedAgentView.close();
-				else await view.openAgentView(selectedAgent.agentId);
-				preparedAgentView = undefined;
-			};
+			const selectedAgentId = view.status().agentId;
+			const selection = createAgentSelectionSession(view, selectedAgentId);
 			const action = await openAgentSelectorSurface(ctx.ui, {
-				...roster,
-				selectedAgentId: selectedAgent.agentId,
-				humanAttention: view.humanAttention(),
-				operationalAttention: view.operationalAttention(),
-				async prepareSelection(selection) {
-					if (
-						selection.kind === "decide" &&
-						!isPendingDecision(selection)
-					) {
-						throw new Error("stale_request: Human Request is no longer pending");
-					}
-					preparedAgentView = await view.openAgentView(selection.agentId);
-					if (
-						selection.kind === "decide" &&
-						!isPendingDecision(selection)
-					) {
-						// Preparation may have acquired or retargeted a view while the
-						// selector retained focus. Undo that change if the Request won the race.
-						await restorePreviousSelection();
-						throw new Error("stale_request: Human Request is no longer pending");
-					}
-				},
+				...createAgentSelectorSnapshot(view, selectedAgentId),
+				prepareSelection: (action) => selection.prepare(action),
 				onSelectionError(error) {
 					ctx.ui.notify(
 						`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -95,9 +63,8 @@ export function registerAgentsCommand(
 			});
 			if (action?.kind === "decide") {
 				try {
-					await view.focusHumanAnswer(action.agentId, action.requestId);
+					await selection.complete(action);
 				} catch (error) {
-					await restorePreviousSelection();
 					ctx.ui.notify(
 						`Human Request selection failed: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
@@ -106,6 +73,7 @@ export function registerAgentsCommand(
 				}
 			}
 			if (action) {
+				const preparedAgentView = selection.preparedView();
 				if (preparedAgentView) {
 					await openAgentViewSurface(ctx.ui, preparedAgentView, {
 						requestShutdown: () => ctx.shutdown(),

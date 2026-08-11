@@ -45,6 +45,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 
 	const lifecycle: string[] = [];
 	const ownerIntentions: unknown[] = [];
+	const ownerSelections: unknown[] = [];
 	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
 	let runtime: PiChildProcessRuntime | undefined;
 	let projection: ReturnType<typeof createAdmittedPiChildProcessProjection> | undefined;
@@ -89,6 +90,8 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 					agentId: "process-runtime-test-agent",
 					intention: "executionStarted",
 				}),
+				selectorSnapshot: processSelectorSnapshot(expectedSessionId),
+				select: (action) => ownerSelections.push(action),
 			}),
 		});
 		projection = createAdmittedPiChildProcessProjection(runtime);
@@ -155,6 +158,27 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.match(frameText(runtime), /HERDR_ENV=undefined/);
 		assert.match(frameText(runtime), /HERDR_SOCKET_PATH=undefined/);
 		assert.match(frameText(runtime), /HERDR_PANE_ID=undefined/);
+
+		projection.dispatchInput("/agents\r");
+		await waitForFrame(runtime, "Tab views");
+		projection.dispatchInput("\r");
+		await waitUntil(() => ownerSelections.length === 1);
+		assert.deepEqual(ownerSelections[0], {
+			kind: "select_agent",
+			agentId: expectedSessionId,
+		});
+		await waitUntil(async () => {
+			await runtime?.drain();
+			return !frameText(runtime as PiChildProcessRuntime).includes("Tab views");
+		});
+		projection.dispatchInput("/agents\r");
+		await waitForFrame(runtime, "Tab views");
+		projection.dispatchInput("k\r");
+		await waitUntil(() => ownerSelections.length === 2);
+		assert.deepEqual(ownerSelections[1], {
+			kind: "select_agent",
+			agentId: "process-runtime-test-workflow",
+		});
 
 		assert.deepEqual(await runtime.prompt({
 			runId: "process-runtime-test-run",
@@ -578,8 +602,17 @@ function ordinaryOwnerHandlers(options: Readonly<{
 	message?: (toolCallId: string, input: unknown) => void;
 	observeReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["observe"]>>;
 	messageReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["message"]>>;
+	selectorSnapshot?: ReturnType<OwnerParticipantRequestHandlers<"ordinary">["presentation"]["snapshot"]>;
+	select?: (action: Parameters<OwnerParticipantRequestHandlers<"ordinary">["presentation"]["select"]>[0]) => void;
 }> = {}): OwnerParticipantRequestHandlers<"ordinary"> {
 	return {
+		presentation: {
+			snapshot: () => options.selectorSnapshot ?? ({
+				live: [], dormant: [], selectedAgentId: "process-child",
+				humanAttention: [], operationalAttention: [],
+			}),
+			async select(action) { options.select?.(action); },
+		},
 		lifecycle: {
 			async executionStarted() { options.executionStarted?.(); },
 			async humanInputSubmitted() { return false; },
@@ -610,6 +643,45 @@ function ordinaryOwnerHandlers(options: Readonly<{
 				return { requestId: "unused-human", answer: "unused" };
 			},
 		},
+	};
+}
+
+function processSelectorSnapshot(childAgentId: string): ReturnType<
+	OwnerParticipantRequestHandlers<"ordinary">["presentation"]["snapshot"]
+> {
+	const status = (
+		agentId: string,
+		label: string,
+		directSpawnerAgentId: string | null,
+		retentionReason: "owner_host_binding" | "interactive_selection",
+	) => ({
+		agentId,
+		workflowId: "process-runtime-test-workflow",
+		label,
+		directSpawnerAgentId,
+		primaryEvidence: {
+			transcriptPath: `/sessions/${agentId}.jsonl`,
+			inspectedThrough: { agentId, entryId: `${agentId}-entry` },
+		},
+		run: {
+			phase: "live" as const,
+			work: "settled" as const,
+			attention: "none" as const,
+			retentionReasons: [{ reason: retentionReason, count: 1 }],
+		},
+		model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
+		thinking: "off" as const,
+		queuedInputCount: 0,
+	});
+	return {
+		live: [
+			status("process-runtime-test-workflow", "Owner", null, "owner_host_binding"),
+			status(childAgentId, "Process Child", "process-runtime-test-workflow", "interactive_selection"),
+		],
+		dormant: [],
+		selectedAgentId: childAgentId,
+		humanAttention: [],
+		operationalAttention: [],
 	};
 }
 

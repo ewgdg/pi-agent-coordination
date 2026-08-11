@@ -1,4 +1,4 @@
-import { Type, type TSchema } from "typebox";
+import { Type, type Static, type TSchema } from "typebox";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 
 import type { AgentControlProtocol } from "./agent-control-channel.ts";
@@ -173,7 +173,7 @@ const AgentRunStateSchema = Type.Union([
 		retentionReasons: Type.Array(RetentionSchema),
 	}),
 ]);
-const AgentStatusSchema = closed({
+const AgentStatusProperties = {
 	agentId: NonEmptyStringSchema,
 	workflowId: NonEmptyStringSchema,
 	label: NonEmptyStringSchema,
@@ -184,6 +184,17 @@ const AgentStatusSchema = closed({
 		inspectedThrough: EntryPointerSchema,
 	}),
 	run: AgentRunStateSchema,
+} as const;
+const AgentStatusSchema = closed(AgentStatusProperties);
+const RuntimeThinkingSchema = Type.Union([
+	Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"),
+	Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
+]);
+const AgentRosterStatusSchema = closed({
+	...AgentStatusProperties,
+	model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
+	thinking: RuntimeThinkingSchema,
+	queuedInputCount: QueuedInputCountSchema,
 });
 const AgentObserveResultSchema = Type.Union([
 	AgentStatusSchema,
@@ -386,18 +397,73 @@ const AgentRuntimeDeliverySchema = Type.Union([
 	}),
 ]);
 
+const ModeratorRequestSetSchema = closed({
+	total: Type.Integer({ minimum: 0 }),
+	sources: Type.Array(ToolCallPointerSchema, { uniqueItems: true }),
+});
+const ModeratorTriggerSchema = Type.Union([
+	closed({
+		kind: Type.Literal("obligation_stall"),
+		agentId: NonEmptyStringSchema,
+		obligations: ModeratorRequestSetSchema,
+	}),
+	closed({
+		kind: Type.Literal("run_failure"),
+		agentId: NonEmptyStringSchema,
+		runSequence: Type.Integer({ minimum: 1 }),
+		obligations: ModeratorRequestSetSchema,
+	}),
+	closed({
+		kind: Type.Literal("dependency_deadlock"),
+		agentIds: Type.Array(NonEmptyStringSchema, { minItems: 1, uniqueItems: true }),
+		requests: ModeratorRequestSetSchema,
+	}),
+	closed({
+		kind: Type.Literal("operation_review"),
+		toolCall: ToolCallPointerSchema,
+		reviewIntervalMs: Type.Integer({ minimum: 1 }),
+	}),
+]);
+const HumanAttentionItemSchema = closed({
+	requestId: NonEmptyStringSchema,
+	agentId: NonEmptyStringSchema,
+	agentLabel: NonEmptyStringSchema,
+	question: Type.String(),
+});
+const OperationalIncidentAttentionSchema = closed({
+	trigger: ModeratorTriggerSchema,
+	affectedAgentIds: Type.Array(NonEmptyStringSchema, { minItems: 1, uniqueItems: true }),
+	diagnostics: Type.Array(EntryPointerSchema, { uniqueItems: true }),
+});
+export const AgentSelectorActionSchema = Type.Union([
+	closed({ kind: Type.Literal("select_agent"), agentId: NonEmptyStringSchema }),
+	closed({
+		kind: Type.Literal("decide"),
+		requestId: NonEmptyStringSchema,
+		agentId: NonEmptyStringSchema,
+	}),
+]);
+export const AgentSelectorSnapshotSchema = closed({
+	live: Type.Array(AgentRosterStatusSchema, { uniqueItems: true }),
+	dormant: Type.Array(AgentRosterStatusSchema, { uniqueItems: true }),
+	selectedAgentId: NonEmptyStringSchema,
+	humanAttention: Type.Array(HumanAttentionItemSchema, { uniqueItems: true }),
+	operationalAttention: Type.Array(OperationalIncidentAttentionSchema, { uniqueItems: true }),
+});
+type DeepReadonly<T> = T extends readonly []
+	? readonly []
+	: T extends readonly (infer Item)[]
+		? readonly DeepReadonly<Item>[]
+	: T extends object
+		? { readonly [Key in keyof T]: DeepReadonly<T[Key]> }
+		: T;
+export type RemoteAgentSelectorAction = DeepReadonly<Static<typeof AgentSelectorActionSchema>>;
+export type RemoteAgentSelectorSnapshot = DeepReadonly<Static<typeof AgentSelectorSnapshotSchema>>;
+
 export const RuntimeSnapshotSchema = closed({
 	cwd: NonEmptyStringSchema,
 	model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
-	thinking: Type.Union([
-		Type.Literal("off"),
-		Type.Literal("minimal"),
-		Type.Literal("low"),
-		Type.Literal("medium"),
-		Type.Literal("high"),
-		Type.Literal("xhigh"),
-		Type.Literal("max"),
-	]),
+	thinking: RuntimeThinkingSchema,
 	tools: StringListSchema,
 	skills: StringListSchema,
 	skillSources: Type.Array(closed({ name: NonEmptyStringSchema, filePath: NonEmptyStringSchema })),
@@ -460,6 +526,14 @@ export const agentControlMethods = {
 	"coordination.moderatorControl": {
 		request: ToolIntention(ModeratorControlInputSchema),
 		response: Type.Unsafe<ModeratorControlReceipt>(ModeratorControlReceiptSchema),
+	},
+	"presentation.agents.snapshot": {
+		request: EmptySchema,
+		response: AgentSelectorSnapshotSchema,
+	},
+	"presentation.agents.select": {
+		request: AgentSelectorActionSchema,
+		response: EmptyResponseSchema,
 	},
 	"run.prompt": {
 		request: closed({

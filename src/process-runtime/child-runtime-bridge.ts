@@ -25,8 +25,10 @@ import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
 import {
 	createControlBackedChildParticipantHandlers,
+	createControlBackedChildPresentationHandlers,
 	type ChildParticipantControlRequester,
 } from "./remote-participant-control.ts";
+import { registerRemoteAgentsCommand } from "./remote-agent-selector.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
 const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
@@ -53,6 +55,10 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
 		return state.channel.request(method, payload, signal);
 	};
+	registerRemoteAgentsCommand(
+		pi,
+		createControlBackedChildPresentationHandlers(participantRequest),
+	);
 	if (bootstrap.role === "ordinary") {
 		const handlers = createControlBackedChildParticipantHandlers("ordinary", participantRequest);
 		registerParticipantLifecycle(pi, handlers.lifecycle);
@@ -263,6 +269,8 @@ async function handleOwnerRequest(
 		case "coordination.spawn":
 		case "coordination.askHuman":
 		case "coordination.moderatorControl":
+		case "presentation.agents.snapshot":
+		case "presentation.agents.select":
 			throw new Error(`child_runtime_direction_violation: ${request.method}`);
 		default:
 			return assertUnreachable(request);
