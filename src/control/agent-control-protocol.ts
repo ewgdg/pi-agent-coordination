@@ -105,7 +105,7 @@ export const agentControlMethods = {
 		response: AcknowledgementSchema,
 	},
 	"queue.clear": {
-		request: EmptySchema,
+		request: closed({ runId: NonEmptyStringSchema }),
 		response: closed({
 			steering: StringQueueSchema,
 			followUp: StringQueueSchema,

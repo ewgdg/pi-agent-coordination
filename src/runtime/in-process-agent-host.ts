@@ -164,7 +164,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		if (!run?.admitted) return { phase: "dormant", retentionReasons: [] };
 		return {
 			phase: this.#ending ? "ending" : "live",
-			work: run.runtime.workState() === "settled" ? "settled" : "active",
+			work: run.runtime.workState() === "active" ? "active" : "settled",
 			attention: this.#inputRequired?.handle === run.handle
 				? "input_required"
 				: "none",

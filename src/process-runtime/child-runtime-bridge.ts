@@ -31,6 +31,7 @@ type RuntimeState = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
 	currentRunId?: string;
+	latestRunId?: string;
 	currentRunOutcome: "completed" | "interrupted" | "failed";
 	shutdownStarted: boolean;
 };
@@ -117,6 +118,7 @@ async function handleOwnerRequest(
 				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
 			}
 			state.currentRunId = request.payload.runId;
+			state.latestRunId = request.payload.runId;
 			state.currentRunOutcome = "completed";
 			let resolvePreflight!: (accepted: boolean) => void;
 			const preflight = new Promise<boolean>((resolve) => {
@@ -139,6 +141,7 @@ async function handleOwnerRequest(
 			const wasActive = !state.runtime.session.isIdle;
 			const commit = observeDeliveryCommit(
 				state.runtime,
+				state.context.sessionManager,
 				request.payload.delivery,
 			);
 			const completion = dispatchDelivery(
@@ -188,6 +191,7 @@ async function handleOwnerRequest(
 				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
 			}
 			state.currentRunId = request.payload.runId;
+			state.latestRunId = request.payload.runId;
 			state.currentRunOutcome = "completed";
 			// The Control response owns dispatch acceptance only. Exact completion and
 			// cancellation remain the agent lifecycle events and run.interrupt request;
@@ -198,6 +202,7 @@ async function handleOwnerRequest(
 			return { accepted: true };
 		}
 		case "queue.clear": {
+			requireCurrentOrLatestRun(state, request.payload.runId);
 			const cleared = state.runtime.session.clearQueue();
 			return {
 				...cleared,
@@ -205,13 +210,8 @@ async function handleOwnerRequest(
 			};
 		}
 		case "run.interrupt": {
-			if (request.payload.runId !== state.currentRunId) {
-				throw new Error(
-					`stale_run: ${request.payload.runId} does not target the current child Run`,
-				);
-			}
-			const accepted = state.currentRunId !== undefined;
-			await state.runtime.session.abort();
+			const accepted = requireCurrentOrLatestRun(state, request.payload.runId);
+			if (accepted) await state.runtime.session.abort();
 			return { accepted };
 		}
 		case "runtime.shutdown":
@@ -296,7 +296,18 @@ function admitRun(state: RuntimeState, runId: string): void {
 	}
 	if (state.currentRunId) return;
 	state.currentRunId = runId;
+	state.latestRunId = runId;
 	state.currentRunOutcome = "completed";
+}
+
+function requireCurrentOrLatestRun(state: RuntimeState, runId: string): boolean {
+	const expectedRunId = state.currentRunId ?? state.latestRunId;
+	if (runId !== expectedRunId) {
+		throw new Error(
+			`stale_run: ${runId} does not target the current or latest child Run`,
+		);
+	}
+	return state.currentRunId === runId;
 }
 
 function dispatchDelivery(
@@ -318,6 +329,7 @@ function dispatchDelivery(
 
 function observeDeliveryCommit(
 	runtime: AgentSessionRuntime,
+	sessionManager: ExtensionContext["sessionManager"],
 	delivery: AgentRuntimeDelivery,
 ): Readonly<{
 	result: Promise<boolean>;
@@ -328,6 +340,9 @@ function observeDeliveryCommit(
 	let rejectResult!: (error: unknown) => void;
 	let settled = false;
 	let unsubscribe: () => void = () => undefined;
+	const existingEntryIds = new Set(
+		sessionManager.getEntries().map((entry) => entry.id),
+	);
 	const finish = (settlement: () => void) => {
 		if (settled) return;
 		settled = true;
@@ -344,8 +359,13 @@ function observeDeliveryCommit(
 			matchesDeliveryMessage(delivery, event.message)
 		) {
 			// AgentSession notifies listeners immediately before its synchronous
-			// SessionManager append. The next microtask is the durable commit edge.
-			queueMicrotask(() => finish(() => settleResult(true)));
+			// SessionManager append. Verify the writer's new exact entry after that edge;
+			// the lifecycle event alone is not durable transcript evidence.
+			queueMicrotask(() => finish(() => settleResult(
+				sessionManager.getEntries().some((entry) =>
+					!existingEntryIds.has(entry.id) && matchesDeliveryEntry(delivery, entry)
+				),
+			)));
 		}
 		if (event.type === "agent_settled") finish(() => settleResult(false));
 	});
@@ -354,6 +374,20 @@ function observeDeliveryCommit(
 		settle: (committed) => finish(() => settleResult(committed)),
 		reject: (error) => finish(() => rejectResult(error)),
 	};
+}
+
+function matchesDeliveryEntry(
+	delivery: AgentRuntimeDelivery,
+	entry: ReturnType<ExtensionContext["sessionManager"]["getEntries"]>[number],
+): boolean {
+	if (delivery.kind === "custom") {
+		return entry.type === "custom_message" &&
+			entry.customType === delivery.message.customType &&
+			isDeepStrictEqual(entry.content, delivery.message.content) &&
+			entry.display === delivery.message.display &&
+			isDeepStrictEqual(entry.details, delivery.message.details);
+	}
+	return entry.type === "message" && matchesDeliveryMessage(delivery, entry.message);
 }
 
 function matchesDeliveryMessage(

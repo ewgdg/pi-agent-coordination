@@ -40,6 +40,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	#workState: AgentRuntimeWorkState = "settled";
 	#queuedInputCount = 0;
 	#currentRunId: string | undefined;
+	#latestRunId: string | undefined;
 	#runSequence = 0;
 	#runObserved = false;
 	#cancellation = new AbortController();
@@ -166,16 +167,16 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	}
 
 	async clearQueue(): Promise<Readonly<{ steering: string[]; followUp: string[] }>> {
+		const runId = this.#requireLatestRunId();
 		const result = await this.#admitted.then((runtime) =>
-			runtime.channel.request("queue.clear", {})
+			runtime.channel.request("queue.clear", { runId })
 		);
 		this.#updateQueuedInputCount(result.queuedInputCount);
 		return { steering: result.steering, followUp: result.followUp };
 	}
 
 	async abort(): Promise<void> {
-		const runId = this.#currentRunId;
-		if (!runId) return;
+		const runId = this.#requireLatestRunId();
 		await this.#admitted.then((runtime) =>
 			runtime.channel.request("run.interrupt", { runId })
 		);
@@ -251,7 +252,16 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#runSequence += 1;
 		this.#runObserved = true;
 		this.#currentRunId = `hosted-run-${this.#runSequence}`;
+		this.#latestRunId = this.#currentRunId;
 		return this.#currentRunId;
+	}
+
+	#requireLatestRunId(): string {
+		if (this.#unavailable) throw this.#unavailable;
+		if (!this.#latestRunId) {
+			throw new Error("child_runtime_run_unavailable: no Run has been admitted");
+		}
+		return this.#latestRunId;
 	}
 
 	#waitForSettlement(): SettlementWaiter {
@@ -293,7 +303,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		const terminalRun = this.#runObserved;
 		this.#unavailable = error;
 		this.#cancellation.abort();
-		this.#workState = "settled";
+		this.#workState = "unavailable";
 		this.#currentRunId = undefined;
 		for (const waiter of [...this.#settlementWaiters]) waiter.reject(error);
 		if (terminalRun) {
