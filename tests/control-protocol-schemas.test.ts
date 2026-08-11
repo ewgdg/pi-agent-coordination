@@ -61,6 +61,19 @@ test("Control frame schema is a closed hello/request/response/event/cancel union
 test("every version-one method and event has TypeBox payload/result schemas", () => {
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
+		"runtime.executionBegin",
+		"runtime.humanInput",
+		"runtime.humanInputMode",
+		"runtime.guardHumanToolResult",
+		"runtime.toolExecutionStart",
+		"runtime.safeBoundary",
+		"runtime.executionEnd",
+		"coordination.observe",
+		"coordination.message",
+		"coordination.control",
+		"coordination.spawn",
+		"coordination.askHuman",
+		"coordination.moderatorControl",
 		"run.prompt",
 		"message.deliver",
 		"run.continue",
@@ -111,11 +124,41 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		model: { provider: "provider", modelId: "model" },
 		thinking: "high",
 		tools: ["read"],
-		skills: [],
-		extensions: [],
+		skills: [{ name: "review", filePath: "/skills/review/SKILL.md" }],
+		extensions: ["/extensions/review.ts"],
 		projectTrusted: true,
 		sessionId: "session",
+		sessionPath: "/sessions/session.jsonl",
+		projectContext: null,
 	}), true);
+	assert.equal(Check(agentControlMethods["runtime.humanInput"].request, {
+		text: "continue",
+		images: [{ type: "image", data: "base64", mimeType: "image/png" }],
+	}), true);
+	assert.equal(Check(agentControlMethods["runtime.humanInput"].request, {
+		text: "continue",
+		extra: true,
+	}), false);
+	assert.equal(Check(agentControlMethods["coordination.message"].request, {
+		toolCallId: "call-message",
+		input: { operation: "send", targetAgentId: "target", content: "hello" },
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
+		children: [{
+			agentId: "child",
+			workflowId: "workflow",
+			label: "Child",
+			directSpawnerAgentId: "owner",
+			primaryEvidence: {
+				transcriptPath: null,
+				inspectedThrough: { agentId: "child", entryId: "entry" },
+			},
+			run: { phase: "dormant", retentionReasons: [] },
+		}],
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
+		children: [{ agentId: "child" }],
+	}), false);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
 		runId: "run-1",
 		delivery: {

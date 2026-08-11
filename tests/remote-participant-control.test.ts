@@ -1,0 +1,174 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import type { ControlRequest } from "../src/control/agent-control-channel.ts";
+import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
+import {
+	createControlBackedParticipantHandlers,
+	dispatchOwnerParticipantRequest,
+	type ParticipantControlRequester,
+	type PiChildOwnerRequestHandlers,
+} from "../src/process-runtime/remote-participant-control.ts";
+
+const status = {
+	agentId: "observed-agent",
+	workflowId: "workflow",
+	label: "Observed",
+	directSpawnerAgentId: "remote-agent",
+	primaryEvidence: {
+		transcriptPath: "/sessions/observed.jsonl",
+		inspectedThrough: { agentId: "observed-agent", entryId: "entry-observed" },
+	},
+	run: { phase: "dormant", retentionReasons: [] },
+} as const;
+
+test("Control-backed participant proxies preserve exact lifecycle and tool intentions", async () => {
+	const calls: unknown[] = [];
+	const cancellation = new AbortController();
+	const request = (async (
+		method: string,
+		payload: unknown,
+		signal?: AbortSignal,
+	) => {
+		calls.push([method, payload, signal]);
+		switch (method) {
+			case "runtime.humanInput": return { resumed: true };
+			case "runtime.humanInputMode": return { mode: "answer" };
+			case "runtime.guardHumanToolResult": return { result: null };
+			case "coordination.observe": return status;
+			case "coordination.message": return { messageId: "message-1", delivery: "pending" };
+			case "coordination.control": return { agentId: "target", disposition: "held" };
+			case "coordination.spawn": return { disposition: "not_created", failedStage: "identity_commit" };
+			case "coordination.askHuman": return { requestId: "human-1", answer: "Proceed." };
+			default: return {};
+		}
+	}) as ParticipantControlRequester;
+	const proxies = createControlBackedParticipantHandlers("ordinary", request);
+
+	await proxies.lifecycle.executionStarted();
+	assert.equal(await proxies.lifecycle.humanInputSubmitted({ text: "resume", images: undefined }), true);
+	assert.equal(await proxies.lifecycle.humanInputMode(), "answer");
+	assert.equal(await proxies.lifecycle.humanToolResultCommitting({
+		message: { role: "user", content: "candidate", timestamp: 1 },
+	}), undefined);
+	await proxies.lifecycle.toolExecutionStarted({ toolCallId: "tool-1", toolName: "read" });
+	await proxies.lifecycle.safeBoundaryReached();
+	await proxies.lifecycle.executionEnded();
+	assert.equal(await proxies.coordination.observe({ operation: "status" }), status);
+	assert.deepEqual(
+		await proxies.coordination.message("message-call", {
+			operation: "send",
+			targetAgentId: "target",
+			content: "hello",
+		}),
+		{ messageId: "message-1", delivery: "pending" },
+	);
+	assert.deepEqual(
+		await proxies.coordination.askUserQuestion(
+			"human-call",
+			{ question: "Proceed?" },
+			cancellation.signal,
+		),
+		{ requestId: "human-1", answer: "Proceed." },
+	);
+
+	assert.deepEqual(calls, [
+		["runtime.executionBegin", {}, undefined],
+		["runtime.humanInput", { text: "resume" }, undefined],
+		["runtime.humanInputMode", {}, undefined],
+		["runtime.guardHumanToolResult", {
+			message: { role: "user", content: "candidate", timestamp: 1 },
+		}, undefined],
+		["runtime.toolExecutionStart", { toolCallId: "tool-1", toolName: "read" }, undefined],
+		["runtime.safeBoundary", {}, undefined],
+		["runtime.executionEnd", {}, undefined],
+		["coordination.observe", { operation: "status" }, undefined],
+		["coordination.message", {
+			toolCallId: "message-call",
+			input: { operation: "send", targetAgentId: "target", content: "hello" },
+		}, undefined],
+		["coordination.askHuman", {
+			toolCallId: "human-call",
+			input: { question: "Proceed?" },
+		}, cancellation.signal],
+	]);
+});
+
+test("aborting a tool call cancels its askHuman Control request", async () => {
+	let receivedSignal: AbortSignal | undefined;
+	const request = (async (method: string, _payload: unknown, signal?: AbortSignal) => {
+		assert.equal(method, "coordination.askHuman");
+		receivedSignal = signal;
+		return await new Promise((_resolve, reject) => {
+			signal?.addEventListener("abort", () =>
+				reject(new DOMException("The operation was aborted", "AbortError")), { once: true });
+		});
+	}) as ParticipantControlRequester;
+	const proxies = createControlBackedParticipantHandlers("ordinary", request);
+	const cancellation = new AbortController();
+	const pending = proxies.coordination.askUserQuestion(
+		"cancelled-human-call",
+		{ question: "Wait?" },
+		cancellation.signal,
+	);
+	cancellation.abort();
+
+	await assert.rejects(pending, (error: unknown) =>
+		error instanceof Error && error.name === "AbortError"
+	);
+	assert.equal(receivedSignal, cancellation.signal);
+	assert.equal(receivedSignal?.aborted, true);
+});
+
+test("Owner dispatch invokes scoped process-neutral handlers and returns exact receipts", async () => {
+	const calls: unknown[] = [];
+	const handlers: PiChildOwnerRequestHandlers<"moderator"> = {
+		lifecycle: {
+			async executionStarted() { calls.push(["begin"]); },
+			async humanInputSubmitted(input) { calls.push(["input", input]); return true; },
+			async humanInputMode() { calls.push(["mode"]); return "agent"; },
+			async humanToolResultCommitting(input) { calls.push(["guard", input]); return undefined; },
+			async toolExecutionStarted(input) { calls.push(["tool", input]); },
+			async safeBoundaryReached() { calls.push(["boundary"]); },
+			async executionEnded() { calls.push(["end"]); },
+		},
+		coordination: {
+			async observe(input) { calls.push(["observe", input]); return { children: [status] }; },
+			async message(toolCallId, input) {
+				calls.push(["message", toolCallId, input]);
+				return { messageId: "message-owner", delivery: "pending" };
+			},
+			async control(toolCallId, input) {
+				calls.push(["control", toolCallId, input]);
+				return { agentId: input.agentId, disposition: "not_running" };
+			},
+			async askUserQuestion(toolCallId, input, signal) {
+				calls.push(["ask", toolCallId, input, signal]);
+				return { requestId: "human-owner", answer: "Yes" };
+			},
+			async moderatorControl(toolCallId, input) {
+				calls.push(["moderator", toolCallId, input]);
+				return { disposition: "resolved" };
+			},
+		},
+	};
+	const signal = new AbortController().signal;
+	const request = {
+		method: "coordination.message",
+		payload: {
+			toolCallId: "owner-call",
+			input: { operation: "poll", messageId: "message-0" },
+		},
+		signal,
+	} as ControlRequest<typeof agentControlProtocol>;
+
+	assert.deepEqual(await dispatchOwnerParticipantRequest(handlers, request), {
+		messageId: "message-owner",
+		delivery: "pending",
+	});
+	assert.deepEqual(calls, [[
+		"message",
+		"owner-call",
+		{ operation: "poll", messageId: "message-0" },
+	]]);
+});

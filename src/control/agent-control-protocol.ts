@@ -1,6 +1,19 @@
-import { Type } from "typebox";
+import { Type, type TSchema } from "typebox";
+import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 
 import type { AgentControlProtocol } from "./agent-control-channel.ts";
+import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
+import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
+import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
+import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
+import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
+import type { ModeratorControlInput, ModeratorControlReceipt } from "../protocol/moderator-control.ts";
+import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
+import {
+	participantCoordinationToolSchemas,
+	type AgentObserveInput,
+	type AgentObserveResult,
+} from "../tools/participant-coordination-tools.ts";
 
 const closed = <const P extends Parameters<typeof Type.Object>[0]>(properties: P) =>
 	Type.Object(properties, { additionalProperties: false });
@@ -29,11 +42,326 @@ const ImageContentSchema = closed({
 	data: Type.String(),
 	mimeType: NonEmptyStringSchema,
 });
+const ImageListSchema = Type.Array(ImageContentSchema);
+const EmptyResponseSchema = closed({});
+const EntryPointerSchema = closed({
+	agentId: NonEmptyStringSchema,
+	entryId: NonEmptyStringSchema,
+});
 const ToolCallPointerSchema = closed({
 	agentId: NonEmptyStringSchema,
 	entryId: NonEmptyStringSchema,
 	toolCallId: NonEmptyStringSchema,
 });
+const ToolContentSchema = Type.Union([TextContentSchema, ImageContentSchema]);
+const ThinkingContentSchema = closed({
+	type: Type.Literal("thinking"),
+	thinking: Type.String(),
+	thinkingSignature: Type.Optional(Type.String()),
+	redacted: Type.Optional(Type.Boolean()),
+});
+const NativeToolCallSchema = closed({
+	type: Type.Literal("toolCall"),
+	id: NonEmptyStringSchema,
+	name: NonEmptyStringSchema,
+	arguments: Type.Record(Type.String(), Type.Unknown()),
+	thoughtSignature: Type.Optional(Type.String()),
+});
+const UsageSchema = closed({
+	input: Type.Number(),
+	output: Type.Number(),
+	cacheRead: Type.Number(),
+	cacheWrite: Type.Number(),
+	cacheWrite1h: Type.Optional(Type.Number()),
+	reasoning: Type.Optional(Type.Number()),
+	totalTokens: Type.Number(),
+	cost: closed({
+		input: Type.Number(),
+		output: Type.Number(),
+		cacheRead: Type.Number(),
+		cacheWrite: Type.Number(),
+		total: Type.Number(),
+	}),
+});
+const AgentMessageSchema = Type.Unsafe<MessageEndEvent["message"]>(Type.Union([
+	closed({
+		role: Type.Literal("user"),
+		content: Type.Union([Type.String(), Type.Array(ToolContentSchema)]),
+		timestamp: Type.Number(),
+	}),
+	closed({
+		role: Type.Literal("assistant"),
+		content: Type.Array(Type.Union([TextContentSchema, ThinkingContentSchema, NativeToolCallSchema])),
+		api: NonEmptyStringSchema,
+		provider: NonEmptyStringSchema,
+		model: NonEmptyStringSchema,
+		responseModel: Type.Optional(Type.String()),
+		responseId: Type.Optional(Type.String()),
+		diagnostics: Type.Optional(Type.Array(Type.Unknown())),
+		usage: UsageSchema,
+		stopReason: Type.Union([
+			Type.Literal("pending"), Type.Literal("stop"), Type.Literal("length"),
+			Type.Literal("toolUse"), Type.Literal("error"), Type.Literal("aborted"),
+			Type.Literal("deferred"),
+		]),
+		deferred: Type.Optional(Type.Unknown()),
+		errorMessage: Type.Optional(Type.String()),
+		rawStopReason: Type.Optional(Type.String()),
+		timestamp: Type.Number(),
+	}),
+	closed({
+		role: Type.Literal("toolResult"),
+		toolCallId: NonEmptyStringSchema,
+		toolName: NonEmptyStringSchema,
+		content: Type.Array(ToolContentSchema),
+		details: Type.Optional(Type.Unknown()),
+		usage: Type.Optional(UsageSchema),
+		addedToolNames: Type.Optional(StringListSchema),
+		isError: Type.Boolean(),
+		timestamp: Type.Number(),
+	}),
+	closed({
+		role: Type.Literal("bashExecution"),
+		command: Type.String(),
+		output: Type.String(),
+		exitCode: Type.Optional(Type.Integer()),
+		cancelled: Type.Boolean(),
+		truncated: Type.Boolean(),
+		fullOutputPath: Type.Optional(Type.String()),
+		timestamp: Type.Number(),
+		excludeFromContext: Type.Optional(Type.Boolean()),
+	}),
+	closed({
+		role: Type.Literal("custom"),
+		customType: NonEmptyStringSchema,
+		content: Type.Union([Type.String(), Type.Array(ToolContentSchema)]),
+		display: Type.Boolean(),
+		details: Type.Optional(Type.Unknown()),
+		timestamp: Type.Number(),
+	}),
+	closed({
+		role: Type.Literal("branchSummary"),
+		summary: Type.String(),
+		fromId: NonEmptyStringSchema,
+		timestamp: Type.Number(),
+	}),
+	closed({
+		role: Type.Literal("compactionSummary"),
+		summary: Type.String(),
+		tokensBefore: Type.Number(),
+		timestamp: Type.Number(),
+	}),
+]));
+const GuardedHumanToolResultSchema = closed({
+	message: Type.Optional(AgentMessageSchema),
+	rejectedAnswer: Type.Optional(Type.String()),
+	reason: Type.Optional(Type.String()),
+});
+const RetentionReasonSchema = Type.Union([
+	Type.Literal("owner_host_binding"), Type.Literal("pending_delivery"),
+	Type.Literal("awaiting_answer"), Type.Literal("answer_owed"),
+	Type.Literal("interruption_hold"), Type.Literal("moderator_handling"),
+	Type.Literal("interactive_selection"),
+]);
+const RetentionSchema = closed({ reason: RetentionReasonSchema, count: Type.Integer({ minimum: 1 }) });
+const AgentRunStateSchema = Type.Union([
+	closed({ phase: Type.Literal("dormant"), retentionReasons: Type.Tuple([]) }),
+	closed({
+		phase: Type.Union([Type.Literal("starting"), Type.Literal("live"), Type.Literal("ending")]),
+		work: Type.Optional(Type.Union([Type.Literal("active"), Type.Literal("settled")])),
+		attention: Type.Union([Type.Literal("none"), Type.Literal("input_required")]),
+		retentionReasons: Type.Array(RetentionSchema),
+	}),
+]);
+const AgentStatusSchema = closed({
+	agentId: NonEmptyStringSchema,
+	workflowId: NonEmptyStringSchema,
+	label: NonEmptyStringSchema,
+	description: Type.Optional(Type.String()),
+	directSpawnerAgentId: Type.Union([NonEmptyStringSchema, Type.Null()]),
+	primaryEvidence: closed({
+		transcriptPath: Type.Union([NonEmptyStringSchema, Type.Null()]),
+		inspectedThrough: EntryPointerSchema,
+	}),
+	run: AgentRunStateSchema,
+});
+const AgentObserveResultSchema = Type.Union([
+	AgentStatusSchema,
+	closed({ children: Type.Array(AgentStatusSchema) }),
+]);
+const EffectiveConfigurationSchema = closed({
+	cwd: NonEmptyStringSchema,
+	model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
+	thinking: Type.Union([
+		Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"),
+		Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
+	]),
+	tools: StringListSchema,
+	skills: StringListSchema,
+	extensions: StringListSchema,
+	projectContext: Type.Optional(closed({
+		mode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
+		body: Type.String(),
+	})),
+});
+const AgentSpawnReceiptSchema = Type.Union([
+	closed({
+		disposition: Type.Literal("pending"), agentId: NonEmptyStringSchema,
+		requestId: NonEmptyStringSchema, effectiveConfiguration: EffectiveConfigurationSchema,
+	}),
+	closed({
+		disposition: Type.Literal("created_unscheduled"), agentId: NonEmptyStringSchema,
+		requestId: NonEmptyStringSchema,
+		failedStage: Type.Union([Type.Literal("run_start"), Type.Literal("delivery_admission")]),
+		effectiveConfiguration: EffectiveConfigurationSchema,
+	}),
+	closed({ disposition: Type.Literal("not_created"), failedStage: Type.Literal("identity_commit") }),
+	closed({
+		disposition: Type.Literal("indeterminate"),
+		agentId: Type.Optional(NonEmptyStringSchema), requestId: Type.Optional(NonEmptyStringSchema),
+		lastConfirmedStage: Type.Optional(Type.Union([Type.Literal("identity"), Type.Literal("run_start")])),
+		effectiveConfiguration: Type.Optional(EffectiveConfigurationSchema),
+	}),
+]);
+const DeliveryStateProperties = {
+	messageId: NonEmptyStringSchema,
+	delivery: Type.Union([Type.Literal("pending"), Type.Literal("indeterminate")]),
+} as const;
+const RejectedDeliveryProperties = {
+	messageId: NonEmptyStringSchema,
+	delivery: Type.Literal("rejected"),
+	rejectionReason: Type.Union([
+		Type.Literal("target_unavailable"), Type.Literal("host_shutting_down"),
+		Type.Literal("capacity_exhausted"),
+	]),
+} as const;
+const AgentMessageReceiptSchema = Type.Union([
+	closed(DeliveryStateProperties), closed(RejectedDeliveryProperties),
+	closed({ ...DeliveryStateProperties, requestId: NonEmptyStringSchema }),
+	closed({ ...RejectedDeliveryProperties, requestId: NonEmptyStringSchema }),
+	closed({
+		messageId: NonEmptyStringSchema, requestId: NonEmptyStringSchema,
+		answerId: NonEmptyStringSchema, disposition: Type.Literal("already_answered"),
+	}),
+	closed({
+		messageId: NonEmptyStringSchema, requestId: NonEmptyStringSchema,
+		cancellationId: NonEmptyStringSchema, disposition: Type.Literal("already_cancelled"),
+	}),
+	closed({
+		messageId: NonEmptyStringSchema, requestId: NonEmptyStringSchema,
+		cancellationId: NonEmptyStringSchema,
+		delivery: Type.Union([Type.Literal("pending"), Type.Literal("indeterminate")]),
+	}),
+	closed({
+		messageId: NonEmptyStringSchema, requestId: NonEmptyStringSchema,
+		cancellationId: NonEmptyStringSchema, delivery: Type.Literal("rejected"),
+		rejectionReason: Type.Union([
+			Type.Literal("target_unavailable"), Type.Literal("host_shutting_down"),
+			Type.Literal("capacity_exhausted"),
+		]),
+	}),
+	closed({
+		disposition: Type.Literal("delivered"), messageId: NonEmptyStringSchema,
+		deliveryEvidence: EntryPointerSchema,
+	}),
+	closed({
+		disposition: Type.Literal("not_observed"), messageId: NonEmptyStringSchema,
+		inspectedThrough: EntryPointerSchema,
+	}),
+	closed({
+		disposition: Type.Literal("indeterminate"), messageId: NonEmptyStringSchema,
+		reason: Type.Union([Type.Literal("inspection_incomplete"), Type.Literal("confirmation_lost")]),
+	}),
+	closed({ disposition: Type.Literal("pending"), messageId: NonEmptyStringSchema }),
+	closed({
+		disposition: Type.Literal("rejected"), messageId: NonEmptyStringSchema,
+		rejectionReason: Type.Union([
+			Type.Literal("target_unavailable"), Type.Literal("host_shutting_down"),
+			Type.Literal("evidence_unavailable"), Type.Literal("policy_rejected"),
+			Type.Literal("capacity_exhausted"),
+		]),
+	}),
+	closed({
+		disposition: Type.Literal("answer_delivered"), messageId: NonEmptyStringSchema,
+		requestId: NonEmptyStringSchema, answerId: NonEmptyStringSchema,
+		fromAgentId: NonEmptyStringSchema, answer: Type.String(), answerSource: ToolCallPointerSchema,
+	}),
+	closed({
+		disposition: Type.Literal("answer_already_delivered"), messageId: NonEmptyStringSchema,
+		requestId: NonEmptyStringSchema, answerId: NonEmptyStringSchema,
+		deliveryEvidence: EntryPointerSchema,
+	}),
+	closed({
+		disposition: Type.Literal("request_delivered"), messageId: NonEmptyStringSchema,
+		requestId: NonEmptyStringSchema, deliveryEvidence: EntryPointerSchema,
+	}),
+	closed({
+		disposition: Type.Literal("request_pending"), messageId: NonEmptyStringSchema,
+		requestId: NonEmptyStringSchema,
+	}),
+]);
+const RunControlReceiptSchema = Type.Union([
+	closed({
+		agentId: NonEmptyStringSchema,
+		disposition: Type.Union([Type.Literal("held"), Type.Literal("already_held"), Type.Literal("not_running")]),
+	}),
+	closed({ agentId: NonEmptyStringSchema, messageId: NonEmptyStringSchema, delivery: Type.Literal("pending") }),
+	closed({
+		agentId: NonEmptyStringSchema, messageId: NonEmptyStringSchema, delivery: Type.Literal("rejected"),
+		rejectionReason: Type.Union([
+			Type.Literal("not_held"), Type.Literal("resume_slot_occupied"), Type.Literal("target_unavailable"),
+		]),
+	}),
+	closed({
+		agentId: NonEmptyStringSchema,
+		disposition: Type.Union([Type.Literal("terminated"), Type.Literal("not_running")]),
+		residualRequests: closed({ incoming: Type.Integer({ minimum: 0 }), outgoing: Type.Integer({ minimum: 0 }) }),
+	}),
+	closed({
+		agentId: NonEmptyStringSchema, disposition: Type.Literal("rejected"),
+		rejectionReason: Type.Literal("interactive_selection"),
+	}),
+]);
+const HumanAnswerSchema = closed({ requestId: NonEmptyStringSchema, answer: NonEmptyStringSchema });
+const ModeratorControlReceiptSchema = Type.Union([
+	closed({
+		disposition: Type.Literal("renewed"), toolCall: ToolCallPointerSchema,
+		nextReviewInMs: Type.Integer({ minimum: 1 }),
+	}),
+	closed({ disposition: Type.Literal("stale"), toolCall: ToolCallPointerSchema }),
+	closed({ disposition: Type.Literal("resolved") }),
+	closed({ disposition: Type.Literal("already_cleared") }),
+	closed({
+		disposition: Type.Literal("blocked"),
+		predicates: Type.Array(Type.Union([
+			Type.Literal("incoming_requests"), Type.Literal("outgoing_requests"),
+			Type.Literal("obligation_stall"), Type.Literal("run_failure"),
+			Type.Literal("dependency_deadlock"), Type.Literal("operation_review"),
+		])),
+	}),
+]);
+const ToolIntention = <T extends TSchema>(input: T) => closed({
+	toolCallId: NonEmptyStringSchema,
+	input,
+});
+const AgentMessageInputSchema = Type.Unsafe<AgentMessageInput>(
+	participantCoordinationToolSchemas.agent_message,
+);
+const AgentObserveInputSchema = Type.Unsafe<AgentObserveInput>(
+	participantCoordinationToolSchemas.agent_observe,
+);
+const RunControlInputSchema = Type.Unsafe<RunControlInput>(
+	participantCoordinationToolSchemas.agent_control,
+);
+const AgentSpawnInputSchema = Type.Unsafe<AgentSpawnInput>(
+	participantCoordinationToolSchemas.agent_spawn,
+);
+const HumanRequestInputSchema = Type.Unsafe<HumanRequestInput>(
+	participantCoordinationToolSchemas.ask_user_question,
+);
+const ModeratorControlInputSchema = Type.Unsafe<ModeratorControlInput>(
+	participantCoordinationToolSchemas.moderator_control,
+);
 const AgentRuntimeDeliverySchema = Type.Union([
 	closed({
 		kind: Type.Literal("custom"),
@@ -71,15 +399,63 @@ export const RuntimeSnapshotSchema = closed({
 		Type.Literal("max"),
 	]),
 	tools: StringListSchema,
-	skills: StringListSchema,
+	skills: Type.Array(closed({ name: NonEmptyStringSchema, filePath: NonEmptyStringSchema })),
 	extensions: StringListSchema,
 	projectTrusted: Type.Boolean(),
 	sessionId: NonEmptyStringSchema,
+	sessionPath: NonEmptyStringSchema,
+	projectContext: Type.Union([
+		Type.Null(),
+		closed({ filePath: NonEmptyStringSchema, body: Type.String() }),
+	]),
 });
 
 /** Bridge-proven version-one method payload/result map. */
 export const agentControlMethods = {
 	"runtime.snapshot": { request: EmptySchema, response: RuntimeSnapshotSchema },
+	"runtime.executionBegin": { request: EmptySchema, response: EmptyResponseSchema },
+	"runtime.humanInput": {
+		request: closed({ text: Type.String(), images: Type.Optional(ImageListSchema) }),
+		response: closed({ resumed: Type.Boolean() }),
+	},
+	"runtime.humanInputMode": {
+		request: EmptySchema,
+		response: closed({ mode: Type.Union([Type.Literal("agent"), Type.Literal("answer")]) }),
+	},
+	"runtime.guardHumanToolResult": {
+		request: closed({ message: AgentMessageSchema }),
+		response: closed({ result: Type.Union([GuardedHumanToolResultSchema, Type.Null()]) }),
+	},
+	"runtime.toolExecutionStart": {
+		request: closed({ toolCallId: NonEmptyStringSchema, toolName: NonEmptyStringSchema }),
+		response: EmptyResponseSchema,
+	},
+	"runtime.safeBoundary": { request: EmptySchema, response: EmptyResponseSchema },
+	"runtime.executionEnd": { request: EmptySchema, response: EmptyResponseSchema },
+	"coordination.observe": {
+		request: AgentObserveInputSchema,
+		response: Type.Unsafe<AgentObserveResult>(AgentObserveResultSchema),
+	},
+	"coordination.message": {
+		request: ToolIntention(AgentMessageInputSchema),
+		response: Type.Unsafe<AgentMessageReceipt>(AgentMessageReceiptSchema),
+	},
+	"coordination.control": {
+		request: ToolIntention(RunControlInputSchema),
+		response: Type.Unsafe<RunControlReceipt>(RunControlReceiptSchema),
+	},
+	"coordination.spawn": {
+		request: ToolIntention(AgentSpawnInputSchema),
+		response: Type.Unsafe<AgentSpawnReceipt>(AgentSpawnReceiptSchema),
+	},
+	"coordination.askHuman": {
+		request: ToolIntention(HumanRequestInputSchema),
+		response: Type.Unsafe<HumanAnswer>(HumanAnswerSchema),
+	},
+	"coordination.moderatorControl": {
+		request: ToolIntention(ModeratorControlInputSchema),
+		response: Type.Unsafe<ModeratorControlReceipt>(ModeratorControlReceiptSchema),
+	},
 	"run.prompt": {
 		request: closed({
 			runId: NonEmptyStringSchema,
