@@ -1,6 +1,7 @@
 import {
 	createFauxCore,
 	fauxAssistantMessage,
+	fauxToolCall,
 } from "@earendil-works/pi-ai";
 import type {
 	ExtensionFactory,
@@ -32,12 +33,26 @@ const delayedResponse = async () => {
 	}
 	return fauxAssistantMessage(PROCESS_RUNTIME_TEST_RESPONSE);
 };
-faux.setResponses([
-	delayedResponse,
-	delayedResponse,
-	delayedResponse,
-	delayedResponse,
-]);
+faux.setResponses(process.env.PROCESS_RUNTIME_COORDINATION_TOOLS === "1"
+	? [
+		fauxAssistantMessage([
+			fauxToolCall("agent_observe", { operation: "status" }, {
+				id: "process-observe-call",
+			}),
+			fauxToolCall("agent_message", {
+				operation: "send",
+				targetAgentId: "process-target-agent",
+				content: "Exact process message",
+			}, { id: "process-message-call" }),
+		], { stopReason: "toolUse" }),
+		delayedResponse,
+	]
+	: [
+		delayedResponse,
+		delayedResponse,
+		delayedResponse,
+		delayedResponse,
+	]);
 
 const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 	pi.registerProvider(PROCESS_RUNTIME_TEST_PROVIDER, {

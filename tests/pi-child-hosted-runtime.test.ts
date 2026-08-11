@@ -13,6 +13,7 @@ import {
 	type PiChildProcessLaunch,
 	type PiChildRuntimeEvent,
 } from "../src/process-runtime/pi-child-process-runtime.ts";
+import type { PiChildOwnerRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { InProcessAgentHost } from "../src/runtime/in-process-agent-host.ts";
 import {
@@ -71,6 +72,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 		runtimeDirectory: root,
 		columns: 80,
 		rows: 24,
+		ownerRequestHandlers: ordinaryOwnerHandlers(),
 	});
 	const pid = launch.pid;
 	const bootstrapPath = launch.bootstrapPath;
@@ -211,6 +213,8 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 			extensions: [],
 			projectTrusted: true,
 			sessionId: "retry-runtime",
+			sessionPath: "/sessions/retry-runtime.jsonl",
+			projectContext: null,
 		},
 		channel: {
 			onClose: () => () => undefined,
@@ -326,6 +330,29 @@ for (const failure of ["channel_loss", "process_kill"] as const) {
 	});
 }
 
+function ordinaryOwnerHandlers(): PiChildOwnerRequestHandlers<"ordinary"> {
+	return {
+		lifecycle: {
+			async executionStarted() {},
+			async humanInputSubmitted() { return false; },
+			async humanInputMode() { return "agent"; },
+			async humanToolResultCommitting() { return undefined; },
+			async toolExecutionStarted() {},
+			async safeBoundaryReached() {},
+			async executionEnded() {},
+		},
+		coordination: {
+			async observe() { return { children: [] }; },
+			async message() { return { messageId: "unused-message", delivery: "pending" }; },
+			async control(_toolCallId, input) {
+				return { agentId: input.agentId, disposition: "not_running" };
+			},
+			async spawn() { return { disposition: "not_created", failedStage: "identity_commit" }; },
+			async askUserQuestion() { return { requestId: "unused-human", answer: "unused" }; },
+		},
+	};
+}
+
 function hasCode(code: string): (error: unknown) => boolean {
 	return (error) => typeof error === "object" && error !== null && "code" in error
 		&& (error as NodeJS.ErrnoException).code === code;
@@ -375,6 +402,7 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 		runtimeDirectory: root,
 		columns: 80,
 		rows: 24,
+		ownerRequestHandlers: ordinaryOwnerHandlers(),
 	});
 	const runtime = new PiChildHostedRuntime(launch);
 	const host = InProcessAgentHost.createChild({

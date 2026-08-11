@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { writeFile, unlink } from "node:fs/promises";
+import { realpath, writeFile, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +25,10 @@ import {
 	buildChildProcessEnvironment,
 } from "./child-process-environment.ts";
 import { buildPiChildCliLaunch } from "./pi-child-cli-launch.ts";
+import {
+	dispatchOwnerParticipantRequest,
+	type PiChildOwnerRequestHandlers,
+} from "./remote-participant-control.ts";
 import {
 	spawnPtyTerminalProjection,
 	type PtyExit,
@@ -66,6 +70,9 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	startupTimeoutMilliseconds?: number;
 	cliPath?: string;
 	bridgeExtensionPath?: string;
+	ownerRequestHandlers?:
+		| PiChildOwnerRequestHandlers<"ordinary">
+		| PiChildOwnerRequestHandlers<"moderator">;
 }>;
 
 /** Standalone Owner-side host for one real Pi CLI/TUI process. */
@@ -195,9 +202,9 @@ export class PiChildProcessRuntime {
 					expectedSessionId: bootstrap.expectedSessionId,
 				},
 				(candidate) => {
-					candidate.onRequest(() => {
-						throw new Error("child_runtime_owner_request_unavailable");
-					});
+					candidate.onRequest((request) =>
+						dispatchOwnerParticipantRequest(options.ownerRequestHandlers, request)
+					);
 					candidate.onEvent((event) => {
 						if (event.event === "runtime.ready") settleReady(event.payload);
 						if (event.event === "runtime.fault") {
@@ -265,11 +272,14 @@ export class PiChildProcessRuntime {
 							"configuration snapshot",
 							cancellation,
 						);
-						assertRuntimeSnapshot(
+						await assertRuntimeSnapshot(
 							snapshot,
 							options.configuration,
+							options.skillPaths,
 							options.projectTrusted,
 							bootstrap.expectedSessionId,
+							options.sessionPath,
+							options.projectContextPath,
 						);
 						return new PiChildProcessRuntime({
 							projection: exactProjection,
@@ -518,27 +528,49 @@ export function resolveInstalledPiCliPath(): string {
 	return join(getPackageDir(), "dist", "cli.js");
 }
 
-function assertRuntimeSnapshot(
+async function assertRuntimeSnapshot(
 	actual: PiChildRuntimeSnapshot,
 	expected: EffectiveAgentRunConfiguration,
+	skillPaths: readonly string[],
 	projectTrusted: boolean,
 	expectedSessionId: string,
-): void {
+	sessionPath: string,
+	projectContextPath: string | undefined,
+): Promise<void> {
 	const expectedSnapshot: PiChildRuntimeSnapshot = {
-		cwd: expected.cwd,
+		cwd: await realpath(expected.cwd),
 		model: expected.model,
 		thinking: expected.thinking,
 		tools: [...expected.tools],
-		skills: [...expected.skills],
-		extensions: [...expected.extensions],
+		skills: await Promise.all(expected.skills.map(async (name, index) => ({
+			name,
+			filePath: await realpath(skillPaths[index]!),
+		}))),
+		extensions: await Promise.all(expected.extensions.map((path) => realpath(path))),
 		projectTrusted,
 		sessionId: expectedSessionId,
+		sessionPath: await realpath(sessionPath),
+		projectContext: expected.projectContext === undefined
+			? null
+			: {
+				filePath: await realpath(requireProjectContextPath(projectContextPath)),
+				body: expected.projectContext.body,
+			},
 	};
 	if (JSON.stringify(actual) !== JSON.stringify(expectedSnapshot)) {
 		throw new Error(
 			`child_runtime_configuration_mismatch: expected ${JSON.stringify(expectedSnapshot)}, received ${JSON.stringify(actual)}`,
 		);
 	}
+}
+
+function requireProjectContextPath(path: string | undefined): string {
+	if (!path) {
+		throw new Error(
+			"invalid_child_launch: configured Project Context requires its file-backed artifact",
+		);
+	}
+	return path;
 }
 
 async function raceStartup<T>(

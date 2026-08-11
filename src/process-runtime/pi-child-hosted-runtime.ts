@@ -66,7 +66,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 				model: runtime.snapshot.model,
 				thinking: runtime.snapshot.thinking,
 				tools: [...runtime.snapshot.tools],
-				skills: [...runtime.snapshot.skills],
+				skills: runtime.snapshot.skills.map(({ name }) => name),
 				fileExtensionPaths: [...runtime.snapshot.extensions],
 				projectTrusted: runtime.snapshot.projectTrusted,
 				sessionId: runtime.snapshot.sessionId,

@@ -12,6 +12,7 @@ import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
+import type { PiChildOwnerRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import {
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
@@ -43,6 +44,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 	})}\n`, { mode: 0o600 });
 
 	const lifecycle: string[] = [];
+	const ownerIntentions: unknown[] = [];
 	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
 	let runtime: PiChildProcessRuntime | undefined;
 	let projection: ReturnType<typeof createAdmittedPiChildProcessProjection> | undefined;
@@ -77,6 +79,12 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			runtimeDirectory: root,
 			columns: 80,
 			rows: 24,
+			ownerRequestHandlers: ordinaryOwnerHandlers({
+				executionStarted: () => ownerIntentions.push({
+					agentId: "process-runtime-test-agent",
+					intention: "executionStarted",
+				}),
+			}),
 		});
 		projection = createAdmittedPiChildProcessProjection(runtime);
 		let projectionChanges = 0;
@@ -110,6 +118,8 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			extensions: [CHILD_EXTENSION],
 			projectTrusted: true,
 			sessionId: expectedSessionId,
+			sessionPath,
+			projectContext: null,
 		});
 		assert.equal((await stat(runtime.bootstrapPath)).mode & 0o777, 0o600);
 
@@ -129,6 +139,10 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		}), { accepted: true });
 		await waitUntil(() => lifecycle.includes("agent.settled"));
 		assert.deepEqual(lifecycle.slice(0, 3), ["agent.start", "agent.end", "agent.settled"]);
+		assert.deepEqual(ownerIntentions[0], {
+			agentId: "process-runtime-test-agent",
+			intention: "executionStarted",
+		});
 		assert.match(JSON.stringify(SessionManager.open(sessionPath).getEntries()), new RegExp(PROCESS_RUNTIME_TEST_RESPONSE));
 		assert.deepEqual(await runtime.channel.request("queue.clear", {
 			runId: "process-runtime-test-run",
@@ -281,6 +295,181 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 	}
 });
 
+test("startup snapshot binds selected skills and file-backed launch inputs exactly", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-snapshot-test-"));
+	const cwd = join(root, "work");
+	const sessionDirectory = join(root, "sessions");
+	const skillDirectory = join(root, "skills", "review");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000004";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	await mkdir(skillDirectory, { recursive: true });
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	const skillPath = join(skillDirectory, "SKILL.md");
+	const projectContextPath = join(root, "project-context.md");
+	const projectContextBody = "Exact process child project context.";
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+	await writeFile(skillPath, [
+		"---",
+		"name: review",
+		"description: Review exact process state.",
+		"---",
+		"Review the process state.",
+	].join("\n"));
+	await writeFile(projectContextPath, projectContextBody);
+	let runtime: PiChildProcessRuntime | undefined;
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "process-snapshot-workflow",
+			agentId: "process-snapshot-agent",
+			role: "ordinary",
+			expectedSessionId,
+			sessionPath,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_MODEL,
+				},
+				thinking: "off",
+				tools: [],
+				skills: ["review"],
+				extensions: [CHILD_EXTENSION],
+				projectContext: { mode: "append", body: projectContextBody },
+			},
+			skillPaths: [skillPath],
+			projectContextPath,
+			projectTrusted: false,
+			ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
+			runtimeDirectory: root,
+		});
+		assert.deepEqual(runtime.snapshot, {
+			cwd,
+			model: {
+				provider: PROCESS_RUNTIME_TEST_PROVIDER,
+				modelId: PROCESS_RUNTIME_TEST_MODEL,
+			},
+			thinking: "off",
+			tools: [],
+			skills: [{ name: "review", filePath: skillPath }],
+			extensions: [CHILD_EXTENSION],
+			projectTrusted: false,
+			sessionId: expectedSessionId,
+			sessionPath,
+			projectContext: { filePath: projectContextPath, body: projectContextBody },
+		});
+	} finally {
+		await runtime?.dispose();
+	}
+});
+
+test("real child Observe and Message tools reach the scoped Owner handlers", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-coordination-test-"));
+	const cwd = join(root, "work");
+	const sessionDirectory = join(root, "sessions");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000003";
+	const agentId = "process-coordination-agent";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+	const ownerCalls: unknown[] = [];
+	const observeReceipt = {
+		agentId,
+		workflowId: "process-coordination-workflow",
+		label: "Remote Child",
+		directSpawnerAgentId: "owner-agent",
+		primaryEvidence: {
+			transcriptPath: sessionPath,
+			inspectedThrough: { agentId, entryId: "entry-observed" },
+		},
+		run: { phase: "dormant", retentionReasons: [] },
+	} as const;
+	const messageReceipt = { messageId: "process-message-receipt", delivery: "pending" } as const;
+	let runtime: PiChildProcessRuntime | undefined;
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "process-coordination-workflow",
+			agentId,
+			role: "ordinary",
+			expectedSessionId,
+			sessionPath,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_MODEL,
+				},
+				thinking: "off",
+				tools: ["agent_observe", "agent_message"],
+				skills: [],
+				extensions: [CHILD_EXTENSION],
+			},
+			skillPaths: [],
+			projectTrusted: true,
+			ownerEnvironment: {
+				...process.env,
+				PI_SKIP_VERSION_CHECK: "1",
+				PROCESS_RUNTIME_COORDINATION_TOOLS: "1",
+			},
+			runtimeDirectory: root,
+			ownerRequestHandlers: ordinaryOwnerHandlers({
+				executionStarted: () => ownerCalls.push([agentId, "executionStarted"]),
+				observe: (input) => ownerCalls.push([agentId, "agent_observe", input]),
+				message: (toolCallId, input) =>
+					ownerCalls.push([agentId, "agent_message", toolCallId, input]),
+				observeReceipt,
+				messageReceipt,
+			}),
+		});
+		const events: string[] = [];
+		runtime.onEvent((event) => events.push(event.event));
+		assert.deepEqual(await runtime.prompt({
+			runId: "process-coordination-run",
+			input: "Invoke the scripted coordination tools.",
+			kind: "initial",
+		}), { accepted: true });
+		await waitUntil(() => events.includes("agent.settled"));
+
+		assert.deepEqual(ownerCalls.slice(0, 3), [
+			[agentId, "executionStarted"],
+			[agentId, "agent_observe", { operation: "status" }],
+			[agentId, "agent_message", "process-message-call", {
+				operation: "send",
+				targetAgentId: "process-target-agent",
+				content: "Exact process message",
+			}],
+		]);
+		const results = SessionManager.open(sessionPath).getEntries().flatMap((entry) =>
+			entry.type === "message" && entry.message.role === "toolResult"
+				? [entry.message]
+				: []
+		);
+		assert.deepEqual(results.find((message) => message?.toolCallId === "process-observe-call")?.details, observeReceipt);
+		assert.deepEqual(results.find((message) => message?.toolCallId === "process-message-call")?.details, messageReceipt);
+	} finally {
+		await runtime?.dispose();
+	}
+});
+
 test("process Runtime Host force-kills a child whose session shutdown never completes", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
@@ -340,6 +529,47 @@ test("process Runtime Host force-kills a child whose session shutdown never comp
 		await runtime?.dispose();
 	}
 });
+
+function ordinaryOwnerHandlers(options: Readonly<{
+	executionStarted?: () => void;
+	observe?: (input: { operation: "status" | "children"; agentId?: string }) => void;
+	message?: (toolCallId: string, input: unknown) => void;
+	observeReceipt?: Awaited<ReturnType<PiChildOwnerRequestHandlers<"ordinary">["coordination"]["observe"]>>;
+	messageReceipt?: Awaited<ReturnType<PiChildOwnerRequestHandlers<"ordinary">["coordination"]["message"]>>;
+}> = {}): PiChildOwnerRequestHandlers<"ordinary"> {
+	return {
+		lifecycle: {
+			async executionStarted() { options.executionStarted?.(); },
+			async humanInputSubmitted() { return false; },
+			async humanInputMode() { return "agent"; },
+			async humanToolResultCommitting() { return undefined; },
+			async toolExecutionStarted() {},
+			async safeBoundaryReached() {},
+			async executionEnded() {},
+		},
+		coordination: {
+			async observe(input) {
+				options.observe?.(input);
+				return options.observeReceipt ?? {
+					children: [],
+				};
+			},
+			async message(toolCallId, input) {
+				options.message?.(toolCallId, input);
+				return options.messageReceipt ?? { messageId: "unused-message", delivery: "pending" };
+			},
+			async control(_toolCallId, input) {
+				return { agentId: input.agentId, disposition: "not_running" };
+			},
+			async spawn() {
+				return { disposition: "not_created", failedStage: "identity_commit" };
+			},
+			async askUserQuestion() {
+				return { requestId: "unused-human", answer: "unused" };
+			},
+		},
+	};
+}
 
 function frameText(runtime: PiChildProcessRuntime): string {
 	return runtime.frame().lines.map((line) => line.text).join("\n");

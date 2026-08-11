@@ -5,8 +5,8 @@ import type {
 	ExtensionContext,
 	ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
-import { readFile, stat } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { readFile, realpath, stat } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { FramedAgentControlChannel } from "../control/agent-control-channel.ts";
@@ -19,10 +19,15 @@ import {
 } from "../control/control-protocol-schemas.ts";
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
+import { registerParticipantLifecycle } from "../pi-integration/participant-lifecycle.ts";
+import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
+import { createControlBackedParticipantHandlers } from "./remote-participant-control.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
+const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
+	"Return to Owner before replacing or forking the native session.";
 
 type ChildChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
 
@@ -41,6 +46,17 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	const bootstrap = await readBootstrapDescriptor();
 	const interactiveBridge = installInteractiveHostBridge(hostPi);
 	let state: RuntimeState | undefined;
+	const participantHandlers = createControlBackedParticipantHandlers(
+		bootstrap.role,
+		(method, payload, signal) => {
+			if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
+			return state.channel.request(method, payload, signal);
+		},
+	);
+	registerParticipantLifecycle(pi, participantHandlers.lifecycle);
+	registerParticipantCoordinationTools(pi, bootstrap.role, participantHandlers.coordination);
+	pi.on("session_before_fork", (_event, ctx) => cancelNativeSessionReplacement(ctx));
+	pi.on("session_before_switch", (_event, ctx) => cancelNativeSessionReplacement(ctx));
 
 	pi.on("session_start", async (_event, ctx) => {
 		if (state) throw new Error("child_runtime_bridge_rebound: session replacement is not supported");
@@ -114,7 +130,7 @@ async function handleOwnerRequest(
 ): Promise<unknown> {
 	switch (request.method) {
 		case "runtime.snapshot":
-			return runtimeSnapshot(state.runtime);
+			return runtimeSnapshot(state.runtime, state.context);
 		case "run.prompt": {
 			if (state.currentRunId) {
 				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
@@ -227,25 +243,64 @@ async function handleOwnerRequest(
 			state.shutdownStarted = true;
 			setImmediate(() => state.context.shutdown());
 			return { accepted: true };
+		case "runtime.executionBegin":
+		case "runtime.humanInput":
+		case "runtime.humanInputMode":
+		case "runtime.guardHumanToolResult":
+		case "runtime.toolExecutionStart":
+		case "runtime.safeBoundary":
+		case "runtime.executionEnd":
+		case "coordination.observe":
+		case "coordination.message":
+		case "coordination.control":
+		case "coordination.spawn":
+		case "coordination.askHuman":
+		case "coordination.moderatorControl":
+			throw new Error(`child_runtime_direction_violation: ${request.method}`);
 		default:
 			return assertUnreachable(request);
 	}
 }
 
-function runtimeSnapshot(runtime: AgentSessionRuntime) {
+async function runtimeSnapshot(
+	runtime: AgentSessionRuntime,
+	context: ExtensionContext,
+) {
 	const session = runtime.session;
-	const bridgePath = canonicalExtensionPath(ENTRY_MODULE_PATH);
+	const bridgePath = await canonicalFilePath(ENTRY_MODULE_PATH, runtime.cwd);
+	const extensions = await Promise.all(
+		runtime.services.resourceLoader.getExtensions().extensions
+			.map((extension) => extension.resolvedPath)
+			.filter((path) => !path.startsWith("<inline:"))
+			.map((path) => canonicalFilePath(path, runtime.cwd)),
+	);
+	const appendPrompt = runtime.services.resourceLoader.getAppendSystemPrompt();
+	const appendSources = runtime.services.resourceLoader.getAppendSystemPromptSources();
+	if (appendPrompt.length !== appendSources.length || appendPrompt.length > 1) {
+		throw new Error("child_runtime_project_context_mismatch: expected at most one file-backed append prompt");
+	}
+	const sessionPath = context.sessionManager.getSessionFile();
+	if (!sessionPath) throw new Error("child_runtime_session_path_unavailable");
 	return {
-		cwd: runtime.cwd,
+		cwd: await canonicalFilePath(runtime.cwd, runtime.cwd),
 		model: requireModel(session.model),
 		thinking: session.thinkingLevel,
 		tools: session.getActiveToolNames(),
-		skills: runtime.services.resourceLoader.getSkills().skills.map(({ name }) => name),
-		extensions: runtime.services.resourceLoader.getExtensions().extensions
-			.map((extension) => extension.resolvedPath)
-			.filter((path) => !path.startsWith("<inline:") && canonicalExtensionPath(path) !== bridgePath),
+		skills: await Promise.all(
+			runtime.services.resourceLoader.getSkills().skills.map(async ({ name, filePath }) => ({
+				name,
+				filePath: await canonicalFilePath(filePath, runtime.cwd),
+			}))),
+		extensions: extensions.filter((path) => path !== bridgePath),
 		projectTrusted: runtime.services.settingsManager.isProjectTrusted(),
 		sessionId: session.sessionId,
+		sessionPath: await canonicalFilePath(sessionPath, runtime.cwd),
+		projectContext: appendPrompt.length === 0
+			? null
+			: {
+				filePath: await canonicalFilePath(appendSources[0]!.path, runtime.cwd),
+				body: appendPrompt[0]!,
+			},
 	};
 }
 
@@ -450,8 +505,15 @@ function requireModel(model: AgentSessionRuntime["session"]["model"]) {
 	return { provider: model.provider, modelId: model.id };
 }
 
-function canonicalExtensionPath(path: string): string {
-	return isAbsolute(path) ? path : new URL(path, import.meta.url).pathname;
+async function canonicalFilePath(path: string, cwd: string): Promise<string> {
+	return realpath(isAbsolute(path) ? path : resolve(cwd, path));
+}
+
+function cancelNativeSessionReplacement(
+	ctx: ExtensionContext,
+): { cancel: true } {
+	ctx.ui.notify(CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE, "error");
+	return { cancel: true };
 }
 
 async function failCurrentRun(state: RuntimeState, runId: string, error: unknown): Promise<void> {
