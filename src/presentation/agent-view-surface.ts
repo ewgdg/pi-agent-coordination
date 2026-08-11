@@ -10,7 +10,7 @@ import {
 	type TUI,
 } from "@earendil-works/pi-tui";
 
-import { addPrioritizedTuiInputListener } from "../pi-integration/native-agent-projection.ts";
+import { addPrioritizedTuiInputListener } from "../pi-integration/prioritized-tui-input.ts";
 import type { TerminalProjection } from "./terminal-projection.ts";
 
 const ENABLE_MOUSE_REPORTING = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h";

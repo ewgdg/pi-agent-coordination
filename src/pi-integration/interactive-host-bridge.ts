@@ -9,10 +9,6 @@ import {
 	assertRuntimeInstanceShape,
 } from "./host-shape.ts";
 import {
-	createPiNativeProjectionHost,
-	type PiNativeProjectionHost,
-} from "./native-agent-projection.ts";
-import {
 	hasInstalledExtensionBindings,
 	refreshNativeExtensionBindings,
 } from "./extension-bindings.ts";
@@ -28,7 +24,6 @@ type HostModule = {
 
 type InteractiveCapture = Readonly<{
 	runtime: AgentSessionRuntime;
-	projectionHost: PiNativeProjectionHost;
 }>;
 
 type RuntimeWaiter = {
@@ -111,13 +106,7 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 				throw error;
 			}
 			const sessionManager = runtime.session.sessionManager;
-			const capture = {
-				runtime,
-				projectionHost: createPiNativeProjectionHost({
-					ownerRuntime: runtime,
-					ownerInteractiveMode: this,
-				}),
-			};
+			const capture = { runtime };
 			// TUI binding is Pi's first mode-specific seam. The WeakMap association
 			// cannot retain a failed or disposed Owner session by itself.
 			state.capturesBySessionManager.set(sessionManager, capture);

@@ -1029,7 +1029,7 @@ function requireRuntimeProjection(
 
 function hasInFlightProjectionInput(run: BoundAgentRuntime): boolean {
 	// Pi remains session-idle during async input and prompt preflight, so only
-	// the native projection can protect the exact Runtime across that interval.
+	// the active terminal projection can protect the exact Runtime across that interval.
 	return run.runtime.projection?.isProcessingInput() ?? false;
 }
 

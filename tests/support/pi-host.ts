@@ -15,6 +15,7 @@ import {
 	SettingsManager,
 	createAgentSessionFromServices,
 	createAgentSessionServices,
+	getPackageDir,
 	type CreateAgentSessionRuntimeFactory,
 	type AgentSession,
 	type AgentSessionServices,
@@ -32,8 +33,8 @@ import type {
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-import { loadPiBuiltInExtensionFactories } from "../../src/pi-integration/named-inline-extension-factories.ts";
 import {
 	createProcessModelBroker,
 	type ProcessModelBroker,
@@ -42,6 +43,17 @@ import {
 const PROVIDER_ID = "coordination-test";
 const MODEL_ID = "deterministic-owner";
 const PROVIDER_BASE_URL = "http://coordination-test.invalid";
+
+async function loadPiBuiltInExtensionFactories(): Promise<readonly InlineExtension[]> {
+	const modulePath = join(getPackageDir(), "dist", "extensions", "index.js");
+	const moduleValue = await import(pathToFileURL(modulePath).href) as {
+		builtInExtensions?: unknown;
+	};
+	if (!Array.isArray(moduleValue.builtInExtensions)) {
+		throw new Error("Incompatible Pi test host: built-in extension registry is unavailable");
+	}
+	return moduleValue.builtInExtensions as InlineExtension[];
+}
 
 const EMPTY_USAGE = {
 	input: 0,
