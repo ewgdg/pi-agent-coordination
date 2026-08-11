@@ -64,7 +64,6 @@ export type ColdWorkflowRecovery = Readonly<{
 
 type CandidateBase = {
 	path: string;
-	entries: readonly SessionEntry[];
 	blueprint: AgentRuntimeBlueprint;
 	invalid: boolean;
 };
@@ -161,31 +160,26 @@ export async function discoverColdWorkflow(options: {
 			quarantinedAgentIds.add(candidate.identity.agentId);
 		}
 		if (candidate.role === "moderator") continue;
-		const parent = candidate.identity.directSpawnerAgentId === ownerIdentity.agentId
-			? {
-				transcript: transcriptFromSessionManager(ownerSessionManager),
-				entries: ownerSessionManager.getEntries(),
-			}
+		const parentTranscript = candidate.identity.directSpawnerAgentId === ownerIdentity.agentId
+			? transcriptFromSessionManager(ownerSessionManager)
 			: (() => {
 				const parentCandidate = uniqueByAgentId.get(
 					candidate.identity.directSpawnerAgentId,
 				);
 				return parentCandidate
-					? {
-						transcript: transcriptFromSessionFile(parentCandidate.path),
-						entries: parentCandidate.entries,
-					}
+					? transcriptFromSessionFile(parentCandidate.path)
 					: undefined;
 			})();
-		if (!parent) {
+		if (!parentTranscript) {
 			candidate.invalid = true;
 			quarantinedAgentIds.add(candidate.identity.agentId);
 			continue;
 		}
 		try {
+			const parentInspection = parentTranscript.inspect();
 			const committed = resolveCommittedSpawnSource({
 				agentId: candidate.identity.directSpawnerAgentId,
-				transcript: parent.transcript.inspect(),
+				transcript: parentInspection,
 				toolCallId: candidate.identity.spawnSource.toolCallId,
 			});
 			if (!sameToolCallPointer(committed.source, candidate.identity.spawnSource)) {
@@ -208,7 +202,7 @@ export async function discoverColdWorkflow(options: {
 			}
 			candidate.spawnInput = input;
 			candidate.spawnOrder = physicalSpawnOrder(
-				parent.entries,
+				parentInspection.entries,
 				committed.source.entryId,
 				committed.source.toolCallId,
 			);
@@ -422,7 +416,6 @@ async function readCandidate(path: string): Promise<Candidate> {
 	return {
 		path,
 		...candidateIdentity,
-		entries,
 		blueprint,
 		invalid: false,
 	};
