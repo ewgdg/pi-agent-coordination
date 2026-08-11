@@ -18,19 +18,17 @@ agent_spawn({
 })
 ```
 
-`request` is required. `template`, `label`, and `description` are optional. `config` may override model, thinking level, working directory, ordinary tools, skills, extensions, and Project Context. Arrays replace inherited selections, including an empty array. `extensions` also accepts `inherit` and `none`.
+`request` is required. `template`, `label`, and `description` are optional. `config` may override model, thinking level, working directory, ordinary tools, skills, and Project Context. Arrays replace inherited tool and skill selections, including an empty array. Child extension selection is `inherit` or `none`; arbitrary per-child extension paths are not accepted.
 
 The label resolves from the explicit label, selected template name, then `agent`. A description comes only from the explicit spawn input. Display metadata is trimmed, preserves Unicode, rejects line breaks and control characters, and is limited to 64 Unicode code points for labels and 240 for descriptions.
 
 The authenticated calling Agent becomes the immutable Direct Spawner. Agent identity, Workflow membership, authority, role-required tools, and Creation Request delivery mode are not caller-supplied fields.
 
-The child receives a fresh durable Pi session. Its immutable baseline captures the caller's effective Run working directory, model, thinking level, ordinary tools, skills, and extensions at creation. It does not inherit the caller's transcript, branch, model context, assembled prompt, editor state, or queued input.
+The child receives a fresh durable Pi session. Its immutable baseline captures the caller's admitted Runtime snapshot: working directory, model, thinking level, ordinary tools, selected skill names, canonical file-backed extensions, and trust. The caller's committed blueprint binds selected child skill names to their exact source paths. It does not inherit the caller's transcript, branch, model context, assembled prompt, editor state, or queued input.
 
-Each Agent Runtime preparation resolves the stored baseline, the current complete selected Template, immutable spawn overrides, and fixed ordinary-Agent requirements in that order. Later parent changes do not cascade. Template content is not copied into Agent Identity, so a changed Template affects the next Runtime preparation; a missing, malformed, or ambiguous selected Template prevents preparation without stale fallback. A selected Runtime keeps its resolved configuration across successive exact Runs.
+Template, effective resources, immutable spawn overrides, role tools, trust, and Project Context resolve once before Agent Identity. The result is committed as one Runtime Blueprint. Successor and cold-recovered Runtimes reuse that blueprint; they do not re-read changed Templates or rediscover a different inherited resource set.
 
-File-backed extensions remain durable file references. A named inline extension remains a canonical `<inline:name>` reference and resolves against the current host registry whenever a Runtime is prepared. Pi invokes the resolved factory with that Runtime's extension API, so loaded tools, handlers, commands, providers, and factory-local state are not copied into a later Runtime. `extensions: "none"` excludes both file-backed and named inline inheritance; callers must also deselect tools supplied only by those extensions.
-
-Only named inline factories are durably inheritable. A missing or duplicate name, or an anonymous positional inline reference, prevents initial child Identity commitment. If the same resource is unavailable when an existing or cold-recovered Agent needs a new Runtime, the Agent remains durable and Dormant while that request reports the target as unavailable.
+Only canonical file-backed inherited extensions cross the process boundary. `extensions: "none"` excludes them. Pi-owned built-ins are reconstructed by the fresh Pi CLI. Arbitrary injected, anonymous, and named inline factories are process-local composition details and are not child inheritance inputs.
 
 ## Agent Templates
 
@@ -67,7 +65,7 @@ The per-spawn `config.cwd` resolves against the immutable baseline working direc
 
 The committed native `agent_spawn` tool call is the Creation Request source. The child Identity append commits the child and Request together. After that append, startup or scheduling failure never removes either fact.
 
-The child starts an in-process Run and receives the Request through the same fixed Deferred lane used by ordinary [Agent messaging](agent-messaging.md). A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
+The child starts a fresh Pi CLI/TUI process and receives the Request through the same fixed Deferred lane used by ordinary [Agent messaging](agent-messaging.md). A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
 
 Confirmed Delivery admission failure releases the new child Run to dormant while preserving the committed child and Creation Request. Once Delivery commits, the Run remains retained while the child owes the corresponding Answer.
 

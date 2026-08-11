@@ -274,8 +274,7 @@ Child-to-parent events:
 
 Parent-to-child events:
 
-- Workflow activity/roster snapshots or ordered deltas for the child activity surface;
-- remote Agent-view frame updates and closure/failure notifications for views initiated inside a child TUI.
+- exact Workflow activity/roster/Attention snapshots for the child activity surface and selector.
 
 Cancellation is explicit. Aborting a child coordination tool sends `CancelFrame` for its exact request. Aborting an Owner-issued operation sends the corresponding cancellation to the child. Unknown or late cancellation is idempotently ignored only when the request is already terminal; other protocol invariant failures close the channel.
 
@@ -307,14 +306,13 @@ For the physical Owner view, `AgentViewSurface` attaches directly to the target 
 
 When `/agents` is invoked inside a child Pi process:
 
-1. the child Runtime Bridge renders its selector/activity UI from Workflow snapshots received over the Control Channel;
-2. a selection request goes to the Owner WorkflowCoordinator;
-3. the Owner acquires the target projection and emits normalized frame updates to the requesting child;
-4. the requesting bridge renders those frames in a native `ctx.ui.custom()` surface;
-5. input/resize/close intent returns through the Control Channel to the target Runtime Host;
-6. retention and view ownership remain authoritative in the Owner.
+1. the child Runtime Bridge renders the normal selector from a scoped Workflow snapshot received over the Control Channel;
+2. an awaited selection action goes to the Owner WorkflowCoordinator;
+3. the Owner retargets the one Workflow-global physical attachment directly to the selected Runtime's PTY projection, or closes it when Owner is selected;
+4. physical input and resize continue through the newly selected projection;
+5. retention and view ownership remain authoritative in the Owner.
 
-Define one Workflow-global active human attachment, matching the existing physical interaction model, so multiple child processes cannot independently resize or drive one target PTY. Reject stale attachment generations mechanically.
+The selection action restores the previous attachment if Human Attention becomes stale or focus fails. Escape remains native child UI input. One Workflow-global active human attachment prevents multiple processes from independently resizing or driving one physical terminal.
 
 ## Child process environment
 
@@ -417,7 +415,7 @@ Checkpoint: complete physical Owner interaction with ordinary and Moderator chil
 2. Preserve nested spawn and immutable descendant-baseline capture through `runtime.snapshot` rather than parent access to child services.
 3. Preserve Messages, Requests, cancellation, answer retention, human questions, moderation, and Operational Incident behavior.
 4. Stream Workflow activity state to each Runtime Bridge.
-5. Implement child-native `/agents` selector/activity UI, remote view attachment generations, frame updates, input/resize forwarding, Agent-to-Agent switching, and return to Owner.
+5. Implement child-native `/agents` selector/activity UI, awaited Owner selection actions, direct physical attachment retargeting, Agent-to-Agent switching, and return to Owner.
 6. Test cancellation and process/channel failure during every pending tool and view operation.
 
 Checkpoint: all public coordination and complete Agent-view tests pass against process-isolated children.
@@ -511,7 +509,11 @@ Future-platform extensibility gate:
 - [x] Finished the Control-backed hosted-Runtime Adapter and truthful pre-admission projection/cancellation, including exact Run targeting, durable Delivery commit proof, terminal channel/exit failure synthesis, and ordered queue intentions.
 - [x] Added awaited child→Owner participant lifecycle and role-exact coordination tool RPC, cancellation, exact resource/context/session handshake evidence, and synchronous tool-batch classification.
 - [x] Removed `SessionManager` from the common Runtime supervisor and added a process-visible deterministic model broker for real child tests.
-- [ ] Cut ordinary and Moderator creation/recovery to the process-only factory, reproduce Herdr settlement, then remove obsolete embedded-child machinery.
+- [x] Cut ordinary and Moderator creation/recovery to the process-only factory and restored broad process-observable behavior coverage.
+- [x] Completed child `/agents`, activity updates, direct attachment retargeting, Agent-to-Agent switching, and return to Owner.
+- [x] Removed the in-process child factory, child-native projection implementation, named-inline inheritance, and private inline-factory preflight.
+- [x] Reproduced the exact real-Herdr Owner → process child → Owner flow; `herdr agent prompt --wait` returned with the Owner session still authoritative and Herdr state `done`.
+- [x] Passed typecheck, full regression, 69-test conformance, package dry-run, audit, diff check, and process/artifact cleanup gates.
 
 ## Surprises and discoveries
 
@@ -543,4 +545,10 @@ Future-platform extensibility gate:
 
 ## Outcomes and retrospective
 
-Not started. This section will record the final architecture, acceptance evidence, removed machinery, remaining platform limitation, and lessons after implementation.
+Every non-Owner ordinary Agent and Moderator now runs through one process-only factory in a fresh installed Pi CLI/TUI and PTY. The Owner keeps Workflow authority; typed Control requests carry lifecycle and coordination intentions, PTY traffic carries terminal interaction, and the child owns its live JSONL writer.
+
+The production cutover preserved ordinary and Moderator Runs, nested spawning, Messages, Requests, Human Attention, interruption, moderation, cold recovery, complete child UI, and `/agents`. Child selection renders locally and retargets the Owner's one physical attachment directly between process PTYs. The original Herdr failure no longer reproduces because child processes do not inherit physical-pane ownership and cannot replace the Owner extension's module state.
+
+The in-process child factory, embedded native child projection, named-inline inheritance, and private inline-factory registry checks were removed. Pi-owned built-ins reconstruct locally; only canonical file-backed inherited extensions cross the process boundary.
+
+Unix sockets are the only production Control Transport in this release. Unsupported platforms fail before Child Identity until another transport Adapter is implemented.
