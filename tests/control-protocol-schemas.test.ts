@@ -119,7 +119,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		outcome: "interrupted",
 		queuedInputCount: 0,
 	}), true);
-	assert.equal(Check(RuntimeSnapshotSchema, {
+	const validRuntimeSnapshot = {
 		cwd: "/project",
 		model: { provider: "provider", modelId: "model" },
 		thinking: "high",
@@ -132,7 +132,10 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		sessionId: "session",
 		sessionPath: "/sessions/session.jsonl",
 		projectContext: null,
-	}), true);
+	} as const;
+	assert.equal(Check(RuntimeSnapshotSchema, validRuntimeSnapshot), true);
+	const { toolExecutionModes: _missingToolModes, ...missingToolModes } = validRuntimeSnapshot;
+	assert.equal(Check(RuntimeSnapshotSchema, missingToolModes), false);
 	assert.equal(Check(agentControlMethods["runtime.humanInput"].request, {
 		text: "continue",
 		images: [{ type: "image", data: "base64", mimeType: "image/png" }],

@@ -82,9 +82,13 @@ function createFakeRuntime(): Readonly<{
 			thinking: "off",
 			tools: [],
 			skills: [],
+			skillSources: [],
 			extensions: [],
+			toolExecutionModes: [],
 			projectTrusted: true,
 			sessionId: "fault-runtime",
+			sessionPath: "/sessions/fault-runtime.jsonl",
+			projectContext: null,
 		},
 		channel: {
 			onClose: () => () => undefined,
