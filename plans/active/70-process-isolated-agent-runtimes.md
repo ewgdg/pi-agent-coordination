@@ -508,7 +508,8 @@ Future-platform extensibility gate:
 - [x] Routed coordination through process-neutral Runtime Host intentions and removed live child `AgentSession`/services reach-through from coordination operations.
 - [x] Extracted handler-driven participant coordination tool schemas, renderers, role sets, and registration without changing local receipts.
 - [x] Adapted real child PTY frames to the Terminal Projection surface, including styled/wide cells, cursor presentation, focus, resize, failure/exit, final-output drain, and owned process-group cleanup.
-- [ ] Finish the internal hosted-Runtime Adapter cut, truthful pre-admission launch projection/cancellation, coordination tool proxying, and Milestones 4–10.
+- [x] Finished the Control-backed hosted-Runtime Adapter and truthful pre-admission projection/cancellation, including exact Run targeting, durable Delivery commit proof, terminal channel/exit failure synthesis, and ordered queue intentions.
+- [ ] Finish awaited participant lifecycle and coordination tool proxying, then ordinary/Moderator process cutover and Milestones 4–10.
 
 ## Surprises and discoveries
 
