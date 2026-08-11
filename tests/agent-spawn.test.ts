@@ -27,6 +27,7 @@ import {
 	type SpawnBoundaryHooks,
 } from "../src/coordination/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
+import { resolveCommittedAgentRuntimeBlueprint } from "../src/protocol/agent-runtime-blueprint.ts";
 import { ProtocolInvariantError } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -344,9 +345,11 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 		workflowDirectory,
 		receipt.agentId,
 	);
-	const childIdentity = SessionManager.open(childSessionFile)
-		.getEntries()
-		.find((entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity");
+	const configuredChildTranscript = SessionManager.open(childSessionFile);
+	const configuredChildEntries = configuredChildTranscript.getEntries();
+	const childIdentity = configuredChildEntries.find(
+		(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
+	);
 	assert.ok(childIdentity && childIdentity.type === "custom");
 	assert.deepEqual(
 		(childIdentity.data as { configuration: object }).configuration,
@@ -363,6 +366,22 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 			},
 		},
 	);
+	const runtimeBlueprint = resolveCommittedAgentRuntimeBlueprint({
+		sessionId: configuredChildTranscript.getSessionId(),
+		entries: configuredChildEntries,
+	});
+	assert.equal(runtimeBlueprint.agentId, receipt.agentId);
+	assert.equal(runtimeBlueprint.role, "ordinary");
+	assert.deepEqual(runtimeBlueprint.configuration, receipt.effectiveConfiguration);
+	assert.equal(runtimeBlueprint.projectTrusted, true);
+	assert.deepEqual(runtimeBlueprint.skillSources, []);
+	assert.deepEqual(runtimeBlueprint.agentsFiles, [
+		{ path: join(effectiveCwd, "AGENTS.md"), content: "Native effective-cwd context" },
+		{
+			path: `<agent-configuration:${receipt.agentId}>`,
+			content: "Template context\n\nSpawn context",
+		},
+	]);
 
 	const agentId = receipt.agentId;
 	await waitForCondition(() => {
