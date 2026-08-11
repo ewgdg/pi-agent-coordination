@@ -2079,8 +2079,12 @@ test("a post-commit Moderator startup failure creates one linked replacement", a
 		retentionReasons: [],
 	});
 	const firstEntries = SessionManager.open(first.path).getEntries();
-	assert.equal(firstEntries.length, 1);
+	assert.equal(firstEntries.length, 2);
 	assert.equal(firstEntries[0]?.type, "custom_message");
+	assert.equal(
+		firstEntries[1]?.type === "custom" ? firstEntries[1].customType : undefined,
+		"agent-coordination.runtime-blueprint",
+	);
 	const replacementInput = SessionManager.open(replacement.path).getEntries().find(
 		(entry) =>
 			entry.type === "custom_message" &&
@@ -2094,7 +2098,7 @@ test("a post-commit Moderator startup failure creates one linked replacement", a
 		(JSON.parse(replacementInput.content) as {
 			previousAttempt?: { agentId: string; entryId: string };
 		}).previousAttempt,
-		{ agentId: first.id, entryId: firstEntries[0]!.id },
+		{ agentId: first.id, entryId: firstEntries.at(-1)!.id },
 	);
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
