@@ -504,6 +504,7 @@ Future-platform extensibility gate:
 - [x] Routed coordination transcript reads through `AgentTranscript` and added a fresh-file inspection Adapter.
 - [x] Materialized the exact pre-launch JSONL only after validating committed Agent Identity and immutable Runtime Blueprint evidence.
 - [x] Committed role-bound immutable Runtime Blueprint evidence for ordinary and Moderator admissions, including exact selected skill sources, trust, and effective context files.
+- [x] Added a process-safe one-shot child blueprint resolver that uses public Pi resource APIs without evaluating inherited extension factories and rejects arbitrary per-child extension paths.
 - [x] Routed coordination through process-neutral Runtime Host intentions and removed live child `AgentSession`/services reach-through from coordination operations.
 - [x] Extracted handler-driven participant coordination tool schemas, renderers, role sets, and registration without changing local receipts.
 - [x] Adapted real child PTY frames to the Terminal Projection surface, including styled/wide cells, cursor presentation, focus, resize, failure/exit, final-output drain, and owned process-group cleanup.
