@@ -25,6 +25,7 @@ import {
 	resolveCommittedHumanRequest,
 } from "../src/protocol/human-request.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -545,7 +546,7 @@ test("a committed Answer remains canonical after later Run failure and reopened 
 	const reopened = SessionManager.open(sessionFile);
 	const request = resolveCommittedHumanRequest({
 		agentId: child.agentId,
-		sessionManager: reopened,
+		transcript: transcriptFromSessionManager(reopened).inspect(),
 		toolCallId,
 		providedInput: input,
 	});
@@ -557,7 +558,10 @@ test("a committed Answer remains canonical after later Run failure and reopened 
 	);
 	assert.ok(resultEntry);
 	assert.deepEqual(
-		inspectCommittedHumanRequestResult({ request, sessionManager: reopened }),
+		inspectCommittedHumanRequestResult({
+			request,
+			transcript: transcriptFromSessionManager(reopened).inspect(),
+		}),
 		{
 			state: "answered",
 			answer: { requestId: request.requestId, answer: "Canonical Answer" },

@@ -28,6 +28,7 @@ import {
 	toolCallPointerKey,
 } from "../protocol/identities.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
+import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { workflowSessionDirectory } from "../runtime/workflow-session-directory.ts";
 
 export type RecoveredOrdinaryAgent = Readonly<{
@@ -162,7 +163,7 @@ export async function discoverColdWorkflow(options: {
 		try {
 			const committed = resolveCommittedSpawnSource({
 				agentId: candidate.identity.directSpawnerAgentId,
-				sessionManager: parent,
+				transcript: transcriptFromSessionManager(parent).inspect(),
 				toolCallId: candidate.identity.spawnSource.toolCallId,
 			});
 			if (!sameToolCallPointer(committed.source, candidate.identity.spawnSource)) {

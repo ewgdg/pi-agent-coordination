@@ -39,9 +39,9 @@ Keep Pi transcript storage behind a deep, process-neutral read model. `AgentTran
 
 ## Progress
 
-- [ ] Transcript contract tests committed red.
-- [ ] Deep module and local adapter implemented.
-- [ ] Coordination/protocol reads migrated.
+- [x] Transcript contract tests committed red.
+- [x] Deep module and local adapter implemented.
+- [x] Coordination/protocol reads migrated.
 - [ ] Full validation complete.
 
 ## Decisions
@@ -49,6 +49,10 @@ Keep Pi transcript storage behind a deep, process-neutral read model. `AgentTran
 - One inspection is one coherent read value containing only session identity/location, header, physical entries, active branch, and model context.
 - The `TranscriptReader` is called anew for every inspection; `AgentTranscript` owns no cache.
 - Mutation is not part of this seam.
+
+## Surprises & discoveries
+
+- Three Message ordering tests used a read-boundary hook to mutate the recipient `SessionManager`. The tests now retain the explicitly local, pre-process-cutover transcript authority captured at child Identity commit and inject malformed evidence before inspection; the production read hook no longer leaks a writable `SessionManager`.
 
 ## Outcomes & retrospective
 

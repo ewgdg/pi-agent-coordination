@@ -44,7 +44,7 @@ export class RunSupervisor {
 		const caller = this.#requireAgent(callerAgentId);
 		const committed = resolveCommittedRunControl({
 			callerAgentId,
-			sessionManager: requireLiveSession(caller).sessionManager,
+			transcript: caller.transcript.inspect(),
 			toolCallId,
 			providedInput: input,
 		});
@@ -156,7 +156,7 @@ export class RunSupervisor {
 			matchesCandidate: (event) =>
 				event.type === "message_end" && event.message.role === "user",
 			inspectCommit: () => {
-				const tail = session.sessionManager.getEntries().at(-1);
+				const tail = record.transcript.inspect().entries.at(-1);
 				return tail?.type === "message" &&
 					tail.message.role === "user" &&
 					JSON.stringify(tail.message.content) === JSON.stringify(content);

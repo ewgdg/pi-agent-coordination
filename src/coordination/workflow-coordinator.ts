@@ -32,6 +32,7 @@ import {
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import { InProcessAgentHost } from "../runtime/in-process-agent-host.ts";
+import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
 	DefaultChildSessionFactory,
 } from "../runtime/default-child-session-factory.ts";
@@ -223,6 +224,7 @@ export class WorkflowCoordinator {
 			identity,
 			services: runtime.services,
 			host: InProcessAgentHost.bindOwner(runtime),
+			transcript: transcriptFromSessionManager(runtime.session.sessionManager),
 			children: [],
 		});
 		const sessionFactory = new DefaultChildSessionFactory({
@@ -492,7 +494,8 @@ export class WorkflowCoordinator {
 				live.push(status);
 				continue;
 			}
-			const header = record.host.sessionManager.getHeader();
+			const transcript = record.transcript.inspect();
+			const header = transcript.header;
 			if (!header) {
 				throw new Error(
 					`invariant_violation: Agent ${record.identity.agentId} has no Pi session header`,
@@ -500,7 +503,7 @@ export class WorkflowCoordinator {
 			}
 			dormant.push({
 				status,
-				recency: piSessionRecency(header, record.host.sessionManager.getEntries()),
+				recency: piSessionRecency(header, transcript.entries),
 				order,
 			});
 		}
@@ -518,12 +521,13 @@ export class WorkflowCoordinator {
 		const liveSession = record.host.currentHandle()
 			? record.host.requireLiveSession()
 			: undefined;
-		const transcriptContext = record.host.sessionManager.buildSessionContext();
+		const transcript = record.transcript.inspect();
+		const transcriptContext = transcript.context;
 		const configured = record.effectiveConfiguration ?? record.identity.configuration.baseline;
 		const model = liveSession?.model
 			? { provider: liveSession.model.provider, modelId: liveSession.model.id }
 			: transcriptContext.model ?? configured.model;
-		const hasRecordedThinking = record.host.sessionManager.getBranch().some(
+		const hasRecordedThinking = transcript.activeBranch.some(
 			(entry) => entry.type === "thinking_level_change",
 		);
 		const thinking = liveSession?.thinkingLevel ??

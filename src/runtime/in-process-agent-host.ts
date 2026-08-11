@@ -93,7 +93,7 @@ type RunEndingHandler = (
 
 export class InProcessAgentHost {
 	readonly lane = new SerialLane();
-	readonly sessionManager: SessionManager;
+	readonly #sessionManager: SessionManager;
 	readonly #startSession: StartSession | undefined;
 	readonly #retentionReasons = new Set<AgentRetentionReason>();
 	readonly #requestRelationships = new Map<
@@ -131,7 +131,7 @@ export class InProcessAgentHost {
 		initialSession?: AgentSession;
 		initialRetentionReasons?: readonly AgentRetentionReason[];
 	}) {
-		this.sessionManager = options.sessionManager;
+		this.#sessionManager = options.sessionManager;
 		this.#startSession = options.startSession;
 		for (const reason of options.initialRetentionReasons ?? []) {
 			this.#retentionReasons.add(reason);
@@ -423,14 +423,14 @@ export class InProcessAgentHost {
 
 	requireLiveSession(): AgentSession {
 		const session = this.#runtime?.admitted ? this.#runtime.session : undefined;
-		if (!session) throw new Error(`Agent Run is unavailable: ${this.sessionManager.getSessionId()}`);
+		if (!session) throw new Error(`Agent Run is unavailable: ${this.#sessionManager.getSessionId()}`);
 		return session;
 	}
 
 	requirePreparedSession(): AgentSession {
 		const session = this.#runtime?.session;
 		if (!session) {
-			throw new Error(`Agent runtime is unavailable: ${this.sessionManager.getSessionId()}`);
+			throw new Error(`Agent runtime is unavailable: ${this.#sessionManager.getSessionId()}`);
 		}
 		return session;
 	}
@@ -481,7 +481,7 @@ export class InProcessAgentHost {
 			throw new Error("host_shutting_down: Agent Run startup is closed");
 		}
 		if (!this.#startSession) {
-			throw new Error(`Agent Run cannot restart: ${this.sessionManager.getSessionId()}`);
+			throw new Error(`Agent Run cannot restart: ${this.#sessionManager.getSessionId()}`);
 		}
 		this.#starting = true;
 		this.#passivePreparation = !admitRun;

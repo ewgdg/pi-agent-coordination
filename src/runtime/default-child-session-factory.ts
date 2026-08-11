@@ -24,6 +24,7 @@ import {
 	type PiNativeProjectionHost,
 } from "../pi-integration/native-agent-projection.ts";
 import { resolveAgentRunProjectTrust } from "../pi-integration/project-trust.ts";
+import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
 	holdModelRunsUntilProjectionAdmission,
 	type ModelRunAdmission,
@@ -210,6 +211,7 @@ export class DefaultChildSessionFactory {
 					effectiveConfiguration: options.firstPrepared.configuration,
 				}),
 			host,
+			transcript: transcriptFromSessionManager(sessionManager),
 			children: [],
 		};
 		return child;
@@ -246,6 +248,7 @@ export class DefaultChildSessionFactory {
 					effectiveConfiguration: options.firstPrepared.configuration,
 				}),
 			host,
+			transcript: transcriptFromSessionManager(sessionManager),
 			children: [],
 		};
 		return moderator;

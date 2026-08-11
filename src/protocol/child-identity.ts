@@ -11,6 +11,7 @@ import {
 import type { ToolCallPointer } from "./identities.ts";
 import { ProtocolInvariantError } from "./identities.ts";
 import { validateRuntimeConfigurationBaseline } from "./runtime-configuration.ts";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 export type ChildAgentIdentity = Readonly<{
 	agentId: string;
@@ -38,17 +39,15 @@ export function commitChildAgentIdentity(
 }
 
 export function validateCommittedChildIdentity(
-	sessionManager: SessionManager,
+	transcript: TranscriptInspection,
 	expected: ChildAgentIdentity,
 ): void {
-	if (sessionManager.getSessionId() !== expected.agentId) {
+	if (transcript.sessionId !== expected.agentId) {
 		throw new ProtocolInvariantError("child Identity does not match its Pi session identity");
 	}
-	const identities = sessionManager
-		.getEntries()
-		.filter(
-			(entry) => entry.type === "custom" && entry.customType === AGENT_IDENTITY_CUSTOM_TYPE,
-		);
+	const identities = transcript.entries.filter(
+		(entry) => entry.type === "custom" && entry.customType === AGENT_IDENTITY_CUSTOM_TYPE,
+	);
 	if (identities.length !== 1) {
 		throw new ProtocolInvariantError(
 			`child transcript contains ${identities.length} ordinary Identity entries`,

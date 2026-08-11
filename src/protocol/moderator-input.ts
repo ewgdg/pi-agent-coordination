@@ -1,7 +1,4 @@
-import type {
-	SessionEntry,
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
 import { resolveModeratorAgentMetadata } from "./agent-metadata.ts";
@@ -13,6 +10,7 @@ import {
 	AGENT_IDENTITY_CUSTOM_TYPE,
 	MODERATOR_INPUT_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 export { MODERATOR_INPUT_CUSTOM_TYPE } from "./custom-entry-types.ts";
 
@@ -107,17 +105,17 @@ export function createModelVisibleModeratorInput(
 }
 
 export function validateCommittedModeratorInput(options: {
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	identity: ModeratorIdentity;
 	input: ModeratorInput;
 }): void {
-	const { sessionManager, identity, input } = options;
-	if (sessionManager.getSessionId() !== identity.agentId) {
+	const { transcript, identity, input } = options;
+	if (transcript.sessionId !== identity.agentId) {
 		throw new ProtocolInvariantError(
 			"Moderator Input does not match its Pi session identity",
 		);
 	}
-	const entries = sessionManager.getEntries();
+	const entries = transcript.entries;
 	const inputs = entries.filter(
 		(entry) =>
 			entry.type === "custom_message" &&

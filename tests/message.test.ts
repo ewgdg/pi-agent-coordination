@@ -790,37 +790,7 @@ test("poll rejects malformed committed Agent Message source evidence", async () 
 });
 
 test("poll rejects malformed Message Delivery evidence for another source", async () => {
-	let injectedMalformedDelivery = false;
-	const harness = await createDormantChildHarness({
-		beforeRecipientInspection: ({ sessionManager }) => {
-			if (injectedMalformedDelivery) return;
-			injectedMalformedDelivery = true;
-			sessionManager.appendCustomMessageEntry(
-				"agent-coordination.message-delivery",
-				JSON.stringify({
-					messages: [
-						{
-							kind: "message",
-							messageId: "another-message",
-							fromAgentId: "another-agent",
-							content: "Malformed because this field is not canonical.",
-							unexpected: true,
-						},
-					],
-				}),
-				true,
-				{
-					messages: [
-						{
-							agentId: "another-agent",
-							entryId: "another-entry",
-							toolCallId: "another-call",
-						},
-					],
-				},
-			);
-		},
-	});
+	const harness = await createDormantChildHarness({});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid Message committed first."),
 	]);
@@ -830,6 +800,26 @@ test("poll rejects malformed Message Delivery evidence for another source", asyn
 		"Do not let malformed sibling evidence disappear during proof lookup.",
 	);
 	await waitForDelivery(harness, sent.source);
+	harness.childSessionManager.appendCustomMessageEntry(
+		"agent-coordination.message-delivery",
+		JSON.stringify({
+			messages: [{
+				kind: "message",
+				messageId: "another-message",
+				fromAgentId: "another-agent",
+				content: "Malformed because this field is not canonical.",
+				unexpected: true,
+			}],
+		}),
+		true,
+		{
+			messages: [{
+				agentId: "another-agent",
+				entryId: "another-entry",
+				toolCallId: "another-call",
+			}],
+		},
+	);
 	const pollToolCallId = "poll-through-malformed-sibling-delivery";
 	const pollInput = {
 		operation: "poll" as const,
@@ -851,14 +841,7 @@ test("poll rejects malformed Message Delivery evidence for another source", asyn
 });
 
 test("poll rejects unknown current-scope coordination evidence", async () => {
-	let injectedUnknownEvidence = false;
-	const harness = await createDormantChildHarness({
-		beforeRecipientInspection: ({ sessionManager }) => {
-			if (injectedUnknownEvidence) return;
-			injectedUnknownEvidence = true;
-			sessionManager.appendCustomEntry("agent-coordination.unknown", {});
-		},
-	});
+	const harness = await createDormantChildHarness({});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid Message committed before unknown evidence."),
 	]);
@@ -868,6 +851,7 @@ test("poll rejects unknown current-scope coordination evidence", async () => {
 		"Do not inspect through unknown coordination evidence.",
 	);
 	await waitForDelivery(harness, sent.source);
+	harness.childSessionManager.appendCustomEntry("agent-coordination.unknown", {});
 	const pollToolCallId = "poll-through-unknown-coordination-evidence";
 	const pollInput = {
 		operation: "poll" as const,
@@ -889,36 +873,7 @@ test("poll rejects unknown current-scope coordination evidence", async () => {
 });
 
 test("poll rejects a hidden custom message as Delivery evidence", async () => {
-	let injectedHiddenDelivery = false;
-	const harness = await createDormantChildHarness({
-		beforeRecipientInspection: ({ sessionManager }) => {
-			if (injectedHiddenDelivery) return;
-			injectedHiddenDelivery = true;
-			sessionManager.appendCustomMessageEntry(
-				"agent-coordination.message-delivery",
-				JSON.stringify({
-					messages: [
-						{
-							kind: "message",
-							messageId: "hidden-message",
-							fromAgentId: "another-agent",
-							content: "This hidden entry is not model-visible Delivery proof.",
-						},
-					],
-				}),
-				false,
-				{
-					messages: [
-						{
-							agentId: "another-agent",
-							entryId: "another-entry",
-							toolCallId: "hidden-delivery-call",
-						},
-					],
-				},
-			);
-		},
-	});
+	const harness = await createDormantChildHarness({});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid model-visible Message committed."),
 	]);
@@ -928,6 +883,25 @@ test("poll rejects a hidden custom message as Delivery evidence", async () => {
 		"Reject hidden custom messages during Delivery inspection.",
 	);
 	await waitForDelivery(harness, sent.source);
+	harness.childSessionManager.appendCustomMessageEntry(
+		"agent-coordination.message-delivery",
+		JSON.stringify({
+			messages: [{
+				kind: "message",
+				messageId: "hidden-message",
+				fromAgentId: "another-agent",
+				content: "This hidden entry is not model-visible Delivery proof.",
+			}],
+		}),
+		false,
+		{
+			messages: [{
+				agentId: "another-agent",
+				entryId: "another-entry",
+				toolCallId: "hidden-delivery-call",
+			}],
+		},
+	);
 	const pollToolCallId = "poll-through-hidden-delivery-evidence";
 	const pollInput = {
 		operation: "poll" as const,
@@ -1925,6 +1899,7 @@ async function createDormantChildHarness(
 		"<inline:pi-agent-coordination>",
 	);
 	let coordinator: WorkflowCoordinator;
+	let childSessionManager: SessionManager | undefined;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		childExtensionFactory: (agentId) =>
@@ -1937,6 +1912,9 @@ async function createDormantChildHarness(
 			beforeModeratorRunStart: () => "confirmed_failure",
 		},
 		spawnBoundaryHooks: {
+			afterIdentityCommit: ({ sessionManager }) => {
+				childSessionManager = sessionManager;
+			},
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
 		messageBoundaryHooks,
@@ -1960,11 +1938,13 @@ async function createDormantChildHarness(
 	const childId = "agentId" in spawn ? spawn.agentId : undefined;
 	if (typeof childId !== "string") throw new Error("Spawn receipt has no child identity");
 	assert.equal(view.status(childId).run.phase, "dormant");
+	if (!childSessionManager) throw new Error("Spawn did not expose its local transcript authority");
 	return {
 		host,
 		coordinator,
 		view,
 		childId,
+		childSessionManager,
 	};
 }
 

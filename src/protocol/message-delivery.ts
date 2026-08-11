@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
 	currentCoordinationScope,
@@ -86,21 +86,21 @@ export function createMessageDelivery(
 
 export function inspectStandaloneMessageDelivery(options: {
 	recipientAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	source: ToolCallPointer;
 	expectedProjection: ModelVisibleMessage;
 	subject: string;
 }): DeliveryInspection {
 	const {
 		recipientAgentId,
-		sessionManager,
+		transcript,
 		source: expectedSource,
 		expectedProjection,
 		subject,
 	} = options;
 	const { deliveries, inspectedThrough } = readMessageDeliveries({
 		recipientAgentId,
-		sessionManager,
+		transcript,
 	});
 	const matches: string[] = [];
 	for (const delivery of deliveries) {
@@ -123,7 +123,7 @@ export function inspectStandaloneMessageDelivery(options: {
 
 export function inspectMessageDeliveries(options: {
 	recipientAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 }): readonly DeliveredMessageEvidence[] {
 	const { deliveries } = readMessageDeliveries(options);
 	for (let index = 0; index < deliveries.length; index += 1) {
@@ -154,19 +154,19 @@ export function validateDeliveredMessageEvidence(
 
 function readMessageDeliveries(options: {
 	recipientAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 }): Readonly<{
 	deliveries: readonly DeliveredMessageEvidence[];
 	inspectedThrough: EntryPointer;
 }> {
-	const { recipientAgentId, sessionManager } = options;
-	const entries = sessionManager.getEntries();
+	const { recipientAgentId, transcript } = options;
+	const entries = transcript.entries;
 	const tail = entries.at(-1);
 	if (!tail) {
 		throw new ProtocolInvariantError(`Agent ${recipientAgentId} has no transcript entries`);
 	}
 	const deliveries: DeliveredMessageEvidence[] = [];
-	for (const entry of currentCoordinationScope(sessionManager, recipientAgentId)) {
+	for (const entry of currentCoordinationScope(transcript, recipientAgentId)) {
 		if (entry.type !== "custom" && entry.type !== "custom_message") continue;
 		if (!entry.customType.startsWith("agent-coordination.")) continue;
 		if (

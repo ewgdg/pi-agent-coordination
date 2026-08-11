@@ -108,7 +108,7 @@ export class HumanRequestCoordinator {
 		const record = this.#requireAgent(callerAgentId);
 		const request = resolveCommittedHumanRequest({
 			agentId: callerAgentId,
-			sessionManager: record.host.sessionManager,
+			transcript: record.transcript.inspect(),
 			toolCallId,
 			providedInput: input,
 		});
@@ -258,7 +258,7 @@ export class HumanRequestCoordinator {
 			if (pending.request.requesterAgentId !== callerAgentId) continue;
 			const inspection = inspectCommittedHumanRequestResult({
 				request: pending.request,
-				sessionManager: pending.record.host.sessionManager,
+				transcript: pending.record.transcript.inspect(),
 			});
 			if (inspection.state === "pending") continue;
 			if (

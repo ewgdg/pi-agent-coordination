@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 
-import type { SessionEntry, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
 	AGENT_IDENTITY_CUSTOM_TYPE,
@@ -24,7 +26,7 @@ export class ProtocolInvariantError extends Error {
 
 export function resolveCommittedSpawnSource(options: {
 	agentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	toolCallId: string;
 }): { source: ToolCallPointer; input: Record<string, unknown> } {
 	return resolveCommittedToolCall({ ...options, toolName: "agent_spawn" });
@@ -32,12 +34,12 @@ export function resolveCommittedSpawnSource(options: {
 
 export function resolveCommittedToolCall(options: {
 	agentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	toolCallId: string;
 	toolName: string;
 }): { source: ToolCallPointer; input: Record<string, unknown> } {
-	const { agentId, sessionManager, toolCallId, toolName } = options;
-	const entries = currentCoordinationScope(sessionManager, agentId);
+	const { agentId, transcript, toolCallId, toolName } = options;
+	const entries = currentCoordinationScope(transcript, agentId);
 	const matches: Array<{ entry: SessionEntry; input: Record<string, unknown> }> = [];
 
 	for (const entry of entries) {
@@ -117,10 +119,10 @@ export function toolCallPointerKey(pointer: ToolCallPointer): string {
 }
 
 export function currentCoordinationScope(
-	sessionManager: SessionManager,
+	transcript: TranscriptInspection,
 	agentId: string,
-): SessionEntry[] {
-	const entries = sessionManager.getEntries();
+): readonly SessionEntry[] {
+	const entries = transcript.entries;
 	const bootstrapIndex = entries.findIndex(
 		(entry) =>
 			(entry.type === "custom" &&

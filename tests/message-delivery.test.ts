@@ -5,6 +5,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { inspectStandaloneMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 
 test("each Message in one ordered batch has independent Delivery proof", () => {
 	const sessionManager = SessionManager.inMemory(process.cwd());
@@ -48,7 +49,7 @@ test("each Message in one ordered batch has independent Delivery proof", () => {
 
 	const first = inspectStandaloneMessageDelivery({
 		recipientAgentId,
-		sessionManager,
+		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		source: firstSource,
 		expectedProjection: {
 			kind: "message",
@@ -60,7 +61,7 @@ test("each Message in one ordered batch has independent Delivery proof", () => {
 	});
 	const second = inspectStandaloneMessageDelivery({
 		recipientAgentId,
-		sessionManager,
+		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		source: secondSource,
 		expectedProjection: {
 			kind: "message",
@@ -108,7 +109,7 @@ test("one Delivery batch cannot repeat a Message source", () => {
 	assert.throws(
 		() => inspectStandaloneMessageDelivery({
 			recipientAgentId,
-			sessionManager,
+			transcript: transcriptFromSessionManager(sessionManager).inspect(),
 			source,
 			expectedProjection: projection,
 			subject: "Message repeated-message",

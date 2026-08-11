@@ -35,6 +35,7 @@ import {
 	type PreparedAgentRun,
 } from "../runtime/default-child-session-factory.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
+import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 
 export type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 
@@ -116,10 +117,9 @@ export class DefaultChildSpawner {
 			throw new Error("host_shutting_down: Workflow is shutting down");
 		}
 		const parent = this.#requireAgent(callerAgentId);
-		const parentSession = requireLiveSession(parent);
 		const { source, input: committedInput } = resolveCommittedSpawnSource({
 			agentId: callerAgentId,
-			sessionManager: parentSession.sessionManager,
+			transcript: parent.transcript.inspect(),
 			toolCallId,
 		});
 		const input = validateAgentSpawnInput(committedInput);
@@ -187,7 +187,10 @@ export class DefaultChildSpawner {
 			sessionManager,
 			identity,
 		});
-		validateCommittedChildIdentity(sessionManager, identity);
+		validateCommittedChildIdentity(
+			transcriptFromSessionManager(sessionManager).inspect(),
+			identity,
+		);
 
 		const child = this.#sessionFactory.createAgentRecord({
 			identity,

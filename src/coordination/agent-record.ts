@@ -10,6 +10,7 @@ import {
 	InProcessAgentHost,
 } from "../runtime/in-process-agent-host.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
+import type { AgentTranscript } from "../transcript/agent-transcript.ts";
 
 export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdentity;
 
@@ -18,6 +19,7 @@ export type AgentRecord = {
 	services?: AgentSessionServices;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
 	host: InProcessAgentHost;
+	transcript: AgentTranscript;
 	children: string[];
 };
 
@@ -47,7 +49,8 @@ export class EvidenceUnavailableError extends Error {
 export function statusOf(record: AgentRecord): AgentStatus {
 	const configuration = record.identity.configuration;
 	const run: AgentRunState = record.host.observe();
-	const transcriptTail = record.host.sessionManager.getEntries().at(-1);
+	const transcript = record.transcript.inspect();
+	const transcriptTail = transcript.entries.at(-1);
 	if (!transcriptTail) {
 		throw new Error(
 			`invariant_violation: Agent ${record.identity.agentId} has no transcript evidence`,
@@ -62,7 +65,7 @@ export function statusOf(record: AgentRecord): AgentStatus {
 			: { description: configuration.description }),
 		directSpawnerAgentId: record.identity.directSpawnerAgentId,
 		primaryEvidence: {
-			transcriptPath: record.host.sessionManager.getSessionFile() ?? null,
+			transcriptPath: transcript.transcriptPath,
 			inspectedThrough: {
 				agentId: record.identity.agentId,
 				entryId: transcriptTail.id,

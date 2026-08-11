@@ -91,7 +91,7 @@ export class RequestEvidence {
 		for (const author of this.#agents.values()) {
 			const authored = findAuthoredAgentMessageSource({
 				authorAgentId: author.identity.agentId,
-				sessionManager: author.host.sessionManager,
+				transcript: author.transcript.inspect(),
 				messageId: requestId,
 			});
 			if (!authored) continue;
@@ -101,7 +101,7 @@ export class RequestEvidence {
 			const request = resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
-				sessionManager: author.host.sessionManager,
+				transcript: author.transcript.inspect(),
 				toolCallId: authored.source.toolCallId,
 				providedInput: authored.input,
 			});
@@ -123,12 +123,12 @@ export class RequestEvidence {
 	findRequestsAuthoredBy(author: AgentRecord): Request[] {
 		const requests = findAuthoredRequestSources({
 			authorAgentId: author.identity.agentId,
-			sessionManager: author.host.sessionManager,
+			transcript: author.transcript.inspect(),
 		}).map(({ source, input }) => {
 			const message = resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
-				sessionManager: author.host.sessionManager,
+				transcript: author.transcript.inspect(),
 				toolCallId: source.toolCallId,
 				providedInput: input,
 			});
@@ -159,7 +159,7 @@ export class RequestEvidence {
 		const answerOwedRequestIds: string[] = [];
 		const localDeliveries = inspectMessageDeliveries({
 			recipientAgentId: agent.identity.agentId,
-			sessionManager: agent.host.sessionManager,
+			transcript: agent.transcript.inspect(),
 		});
 		const deliveredAnswerRequestIds = new Set([
 			...localDeliveries.flatMap((delivery) => {
@@ -172,7 +172,7 @@ export class RequestEvidence {
 			}),
 			...inspectAnswerRetrievals({
 				requesterAgentId: agent.identity.agentId,
-				sessionManager: agent.host.sessionManager,
+				transcript: agent.transcript.inspect(),
 			}).map(({ requestId }) => requestId),
 		]);
 		const deliveredCancellationRequestIds = new Set(
@@ -193,7 +193,7 @@ export class RequestEvidence {
 				const answerDelivered = resolution.answer !== undefined &&
 					inspectAnswerDelivery({
 						requesterAgentId: agent.identity.agentId,
-						sessionManager: agent.host.sessionManager,
+						transcript: agent.transcript.inspect(),
 						answer: resolution.answer,
 					}).deliveryEvidence !== undefined;
 				if (!resolution.cancellation && !answerDelivered) {
@@ -226,7 +226,7 @@ export class RequestEvidence {
 				const cancellationDelivered = resolution.cancellation !== undefined &&
 					inspectMessageDelivery({
 						recipientAgentId: agent.identity.agentId,
-						sessionManager: agent.host.sessionManager,
+						transcript: agent.transcript.inspect(),
 						message: resolution.cancellation,
 					}).deliveryEvidence !== undefined;
 				if (!resolution.answer && !cancellationDelivered) {
@@ -276,8 +276,8 @@ export class RequestEvidence {
 	#inspectResolution(request: Request) {
 		return inspectCanonicalRequestResolution({
 			request,
-			requesterSessionManager: this.#requireAgent(request.fromAgentId).host.sessionManager,
-			responderSessionManager: this.#requireAgent(request.targetAgentId).host.sessionManager,
+			requesterTranscript: this.#requireAgent(request.fromAgentId).transcript.inspect(),
+			responderTranscript: this.#requireAgent(request.targetAgentId).transcript.inspect(),
 		});
 	}
 
@@ -291,7 +291,7 @@ export class RequestEvidence {
 			if (
 				inspectCanonicalMessage({
 					message: request,
-					authorSessionManager: author.host.sessionManager,
+					authorTranscript: author.transcript.inspect(),
 					deliveryEvidence: delivery,
 				}).state !== "canonical"
 			) continue;
@@ -312,13 +312,13 @@ export class RequestEvidence {
 	): boolean {
 		const canonical = findAuthoredAgentMessageSources({
 			authorAgentId: author.identity.agentId,
-			sessionManager: author.host.sessionManager,
+			transcript: author.transcript.inspect(),
 		}).filter(({ source, input }) =>
 			input.operation === operation &&
 			input.requestId === requestId &&
 			inspectAgentMessageAuthorResult({
 				authorAgentId: author.identity.agentId,
-				sessionManager: author.host.sessionManager,
+				transcript: author.transcript.inspect(),
 				source,
 				input,
 			}) === "canonical"
@@ -335,7 +335,7 @@ export class RequestEvidence {
 		return request.origin === "agent_spawn"
 			? inspectCreationRequestDelivery({
 				recipientAgentId: recipient.identity.agentId,
-				sessionManager: recipient.host.sessionManager,
+				transcript: recipient.transcript.inspect(),
 				requestId: request.messageId,
 				fromAgentId: request.fromAgentId,
 				question: request.question,
@@ -343,7 +343,7 @@ export class RequestEvidence {
 			})
 			: inspectMessageDelivery({
 				recipientAgentId: recipient.identity.agentId,
-				sessionManager: recipient.host.sessionManager,
+				transcript: recipient.transcript.inspect(),
 				message: request,
 			});
 	}
@@ -362,7 +362,7 @@ export class RequestEvidence {
 			return resolveCreationRequest({
 				requestId,
 				workflowId: child.identity.workflowId,
-				spawnerSessionManager: spawner.host.sessionManager,
+				spawnerTranscript: spawner.transcript.inspect(),
 				childIdentity: child.identity,
 			});
 		}
@@ -375,7 +375,7 @@ export class RequestEvidence {
 	): Message | undefined {
 		const authored = findAuthoredAgentMessageSource({
 			authorAgentId: author.identity.agentId,
-			sessionManager: author.host.sessionManager,
+			transcript: author.transcript.inspect(),
 			messageId,
 		});
 		if (!authored) return undefined;
@@ -383,7 +383,7 @@ export class RequestEvidence {
 			return resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
-				sessionManager: author.host.sessionManager,
+				transcript: author.transcript.inspect(),
 				toolCallId: authored.source.toolCallId,
 				providedInput: authored.input,
 			});
@@ -392,14 +392,14 @@ export class RequestEvidence {
 		return authored.input.operation === "answer"
 			? resolveCommittedAnswer({
 				responderAgentId: author.identity.agentId,
-				sessionManager: author.host.sessionManager,
+				transcript: author.transcript.inspect(),
 				toolCallId: authored.source.toolCallId,
 				providedInput: authored.input,
 				request,
 			})
 			: resolveCommittedCancellation({
 				requesterAgentId: author.identity.agentId,
-				sessionManager: author.host.sessionManager,
+				transcript: author.transcript.inspect(),
 				toolCallId: authored.source.toolCallId,
 				providedInput: authored.input,
 				request,
@@ -430,7 +430,7 @@ export class RequestEvidence {
 		return [...this.#agents.values()].flatMap((record) =>
 			inspectMessageDeliveries({
 				recipientAgentId: record.identity.agentId,
-				sessionManager: record.host.sessionManager,
+				transcript: record.transcript.inspect(),
 			}));
 	}
 

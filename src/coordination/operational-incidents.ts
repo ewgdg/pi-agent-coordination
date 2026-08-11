@@ -4,6 +4,7 @@ import {
 	continueFromCommittedInput,
 	persistCommittedInput,
 } from "../pi-integration/committed-input.ts";
+import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
 	createModelVisibleModeratorInput,
@@ -233,13 +234,14 @@ export class OperationalIncidentCoordinator {
 	admitToolExecution(agentId: string, toolCallId: string, toolName: string): void {
 		const record = this.#requireAgent(agentId);
 		this.#operationReviews.reconcileAgent(agentId);
+		const transcript = record.transcript.inspect();
 		const { source } = resolveCommittedToolCall({
 			agentId,
-			sessionManager: record.host.sessionManager,
+			transcript,
 			toolCallId,
 			toolName,
 		});
-		const entry = record.host.sessionManager.getEntry(source.entryId);
+		const entry = transcript.entries.find(({ id }) => id === source.entryId);
 		if (entry?.type !== "message" || entry.message.role !== "assistant") {
 			throw new Error("invariant_violation: root tool call source is unavailable");
 		}
@@ -281,7 +283,7 @@ export class OperationalIncidentCoordinator {
 		if (!moderator) throw new Error(`unknown_identity: ${moderatorAgentId}`);
 		const { input: committedInput } = resolveCommittedToolCall({
 			agentId: moderatorAgentId,
-			sessionManager: moderator.host.sessionManager,
+			transcript: moderator.transcript.inspect(),
 			toolCallId,
 			toolName: "moderator_control",
 		});
@@ -482,7 +484,11 @@ export class OperationalIncidentCoordinator {
 			modelInput.details,
 		);
 		persistCommittedInput(sessionManager);
-		validateCommittedModeratorInput({ sessionManager, identity, input });
+		validateCommittedModeratorInput({
+			transcript: transcriptFromSessionManager(sessionManager).inspect(),
+			identity,
+			input,
+		});
 		if (handling.snapshot.kind === "operation_review") {
 			this.#operationReviews.markModeratorInputCommitted(
 				handling.snapshot.review.toolCall,
@@ -753,7 +759,7 @@ export class OperationalIncidentCoordinator {
 		const record = this.#agents.get(toolCall.agentId);
 		if (!record) return false;
 		const entries = currentCoordinationScope(
-			record.host.sessionManager,
+			record.transcript.inspect(),
 			toolCall.agentId,
 		);
 		const sourceExists = entries.some(
@@ -777,7 +783,7 @@ export class OperationalIncidentCoordinator {
 	#assertWorkflowToolCallPointer(toolCall: ToolCallPointer): void {
 		const record = this.#requireAgent(toolCall.agentId);
 		const source = currentCoordinationScope(
-			record.host.sessionManager,
+			record.transcript.inspect(),
 			toolCall.agentId,
 		).find((entry) => entry.id === toolCall.entryId);
 		if (
