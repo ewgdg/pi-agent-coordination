@@ -496,7 +496,12 @@ Future-platform extensibility gate:
 - [x] Confirmed the standard Pi CLI reconstructs Pi-owned inline factories in every process.
 - [x] Confirmed real Herdr settlement, real child TUI, PTY input/resize, durable transcript, and clean child exit in the PoC.
 - [x] Approved and moved to `plans/active/` on implementation branch `feat/process-isolated-agent-runtimes`.
-- [ ] Complete Milestones 1–10.
+- [x] Preserved the pre-cutover implementation on branch `archive/in-process-agent-runtimes` at `3f84e97`.
+- [x] Implemented the typed transport-neutral Control Channel, in-memory Adapter, Unix socket Adapter, and platform admission.
+- [x] Extracted the process-neutral Terminal Projection seam and proved real PTY parsing, input, generated replies, resize, and exit.
+- [x] Added exact Pi child CLI launch construction and physical Herdr pane environment isolation.
+- [ ] Complete the process Runtime Bridge vertical slice.
+- [ ] Complete transcript/configuration/Runtime Host cutover and Milestones 4–10.
 
 ## Surprises and discoveries
 
