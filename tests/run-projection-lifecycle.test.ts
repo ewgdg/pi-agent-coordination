@@ -16,7 +16,7 @@ import {
 	createPiNativeProjectionHost,
 	type PiNativeAgentProjection,
 } from "../src/pi-integration/native-agent-projection.ts";
-import { InProcessAgentHost } from "../src/runtime/in-process-agent-host.ts";
+import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import { InProcessHostedRuntime } from "../src/runtime/in-process-hosted-runtime.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
@@ -25,8 +25,8 @@ const PROJECTION_RENDER_WIDTH = 120;
 
 test("clean release disposes the exact projection and session once", async () => {
 	const resource = createRunResource();
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => resource.startedRun,
 	});
 	const handle = await host.lane.run(() => host.startInLane());
@@ -47,8 +47,8 @@ test("clean release disposes the exact projection and session once", async () =>
 test("selected clean Runs release inside one retained Runtime", async () => {
 	const resource = createRunResource();
 	let runtimePreparations = 0;
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => {
 			runtimePreparations += 1;
 			return resource.startedRun;
@@ -102,8 +102,8 @@ test("selected clean Runs release inside one retained Runtime", async () => {
 test("failure, termination, and Workflow shutdown each dispose their exact projection and session once", async () => {
 	for (const cause of ["failure", "termination", "shutdown"] as const) {
 		const resource = createRunResource();
-		const host = InProcessAgentHost.createChild({
-			sessionManager: SessionManager.inMemory(),
+		const host = AgentRuntimeSupervisor.createChild({
+			agentId: "projection-test-agent",
 			startSession: async () => resource.startedRun,
 		});
 		await host.lane.run(() => host.startInLane(["pending_delivery"]));
@@ -124,8 +124,8 @@ test("failure, termination, and Workflow shutdown each dispose their exact proje
 
 test("failed startup after Run binding rolls back the projection and session once", async () => {
 	const resource = createRunResource();
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => resource.startedRun,
 	});
 	host.setRunStartedHandler(() => {
@@ -147,8 +147,8 @@ test("failed startup after Run binding rolls back the projection and session onc
 test("failed startup emits the exact Run terminal lifecycle before disposal", async () => {
 	const resource = createRunResource();
 	const events: string[] = [];
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => ({
 			...resource.startedRun,
 			ready: Promise.reject(new Error("session_start rejected")),
@@ -191,8 +191,8 @@ test("post-binding startup failure cancels and observes pending exact readiness"
 			return Promise.resolve();
 		},
 	};
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => ({
 			...resource.startedRunWithProjection(projection),
 			ready,
@@ -223,8 +223,8 @@ test("post-binding startup failure cancels and observes pending exact readiness"
 
 test("shutdown fencing prevents a prepared Runtime from admitting a Run", async () => {
 	const resource = createRunResource();
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => resource.startedRun,
 	});
 	let relationshipInitializations = 0;
@@ -291,8 +291,8 @@ test("shutdown fenced before projection binding observes accepted startup cancel
 			return disposal;
 		},
 	};
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => {
 			markPreparationStarted();
 			await preparationGate;
@@ -341,8 +341,8 @@ test("a naturally rejected startup remains Run Failure after a pre-binding shutd
 			return undefined;
 		},
 	};
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => {
 			markPreparationStarted();
 			await preparationGate;
@@ -371,8 +371,8 @@ test("native subscription failure rolls back the already-created projection and 
 	const resource = createRunResource({
 		subscribeError: new Error("native subscription unavailable"),
 	});
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => resource.startedRun,
 	});
 
@@ -445,8 +445,8 @@ test("termination keeps the projection subscribed through final Run settlement",
 			await nativeProjection.dispose();
 		},
 	};
-	const agentHost = InProcessAgentHost.createChild({
-		sessionManager: session.sessionManager,
+	const agentHost = AgentRuntimeSupervisor.createChild({
+		agentId: session.sessionId,
 		startSession: async () => ({
 			runtime: new InProcessHostedRuntime({
 				session,
@@ -482,7 +482,7 @@ test("Runtime Host confirms user and custom Delivery transcript commits", async 
 		fauxAssistantMessage("User Delivery completed."),
 		fauxAssistantMessage("Custom Delivery completed."),
 	]);
-	const runtimeHost = InProcessAgentHost.bindOwner(ownerHost.runtime);
+	const runtimeHost = AgentRuntimeSupervisor.bindOwner(ownerHost.runtime);
 	const userContent = [{ type: "text" as const, text: "Commit this user Delivery." }];
 	const userDelivery = runtimeHost.deliverInLane(
 		{ kind: "user", content: userContent },
@@ -528,8 +528,8 @@ test("Runtime Host confirms user and custom Delivery transcript commits", async 
 
 test("Runtime Host exposes process-neutral effective state and exact Run intentions", async () => {
 	const resource = createRunResource();
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => resource.startedRun,
 	});
 
@@ -560,8 +560,8 @@ test("cleanup continues through projection failure and still disposes the exact 
 	const resource = createRunResource({
 		projectionDisposeError: new Error("projection cleanup failed"),
 	});
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "projection-test-agent",
 		startSession: async () => resource.startedRun,
 	});
 	await host.lane.run(() => host.startInLane());

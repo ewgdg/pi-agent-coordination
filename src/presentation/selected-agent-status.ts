@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
-import type { AgentRunState } from "../runtime/in-process-agent-host.ts";
+import type { AgentRunState } from "../runtime/agent-runtime-supervisor.ts";
 
 const COMPACT_AGENT_IDENTITY_LENGTH = 8;
 

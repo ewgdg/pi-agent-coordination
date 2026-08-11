@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { SessionManager } from "@earendil-works/pi-coding-agent";
-
-import { InProcessAgentHost } from "../src/runtime/in-process-agent-host.ts";
+import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import type { HostedAgentRuntime } from "../src/runtime/hosted-agent-runtime.ts";
 
 const snapshot = {
@@ -43,8 +41,8 @@ test("the common Runtime Host awaits remote queue clearing before aborting", asy
 		waitForIdle: async () => undefined,
 		dispose: async () => undefined,
 	} as unknown as HostedAgentRuntime;
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.inMemory(),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "async-queue-test-agent",
 		startSession: async () => ({ runtime }),
 	});
 	await host.lane.run(() => host.startInLane());

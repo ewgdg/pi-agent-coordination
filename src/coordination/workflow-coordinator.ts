@@ -30,7 +30,7 @@ import {
 	type ModelReference,
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
-import { InProcessAgentHost } from "../runtime/in-process-agent-host.ts";
+import { AgentRuntimeSupervisor } from "../runtime/agent-runtime-supervisor.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
 	DefaultChildSessionFactory,
@@ -223,7 +223,7 @@ export class WorkflowCoordinator {
 		);
 		this.#agents.set(identity.agentId, {
 			identity,
-			host: InProcessAgentHost.bindOwner(runtime),
+			host: AgentRuntimeSupervisor.bindOwner(runtime),
 			transcript: transcriptFromSessionManager(runtime.session.sessionManager),
 			children: [],
 		});

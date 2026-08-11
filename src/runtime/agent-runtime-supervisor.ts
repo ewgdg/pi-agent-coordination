@@ -1,7 +1,4 @@
-import type {
-	AgentSessionRuntime,
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import type {
@@ -75,9 +72,9 @@ type RunEndingHandler = (
 	cause: Exclude<AgentRunEndCause, "clean">,
 ) => void | Promise<void>;
 
-export class InProcessAgentHost implements AgentRuntimeHost {
+export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	readonly lane = new SerialLane();
-	readonly #sessionManager: SessionManager;
+	readonly #agentId: string;
 	readonly #startSession: StartSession | undefined;
 	readonly #retentionReasons = new Set<AgentRetentionReason>();
 	readonly #requestRelationships = new Map<
@@ -110,12 +107,12 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 	#heldNativeQueue: HeldNativeQueue | undefined;
 
 	private constructor(options: {
-		sessionManager: SessionManager;
+		agentId: string;
 		startSession?: StartSession;
 		initialRuntime?: HostedAgentRuntime;
 		initialRetentionReasons?: readonly AgentRetentionReason[];
 	}) {
-		this.#sessionManager = options.sessionManager;
+		this.#agentId = options.agentId;
 		this.#startSession = options.startSession;
 		for (const reason of options.initialRetentionReasons ?? []) {
 			this.#retentionReasons.add(reason);
@@ -125,9 +122,9 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		}
 	}
 
-	static bindOwner(runtime: AgentSessionRuntime): InProcessAgentHost {
-		return new InProcessAgentHost({
-			sessionManager: runtime.session.sessionManager,
+	static bindOwner(runtime: AgentSessionRuntime): AgentRuntimeSupervisor {
+		return new AgentRuntimeSupervisor({
+			agentId: runtime.session.sessionId,
 			initialRuntime: InProcessHostedRuntime.fromSession({
 				session: runtime.session,
 				services: runtime.services,
@@ -138,10 +135,10 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 	}
 
 	static createChild(options: {
-		sessionManager: SessionManager;
+		agentId: string;
 		startSession: StartSession;
-	}): InProcessAgentHost {
-		return new InProcessAgentHost(options);
+	}): AgentRuntimeSupervisor {
+		return new AgentRuntimeSupervisor(options);
 	}
 
 	observe(): AgentRunState {
@@ -451,7 +448,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 	#requireLiveRuntime(): HostedAgentRuntime {
 		const runtime = this.#runtime?.admitted ? this.#runtime.runtime : undefined;
 		if (!runtime) {
-			throw new Error(`Agent Run is unavailable: ${this.#sessionManager.getSessionId()}`);
+			throw new Error(`Agent Run is unavailable: ${this.#agentId}`);
 		}
 		return runtime;
 	}
@@ -507,7 +504,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 			throw new Error("host_shutting_down: Agent Run startup is closed");
 		}
 		if (!this.#startSession) {
-			throw new Error(`Agent Run cannot restart: ${this.#sessionManager.getSessionId()}`);
+			throw new Error(`Agent Run cannot restart: ${this.#agentId}`);
 		}
 		this.#starting = true;
 		this.#passivePreparation = !admitRun;

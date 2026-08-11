@@ -40,9 +40,9 @@ import {
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { ModeratorIdentity } from "../protocol/moderator-input.ts";
 import {
-	InProcessAgentHost,
+	AgentRuntimeSupervisor,
 	type StartedAgentRuntime,
-} from "./in-process-agent-host.ts";
+} from "./agent-runtime-supervisor.ts";
 import { InProcessHostedRuntime } from "./in-process-hosted-runtime.ts";
 import { SerialLane } from "./serial-lane.ts";
 import { discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
@@ -178,8 +178,8 @@ export class DefaultChildSessionFactory {
 		const { identity, sessionManager, blueprint } = options;
 		let firstPrepared = options.firstPrepared;
 		let child!: AgentRecord;
-		const host = InProcessAgentHost.createChild({
-			sessionManager,
+		const host = AgentRuntimeSupervisor.createChild({
+			agentId: identity.agentId,
 			startSession: async () => {
 				const prepared = firstPrepared ?? await this.prepareRun(
 					identity.agentId,
@@ -211,8 +211,8 @@ export class DefaultChildSessionFactory {
 		const { identity, sessionManager } = options;
 		let firstPrepared = options.firstPrepared;
 		let moderator!: AgentRecord;
-		const host = InProcessAgentHost.createChild({
-			sessionManager,
+		const host = AgentRuntimeSupervisor.createChild({
+			agentId: identity.agentId,
 			startSession: async () => {
 				const prepared = firstPrepared ?? await this.prepareModeratorRun(
 					identity.agentId,

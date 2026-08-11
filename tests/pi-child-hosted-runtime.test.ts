@@ -15,7 +15,7 @@ import {
 } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
-import { InProcessAgentHost } from "../src/runtime/in-process-agent-host.ts";
+import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import {
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
@@ -77,8 +77,8 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 	const pid = launch.pid;
 	const bootstrapPath = launch.bootstrapPath;
 	const runtime = new PiChildHostedRuntime(launch);
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.open(sessionPath),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: expectedSessionId,
 		startSession: async () => ({ runtime, ready: runtime.ready }),
 	});
 	const settlements: string[] = [];
@@ -420,8 +420,8 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 		ownerRequestHandlers: ordinaryOwnerHandlers(),
 	});
 	const runtime = new PiChildHostedRuntime(launch);
-	const host = InProcessAgentHost.createChild({
-		sessionManager: SessionManager.open(sessionPath),
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: expectedSessionId,
 		startSession: async () => ({ runtime, ready: runtime.ready }),
 	});
 	const handle = await host.lane.run(() => host.startInLane());

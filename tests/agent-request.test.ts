@@ -16,7 +16,7 @@ import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts
 import type { MessageBoundaryHooks } from "../src/coordination/workflow-coordinator.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import type { AgentRunState } from "../src/runtime/in-process-agent-host.ts";
+import type { AgentRunState } from "../src/runtime/agent-runtime-supervisor.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
