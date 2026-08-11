@@ -500,8 +500,9 @@ Future-platform extensibility gate:
 - [x] Implemented the typed transport-neutral Control Channel, in-memory Adapter, Unix socket Adapter, and platform admission.
 - [x] Extracted the process-neutral Terminal Projection seam and proved real PTY parsing, input, generated replies, resize, and exit.
 - [x] Added exact Pi child CLI launch construction and physical Herdr pane environment isolation.
-- [ ] Complete the process Runtime Bridge vertical slice.
-- [ ] Complete transcript/configuration/Runtime Host cutover and Milestones 4–10.
+- [x] Completed the production Runtime Bridge/Process Runtime vertical slice with real Pi CLI/TUI, offline model lifecycle, exact session, token admission, PTY input/resize, and bounded termination.
+- [x] Routed coordination transcript reads through `AgentTranscript` and added a fresh-file inspection Adapter.
+- [ ] Complete configuration/Runtime Host cutover, coordination tool proxying, and Milestones 4–10.
 
 ## Surprises and discoveries
 
