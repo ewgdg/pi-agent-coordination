@@ -202,6 +202,12 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	}
 
 	#handleEvent(event: PiChildRuntimeEvent): void {
+		if (event.event === "runtime.fault") {
+			this.#fail(new Error(
+				`child_runtime_fault: ${event.payload.code}: ${event.payload.message}`,
+			));
+			return;
+		}
 		if (
 			event.event !== "agent.start" &&
 			event.event !== "agent.end" &&
