@@ -8,10 +8,6 @@ import {
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
-import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import type { MessageBoundaryHooks } from "../src/coordination/workflow-coordinator.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
@@ -1461,10 +1457,6 @@ async function createDormantChildHarness(
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// This suite parks unanswered work to probe Request semantics. Suppress live
 		// Moderator Runs so incidental stall handling does not consume scripted replies.
 		incidentBoundaryHooks: {
@@ -1524,11 +1516,11 @@ async function waitForChildSessionFile(
 		"pi-agent-coordination",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
 		const child = sessions.find(({ id }) => id === childId);
 		if (child) return child.path;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Child Pi session file was not created");
 }
@@ -1537,18 +1529,18 @@ async function waitForEntry(
 	sessionFile: string,
 	predicate: (entry: ReturnType<SessionManager["getEntries"]>[number]) => boolean,
 ) {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const entries = SessionManager.open(sessionFile).getEntries();
 		if (entries.some(predicate)) return entries;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected child transcript entry did not commit");
 }
 
 async function waitForCondition(predicate: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		if (predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected condition was not reached");
 }

@@ -142,7 +142,7 @@ async function createUnboundTestOwnerHostWithRuntime(
 		implicitModeratorResponses: options?.implicitModeratorResponses ?? true,
 		allowModelNetwork,
 		fauxTokensPerSecond: options?.fauxTokensPerSecond,
-		processVisibleModel: options?.processVisibleModel ?? false,
+		processVisibleModel: options?.processVisibleModel ?? true,
 	});
 	const additionalExtensionPaths = [
 		...(options?.additionalExtensionPaths ?? []),

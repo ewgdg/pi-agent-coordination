@@ -1,20 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { WorkflowExecutionScheduler } from "../src/coordination/workflow-execution-scheduler.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
-import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
 import {
 	WorkflowPolicyStore,
 	parseWorkflowPolicy,
@@ -24,7 +18,6 @@ import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
-import { capturedAgentSession } from "./support/captured-agent-sessions.ts";
 
 test("ordinary executions enter and leave one Workflow-wide FIFO capacity", async () => {
 	const policy = new WorkflowPolicyStore(
@@ -147,41 +140,24 @@ test("Moderator execution is exempt and does not release an ordinary waiter", as
 });
 
 test("real ordinary child Runs share fair execution capacity before generation and tools", async (t) => {
-	const registryKey = Symbol.for("pi-agent-coordination.test.execution-gate");
-	let firstToolStarted!: () => void;
-	const firstToolStart = new Promise<void>((resolve) => {
-		firstToolStarted = resolve;
+	let firstGenerationStarted!: () => void;
+	const firstGenerationStart = new Promise<void>((resolve) => {
+		firstGenerationStarted = resolve;
 	});
-	let releaseFirstTool!: () => void;
-	const firstToolRelease = new Promise<void>((resolve) => {
-		releaseFirstTool = resolve;
+	let releaseFirstGeneration!: () => void;
+	const firstGenerationRelease = new Promise<void>((resolve) => {
+		releaseFirstGeneration = resolve;
 	});
-	let secondToolStarted!: () => void;
-	const secondToolStart = new Promise<void>((resolve) => {
-		secondToolStarted = resolve;
+	let secondGenerationStarted!: () => void;
+	const secondGenerationStart = new Promise<void>((resolve) => {
+		secondGenerationStarted = resolve;
 	});
-	let toolExecutions = 0;
-	(globalThis as Record<PropertyKey, unknown>)[registryKey] = {
-		async execute() {
-			toolExecutions += 1;
-			if (toolExecutions === 1) {
-				firstToolStarted();
-				await firstToolRelease;
-				return;
-			}
-			secondToolStarted();
-		},
-	};
-	t.after(() => {
-		delete (globalThis as Record<PropertyKey, unknown>)[registryKey];
-	});
+	let generations = 0;
 
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
-		additionalExtensionPaths: [
-			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
-		],
 	});
+	t.after(() => host.runtime.dispose());
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(
 		host.runtime,
@@ -190,45 +166,38 @@ test("real ordinary child Runs share fair execution capacity before generation a
 	const policy = new WorkflowPolicyStore(
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);
-	const childSessions: AgentSession[] = [];
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-		spawnBoundaryHooks: {
-			afterRunStart({ identity }) {
-				childSessions.push(capturedAgentSession(identity.agentId));
-			},
-		},
 	});
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("execution_gate", {}, { id: "first-execution-gate" }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("First execution completed."),
-		fauxAssistantMessage(
-			fauxToolCall("execution_gate", {}, { id: "second-execution-gate" }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("Second execution completed."),
+		async () => {
+			generations += 1;
+			firstGenerationStarted();
+			await firstGenerationRelease;
+			return fauxAssistantMessage("First execution completed.");
+		},
+		() => {
+			generations += 1;
+			secondGenerationStarted();
+			return fauxAssistantMessage("Second execution completed.");
+		},
 	]);
 
 	await spawnChild(owner, host, "first-capacity-child");
-	await firstToolStart;
+	await firstGenerationStart;
 	await spawnChild(owner, host, "second-capacity-child");
 	await new Promise<void>((resolve) => setImmediate(resolve));
-	assert.equal(toolExecutions, 1);
+	assert.equal(generations, 1);
 
-	releaseFirstTool();
-	await secondToolStart;
-	assert.equal(toolExecutions, 2);
-	await Promise.all(childSessions.map((session) => session.waitForIdle()));
+	releaseFirstGeneration();
+	await secondGenerationStart;
+	assert.equal(generations, 2);
+	await waitForCondition(() => owner.children().every(
+		({ run }) => "work" in run && run.work === "settled",
+	));
 	const policyDirectory = join(host.services.agentDir, "config");
 	await mkdir(policyDirectory, { recursive: true });
 	await writeFile(
@@ -236,39 +205,34 @@ test("real ordinary child Runs share fair execution capacity before generation a
 		'{"maxConcurrentAgentRuns": 7}',
 		"utf8",
 	);
-	const childTranscript = structuredClone(childSessions[0]!.sessionManager.getEntries());
-	await childSessions[0]!.reload();
+	const [firstChild] = owner.children();
+	assert.ok(firstChild);
+	const childSessionFile = await waitForChildSessionFile(host, firstChild.agentId);
+	const childTranscript = structuredClone(SessionManager.open(childSessionFile).getEntries());
+	const selected = await owner.openAgentView(firstChild.agentId);
+	assert.ok(selected);
+	selected.projection().dispatchInput("/reload\r");
+	await waitForCondition(() => selected.projection().presentation.render(80).join("\n").includes("Reload"));
 	assert.equal(policy.current().maxConcurrentAgentRuns, 1);
-	assert.deepEqual(childSessions[0]!.sessionManager.getEntries(), childTranscript);
+	assert.deepEqual(SessionManager.open(childSessionFile).getEntries(), childTranscript);
+	await selected.close();
 
 	await host.runtime.dispose();
 });
 
 test("an input-required ordinary Run releases capacity until work can resume", async (t) => {
-	const registryKey = Symbol.for("pi-agent-coordination.test.execution-gate");
-	let secondToolStarted!: () => void;
-	const secondToolStart = new Promise<void>((resolve) => {
-		secondToolStarted = resolve;
+	let secondGenerationStarted!: () => void;
+	const secondGenerationStart = new Promise<void>((resolve) => {
+		secondGenerationStarted = resolve;
 	});
-	let releaseSecondTool!: () => void;
-	const secondToolRelease = new Promise<void>((resolve) => {
-		releaseSecondTool = resolve;
-	});
-	(globalThis as Record<PropertyKey, unknown>)[registryKey] = {
-		async execute() {
-			secondToolStarted();
-			await secondToolRelease;
-		},
-	};
-	t.after(() => {
-		delete (globalThis as Record<PropertyKey, unknown>)[registryKey];
+	let releaseSecondGeneration!: () => void;
+	const secondGenerationRelease = new Promise<void>((resolve) => {
+		releaseSecondGeneration = resolve;
 	});
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
-		additionalExtensionPaths: [
-			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
-		],
 	});
+	t.after(() => host.runtime.dispose());
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(
 		host.runtime,
@@ -277,20 +241,10 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 	const policy = new WorkflowPolicyStore(
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);
-	const childSessions: AgentSession[] = [];
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-		spawnBoundaryHooks: {
-			afterRunStart({ identity }) {
-				childSessions.push(capturedAgentSession(identity.agentId));
-			},
-		},
 	});
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
@@ -302,21 +256,28 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 			),
 			{ stopReason: "toolUse" },
 		),
-		fauxAssistantMessage(
-			fauxToolCall("execution_gate", {}, { id: "execution-after-human-wait" }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The second child completed first."),
+		async () => {
+			secondGenerationStarted();
+			await secondGenerationRelease;
+			return fauxAssistantMessage("The second child completed first.");
+		},
 		fauxAssistantMessage("The Human Answer resumed the first child."),
 	]);
 
 	await spawnChild(owner, host, "input-required-child");
 	await waitForCondition(() => owner.humanAttention().length === 1);
+	const [waitingChild] = owner.children();
+	assert.ok(waitingChild);
 	await spawnChild(owner, host, "execution-while-input-required");
-	await secondToolStart;
-	await childSessions[0]!.prompt("Yes", { streamingBehavior: "steer" });
-	releaseSecondTool();
-	await Promise.all(childSessions.map((session) => session.waitForIdle()));
+	await secondGenerationStart;
+	const selected = await owner.openAgentView(waitingChild.agentId);
+	assert.ok(selected);
+	selected.projection().dispatchInput("Yes\r");
+	releaseSecondGeneration();
+	await waitForCondition(() => owner.children().every(
+		({ run }) => "work" in run && run.work === "settled",
+	));
+	await selected.close();
 
 	await host.runtime.dispose();
 });
@@ -337,10 +298,26 @@ async function spawnChild(
 	assert.equal(receipt.disposition, "pending");
 }
 
+async function waitForChildSessionFile(
+	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>,
+	childId: string,
+): Promise<string> {
+	const sessionDirectory = host.session.sessionManager.getSessionDir();
+	if (!sessionDirectory) throw new Error("Persistent Owner session directory unavailable");
+	const workflowDirectory = join(sessionDirectory, host.session.sessionId);
+	for (let attempt = 0; attempt < 500; attempt += 1) {
+		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
+		const child = sessions.find(({ id }) => id === childId);
+		if (child) return child.path;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Child Pi session file was not created");
+}
+
 async function waitForCondition(predicate: () => boolean): Promise<void> {
 	for (let attempt = 0; attempt < 300; attempt += 1) {
 		if (predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected execution scheduler condition was not reached");
 }

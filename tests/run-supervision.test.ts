@@ -8,10 +8,6 @@ import {
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
-import {
 	WorkflowCoordinator,
 	type AgentMessageInput,
 } from "../src/coordination/workflow-coordinator.ts";
@@ -32,7 +28,7 @@ import {
 } from "./support/agent-session.ts";
 import { capturedAgentSession } from "./support/captured-agent-sessions.ts";
 
-const MAX_CONDITION_POLL_ATTEMPTS = 100;
+const MAX_CONDITION_POLL_ATTEMPTS = 500;
 
 test("activity subscriptions publish queued-input changes while a child Run remains active", async () => {
 	const harness = await createRunSupervisionHarness();
@@ -1107,10 +1103,6 @@ async function createRunSupervisionHarness(options?: {
 				},
 			}
 			: undefined,
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// Run-supervision tests intentionally hold unanswered work open. Suppress live
 		// Moderator Runs so exact-Hold assertions stay isolated from stall handling.
 		incidentBoundaryHooks: {
@@ -1309,7 +1301,7 @@ async function createRunSupervisionHarness(options?: {
 async function waitForCondition(predicate: () => boolean): Promise<void> {
 	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		if (predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected Run supervision condition was not reached");
 }

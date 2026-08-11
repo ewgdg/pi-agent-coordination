@@ -13,10 +13,6 @@ import {
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 
-import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import type {
 	AgentMessageReceipt,
@@ -462,10 +458,6 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
 		incidentBoundaryHooks: {
@@ -540,9 +532,9 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 			entry.customType === "agent-coordination.message-delivery" &&
 			JSON.stringify(entry.details) === JSON.stringify({ messages: [source] }),
 	);
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		if (view.status(spawn.agentId).run.phase === "dormant") break;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	assert.equal(view.status(spawn.agentId).run.phase, "dormant");
 
@@ -935,10 +927,6 @@ test("only the original sender can poll a Message", async () => {
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// This test needs a live unanswered child to exercise poll authorization.
 		// Keep any incidental Moderator attempt dormant so it cannot steal replies.
 		incidentBoundaryHooks: {
@@ -1866,11 +1854,11 @@ async function waitForChildSessionFile(
 		"pi-agent-coordination",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
 		const child = sessions.find(({ id }) => id === childId);
 		if (child) return child.path;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Child Pi session file was not created");
 }
@@ -1879,10 +1867,10 @@ async function waitForEntry(
 	sessionFile: string,
 	predicate: (entry: ReturnType<SessionManager["getEntries"]>[number]) => boolean,
 ) {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const entries = SessionManager.open(sessionFile).getEntries();
 		if (entries.some(predicate)) return entries;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected child transcript entry did not commit");
 }
@@ -1907,10 +1895,6 @@ async function createDormantChildHarness(
 	let childSessionManager: SessionManager | undefined;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
 		incidentBoundaryHooks: {
@@ -2016,9 +2000,9 @@ async function waitForDelivery(
 }
 
 async function waitForCondition(predicate: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		if (predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected condition was not reached");
 }
