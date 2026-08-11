@@ -1192,9 +1192,9 @@ async function createRunSupervisionHarness(options?: {
 						!beforeEntryIds.has(entry.id) &&
 						JSON.stringify(entry).includes(text)
 					);
-					const inputFailure = selected && stripTerminalSequences(
+					const inputFailure = Boolean(selected && stripTerminalSequences(
 						selected.projection().presentation.render(120).join("\n"),
-					).includes("Agent input failed");
+					).includes("Agent input failed"));
 					return committed || inputFailure;
 				});
 				if (selected && stripTerminalSequences(
@@ -1229,7 +1229,11 @@ async function createRunSupervisionHarness(options?: {
 			async abort() {
 				const selected = await selectAgent(agentId);
 				selected.projection().dispatchInput("\x03");
-				await selected.projection().whenInputIdle();
+				await waitForCondition(() => {
+					const run = ownerView.status(agentId).run;
+					return run.phase === "dormant" ||
+						(run.phase === "live" && run.work === "settled");
+				});
 			},
 			waitForIdle: () => waitForCondition(() => {
 				const run = ownerView.status(agentId).run;
