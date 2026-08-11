@@ -11,7 +11,7 @@ import {
 	type HumanRequestInput,
 } from "../protocol/human-request.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
-import type { AgentRunHandle } from "../runtime/in-process-agent-host.ts";
+import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
 
 const INTERRUPTED_MESSAGE = "Human request interrupted before an answer was provided.";

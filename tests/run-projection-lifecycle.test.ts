@@ -27,10 +27,8 @@ test("clean release disposes the exact projection and session once", async () =>
 		sessionManager: SessionManager.inMemory(),
 		startSession: async () => resource.startedRun,
 	});
-	const session = await host.lane.run(() => host.startInLane());
-	const handle = host.currentHandle();
-	assert.ok(handle);
-	assert.equal(session, resource.session);
+	const handle = await host.lane.run(() => host.startInLane());
+	assert.equal(host.currentHandle(), handle);
 
 	assert.equal(
 		await host.lane.run(() => host.releaseIfEligibleInLane(handle)),
@@ -59,9 +57,7 @@ test("selected clean Runs release inside one retained Runtime", async () => {
 		ended.push({ sequence: handle.sequence, cause });
 	});
 
-	const preparedSession = await host.lane.run(() =>
-		host.prepareInLane(["interactive_selection"])
-	);
+	await host.lane.run(() => host.prepareInLane(["interactive_selection"]));
 	const preparedProjection = host.currentProjection();
 	await host.lane.run(() => host.startInLane());
 	const firstHandle = host.currentHandle();
@@ -78,9 +74,8 @@ test("selected clean Runs release inside one retained Runtime", async () => {
 		unsubscriptions: 0,
 	});
 
-	assert.equal(await host.lane.run(() => host.startInLane()), preparedSession);
-	const secondHandle = host.currentHandle();
-	assert.ok(secondHandle);
+	const secondHandle = await host.lane.run(() => host.startInLane());
+	assert.equal(host.currentHandle(), secondHandle);
 	assert.notEqual(secondHandle, firstHandle);
 	assert.equal(secondHandle.sequence, firstHandle.sequence + 1);
 	assert.equal(host.currentProjection(), preparedProjection);

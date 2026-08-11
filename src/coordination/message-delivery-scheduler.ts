@@ -13,7 +13,7 @@ import type {
 	AgentRunHandle,
 	AgentRunSettlement,
 	InterruptionHoldHandle,
-} from "../runtime/in-process-agent-host.ts";
+} from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 
 export type ScheduledMessageDelivery = Readonly<{

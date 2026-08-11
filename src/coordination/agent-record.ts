@@ -1,10 +1,10 @@
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { ModeratorIdentity } from "../protocol/moderator-input.ts";
-import {
-	type AgentRunState,
-	InProcessAgentHost,
-} from "../runtime/in-process-agent-host.ts";
+import type {
+	AgentRunState,
+	AgentRuntimeHost,
+} from "../runtime/agent-runtime-host.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
 import type { AgentTranscript } from "../transcript/agent-transcript.ts";
 
@@ -13,7 +13,7 @@ export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdenti
 export type AgentRecord = {
 	identity: AgentIdentity;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
-	host: InProcessAgentHost;
+	host: AgentRuntimeHost;
 	transcript: AgentTranscript;
 	children: string[];
 };

@@ -30,7 +30,7 @@ import {
 	findAuthoredRequestSources,
 	inspectCanonicalRequestResolution,
 } from "../protocol/request-resolution.ts";
-import type { ResidualRequestRelationships } from "../runtime/in-process-agent-host.ts";
+import type { ResidualRequestRelationships } from "../runtime/agent-runtime-host.ts";
 
 type Request = Extract<Message, { kind: "request" }>;
 type Answer = Extract<Message, { kind: "answer" }>;

@@ -42,7 +42,7 @@ import {
 	inspectCreationRequestDelivery,
 } from "../protocol/creation-request.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
-import type { InterruptionHoldHandle } from "../runtime/in-process-agent-host.ts";
+import type { InterruptionHoldHandle } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import type { UnresolvedAgentRequest } from "./dependency-deadlock.ts";
 

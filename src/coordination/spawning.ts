@@ -20,11 +20,10 @@ import {
 	toolCallPointerKey,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
-import {
-	InProcessAgentHost,
-	type AgentRunHandle,
-	type RunRetentionReason,
-} from "../runtime/in-process-agent-host.ts";
+import type {
+	AgentRunHandle,
+	RunRetentionReason,
+} from "../runtime/agent-runtime-host.ts";
 import {
 	DefaultChildSessionFactory,
 	type PreparedAgentRun,

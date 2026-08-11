@@ -11,7 +11,7 @@ import {
 import type {
 	AgentRosterStatus,
 } from "../coordination/workflow-coordinator.ts";
-import type { LiveRunState } from "../runtime/in-process-agent-host.ts";
+import type { LiveRunState } from "../runtime/agent-runtime-host.ts";
 import type { HumanAttentionItem } from "../coordination/human-requests.ts";
 import type { OperationalIncidentAttention } from "../coordination/operational-incidents.ts";
 import {

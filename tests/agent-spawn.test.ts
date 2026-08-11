@@ -1171,7 +1171,11 @@ test("confirmed post-Identity Delivery admission failure keeps the child and Req
 
 test("lost Run-start confirmation stays indeterminate after confirmed Identity", async () => {
 	const harness = await createCoordinatorHarness({
-		afterRunStart: () => "confirmation_lost",
+		afterRunStart: (context) => {
+			assert.deepEqual(Object.keys(context).sort(), ["handle", "identity"]);
+			assert.equal(context.handle.sequence > 0, true);
+			return "confirmation_lost";
+		},
 	});
 	const receipt = await harness.spawn("spawn-run-start-confirmation-lost");
 

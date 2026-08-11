@@ -7,52 +7,35 @@ import type {
 
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import type {
+	AgentRetentionReason,
+	AgentRunEndCause,
+	AgentRunHandle,
+	AgentRunSettlement,
+	AgentRunState,
 	AgentRuntimeDelivery,
 	AgentRuntimeDeliveryDispatch,
+	AgentRuntimeHost,
 	AgentRuntimeWorkState,
 	EffectiveRuntimeSnapshot,
+	InterruptionHoldHandle,
+	ResidualRequestRelationships,
 	ToolBatchClassification,
 	TranscriptCommitConfirmation,
+} from "./agent-runtime-host.ts";
+export type {
+	AgentRetentionReason,
+	AgentRunEndCause,
+	AgentRunHandle,
+	AgentRunSettlement,
+	AgentRunState,
+	InterruptionHoldHandle,
+	ResidualRequestRelationships,
+	RunRetentionReason,
 } from "./agent-runtime-host.ts";
 import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
 import { SerialLane } from "./serial-lane.ts";
 
-export type RunRetentionReason =
-	| "owner_host_binding"
-	| "pending_delivery"
-	| "awaiting_answer"
-	| "answer_owed"
-	| "interruption_hold"
-	| "moderator_handling";
-
-export type AgentRuntimeRetentionReason = "interactive_selection";
-export type AgentRetentionReason = RunRetentionReason | AgentRuntimeRetentionReason;
-
-export type AgentRetention = Readonly<{
-	reason: AgentRetentionReason;
-	count: number;
-}>;
-
 type RequestRelationshipReason = "awaiting_answer" | "answer_owed";
-
-export type LiveRunState = Readonly<{
-	phase: "starting" | "live" | "ending";
-	work?: "active" | "settled";
-	attention: "none" | "input_required";
-	retentionReasons: readonly AgentRetention[];
-}>;
-
-export type DormantRunState = Readonly<{
-	phase: "dormant";
-	retentionReasons: readonly [];
-}>;
-
-export type AgentRunState = LiveRunState | DormantRunState;
-export type AgentRunHandle = Readonly<{ sequence: number }>;
-export type InterruptionHoldHandle = Readonly<{
-	run: AgentRunHandle;
-	sequence: number;
-}>;
 
 export type StartedAgentRuntime = Readonly<{
 	session: AgentSession;
@@ -80,17 +63,11 @@ type HeldNativeQueue = {
 };
 
 type StartSession = () => Promise<StartedAgentRuntime>;
-export type AgentRunSettlement = "settled" | "failed";
 type SettledHandler = (handle: AgentRunHandle, settlement: AgentRunSettlement) => void;
-export type AgentRunEndCause = "clean" | "failure" | "termination" | "shutdown";
 type EndedHandler = (handle: AgentRunHandle, cause: AgentRunEndCause) => void;
 type StateChangeHandler = () => void;
 type ProjectionInputSettledHandler = () => void;
 type RunFenceHandler = (handle: AgentRunHandle) => void;
-export type ResidualRequestRelationships = Readonly<{
-	awaitingAnswerRequestIds: readonly string[];
-	answerOwedRequestIds: readonly string[];
-}>;
 type RunStartInitializer = () => ResidualRequestRelationships;
 type RunStartedHandler = (
 	handle: AgentRunHandle,
@@ -100,7 +77,7 @@ type RunEndingHandler = (
 	cause: Exclude<AgentRunEndCause, "clean">,
 ) => void | Promise<void>;
 
-export class InProcessAgentHost {
+export class InProcessAgentHost implements AgentRuntimeHost {
 	readonly lane = new SerialLane();
 	readonly #sessionManager: SessionManager;
 	readonly #startSession: StartSession | undefined;
@@ -294,7 +271,7 @@ export class InProcessAgentHost {
 			_runAgentPrompt(messages: readonly []): Promise<void>;
 		};
 		const continuation = session._runAgentPrompt([]);
-		this.trackOperation(continuation);
+		this.#trackOperation(continuation);
 		return continuation;
 	}
 
@@ -305,7 +282,7 @@ export class InProcessAgentHost {
 		const session = this.#requireLiveSession();
 		if (!confirmation) {
 			const completion = dispatchRuntimeDelivery(session, delivery);
-			this.trackOperation(completion);
+			this.#trackOperation(completion);
 			return { completion };
 		}
 		let completion!: Promise<void>;
@@ -315,7 +292,7 @@ export class InProcessAgentHost {
 			inspectCommit: confirmation.inspectCommit,
 			onDispatched: (dispatched) => {
 				completion = dispatched;
-				this.trackOperation(dispatched);
+				this.#trackOperation(dispatched);
 			},
 		});
 		return { completion, transcriptCommit };
@@ -492,7 +469,7 @@ export class InProcessAgentHost {
 		const run = this.#runtime;
 		if (!run || run.handle !== handle || this.#ending) return;
 		this.#markRunFailed(run, handle);
-		this.trackOperation(run.session.abort());
+		this.#trackOperation(run.session.abort());
 	}
 
 	endInputRequired(handle: AgentRunHandle, requestId: string): void {
@@ -511,24 +488,21 @@ export class InProcessAgentHost {
 		return session;
 	}
 
-	requirePreparedSession(): AgentSession {
-		const session = this.#runtime?.session;
-		if (!session) {
-			throw new Error(`Agent runtime is unavailable: ${this.#sessionManager.getSessionId()}`);
-		}
-		return session;
-	}
-
 	async startInLane(
 		initialRetentionReasons: readonly AgentRetentionReason[] = [],
-	): Promise<AgentSession> {
-		return this.#ensureRuntimeInLane(true, initialRetentionReasons);
+	): Promise<AgentRunHandle> {
+		await this.#ensureRuntimeInLane(true, initialRetentionReasons);
+		const handle = this.currentHandle();
+		if (!handle) {
+			throw new Error("invariant_violation: admitted Agent Run has no handle");
+		}
+		return handle;
 	}
 
 	async prepareInLane(
 		initialRetentionReasons: readonly AgentRetentionReason[] = [],
-	): Promise<AgentSession> {
-		return this.#ensureRuntimeInLane(false, initialRetentionReasons);
+	): Promise<void> {
+		await this.#ensureRuntimeInLane(false, initialRetentionReasons);
 	}
 
 	async #ensureRuntimeInLane(
@@ -737,7 +711,7 @@ export class InProcessAgentHost {
 			(held ? held.steering.length + held.followUp.length : 0);
 	}
 
-	trackOperation(operation: Promise<unknown>): void {
+	#trackOperation(operation: Promise<unknown>): void {
 		const tracked = operation.then(
 			() => undefined,
 			() => undefined,
@@ -850,7 +824,7 @@ export class InProcessAgentHost {
 
 	async discardAndEndInLane(
 		cause: Exclude<AgentRunEndCause, "clean">,
-		disposeRun?: (session: AgentSession) => Promise<void>,
+		disposeRuntime?: () => Promise<void>,
 	): Promise<void> {
 		const run = this.#runtime;
 		if (!run) {
@@ -860,7 +834,7 @@ export class InProcessAgentHost {
 		// A failed selected Run becomes Dormant in place so transcript, commands,
 		// extension state, and projection identity remain available to the human.
 		const retainRuntime = cause === "failure" &&
-			disposeRun === undefined &&
+			disposeRuntime === undefined &&
 			run.projection !== undefined &&
 			this.#retentionReasons.has("interactive_selection");
 		const endedHandle = run.handle;
@@ -883,14 +857,14 @@ export class InProcessAgentHost {
 			}
 			if (!retainRuntime) await attemptCleanup(() => run.unsubscribe());
 			await attemptCleanup(() => run.session.clearQueue());
-			if (disposeRun) {
-				await attemptCleanup(() => disposeRun(run.session));
+			if (disposeRuntime) {
+				await attemptCleanup(disposeRuntime);
 			} else {
 				await attemptCleanup(() => run.session.abort());
 				await attemptCleanup(() => run.session.waitForIdle());
 			}
 			if (!retainRuntime) await attemptCleanup(() => run.projection?.dispose());
-			if (!disposeRun && !retainRuntime) {
+			if (!disposeRuntime && !retainRuntime) {
 				await attemptCleanup(() => run.session.dispose());
 			}
 			await attemptCleanup(() => Promise.all([...this.#trackedOperations]).then(
@@ -1067,10 +1041,10 @@ export class InProcessAgentHost {
 		) return;
 		this.#heldNativeQueue = undefined;
 		for (const message of queue.steering) {
-			this.trackOperation(run.session.sendUserMessage(message, { deliverAs: "steer" }));
+			this.#trackOperation(run.session.sendUserMessage(message, { deliverAs: "steer" }));
 		}
 		for (const message of queue.followUp) {
-			this.trackOperation(run.session.sendUserMessage(message, { deliverAs: "followUp" }));
+			this.#trackOperation(run.session.sendUserMessage(message, { deliverAs: "followUp" }));
 		}
 	}
 

@@ -32,7 +32,7 @@ import {
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
 import type { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
-import type { AgentRunHandle } from "../runtime/in-process-agent-host.ts";
+import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import { statusOf, type AgentRecord } from "./agent-record.ts";
