@@ -4,6 +4,7 @@ import test from "node:test";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	type Context,
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
@@ -163,6 +164,16 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 	const sourceFile = sourceOwner.sessionManager.getSessionFile();
 	assert.ok(sourceFile);
 	try {
+		// The direct and nested child processes can request their terminal response in
+		// either order. Route both broker slots from their delivered Request evidence.
+		const completeNestedCoordination = (context: Context) =>
+			fauxAssistantMessage(
+				JSON.stringify(context.messages).includes(
+					"Create a nested source Workflow for clone coverage.",
+				)
+					? "The direct child completed nested coordination."
+					: "The nested child is ready in the source Workflow.",
+			);
 		host.model.setResponses([
 			fauxAssistantMessage(
 				fauxToolCall(
@@ -172,8 +183,8 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 				),
 				{ stopReason: "toolUse" },
 			),
-			fauxAssistantMessage("The nested child is ready in the source Workflow."),
-			fauxAssistantMessage("The direct child completed nested coordination."),
+			completeNestedCoordination,
+			completeNestedCoordination,
 		]);
 		const directSpawn = await executeTool(
 			host,
@@ -577,6 +588,8 @@ function ownerBaseline(host: TestOwnerHost) {
 		thinking: "off" as const,
 		tools: [],
 		skills: [],
-		extensions: [],
+		extensions: host.services.resourceLoader.getExtensions().extensions
+			.filter(({ path }) => path !== "<inline:pi-agent-coordination>")
+			.map(({ resolvedPath }) => resolvedPath),
 	};
 }
