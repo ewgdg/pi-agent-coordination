@@ -33,6 +33,7 @@ type RuntimeState = {
 	currentRunId?: string;
 	latestRunId?: string;
 	currentRunOutcome: "completed" | "interrupted" | "failed";
+	queueIntentionTail: Promise<void>;
 	shutdownStarted: boolean;
 };
 
@@ -62,6 +63,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			context: ctx,
 			runtime: capture.runtime,
 			currentRunOutcome: "completed",
+			queueIntentionTail: Promise.resolve(),
 			shutdownStarted: false,
 		};
 		capture.runtime.session.subscribe((event) => {
@@ -144,10 +146,12 @@ async function handleOwnerRequest(
 				state.context.sessionManager,
 				request.payload.delivery,
 			);
-			const completion = dispatchDelivery(
-				state.runtime,
-				request.payload.delivery,
-			);
+			const completion = wasActive
+				? sequenceQueueIntention(state, () => {
+					if (request.signal.aborted) throw requestCancellationError(request.signal);
+					return dispatchDelivery(state.runtime, request.payload.delivery);
+				})
+				: dispatchDelivery(state.runtime, request.payload.delivery);
 			const cancel = () => {
 				commit.reject(requestCancellationError(request.signal));
 				if (state.currentRunId !== request.payload.runId) return;
@@ -203,7 +207,10 @@ async function handleOwnerRequest(
 		}
 		case "queue.clear": {
 			requireCurrentOrLatestRun(state, request.payload.runId);
-			const cleared = state.runtime.session.clearQueue();
+			const cleared = await sequenceQueueIntention(
+				state,
+				() => state.runtime.session.clearQueue(),
+			);
 			return {
 				...cleared,
 				queuedInputCount: state.runtime.session.pendingMessageCount,
@@ -211,7 +218,9 @@ async function handleOwnerRequest(
 		}
 		case "run.interrupt": {
 			const accepted = requireCurrentOrLatestRun(state, request.payload.runId);
-			if (accepted) await state.runtime.session.abort();
+			if (accepted) {
+				await sequenceQueueIntention(state, () => state.runtime.session.abort());
+			}
 			return { accepted };
 		}
 		case "runtime.shutdown":
@@ -308,6 +317,18 @@ function requireCurrentOrLatestRun(state: RuntimeState, runId: string): boolean 
 		);
 	}
 	return state.currentRunId === runId;
+}
+
+function sequenceQueueIntention<T>(
+	state: RuntimeState,
+	operation: () => T | Promise<T>,
+): Promise<T> {
+	const result = state.queueIntentionTail.then(operation);
+	state.queueIntentionTail = result.then(
+		() => undefined,
+		() => undefined,
+	);
+	return result;
 }
 
 function dispatchDelivery(
