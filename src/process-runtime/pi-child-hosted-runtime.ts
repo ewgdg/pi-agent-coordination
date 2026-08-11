@@ -16,6 +16,7 @@ import {
 	type PiChildProcessLaunch,
 	type PiChildProcessRuntime,
 	type PiChildRuntimeEvent,
+	type PiChildRuntimeSnapshot,
 } from "./pi-child-process-runtime.ts";
 
 type SettlementWaiter = {
@@ -37,7 +38,8 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	readonly #removeEventHandler: () => void;
 	#removeChannelCloseHandler: () => void = () => undefined;
 	#snapshot: EffectiveRuntimeSnapshot | undefined;
-	#toolExecutionModes = new Map<string, "sequential" | "parallel">();
+	#childSnapshot: PiChildRuntimeSnapshot | undefined;
+	#toolExecutionModes: Map<string, "sequential" | "parallel"> | undefined;
 	#workState: AgentRuntimeWorkState = "settled";
 	#queuedInputCount = 0;
 	#currentRunId: string | undefined;
@@ -62,12 +64,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#removeEventHandler = launch.onEvent((event) => this.#handleEvent(event));
 		this.#admitted = launch.ready();
 		this.ready = this.#admitted.then((runtime) => {
-			this.#toolExecutionModes = new Map(
-				runtime.snapshot.toolExecutionModes.map(({ name, executionMode }) => [
-					name,
-					executionMode,
-				]),
-			);
+			this.#childSnapshot = runtime.snapshot;
 			this.#snapshot = {
 				cwd: runtime.snapshot.cwd,
 				model: runtime.snapshot.model,
@@ -111,14 +108,28 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	}
 
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification {
+		const executionModes = this.#requireToolExecutionModes();
 		for (const toolName of toolNames) {
-			const executionMode = this.#toolExecutionModes.get(toolName);
+			const executionMode = executionModes.get(toolName);
 			if (!executionMode) {
 				throw new Error(`invariant_violation: tool definition ${toolName} is unavailable`);
 			}
 			if (executionMode === "sequential") return "blocking";
 		}
 		return "asynchronous";
+	}
+
+	#requireToolExecutionModes(): ReadonlyMap<string, "sequential" | "parallel"> {
+		if (!this.#childSnapshot) {
+			throw new Error("invariant_violation: child Runtime snapshot is unavailable");
+		}
+		this.#toolExecutionModes ??= new Map(
+			this.#childSnapshot.toolExecutionModes.map(({ name, executionMode }) => [
+				name,
+				executionMode,
+			]),
+		);
+		return this.#toolExecutionModes;
 	}
 
 	cancellationSignal(): AbortSignal {
