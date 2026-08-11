@@ -939,6 +939,36 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		});
 		return failedModerators.length === 2;
 	});
+	const observe = host.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const failedModeratorIds = (await SessionManager.list(host.cwd, directory)).flatMap(
+		({ path }) => {
+			const session = SessionManager.open(path);
+			const entries = session.getEntries();
+			const tail = entries.at(-1);
+			return entries[0]?.type === "custom_message" &&
+				entries[0].customType === "agent-coordination.moderator-input" &&
+				tail?.type === "message" && tail.message.role === "assistant" &&
+				tail.message.stopReason === "error"
+				? [session.getSessionId()]
+				: [];
+		},
+	);
+	await waitForCondition(async () => {
+		for (const agentId of failedModeratorIds) {
+			const result = await observe.execute(
+				`observe-failed-moderator-${agentId}`,
+				{ operation: "status", agentId },
+				undefined,
+				undefined,
+				host.session.extensionRunner.createContext(),
+			);
+			if ((result.details as { run: { phase: string } }).run.phase !== "dormant") {
+				return false;
+			}
+		}
+		return true;
+	});
 	const attentionAgents = await openAgentsSurface(host);
 	await waitForCondition(async () =>
 		attentionAgents.surface.render(80).join("\n").includes(
