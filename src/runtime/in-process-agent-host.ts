@@ -6,6 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
+import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
 import type {
 	AgentRetentionReason,
 	AgentRunEndCause,
@@ -267,10 +268,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 	}
 
 	continueFromCommittedInputInLane(): Promise<void> {
-		const session = this.#requireLiveSession() as unknown as {
-			_runAgentPrompt(messages: readonly []): Promise<void>;
-		};
-		const continuation = session._runAgentPrompt([]);
+		const continuation = continueFromCommittedInput(this.#requireLiveSession());
 		this.#trackOperation(continuation);
 		return continuation;
 	}
