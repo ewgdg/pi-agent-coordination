@@ -9,6 +9,39 @@ import type {
 } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
 
+test("an authenticated native child lifecycle adopts its transport identity without a dispatched cycle", async () => {
+	const { runtime, emit } = createFakeRuntime();
+	const hostedEvents: HostedRuntimeEvent[] = [];
+	runtime.subscribe((event) => hostedEvents.push(event));
+	await runtime.ready;
+
+	emit(controlEvent("agent.start", {
+		runId: "native-run-1",
+		queuedInputCount: 0,
+	}));
+	assert.equal(runtime.workState(), "active");
+	emit(controlEvent("agent.end", {
+		runId: "native-run-1",
+		outcome: "completed",
+		willRetry: false,
+		queuedInputCount: 0,
+	}));
+	emit(controlEvent("agent.settled", {
+		runId: "native-run-1",
+		outcome: "completed",
+		queuedInputCount: 0,
+	}));
+
+	assert.equal(runtime.workState(), "settled");
+	assert.deepEqual(hostedEvents, [
+		{ type: "state_changed" },
+		{ type: "agent_end", outcome: "completed", willRetry: false },
+		{ type: "state_changed" },
+		{ type: "agent_settled" },
+	]);
+	await runtime.dispose();
+});
+
 test("a post-admission child Runtime fault terminally fences its hosted Run once", async () => {
 	const { runtime, emit } = createFakeRuntime();
 	const hostedEvents: HostedRuntimeEvent[] = [];

@@ -220,7 +220,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	effectiveRuntimeSnapshot(): EffectiveRuntimeSnapshot | undefined {
-		return this.#runtime?.runtime.snapshot();
+		return this.#runtime?.admitted ? this.#runtime.runtime.snapshot() : undefined;
 	}
 
 	currentWorkState(): AgentRuntimeWorkState {

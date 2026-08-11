@@ -556,6 +556,21 @@ test("Runtime Host exposes process-neutral effective state and exact Run intenti
 	);
 });
 
+test("a prepared Runtime does not expose an effective Run snapshot before admission", async () => {
+	const resource = createRunResource();
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "prepared-runtime-agent",
+		startSession: async () => resource.startedRun,
+	});
+
+	await host.lane.run(() => host.prepareInLane(["interactive_selection"]));
+	assert.ok(host.currentProjection());
+	assert.equal(host.currentHandle(), undefined);
+	assert.equal(host.effectiveRuntimeSnapshot(), undefined);
+	assert.deepEqual(host.observe(), { phase: "dormant", retentionReasons: [] });
+	await host.lane.run(() => host.discardAndEndInLane("termination"));
+});
+
 test("cleanup continues through projection failure and still disposes the exact session", async () => {
 	const resource = createRunResource({
 		projectionDisposeError: new Error("projection cleanup failed"),

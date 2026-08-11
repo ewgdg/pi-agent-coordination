@@ -43,6 +43,7 @@ type RuntimeState = {
 	currentRunId?: string;
 	latestRunId?: string;
 	currentRunOutcome: "completed" | "interrupted" | "failed";
+	nativeRunSequence: number;
 	queueIntentionTail: Promise<void>;
 	shutdownStarted: boolean;
 };
@@ -92,6 +93,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			context: ctx,
 			runtime: capture.runtime,
 			currentRunOutcome: "completed",
+			nativeRunSequence: 0,
 			queueIntentionTail: Promise.resolve(),
 			shutdownStarted: false,
 		};
@@ -336,14 +338,11 @@ async function reportRuntimeLifecycle(
 	event: AgentSessionEvent,
 ): Promise<void> {
 	if (event.type === "agent_start") {
-		if (!state.currentRunId) {
-			await reportFault(
-				state.channel,
-				"run_identity_missing",
-				new Error("Pi started without an admitted run"),
-			);
-			return;
-		}
+		// Interactive and extension-local Pi input is admitted through the child →
+		// Owner lifecycle request before this awaited event. It has no Owner-issued
+		// run.prompt request from which to inherit a transport cycle identity.
+		state.currentRunId ??= `native-run-${++state.nativeRunSequence}`;
+		state.latestRunId = state.currentRunId;
 		await state.channel.sendEvent("agent.start", {
 			runId: state.currentRunId,
 			queuedInputCount: state.runtime.session.pendingMessageCount,

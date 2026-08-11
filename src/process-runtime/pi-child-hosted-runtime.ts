@@ -222,7 +222,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			event.event !== "agent.end" &&
 			event.event !== "agent.settled"
 		) return;
-		if (!this.#acceptsRunId(event.payload.runId)) return;
+		if (!this.#acceptsLifecycleEvent(event)) return;
 		this.#updateQueuedInputCount(event.payload.queuedInputCount);
 		if (event.event === "agent.start") {
 			if (this.#cancellation.signal.aborted) this.#cancellation = new AbortController();
@@ -253,8 +253,20 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#emit({ type: "agent_settled" });
 	}
 
-	#acceptsRunId(runId: string): boolean {
+	#acceptsLifecycleEvent(
+		event: Extract<PiChildRuntimeEvent, { event: "agent.start" | "agent.end" | "agent.settled" }>,
+	): boolean {
+		const runId = event.payload.runId;
 		if (this.#currentRunId === runId) return true;
+		if (event.event === "agent.start" && this.#currentRunId === undefined) {
+			// An authenticated child may begin a native interactive or extension-local
+			// model cycle only after its awaited executionBegin request admitted the
+			// Owner-side Run. Adopt that child-generated transport identity here.
+			this.#currentRunId = runId;
+			this.#latestRunId = runId;
+			this.#runObserved = true;
+			return true;
+		}
 		this.#fail(new Error(
 			`stale_run: child lifecycle ${runId} does not match ${String(this.#currentRunId)}`,
 		));

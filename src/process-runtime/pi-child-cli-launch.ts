@@ -75,9 +75,11 @@ export function buildPiChildCliLaunch(options: {
 			? ["--no-tools"]
 			: ["--tools", configuration.tools.join(",")]),
 		"--no-extensions",
-		...configuration.extensions.flatMap((path) => ["--extension", path]),
+		// Control must be connected before inherited session_start handlers run: an
+		// inherited extension may synchronously open UI or initiate Agent work.
 		"--extension",
 		bridgeExtensionPath,
+		...configuration.extensions.flatMap((path) => ["--extension", path]),
 		"--no-skills",
 		...skillPaths.flatMap((path) => ["--skill", path]),
 		"--no-context-files",

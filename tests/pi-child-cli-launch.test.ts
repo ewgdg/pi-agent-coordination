@@ -31,9 +31,11 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 				"--thinking", "high",
 				"--tools", "read,agent_message,agent_spawn",
 				"--no-extensions",
+				// The bridge must bind Control before inherited session_start handlers
+				// can synchronously activate child work.
+				"--extension", "/package/src/process-runtime/child-runtime-bridge.ts",
 				"--extension", "/extensions/first.ts",
 				"--extension", "/extensions/second.ts",
-				"--extension", "/package/src/process-runtime/child-runtime-bridge.ts",
 				"--no-skills",
 				"--skill", "/skills/review/SKILL.md",
 				"--skill", "/skills/testing/SKILL.md",
