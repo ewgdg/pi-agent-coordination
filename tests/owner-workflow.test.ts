@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import test from "node:test";
 
 import {
@@ -24,6 +27,11 @@ test("interactive Pi boots one observable Owner while preserving native interact
 			(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
 		);
 	assert.ok(ownerIdentity && ownerIdentity.type === "custom");
+	const processExtensions = host.services.resourceLoader
+		.getExtensions()
+		.extensions
+		.map(({ resolvedPath }) => resolvedPath)
+		.filter((path) => path.includes("process-model-broker-extension"));
 	assert.deepEqual(ownerIdentity.data, {
 		agentId: host.session.sessionId,
 		workflowId: host.session.sessionId,
@@ -36,7 +44,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 				thinking: "off",
 				tools: [],
 				skills: [],
-				extensions: [],
+				extensions: processExtensions,
 			},
 		},
 	});
@@ -114,7 +122,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 	assert.equal(disposeCalls, 1);
 });
 
-test("native Owner replacement closes every retained source Workflow session", async () => {
+test("native Owner replacement closes every retained source Workflow process", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained until the Owner replaces its native session."),
@@ -138,20 +146,21 @@ test("native Owner replacement closes every retained source Workflow session", a
 	);
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 
-	let childDisposeCalls = 0;
-	const nativeDispose = AgentSession.prototype.dispose;
-	AgentSession.prototype.dispose = function countReplacedWorkflowChildDisposal() {
-		if (this.sessionId === childAgentId) childDisposeCalls += 1;
-		return nativeDispose.call(this);
-	};
-	try {
-		await host.runtime.newSession();
-	} finally {
-		AgentSession.prototype.dispose = nativeDispose;
-	}
-
-	assert.equal(childDisposeCalls, 1);
+	await host.runtime.newSession();
+	await waitForNoRuntimeArtifacts(host.session.sessionId);
 	assert.ok(host.runtime.session.getToolDefinition("agent_spawn"));
+	const observe = host.runtime.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	await assert.rejects(
+		() => observe.execute(
+			"observe-replaced-workflow-child",
+			{ operation: "status", agentId: childAgentId },
+			undefined,
+			undefined,
+			host.runtime.session.extensionRunner.createContext(),
+		),
+		/unknown_identity/,
+	);
 	await host.runtime.dispose();
 });
 
@@ -193,7 +202,7 @@ test("shutdown with an open Agent view closes it without rebinding stopped inter
 	assert.equal(host.ui.customSurfaces.length, 0);
 });
 
-test("orderly shutdown disposes retained child, Moderator, and Owner sessions exactly once", async () => {
+test("orderly shutdown disposes retained child and Moderator processes plus Owner session", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
@@ -242,17 +251,18 @@ test("orderly shutdown disposes retained child, Moderator, and Owner sessions ex
 		assert.deepEqual(
 			Object.fromEntries(disposalCounts),
 			{
-				[childAgentId]: 1,
-				[moderatorAgentId]: 1,
+				[childAgentId]: 0,
+				[moderatorAgentId]: 0,
 				[host.session.sessionId]: 1,
 			},
 		);
+		await waitForNoRuntimeArtifacts(host.session.sessionId);
 	} finally {
 		AgentSession.prototype.dispose = nativeDispose;
 	}
 });
 
-test("orderly shutdown disposes child and Owner sessions even when child abort fails", async () => {
+test("child AgentSession patches cannot affect process shutdown or Owner disposal", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained for exhaustive shutdown cleanup."),
@@ -296,18 +306,10 @@ test("orderly shutdown disposes child and Owner sessions even when child abort f
 	};
 
 	try {
-		await assert.rejects(
-			() => host.runtime.dispose(),
-			(error: unknown) =>
-				error instanceof AggregateError &&
-				error.errors.some(
-					(candidate) =>
-						candidate instanceof Error &&
-						candidate.message === "injected child abort failure",
-				),
-		);
-		assert.equal(childDisposeCalls, 1);
+		await host.runtime.dispose();
+		assert.equal(childDisposeCalls, 0);
 		assert.equal(ownerDisposeCalls, 1);
+		await waitForNoRuntimeArtifacts(host.session.sessionId);
 	} finally {
 		AgentSession.prototype.abort = nativeAbort;
 		AgentSession.prototype.dispose = nativeDispose;
@@ -334,4 +336,13 @@ async function waitForModeratorAgentId(
 		await new Promise<void>((resolve) => setImmediate(resolve));
 	}
 	throw new Error("Expected retained Moderator session was not created");
+}
+
+async function waitForNoRuntimeArtifacts(workflowId: string): Promise<void> {
+	const prefix = `pi-ac-${createHash("sha256").update(workflowId).digest("hex").slice(0, 10)}-`;
+	for (let attempt = 0; attempt < 1_000; attempt += 1) {
+		if (!(await readdir(tmpdir())).some((name) => name.startsWith(prefix))) return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error("Process Runtime artifacts survived Workflow shutdown");
 }
