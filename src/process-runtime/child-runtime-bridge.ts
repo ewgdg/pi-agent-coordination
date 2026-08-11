@@ -109,14 +109,6 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		});
 		if (current.currentRunId === runId) current.currentRunId = undefined;
 	});
-	pi.on("model_select", async () => sendConfigurationChanged(state));
-	pi.on("thinking_level_select", async () => sendConfigurationChanged(state));
-	pi.on("session_info_changed", async (_event, ctx) => {
-		const current = requireState(state);
-		await current.channel.sendEvent("session.infoChanged", {
-			sessionId: ctx.sessionManager.getSessionId(),
-		});
-	});
 	pi.on("session_shutdown", async (event) => {
 		const current = state;
 		if (!current) return;
@@ -159,7 +151,7 @@ async function handleOwnerRequest(
 			setImmediate(() => state.context.shutdown());
 			return { accepted: true };
 		default:
-			throw new Error(`child_runtime_method_unavailable: ${request.method}`);
+			return assertUnreachable(request);
 	}
 }
 
@@ -186,11 +178,6 @@ function requireModel(model: AgentSessionRuntime["session"]["model"]) {
 
 function canonicalExtensionPath(path: string): string {
 	return isAbsolute(path) ? path : new URL(path, import.meta.url).pathname;
-}
-
-async function sendConfigurationChanged(state: RuntimeState | undefined): Promise<void> {
-	const current = requireState(state);
-	await current.channel.sendEvent("runtime.configurationChanged", runtimeSnapshot(current.runtime));
 }
 
 async function failCurrentRun(state: RuntimeState, runId: string, error: unknown): Promise<void> {
@@ -247,6 +234,10 @@ function requireState(state: RuntimeState | undefined): RuntimeState {
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function assertUnreachable(value: never): never {
+	throw new Error(`child_runtime_method_unavailable: ${String(value)}`);
 }
 
 export default childRuntimeBridge;

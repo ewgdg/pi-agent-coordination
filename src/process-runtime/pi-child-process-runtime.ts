@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import type { Static } from "typebox";
 
+import { AgentControlAdmissionBroker } from "../control/agent-control-admission.ts";
 import {
 	FramedAgentControlChannel,
 	type ControlEvent,
@@ -14,10 +15,7 @@ import {
 	agentControlProtocol,
 	RuntimeSnapshotSchema,
 } from "../control/agent-control-protocol.ts";
-import {
-	createPlatformControlListener,
-	type ControlTransportListener,
-} from "../control/control-platform.ts";
+import { createPlatformControlListener } from "../control/control-platform.ts";
 import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
 	type ChildProcessBootstrap,
@@ -73,8 +71,8 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 /** Standalone Owner-side host for one real Pi CLI/TUI process. */
 export class PiChildProcessRuntime {
 	readonly #projection: PtyTerminalProjection;
-	readonly #listener: ControlTransportListener;
-	readonly #eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+	readonly #admissionBroker: AgentControlAdmissionBroker<typeof agentControlProtocol>;
+	readonly #eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
 	readonly #cleanup: () => Promise<void>;
 	#cleanupPromise: Promise<void> | undefined;
 	#shutdownPromise: Promise<PtyExit> | undefined;
@@ -90,14 +88,16 @@ export class PiChildProcessRuntime {
 
 	private constructor(options: {
 		projection: PtyTerminalProjection;
-		listener: ControlTransportListener;
+		admissionBroker: AgentControlAdmissionBroker<typeof agentControlProtocol>;
 		channel: PiChildRuntimeChannel;
 		ready: PiChildRuntimeReady;
 		snapshot: PiChildRuntimeSnapshot;
 		bootstrapPath: string;
+		eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
 	}) {
 		this.#projection = options.projection;
-		this.#listener = options.listener;
+		this.#admissionBroker = options.admissionBroker;
+		this.#eventHandlers = options.eventHandlers;
 		this.channel = options.channel;
 		this.ready = options.ready;
 		this.snapshot = options.snapshot;
@@ -105,7 +105,7 @@ export class PiChildProcessRuntime {
 		this.#cleanup = async () => {
 			await this.channel.close().catch(() => undefined);
 			await unlinkIfExists(this.bootstrapPath);
-			await this.#listener.close().catch(() => undefined);
+			await this.#admissionBroker.close().catch(() => undefined);
 			await this.#projection.dispose().catch(() => undefined);
 		};
 		this.exited = this.#projection.exited.then(async (exit) => {
@@ -113,9 +113,6 @@ export class PiChildProcessRuntime {
 			this.#exitResult = exit;
 			await this.#finalize();
 			return exit;
-		});
-		this.channel.onEvent((event) => {
-			for (const handler of this.#eventHandlers) handler(event);
 		});
 		this.channel.onClose(() => {
 			this.#channelClosed = true;
@@ -134,6 +131,11 @@ export class PiChildProcessRuntime {
 				? {}
 				: { runtimeDirectory: options.runtimeDirectory }),
 		});
+		const admissionBroker = new AgentControlAdmissionBroker({
+			listener,
+			protocol: agentControlProtocol,
+			workflowId: options.workflowId,
+		});
 		const bootstrapPath = join(dirname(listener.endpoint.address), "bootstrap.json");
 		const bootstrap: ChildProcessBootstrap = {
 			protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
@@ -146,6 +148,17 @@ export class PiChildProcessRuntime {
 		};
 		let projection: PtyTerminalProjection | undefined;
 		let channel: PiChildRuntimeChannel | undefined;
+		const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+		let settleReady!: (ready: PiChildRuntimeReady) => void;
+		let rejectReady!: (error: Error) => void;
+		const ready = new Promise<PiChildRuntimeReady>((resolve, reject) => {
+			settleReady = resolve;
+			rejectReady = reject;
+		});
+		let rejectStartupFault!: (error: Error) => void;
+		const startupFault = new Promise<never>((_resolve, reject) => {
+			rejectStartupFault = reject;
+		});
 		try {
 			await writeFile(bootstrapPath, `${JSON.stringify(bootstrap)}\n`, {
 				encoding: "utf8",
@@ -170,6 +183,32 @@ export class PiChildProcessRuntime {
 			});
 			environment.TERM = "xterm-256color";
 			environment.COLORTERM = "truecolor";
+			const timeoutMilliseconds = options.startupTimeoutMilliseconds
+				?? DEFAULT_STARTUP_TIMEOUT_MILLISECONDS;
+			const admission = admissionBroker.admit(
+				{
+					agentId: bootstrap.agentId,
+					connectionToken: bootstrap.connectionToken,
+					expectedSessionId: bootstrap.expectedSessionId,
+				},
+				(candidate) => {
+					candidate.onRequest(() => {
+						throw new Error("child_runtime_owner_request_unavailable");
+					});
+					candidate.onEvent((event) => {
+						if (event.event === "runtime.ready") settleReady(event.payload);
+						if (event.event === "runtime.fault") {
+							rejectStartupFault(new Error(
+								`child_runtime_fault: ${event.payload.code}: ${event.payload.message}`,
+							));
+						}
+						for (const handler of eventHandlers) handler(event);
+					});
+					candidate.onClose((cause) => rejectReady(cause));
+				},
+			);
+			// Register the one-time token before the child can connect.
+			void admission.catch(() => undefined);
 			projection = spawnPtyTerminalProjection({
 				file: launch.command,
 				arguments: launch.arguments,
@@ -178,64 +217,12 @@ export class PiChildProcessRuntime {
 				columns: options.columns ?? DEFAULT_COLUMNS,
 				rows: options.rows ?? DEFAULT_ROWS,
 			});
-			const timeoutMilliseconds = options.startupTimeoutMilliseconds
-				?? DEFAULT_STARTUP_TIMEOUT_MILLISECONDS;
-			const transport = await raceStartup(
-				listener.accept(),
+			channel = await raceStartup(
+				admission,
 				projection,
 				timeoutMilliseconds,
-				"control connection",
+				"control admission",
 			);
-			channel = new FramedAgentControlChannel({
-				identity: {
-					protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
-					workflowId: bootstrap.workflowId,
-					agentId: bootstrap.agentId,
-				},
-				protocol: agentControlProtocol,
-				transport,
-			});
-			channel.onRequest(() => {
-				throw new Error("child_runtime_owner_request_unavailable");
-			});
-			let settleHello!: () => void;
-			let rejectHello!: (error: Error) => void;
-			const hello = new Promise<void>((resolve, reject) => {
-				settleHello = resolve;
-				rejectHello = reject;
-			});
-			let settleReady!: (ready: PiChildRuntimeReady) => void;
-			let rejectReady!: (error: Error) => void;
-			const ready = new Promise<PiChildRuntimeReady>((resolve, reject) => {
-				settleReady = resolve;
-				rejectReady = reject;
-			});
-			let rejectStartupFault!: (error: Error) => void;
-			const startupFault = new Promise<never>((_resolve, reject) => {
-				rejectStartupFault = reject;
-			});
-			channel.onHello((received) => {
-				if (received.connectionToken !== bootstrap.connectionToken) {
-					throw new Error("child_runtime_hello_rejected: connection token mismatch");
-				}
-				if (received.expectedSessionId !== bootstrap.expectedSessionId) {
-					throw new Error("child_runtime_hello_rejected: session identity mismatch");
-				}
-				settleHello();
-			});
-			const unsubscribeStartupEvents = channel.onEvent((event) => {
-				if (event.event === "runtime.ready") settleReady(event.payload);
-				if (event.event === "runtime.fault") {
-					rejectStartupFault(new Error(
-						`child_runtime_fault: ${event.payload.code}: ${event.payload.message}`,
-					));
-				}
-			});
-			channel.onClose((cause) => {
-				rejectHello(cause);
-				rejectReady(cause);
-			});
-			await raceStartup(hello, projection, timeoutMilliseconds, "hello");
 			const readyPayload = await raceStartup(ready, projection, timeoutMilliseconds, "runtime.ready");
 			if (readyPayload.sessionId !== bootstrap.expectedSessionId) {
 				throw new Error(
@@ -249,14 +236,14 @@ export class PiChildProcessRuntime {
 				"configuration snapshot",
 			);
 			assertRuntimeSnapshot(snapshot, options.configuration, bootstrap.expectedSessionId);
-			unsubscribeStartupEvents();
 			return new PiChildProcessRuntime({
 				projection,
-				listener,
+				admissionBroker,
 				channel,
 				ready: readyPayload,
 				snapshot,
 				bootstrapPath,
+				eventHandlers,
 			});
 		} catch (error) {
 			let terminalDiagnostic = "";
@@ -271,7 +258,7 @@ export class PiChildProcessRuntime {
 			if (projection) forceKillProjection(projection);
 			await projection?.dispose().catch(() => undefined);
 			await unlinkIfExists(bootstrapPath);
-			await listener.close().catch(() => undefined);
+			await admissionBroker.close().catch(() => undefined);
 			const cause = error instanceof Error ? error : new Error(String(error));
 			throw terminalDiagnostic.length === 0
 				? cause
