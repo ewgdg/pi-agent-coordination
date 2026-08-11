@@ -116,6 +116,8 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 			),
 		]), "completed");
 		assert.equal(host.currentWorkState(), "settled");
+		assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
+		await runtime.abort();
 
 		const customMessage = createMessageDelivery([{
 			source: {
@@ -309,7 +311,9 @@ for (const failure of ["channel_loss", "process_kill"] as const) {
 			assert.deepEqual(settlements, ["failed"]);
 			assert.equal(cancellation.aborted, true);
 			assert.equal(harness.host.currentRunFailed(), true);
-			assert.equal(harness.host.currentWorkState(), "settled");
+			assert.equal(harness.host.currentWorkState(), "unavailable");
+			const failedRunState = harness.host.observe();
+			assert.equal("work" in failedRunState && failedRunState.work, "settled");
 			await harness.launch.exited;
 			await harness.host.lane.run(() =>
 				harness.host.discardAndEndInLane("failure")

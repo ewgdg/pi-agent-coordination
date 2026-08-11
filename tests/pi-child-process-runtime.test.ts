@@ -130,6 +130,20 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		await waitUntil(() => lifecycle.includes("agent.settled"));
 		assert.deepEqual(lifecycle.slice(0, 3), ["agent.start", "agent.end", "agent.settled"]);
 		assert.match(JSON.stringify(SessionManager.open(sessionPath).getEntries()), new RegExp(PROCESS_RUNTIME_TEST_RESPONSE));
+		assert.deepEqual(await runtime.channel.request("queue.clear", {
+			runId: "process-runtime-test-run",
+		}), { steering: [], followUp: [], queuedInputCount: 0 });
+		assert.deepEqual(await runtime.channel.request("run.interrupt", {
+			runId: "process-runtime-test-run",
+		}), { accepted: false });
+		await assert.rejects(
+			runtime.channel.request("queue.clear", { runId: "stale-process-runtime-run" }),
+			/stale_run/,
+		);
+		await assert.rejects(
+			runtime.channel.request("run.interrupt", { runId: "stale-process-runtime-run" }),
+			/stale_run/,
+		);
 
 		assert.deepEqual(await runtime.channel.request("run.continue", {
 			runId: "process-runtime-continued-run",
@@ -162,7 +176,9 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 				deliverAs: "steer",
 			},
 		});
-		assert.deepEqual(await runtime.channel.request("queue.clear", {}), {
+		assert.deepEqual(await runtime.channel.request("queue.clear", {
+			runId: "process-runtime-delivery-run",
+		}), {
 			steering: ["Clear this queued direction before it commits."],
 			followUp: [],
 			queuedInputCount: 0,
@@ -214,6 +230,24 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.doesNotMatch(
 			JSON.stringify(SessionManager.open(sessionPath).getEntries()),
 			/This cancelled queued direction must never commit/,
+		);
+
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "process-runtime-missing-commit-run",
+			delivery: {
+				kind: "user",
+				content: "PROCESS_RUNTIME_DROP_MESSAGE_COMMIT",
+			},
+		}), {
+			accepted: true,
+			transcriptCommitted: false,
+			modelCycleStarted: true,
+			queuedInputCount: 0,
+		});
+		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 5);
+		assert.doesNotMatch(
+			JSON.stringify(SessionManager.open(sessionPath).getEntries()),
+			/PROCESS_RUNTIME_DROP_MESSAGE_COMMIT/,
 		);
 
 		projection.resize(100, 30);

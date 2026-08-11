@@ -2,7 +2,10 @@ import {
 	createFauxCore,
 	fauxAssistantMessage,
 } from "@earendil-works/pi-ai";
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionFactory,
+	SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { execFileSync } from "node:child_process";
 
 export const PROCESS_RUNTIME_TEST_PROVIDER = "process-runtime-test";
@@ -55,6 +58,17 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		// Test-only fault injection: the bridge receives the public readonly view,
+		// while Pi owns the writable SessionManager behind that same object.
+		const sessionManager = ctx.sessionManager as unknown as SessionManager;
+		const appendMessage = sessionManager.appendMessage.bind(sessionManager);
+		sessionManager.appendMessage = (message) => {
+			if (
+				message.role === "user" &&
+				JSON.stringify(message.content).includes("PROCESS_RUNTIME_DROP_MESSAGE_COMMIT")
+			) return "suppressed-process-runtime-test-entry";
+			return appendMessage(message);
+		};
 		ctx.ui.setWidget("process-runtime-test", [
 			"PROCESS_RUNTIME_CHILD_WIDGET",
 			`PID=${process.pid}`,

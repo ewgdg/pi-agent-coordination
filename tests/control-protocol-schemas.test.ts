@@ -157,6 +157,10 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.equal(Check(agentControlMethods["run.interrupt"].request, {
 		runId: "run-1",
 	}), true);
+	assert.equal(Check(agentControlMethods["queue.clear"].request, {}), false);
+	assert.equal(Check(agentControlMethods["queue.clear"].request, {
+		runId: "run-1",
+	}), true);
 	assert.equal(Check(agentControlMethods["queue.clear"].response, {
 		steering: ["one"],
 		followUp: ["two"],
