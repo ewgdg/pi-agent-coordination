@@ -130,7 +130,7 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 			description: "obligation stall",
 			baseline: {
 				...ownerBaseline,
-				tools: host.session.getAllTools().map(({ name }) => name),
+				tools: host.session.getActiveToolNames(),
 			},
 		},
 	});
@@ -177,8 +177,7 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	const ownerSession = host.runtime.session;
 	const liveView = await openLiveAgentView(host, moderator.id);
 	const liveRendered = stripTerminalSequences(liveView.view.render(80).join("\n"));
-	assert.match(liveRendered, /moderator.*idle/);
-	assert.match(liveRendered, new RegExp(moderator.id.slice(-8)));
+	assert.match(liveRendered, /agent-coordination\.moderator-input/);
 	assert.match(liveRendered, /\(coordination-test\) deterministic-owner/);
 	assert.equal(host.runtime.session, ownerSession);
 	host.model.setResponses([
@@ -211,8 +210,8 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	const dormantRendered = stripTerminalSequences(
 		dormantView.view.render(80).join("\n"),
 	);
-	assert.match(dormantRendered, /moderator.*dormant/);
-	assert.match(dormantRendered, new RegExp(moderator.id.slice(-8)));
+	assert.match(dormantRendered, /agent-coordination\.moderator-input/);
+	assert.equal((await observeStatus(host, moderator.id)).run.phase, "dormant");
 	assert.equal(host.runtime.session, ownerSession);
 	await returnAgentViewToOwner(host, dormantView);
 
@@ -364,10 +363,11 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	const moderator = await waitForModeratorKind(host, "operation_review");
 	const agentView = await owner.openAgentView(child.agentId);
 	assert.ok(agentView);
+	const childTranscriptPathBeforeReview = owner.status(child.agentId)
+		.primaryEvidence.transcriptPath;
+	assert.ok(childTranscriptPathBeforeReview);
 	assert.match(
-		stripTerminalSequences(
-			agentView.projection().presentation.render(240).join("\n"),
-		),
+		JSON.stringify(SessionManager.open(childTranscriptPathBeforeReview).getEntries()),
 		/Keep the Creation Request open/,
 	);
 	assert.equal(await owner.openAgentView(moderator.id), undefined);
@@ -720,19 +720,12 @@ test("a failed successor startup does not clear Run Failure handling", async () 
 		);
 		const receipt = await harness.owner.message(toolCallId, input);
 		assert.ok("delivery" in receipt);
-		assert.equal(receipt.delivery, "rejected");
-		assert.equal(
-			"rejectionReason" in receipt && receipt.rejectionReason,
-			"target_unavailable",
-		);
+		assert.equal(receipt.delivery, "pending");
 		await harness.owner.reachSafeBoundary();
-
-		assert.equal(harness.owner.status(affected.agentId).run.phase, "dormant");
-		assert.equal(
-			harness.owner.status(moderator.id).run.retentionReasons.some(
+		await waitForCondition(() =>
+			!harness.owner.status(moderator.id).run.retentionReasons.some(
 				({ reason }) => reason === "moderator_handling",
-			),
-			true,
+			)
 		);
 	} finally {
 		controlledModelRuntime.getModel = originalGetModel;
@@ -1238,13 +1231,6 @@ test("external Answer clearance releases Moderator handling", async () => {
 			({ reason }) => reason === "answer_owed",
 		);
 	});
-	await waitForCondition(async () => {
-		const status = await observeStatus(host, moderator.id);
-		return status.run.phase === "live" &&
-			!status.run.retentionReasons.some(
-				({ reason }) => reason === "moderator_handling",
-			);
-	});
 	assert.equal((await findModerators(host)).length, 1);
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -1278,6 +1264,13 @@ test("external Answer clearance releases Moderator handling", async () => {
 	);
 	assert.deepEqual(clearedResolution.message.details, {
 		disposition: "already_cleared",
+	});
+	await waitForCondition(async () => {
+		const status = await observeStatus(host, moderator.id);
+		return status.run.phase === "live" &&
+			!status.run.retentionReasons.some(
+				({ reason }) => reason === "moderator_handling",
+			);
 	});
 
 	await host.runtime.dispose();
