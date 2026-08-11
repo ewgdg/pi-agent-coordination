@@ -6,9 +6,11 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
+import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import {
 	PROCESS_RUNTIME_TEST_MODEL,
@@ -42,6 +44,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 
 	const lifecycle: string[] = [];
 	let runtime: PiChildProcessRuntime | undefined;
+	let projection: ReturnType<typeof createPiChildProcessProjection> | undefined;
 	try {
 		runtime = await PiChildProcessRuntime.start({
 			workflowId: "process-runtime-test-workflow",
@@ -73,6 +76,13 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			columns: 80,
 			rows: 24,
 		});
+		projection = createPiChildProcessProjection(runtime);
+		let projectionChanges = 0;
+		let projectionExits = 0;
+		const projectionFailures: unknown[] = [];
+		projection.addChangeHandler(() => projectionChanges += 1);
+		projection.addExitRequestHandler(() => projectionExits += 1);
+		projection.addFailureHandler((error) => projectionFailures.push(error));
 		runtime.onEvent((event: ControlEvent<typeof agentControlProtocol>) => {
 			if (["agent.start", "agent.end", "agent.settled", "session.shutdown"].includes(event.event)) {
 				lifecycle.push(event.event);
@@ -100,6 +110,10 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.equal((await stat(runtime.bootstrapPath)).mode & 0o777, 0o600);
 
 		await waitForFrame(runtime, "PROCESS_RUNTIME_CHILD_WIDGET");
+		assert.match(
+			projection.presentation.render(80).map(stripTerminalSequences).join("\n"),
+			/PROCESS_RUNTIME_CHILD_WIDGET/,
+		);
 		assert.match(frameText(runtime), /HERDR_ENV=undefined/);
 		assert.match(frameText(runtime), /HERDR_SOCKET_PATH=undefined/);
 		assert.match(frameText(runtime), /HERDR_PANE_ID=undefined/);
@@ -113,9 +127,10 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.deepEqual(lifecycle.slice(0, 3), ["agent.start", "agent.end", "agent.settled"]);
 		assert.match(JSON.stringify(SessionManager.open(sessionPath).getEntries()), new RegExp(PROCESS_RUNTIME_TEST_RESPONSE));
 
-		runtime.resize(100, 30);
-		runtime.writeInput("/runtime-probe OWNER_INPUT_OK\r");
+		projection.resize(100, 30);
+		projection.dispatchInput("/runtime-probe OWNER_INPUT_OK\r");
 		await waitForFrame(runtime, "INPUT=OWNER_INPUT_OK");
+		assert.ok(projectionChanges > 0);
 		assert.match(frameText(runtime), /SIZE=100x30/);
 		assert.equal(runtime.frame().columns, 100);
 		assert.equal(runtime.frame().rows, 30);
@@ -125,9 +140,12 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		const exit = await runtime.shutdown("test complete");
 		assert.deepEqual(exit, { exitCode: 0, signal: 0 });
 		await waitUntil(() => lifecycle.includes("session.shutdown"));
+		await waitUntil(() => projectionExits === 1);
+		assert.deepEqual(projectionFailures, []);
 		assert.throws(() => process.kill(pid, 0), hasProcessCode("ESRCH"));
 		await assert.rejects(lstat(bootstrapPath), hasFsCode("ENOENT"));
 	} finally {
+		await projection?.dispose();
 		await runtime?.dispose();
 	}
 });

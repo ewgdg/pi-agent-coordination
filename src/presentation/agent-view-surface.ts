@@ -2,8 +2,10 @@ import type {
 	ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+	isFocusable,
 	truncateToWidth,
 	type Component,
+	type Focusable,
 	type OverlayHandle,
 	type TUI,
 } from "@earendil-works/pi-tui";
@@ -86,7 +88,7 @@ export async function openAgentViewSurface(
 	}
 }
 
-class AgentViewSurface implements Component {
+class AgentViewSurface implements Component, Focusable {
 	readonly #tui: TUI;
 	readonly #view: DurableAgentView;
 	readonly #removeChangeHandler: () => void;
@@ -102,6 +104,8 @@ class AgentViewSurface implements Component {
 	#shutdownRequested = false;
 	#disposed = false;
 	#failed = false;
+	#focused = false;
+	#focusedPresentation: Component | undefined;
 
 	constructor(
 		tui: TUI,
@@ -116,6 +120,7 @@ class AgentViewSurface implements Component {
 		this.#ownsInput = ownsInput;
 		this.#failFromSurface = failFromSurface;
 		this.#removeChangeHandler = view.addChangeHandler(() => {
+			this.#synchronizePresentationFocus();
 			this.#observeProjectionEvents(requestShutdown);
 			this.#tui.requestRender();
 		});
@@ -144,6 +149,15 @@ class AgentViewSurface implements Component {
 		if (this.#ownsMouseReporting) {
 			this.#tui.terminal.write(ENABLE_MOUSE_REPORTING);
 		}
+	}
+
+	get focused(): boolean {
+		return this.#focused;
+	}
+
+	set focused(value: boolean) {
+		this.#focused = value;
+		this.#synchronizePresentationFocus();
 	}
 
 	handleInput(data: string): void {
@@ -196,6 +210,17 @@ class AgentViewSurface implements Component {
 		}
 	}
 
+	#synchronizePresentationFocus(): void {
+		const presentation = this.#view.projection().presentation;
+		if (presentation !== this.#focusedPresentation) {
+			if (this.#focusedPresentation && isFocusable(this.#focusedPresentation)) {
+				this.#focusedPresentation.focused = false;
+			}
+			this.#focusedPresentation = presentation;
+		}
+		if (isFocusable(presentation)) presentation.focused = this.#focused;
+	}
+
 	#fail(error: unknown): void {
 		if (this.#failed || this.#disposed) return;
 		this.#failed = true;
@@ -229,6 +254,10 @@ class AgentViewSurface implements Component {
 		this.#removeProjectionFailureHandler();
 		this.#removeProjectionExitRequestHandler();
 		this.#removePrioritizedInputListener();
+		if (this.#focusedPresentation && isFocusable(this.#focusedPresentation)) {
+			this.#focusedPresentation.focused = false;
+		}
+		this.#focusedPresentation = undefined;
 		if (this.#ownsMouseReporting) {
 			this.#tui.terminal.write(DISABLE_MOUSE_REPORTING);
 		}

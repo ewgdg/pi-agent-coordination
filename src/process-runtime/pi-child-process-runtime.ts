@@ -274,6 +274,14 @@ export class PiChildProcessRuntime {
 		return this.#projection.frame();
 	}
 
+	addChangeHandler(handler: () => void): () => void {
+		return this.#projection.addChangeHandler(handler);
+	}
+
+	addFailureHandler(handler: (error: unknown) => void): () => void {
+		return this.#projection.addFailureHandler(handler);
+	}
+
 	writeInput(data: string | Buffer): void {
 		this.#projection.writeInput(data);
 	}

@@ -1,0 +1,281 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { CURSOR_MARKER, stripTerminalSequences, visibleWidth, type Focusable } from "@earendil-works/pi-tui";
+
+import {
+	createPiChildProcessProjection,
+	type PiChildProjectionRuntime,
+} from "../src/process-runtime/pi-child-process-projection.ts";
+import type { PiChildRuntimeEvent } from "../src/process-runtime/pi-child-process-runtime.ts";
+import type {
+	PtyExit,
+	TerminalCellStyle,
+	TerminalProjectionCell,
+	TerminalProjectionFrame,
+} from "../src/process-runtime/pty-terminal-projection.ts";
+
+const DEFAULT_STYLE: TerminalCellStyle = {
+	foreground: { kind: "default" },
+	background: { kind: "default" },
+	bold: false,
+	dim: false,
+	italic: false,
+	underline: false,
+	blink: false,
+	inverse: false,
+	invisible: false,
+	strikethrough: false,
+	overline: false,
+};
+
+function cell(
+	text: string,
+	width = 1,
+	style: TerminalCellStyle = DEFAULT_STYLE,
+): TerminalProjectionCell {
+	return { text, width, style };
+}
+
+test("process projection renders exact terminal styling, wide cells, and focused cursor metadata", () => {
+	const runtime = new FakeRuntime({
+		columns: 6,
+		rows: 2,
+		buffer: "alternate",
+		cursor: { column: 3, row: 0, visible: true, style: "bar", blink: true },
+		lines: [
+			{
+				text: "A界B",
+				wrapped: false,
+				cells: [
+					cell("A", 1, {
+						foreground: { kind: "rgb", red: 1, green: 2, blue: 3 },
+						background: { kind: "indexed", index: 123 },
+						bold: true,
+						dim: true,
+						italic: true,
+						underline: true,
+						blink: true,
+						inverse: true,
+						invisible: true,
+						strikethrough: true,
+						overline: true,
+					}),
+					cell("界", 2),
+					cell("", 0),
+					cell("B"),
+					cell(""),
+					cell(""),
+				],
+			},
+			{ text: "", wrapped: false, cells: Array.from({ length: 6 }, () => cell("")) },
+		],
+	});
+	const projection = createPiChildProcessProjection(runtime);
+	const presentation = projection.presentation as typeof projection.presentation & Focusable;
+
+	const unfocused = presentation.render(6);
+	assert.equal(unfocused.length, 2);
+	assert.equal(stripTerminalSequences(unfocused[0]!), "A界▏");
+	assert.equal(visibleWidth(unfocused[0]!), 4);
+	assert.ok(!unfocused[0]!.includes(CURSOR_MARKER));
+	assert.match(unfocused[0]!, /\x1b\[0;1;2;3;4;5;7;8;9;53;38;2;1;2;3;48;5;123mA/);
+
+	presentation.focused = true;
+	const focused = presentation.render(6);
+	assert.ok(focused[0]!.includes(CURSOR_MARKER));
+	assert.match(focused[0]!, /\x1b\[0;5;39;49m▏/);
+	assert.equal(stripTerminalSequences(focused[0]!), "A界▏");
+	assert.equal(visibleWidth(focused[0]!), 4);
+});
+
+test("process projection preserves visible cursor styles and hides cursor presentation", () => {
+	for (const expected of [
+		{ style: "block" as const, text: "X", sgr: /\x1b\[0;7;39;49mX/ },
+		{ style: "underline" as const, text: "X", sgr: /\x1b\[0;4;39;49mX/ },
+		{ style: "bar" as const, text: "▏", sgr: /\x1b\[0;39;49m▏/ },
+	]) {
+		const frame = frameWithText("X", 2, 1);
+		const runtime = new FakeRuntime({
+			...frame,
+			cursor: { column: 0, row: 0, visible: true, style: expected.style, blink: false },
+		});
+		const projection = createPiChildProcessProjection(runtime);
+		const presentation = projection.presentation as typeof projection.presentation & Focusable;
+		presentation.focused = true;
+		const line = presentation.render(2)[0]!;
+		assert.equal(stripTerminalSequences(line), expected.text);
+		assert.match(line, expected.sgr);
+		assert.ok(line.includes(CURSOR_MARKER));
+	}
+
+	const hiddenFrame = frameWithText("X", 2, 1);
+	const hidden = createPiChildProcessProjection(new FakeRuntime({
+		...hiddenFrame,
+		cursor: { ...hiddenFrame.cursor, visible: false },
+	}));
+	const presentation = hidden.presentation as typeof hidden.presentation & Focusable;
+	presentation.focused = true;
+	const line = presentation.render(2)[0]!;
+	assert.equal(stripTerminalSequences(line), "X");
+	assert.ok(!line.includes(CURSOR_MARKER));
+	assert.doesNotMatch(line, /\x1b\[0;(?:4|7);/);
+});
+
+test("process projection maps terminal operations and events without render-driven resize", async () => {
+	const runtime = new FakeRuntime(frameWithText("ready", 8, 3));
+	const projection = createPiChildProcessProjection(runtime);
+	let changes = 0;
+	const failures: unknown[] = [];
+	let exits = 0;
+	projection.addChangeHandler(() => changes += 1);
+	projection.addFailureHandler((error) => failures.push(error));
+	projection.addExitRequestHandler(() => exits += 1);
+
+	projection.presentation.render(8);
+	projection.presentation.render(5);
+	assert.deepEqual(runtime.resizes, []);
+	projection.resize(8, 3);
+	assert.deepEqual(runtime.resizes, []);
+	projection.resize(10, 4);
+	assert.deepEqual(runtime.resizes, [{ columns: 10, rows: 4 }]);
+
+	const input = "A\x1b[B\r\x1b[200~paste\ntext\x1b[201~";
+	projection.dispatchInput(input);
+	assert.deepEqual(runtime.inputs, [input]);
+	projection.focusEditor();
+	assert.deepEqual(runtime.inputs, [input]);
+
+	runtime.notifyChange();
+	const terminalFailure = new Error("terminal parser failed");
+	runtime.notifyFailure(terminalFailure);
+	const runtimeFailure = new Error("runtime bridge failed");
+	runtime.notifyEvent({
+		event: "runtime.fault",
+		payload: { code: "test", message: runtimeFailure.message },
+		sequence: 1,
+	});
+	assert.equal(changes, 2);
+	assert.equal(failures[0], terminalFailure);
+	assert.match(String(failures[1]), /runtime bridge failed/);
+
+	let writeIdle: Promise<void> | undefined;
+	runtime.observeWrite = () => {
+		assert.equal(projection.isProcessingInput(), true);
+		writeIdle = projection.whenInputIdle();
+	};
+	projection.dispatchInput("observed");
+	assert.equal(projection.isProcessingInput(), false);
+	await writeIdle;
+	await projection.ready();
+	assert.equal(projection.cancelInitialization(new Error("too late")), undefined);
+
+	runtime.settleExit({ exitCode: 0, signal: 0 });
+	await runtime.exited;
+	await Promise.resolve();
+	assert.equal(exits, 1);
+	assert.equal(failures.length, 2);
+	await projection.dispose();
+	await projection.dispose();
+	assert.equal(runtime.disposeCount, 1);
+});
+
+test("abnormal process exit is both a projection failure and an exit request", async () => {
+	const runtime = new FakeRuntime(frameWithText("failed", 8, 3));
+	const projection = createPiChildProcessProjection(runtime);
+	const failures: unknown[] = [];
+	let exits = 0;
+	projection.addFailureHandler((error) => failures.push(error));
+	projection.addExitRequestHandler(() => exits += 1);
+
+	runtime.settleExit({ exitCode: 7, signal: 0 });
+	await runtime.exited;
+	await Promise.resolve();
+	assert.equal(exits, 1);
+	assert.match(String(failures[0]), /code 7 signal 0/);
+	await projection.dispose();
+});
+
+function frameWithText(text: string, columns: number, rows: number): TerminalProjectionFrame {
+	return {
+		columns,
+		rows,
+		buffer: "alternate",
+		cursor: { column: text.length, row: 0, visible: false, style: "block", blink: false },
+		lines: Array.from({ length: rows }, (_, row) => ({
+			text: row === 0 ? text : "",
+			wrapped: false,
+			cells: Array.from({ length: columns }, (_, column) =>
+				cell(row === 0 ? (text[column] ?? "") : "")),
+		})),
+	};
+}
+
+class FakeRuntime implements PiChildProjectionRuntime {
+	readonly ready = { sessionId: "session", mode: "tui" as const, hasUI: true as const };
+	readonly inputs: string[] = [];
+	readonly resizes: Array<{ columns: number; rows: number }> = [];
+	readonly #changeHandlers = new Set<() => void>();
+	readonly #failureHandlers = new Set<(error: unknown) => void>();
+	readonly #eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+	#frame: TerminalProjectionFrame;
+	#settleExit!: (exit: PtyExit) => void;
+	observeWrite: (() => void) | undefined;
+	disposeCount = 0;
+	readonly exited = new Promise<PtyExit>((resolve) => this.#settleExit = resolve);
+
+	constructor(frame: TerminalProjectionFrame) {
+		this.#frame = frame;
+	}
+
+	frame(): TerminalProjectionFrame {
+		return this.#frame;
+	}
+
+	writeInput(data: string | Buffer): void {
+		this.inputs.push(typeof data === "string" ? data : data.toString("utf8"));
+		this.observeWrite?.();
+	}
+
+	resize(columns: number, rows: number): void {
+		this.resizes.push({ columns, rows });
+		this.#frame = { ...this.#frame, columns, rows };
+		this.notifyChange();
+	}
+
+	addChangeHandler(handler: () => void): () => void {
+		this.#changeHandlers.add(handler);
+		return () => this.#changeHandlers.delete(handler);
+	}
+
+	addFailureHandler(handler: (error: unknown) => void): () => void {
+		this.#failureHandlers.add(handler);
+		return () => this.#failureHandlers.delete(handler);
+	}
+
+	onEvent(handler: (event: PiChildRuntimeEvent) => void): () => void {
+		this.#eventHandlers.add(handler);
+		return () => this.#eventHandlers.delete(handler);
+	}
+
+	dispose(): Promise<void> {
+		this.disposeCount += 1;
+		return Promise.resolve();
+	}
+
+	notifyChange(): void {
+		for (const handler of this.#changeHandlers) handler();
+	}
+
+	notifyFailure(error: unknown): void {
+		for (const handler of this.#failureHandlers) handler(error);
+	}
+
+	notifyEvent(event: PiChildRuntimeEvent): void {
+		for (const handler of this.#eventHandlers) handler(event);
+	}
+
+	settleExit(exit: PtyExit): void {
+		this.#settleExit(exit);
+	}
+}

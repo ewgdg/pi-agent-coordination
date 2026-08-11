@@ -10,6 +10,7 @@ import {
 	stripTerminalSequences,
 	visibleWidth,
 	type Component,
+	type Focusable,
 	type OverlayHandle,
 	type TUI,
 } from "@earendil-works/pi-tui";
@@ -21,6 +22,32 @@ import {
 } from "../src/presentation/agent-view-surface.ts";
 
 const AGENT_ID = "agent-view-durable-12345678";
+
+test("Agent view focus follows the active terminal presentation", async () => {
+	const first = projectionWithFrame("first", ["first"]);
+	const second = projectionWithFrame("second", ["second"]);
+	const firstPresentation = first.presentation as Component & Focusable;
+	const secondPresentation = second.presentation as Component & Focusable;
+	firstPresentation.focused = false;
+	secondPresentation.focused = false;
+	const view = createViewHarness(first);
+	const ui = createSurfaceHarness(3);
+
+	const opened = openAgentViewSurface(ui.ui, view.view);
+	await ui.ready;
+	const surface = ui.component as Component & Focusable;
+	surface.focused = true;
+	assert.equal(firstPresentation.focused, true);
+	view.replaceProjection(second);
+	assert.equal(firstPresentation.focused, false);
+	assert.equal(secondPresentation.focused, true);
+	surface.focused = false;
+	assert.equal(secondPresentation.focused, false);
+
+	await view.closeFromHost();
+	await opened;
+	assert.equal(secondPresentation.focused, false);
+});
 
 test("the full-window Agent view renders the complete child frame and forwards native input", async () => {
 	const projection = projectionWithFrame("live", [

@@ -25,7 +25,7 @@ async function spawnNodeScript(
 
 test("real PTY output is parsed into styled cells, cursor, and dimensions before exit resolves", { timeout: TEST_TIMEOUT_MS }, async () => {
 	const projection = await spawnNodeScript(String.raw`
-		process.stdout.write("\x1b[2J\x1b[Hplain\x1b[2;3H\x1b[1;3;4;38;2;12;34;56;48;5;123mX\x1b[0m\x1b[4;6H");
+		process.stdout.write("\x1b[2J\x1b[Hplain\x1b[2;3H\x1b[1;3;4;38;2;12;34;56;48;5;123mX\x1b[0m\x1b[3;1H😀\x1b[4;6H");
 	`);
 
 	const exit = await projection.exited;
@@ -42,6 +42,9 @@ test("real PTY output is parsed into styled cells, cursor, and dimensions before
 		blink: false,
 	});
 	assert.equal(frame.buffer, "normal");
+	assert.equal(frame.lines[2]?.cells[0]?.text, "😀");
+	assert.equal(frame.lines[2]?.cells[0]?.width, 2);
+	assert.equal(frame.lines[2]?.cells[1]?.width, 0);
 	assert.deepEqual(frame.lines[1]?.cells[2], {
 		text: "X",
 		width: 1,
@@ -157,7 +160,13 @@ test("frame changes expose cursor presentation and identical resize is a no-op",
 		process.on("SIGWINCH", () => resizeCount += 1);
 		process.stdin.setRawMode(true);
 		process.stdin.resume();
-		process.stdin.once("data", () => {
+		let inputCount = 0;
+		process.stdin.on("data", () => {
+			inputCount += 1;
+			if (inputCount === 1) {
+				process.stdout.write("\x1bc\x1b[0 qRESET");
+				return;
+			}
 			process.stdout.write("\x1b[?25h\x1b[4 q\x1b[2J\x1b[HRESIZES=" + resizeCount);
 			process.exit(0);
 		});
@@ -175,7 +184,19 @@ test("frame changes expose cursor presentation and identical resize is a no-op",
 	});
 	assert.ok(changes > 0);
 
+	projection.writeInput("RESET");
+	await waitForText(projection, "RESET");
+	assert.deepEqual(projection.frame().cursor, {
+		column: 5,
+		row: 0,
+		visible: true,
+		style: "block",
+		blink: true,
+	});
+
+	const changesBeforeIdenticalResize = changes;
 	projection.resize(24, 6);
+	assert.equal(changes, changesBeforeIdenticalResize);
 	projection.writeInput("REPORT");
 	await projection.exited;
 	assert.equal(projection.frame().lines[0]?.text, "RESIZES=0");

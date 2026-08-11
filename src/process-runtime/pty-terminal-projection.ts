@@ -1,3 +1,4 @@
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import xtermHeadless from "@xterm/headless";
 import * as nodePty from "node-pty";
 
@@ -86,6 +87,8 @@ export function spawnPtyTerminalProjection(
 		rows: options.rows,
 		allowProposedApi: true,
 	});
+	terminal.loadAddon(new Unicode11Addon());
+	terminal.unicode.activeVersion = "11";
 	let child: nodePty.IPty;
 	try {
 		child = nodePty.spawn(options.file, [...(options.arguments ?? [])], {
@@ -142,6 +145,10 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			terminal.parser.registerCsiHandler(
 				{ intermediates: " ", final: "q" },
 				(params) => this.#observeCursorStyle(params),
+			),
+			terminal.parser.registerEscHandler(
+				{ final: "c" },
+				() => this.#observeTerminalReset(),
 			),
 		);
 		this.exited = new Promise<PtyExit>((resolve) => {
@@ -260,15 +267,11 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		this.#pendingWrites += 1;
 		try {
 			this.#terminal.write(data, () => {
-				this.#pendingWrites -= 1;
+				this.#settleParsedWrite();
 				this.#notifyChange();
-				if (this.#pendingWrites === 0) {
-					for (const resolve of this.#drainWaiters) resolve();
-					this.#drainWaiters.clear();
-				}
 			});
 		} catch (error) {
-			this.#pendingWrites -= 1;
+			this.#settleParsedWrite();
 			this.#notifyFailure(error);
 		}
 	}
@@ -282,6 +285,13 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		}
 	}
 
+	#settleParsedWrite(): void {
+		this.#pendingWrites -= 1;
+		if (this.#pendingWrites !== 0) return;
+		for (const resolve of this.#drainWaiters) resolve();
+		this.#drainWaiters.clear();
+	}
+
 	#observeCursorVisibility(params: (number | number[])[], visible: boolean): false {
 		if (params.some((parameter) => parameter === 25)) this.#cursorVisible = visible;
 		return false;
@@ -291,7 +301,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		const parameter = typeof params[0] === "number" ? params[0] : 0;
 		if (parameter === 0) {
 			this.#cursorStyle = "block";
-			this.#cursorBlink = false;
+			this.#cursorBlink = true;
 			return false;
 		}
 		if (parameter >= 1 && parameter <= 6) {
@@ -300,6 +310,13 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 				: parameter <= 4 ? "underline" : "bar";
 			this.#cursorBlink = parameter % 2 === 1;
 		}
+		return false;
+	}
+
+	#observeTerminalReset(): false {
+		this.#cursorVisible = true;
+		this.#cursorStyle = "block";
+		this.#cursorBlink = false;
 		return false;
 	}
 
