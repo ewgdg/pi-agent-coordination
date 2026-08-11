@@ -64,6 +64,24 @@ test("new Agent transcript materialization commits pre-launch Identity evidence"
 	});
 	prepared.appendCustomEntry("agent-coordination.identity", {
 		agentId: "agent-materialized",
+		workflowId: "workflow-materialized",
+		directSpawnerAgentId: "parent-materialized",
+		spawnSource: {
+			agentId: "parent-materialized",
+			entryId: "spawn-entry",
+			toolCallId: "spawn-tool-call",
+		},
+		configuration: {
+			label: "materialized",
+			baseline: {
+				cwd: root,
+				model: { provider: "anthropic", modelId: "claude-test" },
+				thinking: "off",
+				tools: [],
+				skills: [],
+				extensions: [],
+			},
+		},
 	});
 	commitAgentRuntimeBlueprint(prepared, {
 		agentId: "agent-materialized",
@@ -91,6 +109,34 @@ test("new Agent transcript materialization commits pre-launch Identity evidence"
 	await assert.rejects(
 		materializeNewAgentTranscript(prepared),
 		/transcript already exists/,
+	);
+});
+
+test("transcript materialization rejects a blueprint without its role bootstrap evidence", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-transcript-invalid-bootstrap-"));
+	const prepared = SessionManager.create(root, join(root, "sessions"), {
+		id: "agent-invalid-bootstrap",
+	});
+	prepared.appendCustomEntry("agent-coordination.marker", { invalid: true });
+	commitAgentRuntimeBlueprint(prepared, {
+		agentId: "agent-invalid-bootstrap",
+		role: "ordinary",
+		configuration: {
+			cwd: root,
+			model: { provider: "anthropic", modelId: "claude-test" },
+			thinking: "off",
+			tools: ["agent_message"],
+			skills: [],
+			extensions: [],
+		},
+		projectTrusted: false,
+		skillSources: [],
+		agentsFiles: [],
+	});
+
+	await assert.rejects(
+		materializeNewAgentTranscript(prepared),
+		/ordinary Identity/,
 	);
 });
 
