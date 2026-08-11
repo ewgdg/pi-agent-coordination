@@ -29,6 +29,7 @@ export const ChildProcessBootstrapSchema = Type.Object({
 	workflowId: NonEmptyStringSchema,
 	agentId: NonEmptyStringSchema,
 	role: Type.Union([Type.Literal("ordinary"), Type.Literal("moderator")]),
+	ownerPresentation: Type.Boolean(),
 	expectedSessionId: NonEmptyStringSchema,
 }, { additionalProperties: false });
 

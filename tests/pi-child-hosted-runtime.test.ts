@@ -73,7 +73,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 		runtimeDirectory: root,
 		columns: 80,
 		rows: 24,
-		ownerRequestHandlers: ordinaryOwnerHandlers(),
+		ownerRequestHandlers: ordinaryOwnerHandlers("hosted-runtime-test-agent"),
 	});
 	const pid = launch.pid;
 	const bootstrapPath = launch.bootstrapPath;
@@ -354,11 +354,30 @@ for (const failure of ["channel_loss", "process_kill"] as const) {
 	});
 }
 
-function ordinaryOwnerHandlers(): OwnerParticipantRequestHandlers<"ordinary"> {
+function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers<"ordinary"> {
+	const status = {
+		agentId,
+		workflowId: "hosted-runtime-test-workflow",
+		label: "Hosted Child",
+		directSpawnerAgentId: "hosted-runtime-test-workflow",
+		primaryEvidence: {
+			transcriptPath: `/sessions/${agentId}.jsonl`,
+			inspectedThrough: { agentId, entryId: `${agentId}-entry` },
+		},
+		run: {
+			phase: "live" as const,
+			work: "settled" as const,
+			attention: "none" as const,
+			retentionReasons: [{ reason: "interactive_selection" as const, count: 1 }],
+		},
+		model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
+		thinking: "off" as const,
+		queuedInputCount: 0,
+	};
 	return {
 		presentation: {
 			snapshot: () => ({
-				live: [], dormant: [], selectedAgentId: "hosted-child",
+				live: [status], dormant: [], selectedAgentId: agentId,
 				humanAttention: [], operationalAttention: [],
 			}),
 			async select() {},
@@ -437,7 +456,7 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 		runtimeDirectory: root,
 		columns: 80,
 		rows: 24,
-		ownerRequestHandlers: ordinaryOwnerHandlers(),
+		ownerRequestHandlers: ordinaryOwnerHandlers(`hosted-${name}-agent`),
 	});
 	const runtime = new PiChildHostedRuntime(launch);
 	const host = AgentRuntimeSupervisor.createChild({

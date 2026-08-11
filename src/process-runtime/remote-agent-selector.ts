@@ -97,6 +97,11 @@ export function createOwnerAgentPresentationHandlers(
 ): OwnerParticipantPresentationHandlers {
 	return {
 		snapshot: () => createAgentSelectorSnapshot(resolveView(), selectedAgentId),
+		addChangeHandler(handler) {
+			return resolveView().addAgentActivityChangeHandler(() =>
+				handler(createAgentSelectorSnapshot(resolveView(), selectedAgentId))
+			);
+		},
 		async select(action, signal) {
 			const selection = createAgentSelectionSession(resolveView(), selectedAgentId);
 			await selection.prepare(action as AgentSelectorAction, signal);

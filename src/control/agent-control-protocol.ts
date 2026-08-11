@@ -459,6 +459,9 @@ type DeepReadonly<T> = T extends readonly []
 		: T;
 export type RemoteAgentSelectorAction = DeepReadonly<Static<typeof AgentSelectorActionSchema>>;
 export type RemoteAgentSelectorSnapshot = DeepReadonly<Static<typeof AgentSelectorSnapshotSchema>>;
+const RemoteAgentSelectorSnapshotSchema = Type.Unsafe<RemoteAgentSelectorSnapshot>(
+	AgentSelectorSnapshotSchema,
+);
 
 export const RuntimeSnapshotSchema = closed({
 	cwd: NonEmptyStringSchema,
@@ -604,6 +607,7 @@ export const agentControlEvents = {
 			queuedInputCount: QueuedInputCountSchema,
 		}),
 	},
+	"presentation.agents.changed": { payload: RemoteAgentSelectorSnapshotSchema },
 	"session.shutdown": { payload: closed({ reason: Type.Optional(Type.String()) }) },
 	"runtime.fault": {
 		payload: closed({ code: NonEmptyStringSchema, message: Type.String() }),

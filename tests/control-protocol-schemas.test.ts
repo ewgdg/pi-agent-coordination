@@ -27,6 +27,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		workflowId: "workflow",
 		agentId: "agent",
 		role: "ordinary",
+		ownerPresentation: true,
 		expectedSessionId: "session",
 	} as const;
 	assert.equal(Check(ControlEndpointSchema, endpoint), true);
@@ -88,6 +89,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		"agent.start",
 		"agent.end",
 		"agent.settled",
+		"presentation.agents.changed",
 		"session.shutdown",
 		"runtime.fault",
 	]);

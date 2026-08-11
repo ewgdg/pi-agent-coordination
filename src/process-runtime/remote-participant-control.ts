@@ -39,6 +39,7 @@ export type OwnerParticipantRequestHandlers<Role extends RemoteParticipantRole> 
 export type OwnerParticipantPresentationHandlers = Readonly<{
 	snapshot(): RemoteAgentSelectorSnapshot;
 	select(action: RemoteAgentSelectorAction, signal: AbortSignal): Promise<void>;
+	addChangeHandler?(handler: (snapshot: RemoteAgentSelectorSnapshot) => void): () => void;
 }>;
 
 export type ControlBackedChildPresentationHandlers = Readonly<{

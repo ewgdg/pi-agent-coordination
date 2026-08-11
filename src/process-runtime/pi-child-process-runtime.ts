@@ -167,6 +167,7 @@ export class PiChildProcessRuntime {
 				workflowId: requireIdentity("workflowId", options.workflowId),
 				agentId: requireIdentity("agentId", options.agentId),
 				role: options.role,
+				ownerPresentation: options.ownerRequestHandlers !== undefined,
 				expectedSessionId: requireIdentity("expectedSessionId", options.expectedSessionId),
 			};
 			contextArtifactPath = await materializeNewChildContextArtifact({
@@ -217,6 +218,16 @@ export class PiChildProcessRuntime {
 					candidate.onRequest((request) =>
 						dispatchParticipantRequestToOwner(options.ownerRequestHandlers, request)
 					);
+					const removePresentationChangeHandler = options.ownerRequestHandlers
+						?.presentation.addChangeHandler?.((snapshot) => {
+							void candidate.sendEvent("presentation.agents.changed", {
+								...snapshot,
+								live: [...snapshot.live],
+								dormant: [...snapshot.dormant],
+								humanAttention: [...snapshot.humanAttention],
+								operationalAttention: [...snapshot.operationalAttention],
+							}).catch(() => undefined);
+						}) ?? (() => undefined);
 					candidate.onEvent((event) => {
 						if (event.event === "runtime.ready") settleReady(event.payload);
 						if (event.event === "runtime.fault") {
@@ -226,7 +237,10 @@ export class PiChildProcessRuntime {
 						}
 						for (const handler of eventHandlers) handler(event);
 					});
-					candidate.onClose((cause) => rejectReady(cause));
+					candidate.onClose((cause) => {
+						removePresentationChangeHandler();
+						rejectReady(cause);
+					});
 				},
 			);
 			void admission.catch(() => undefined);

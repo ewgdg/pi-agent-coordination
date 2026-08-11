@@ -10,7 +10,10 @@ import { isAbsolute, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { FramedAgentControlChannel } from "../control/agent-control-channel.ts";
-import { agentControlProtocol } from "../control/agent-control-protocol.ts";
+import {
+	agentControlProtocol,
+	type RemoteAgentSelectorSnapshot,
+} from "../control/agent-control-protocol.ts";
 import { connectControlTransport } from "../control/control-platform.ts";
 import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
@@ -18,6 +21,11 @@ import {
 	validateChildProcessBootstrap,
 } from "../control/control-protocol-schemas.ts";
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
+import {
+	installAgentActivityDock,
+	type AgentActivitySnapshot,
+	type AgentActivitySource,
+} from "../presentation/agent-activity-surface.ts";
 import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
 import { registerParticipantLifecycle } from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
@@ -44,6 +52,7 @@ type RuntimeState = {
 	latestRunId?: string;
 	currentRunOutcome: "completed" | "interrupted" | "failed";
 	nativeRunSequence: number;
+	activity: RemoteAgentActivitySource;
 	queueIntentionTail: Promise<void>;
 	shutdownStarted: boolean;
 };
@@ -51,6 +60,7 @@ type RuntimeState = {
 const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	const bootstrap = await readBootstrapDescriptor();
 	const interactiveBridge = installInteractiveHostBridge(hostPi);
+	const activity = new RemoteAgentActivitySource(bootstrap.agentId);
 	let state: RuntimeState | undefined;
 	const participantRequest: ChildParticipantControlRequester = (method, payload, signal) => {
 		if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
@@ -94,6 +104,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			runtime: capture.runtime,
 			currentRunOutcome: "completed",
 			nativeRunSequence: 0,
+			activity,
 			queueIntentionTail: Promise.resolve(),
 			shutdownStarted: false,
 		};
@@ -105,7 +116,11 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			);
 		});
 		channel.onRequest((request) => handleOwnerRequest(state as RuntimeState, request));
-		channel.onEvent(() => undefined);
+		channel.onEvent((event) => {
+			if (event.event === "presentation.agents.changed") {
+				activity.update(event.payload);
+			}
+		});
 		channel.onClose(() => {
 			const current = state;
 			if (!current || current.shutdownStarted) return;
@@ -118,6 +133,10 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				connectionToken: bootstrap.connectionToken,
 				expectedSessionId: bootstrap.expectedSessionId,
 			});
+			if (bootstrap.ownerPresentation) {
+				activity.update(await participantRequest("presentation.agents.snapshot", {}));
+				installAgentActivityDock(ctx.ui, activity);
+			}
 			await channel.sendEvent("runtime.ready", {
 				sessionId: ctx.sessionManager.getSessionId(),
 				mode: "tui",
@@ -338,6 +357,7 @@ async function reportRuntimeLifecycle(
 	event: AgentSessionEvent,
 ): Promise<void> {
 	if (event.type === "agent_start") {
+		state.activity.setScopeFailed(false);
 		// Interactive and extension-local Pi input is admitted through the child →
 		// Owner lifecycle request before this awaited event. It has no Owner-issued
 		// run.prompt request from which to inherit a transport cycle identity.
@@ -359,6 +379,7 @@ async function reportRuntimeLifecycle(
 			: assistant?.role === "assistant" && assistant.stopReason === "error"
 				? "failed"
 				: "completed";
+		state.activity.setScopeFailed(state.currentRunOutcome === "failed");
 		await state.channel.sendEvent("agent.end", {
 			runId: state.currentRunId,
 			outcome: state.currentRunOutcome,
@@ -543,6 +564,7 @@ function cancelNativeSessionReplacement(
 }
 
 async function failCurrentRun(state: RuntimeState, runId: string, error: unknown): Promise<void> {
+	state.activity.setScopeFailed(true);
 	await reportFault(state.channel, "run_prompt_failed", error);
 	if (state.currentRunId !== runId) return;
 	await state.channel.sendEvent("agent.end", {
@@ -571,6 +593,59 @@ function assertExpectedSession(runtime: AgentSessionRuntime, bootstrap: ChildPro
 		throw new Error(
 			`child_runtime_session_mismatch: expected ${bootstrap.expectedSessionId}, received ${runtime.session.sessionId}`,
 		);
+	}
+}
+
+class RemoteAgentActivitySource implements AgentActivitySource {
+	#agentId: string;
+	readonly #handlers = new Set<() => void>();
+	#selector: RemoteAgentSelectorSnapshot | undefined;
+	#scopeFailed = false;
+
+	constructor(agentId: string) {
+		this.#agentId = agentId;
+	}
+
+	update(selector: RemoteAgentSelectorSnapshot): void {
+		this.#agentId = selector.selectedAgentId;
+		this.#selector = selector;
+		this.#notifyChanged();
+	}
+
+	setScopeFailed(failed: boolean): void {
+		if (this.#scopeFailed === failed) return;
+		this.#scopeFailed = failed;
+		this.#notifyChanged();
+	}
+
+	snapshot(): AgentActivitySnapshot {
+		const selector = this.#selector;
+		if (!selector) {
+			throw new Error("child_runtime_activity_unavailable: selector snapshot is not initialized");
+		}
+		const roster = [...selector.live, ...selector.dormant];
+		const scope = roster.find(({ agentId }) => agentId === this.#agentId);
+		if (!scope) {
+			throw new Error(`child_runtime_activity_unavailable: Agent ${this.#agentId} is absent`);
+		}
+		return {
+			scope: { ...scope, failed: this.#scopeFailed },
+			children: selector.live
+				.filter(({ directSpawnerAgentId }) => directSpawnerAgentId === this.#agentId)
+				.map((child) => ({ ...child, failed: false })),
+			answerMode: selector.humanAttention.some(({ agentId }) => agentId === this.#agentId),
+			humanAttention: selector.humanAttention,
+			operationalAttention: selector.operationalAttention,
+		};
+	}
+
+	addChangeHandler(handler: () => void): () => void {
+		this.#handlers.add(handler);
+		return () => this.#handlers.delete(handler);
+	}
+
+	#notifyChanged(): void {
+		for (const handler of this.#handlers) handler();
 	}
 }
 

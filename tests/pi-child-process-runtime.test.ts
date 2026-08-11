@@ -151,10 +151,12 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.equal((await stat(runtime.bootstrapPath)).mode & 0o777, 0o600);
 
 		await waitForFrame(runtime, "PROCESS_RUNTIME_CHILD_WIDGET");
-		assert.match(
-			projection.presentation.render(80).map(stripTerminalSequences).join("\n"),
-			/PROCESS_RUNTIME_CHILD_WIDGET/,
-		);
+		const initialChildFrame = projection.presentation
+			.render(80)
+			.map(stripTerminalSequences)
+			.join("\n");
+		assert.match(initialChildFrame, /PROCESS_RUNTIME_CHILD_WIDGET/);
+		assert.match(initialChildFrame, /Process Child.*[0-9a-f]{8}.*idle/);
 		assert.match(frameText(runtime), /HERDR_ENV=undefined/);
 		assert.match(frameText(runtime), /HERDR_SOCKET_PATH=undefined/);
 		assert.match(frameText(runtime), /HERDR_PANE_ID=undefined/);
@@ -497,6 +499,7 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 			},
 			runtimeDirectory: root,
 			ownerRequestHandlers: ordinaryOwnerHandlers({
+				selectorSnapshot: processSelectorSnapshot(agentId),
 				executionStarted: () => ownerCalls.push([agentId, "executionStarted"]),
 				observe: (input) => ownerCalls.push([agentId, "agent_observe", input]),
 				message: (toolCallId, input) =>
