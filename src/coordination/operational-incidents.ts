@@ -1,11 +1,16 @@
 import { uuidv7 } from "@earendil-works/pi-ai";
+import { isDeepStrictEqual } from "node:util";
 
 import {
 	materializeNewAgentTranscript,
 	transcriptFromSessionFile,
 } from "../pi-integration/session-manager-transcript.ts";
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
-import { commitAgentRuntimeBlueprint } from "../protocol/agent-runtime-blueprint.ts";
+import {
+	commitAgentRuntimeBlueprint,
+	resolveCommittedAgentRuntimeBlueprint,
+	type AgentRuntimeBlueprint,
+} from "../protocol/agent-runtime-blueprint.ts";
 import {
 	createModelVisibleModeratorInput,
 	isModeratorIdentity,
@@ -27,6 +32,7 @@ import {
 } from "../protocol/moderator-control.ts";
 import {
 	currentCoordinationScope,
+	ProtocolInvariantError,
 	resolveCommittedToolCall,
 	toolCallPointerKey,
 	type ToolCallPointer,
@@ -477,7 +483,20 @@ export class OperationalIncidentCoordinator {
 			modelInput.details,
 		);
 		commitAgentRuntimeBlueprint(sessionManager, prepared.blueprint);
-		const sessionPath = await materializeNewAgentTranscript(sessionManager);
+		let sessionPath: string;
+		try {
+			sessionPath = await materializeNewAgentTranscript(sessionManager);
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			const candidatePath = sessionManager.getSessionFile();
+			if (!candidatePath || !hasExactDurableModeratorEvidence({
+				sessionPath: candidatePath,
+				identity,
+				input,
+				blueprint: prepared.blueprint,
+			})) throw error;
+			sessionPath = candidatePath;
+		}
 		validateCommittedModeratorInput({
 			transcript: transcriptFromSessionFile(sessionPath).inspect(),
 			identity,
@@ -815,5 +834,31 @@ export class OperationalIncidentCoordinator {
 		this.#agents
 			.get(handling.moderatorAgentId)
 			?.host.removeRetentionReason("moderator_handling");
+	}
+}
+
+function hasExactDurableModeratorEvidence(options: {
+	sessionPath: string;
+	identity: ModeratorIdentity;
+	input: ModeratorInput;
+	blueprint: AgentRuntimeBlueprint;
+}): boolean {
+	try {
+		const transcript = transcriptFromSessionFile(options.sessionPath).inspect();
+		validateCommittedModeratorInput({
+			transcript,
+			identity: options.identity,
+			input: options.input,
+		});
+		return isDeepStrictEqual(
+			resolveCommittedAgentRuntimeBlueprint({
+				sessionId: options.identity.agentId,
+				entries: transcript.entries,
+			}),
+			options.blueprint,
+		);
+	} catch (error) {
+		if (error instanceof ProtocolInvariantError) throw error;
+		return false;
 	}
 }
