@@ -87,9 +87,10 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		"pending",
 	);
 	const effectiveConfiguration = (
-		spawnResult.message.details as AgentSpawnReceipt & {
-			effectiveConfiguration: AgentSpawnReceipt["effectiveConfiguration"];
-		}
+		spawnResult.message.details as Extract<
+			AgentSpawnReceipt,
+			{ disposition: "pending" }
+		>
 	).effectiveConfiguration;
 	assert.equal(effectiveConfiguration.extensions.length, 1);
 	assert.match(effectiveConfiguration.extensions[0]!, /process-model-broker-extension\.mjs$/);
