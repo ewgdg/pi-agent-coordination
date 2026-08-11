@@ -34,11 +34,19 @@ export type TerminalProjectionLine = Readonly<{
 	cells: readonly TerminalProjectionCell[];
 }>;
 
+export type TerminalCursorStyle = "block" | "underline" | "bar";
+
 export type TerminalProjectionFrame = Readonly<{
 	columns: number;
 	rows: number;
 	buffer: "normal" | "alternate";
-	cursor: Readonly<{ column: number; row: number }>;
+	cursor: Readonly<{
+		column: number;
+		row: number;
+		visible: boolean;
+		style: TerminalCursorStyle;
+		blink: boolean;
+	}>;
 	lines: readonly TerminalProjectionLine[];
 }>;
 
@@ -59,6 +67,8 @@ export interface PtyTerminalProjection {
 	readonly disposed: boolean;
 	readonly exited: Promise<PtyExit>;
 	frame(): TerminalProjectionFrame;
+	addChangeHandler(handler: () => void): () => void;
+	addFailureHandler(handler: (error: unknown) => void): () => void;
 	writeInput(data: string | Buffer): void;
 	resize(columns: number, rows: number): void;
 	kill(signal: NodeJS.Signals): void;
@@ -95,8 +105,13 @@ export function spawnPtyTerminalProjection(
 class NodePtyTerminalProjection implements PtyTerminalProjection {
 	readonly #child: nodePty.IPty;
 	readonly #terminal: InstanceType<typeof Terminal>;
-	readonly #subscriptions: nodePty.IDisposable[] = [];
+	readonly #subscriptions: Array<{ dispose(): void }> = [];
 	readonly #drainWaiters = new Set<() => void>();
+	readonly #changeHandlers = new Set<() => void>();
+	readonly #failureHandlers = new Set<(error: unknown) => void>();
+	#cursorVisible = true;
+	#cursorStyle: TerminalCursorStyle = "block";
+	#cursorBlink = false;
 	#pendingWrites = 0;
 	#exitObserved = false;
 	#disposed = false;
@@ -114,6 +129,18 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			terminal.onData((data) => this.#writeGeneratedReply(data)),
 			terminal.onBinary((data) =>
 				this.#writeGeneratedReply(Buffer.from(data, "binary")),
+			),
+			terminal.parser.registerCsiHandler(
+				{ prefix: "?", final: "h" },
+				(params) => this.#observeCursorVisibility(params, true),
+			),
+			terminal.parser.registerCsiHandler(
+				{ prefix: "?", final: "l" },
+				(params) => this.#observeCursorVisibility(params, false),
+			),
+			terminal.parser.registerCsiHandler(
+				{ intermediates: " ", final: "q" },
+				(params) => this.#observeCursorStyle(params),
 			),
 		);
 		this.exited = new Promise<PtyExit>((resolve) => {
@@ -162,24 +189,51 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			cursor: {
 				column: buffer.cursorX,
 				row: buffer.baseY + buffer.cursorY - buffer.viewportY,
+				visible: this.#cursorVisible,
+				style: this.#cursorStyle,
+				blink: this.#cursorBlink,
 			},
 			lines,
 		};
 	}
 
+	addChangeHandler(handler: () => void): () => void {
+		if (this.#disposed) return () => undefined;
+		this.#changeHandlers.add(handler);
+		return () => this.#changeHandlers.delete(handler);
+	}
+
+	addFailureHandler(handler: (error: unknown) => void): () => void {
+		if (this.#disposed) return () => undefined;
+		this.#failureHandlers.add(handler);
+		return () => this.#failureHandlers.delete(handler);
+	}
+
 	writeInput(data: string | Buffer): void {
 		this.#requireWritable();
-		this.#child.write(data);
+		try {
+			this.#child.write(data);
+		} catch (error) {
+			this.#notifyFailure(error);
+			throw error;
+		}
 	}
 
 	resize(columns: number, rows: number): void {
 		this.#requireWritable();
 		requireDimension("columns", columns);
 		requireDimension("rows", rows);
-		// The child can emit output synchronously in response to SIGWINCH, so the
-		// emulator must expose the new geometry before the PTY is notified.
-		this.#terminal.resize(columns, rows);
-		this.#child.resize(columns, rows);
+		if (columns === this.#terminal.cols && rows === this.#terminal.rows) return;
+		try {
+			// The child can emit output synchronously in response to SIGWINCH, so the
+			// emulator must expose the new geometry before the PTY is notified.
+			this.#terminal.resize(columns, rows);
+			this.#child.resize(columns, rows);
+			this.#notifyChange();
+		} catch (error) {
+			this.#notifyFailure(error);
+			throw error;
+		}
 	}
 
 	kill(signal: NodeJS.Signals): void {
@@ -203,18 +257,59 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	#parseOutput(data: string): void {
 		if (this.#disposed) return;
 		this.#pendingWrites += 1;
-		this.#terminal.write(data, () => {
+		try {
+			this.#terminal.write(data, () => {
+				this.#pendingWrites -= 1;
+				this.#notifyChange();
+				if (this.#pendingWrites === 0) {
+					for (const resolve of this.#drainWaiters) resolve();
+					this.#drainWaiters.clear();
+				}
+			});
+		} catch (error) {
 			this.#pendingWrites -= 1;
-			if (this.#pendingWrites === 0) {
-				for (const resolve of this.#drainWaiters) resolve();
-				this.#drainWaiters.clear();
-			}
-		});
+			this.#notifyFailure(error);
+		}
 	}
 
 	#writeGeneratedReply(data: string | Buffer): void {
 		if (this.#disposed || this.#exitObserved) return;
-		this.#child.write(data);
+		try {
+			this.#child.write(data);
+		} catch (error) {
+			this.#notifyFailure(error);
+		}
+	}
+
+	#observeCursorVisibility(params: (number | number[])[], visible: boolean): false {
+		if (params.some((parameter) => parameter === 25)) this.#cursorVisible = visible;
+		return false;
+	}
+
+	#observeCursorStyle(params: (number | number[])[]): false {
+		const parameter = typeof params[0] === "number" ? params[0] : 0;
+		if (parameter === 0) {
+			this.#cursorStyle = "block";
+			this.#cursorBlink = false;
+			return false;
+		}
+		if (parameter >= 1 && parameter <= 6) {
+			this.#cursorStyle = parameter <= 2
+				? "block"
+				: parameter <= 4 ? "underline" : "bar";
+			this.#cursorBlink = parameter % 2 === 1;
+		}
+		return false;
+	}
+
+	#notifyChange(): void {
+		if (this.#disposed) return;
+		for (const handler of this.#changeHandlers) handler();
+	}
+
+	#notifyFailure(error: unknown): void {
+		if (this.#disposed) return;
+		for (const handler of this.#failureHandlers) handler(error);
 	}
 
 	async #finishExit(
@@ -236,6 +331,8 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		await this.#waitForParserDrain();
 		for (const subscription of this.#subscriptions) subscription.dispose();
 		this.#subscriptions.length = 0;
+		this.#changeHandlers.clear();
+		this.#failureHandlers.clear();
 		this.#terminal.dispose();
 	}
 

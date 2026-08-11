@@ -34,7 +34,13 @@ test("real PTY output is parsed into styled cells, cursor, and dimensions before
 	assert.equal(frame.columns, 24);
 	assert.equal(frame.rows, 6);
 	assert.equal(frame.lines[0]?.text, "plain");
-	assert.deepEqual(frame.cursor, { column: 5, row: 3 });
+	assert.deepEqual(frame.cursor, {
+		column: 5,
+		row: 3,
+		visible: true,
+		style: "block",
+		blink: false,
+	});
 	assert.equal(frame.buffer, "normal");
 	assert.deepEqual(frame.lines[1]?.cells[2], {
 		text: "X",
@@ -119,6 +125,45 @@ test("explicit signals force a stubborn real PTY child to exact exit", { timeout
 	projection.kill("SIGKILL");
 	const exit = await projection.exited;
 	assert.notEqual(exit.signal, 0);
+	await projection.dispose();
+});
+
+test("frame changes expose cursor presentation and identical resize is a no-op", { timeout: TEST_TIMEOUT_MS }, async () => {
+	const projection = await spawnNodeScript(String.raw`
+		let resizeCount = 0;
+		process.on("SIGWINCH", () => resizeCount += 1);
+		process.stdin.setRawMode(true);
+		process.stdin.resume();
+		process.stdin.once("data", () => {
+			process.stdout.write("\x1b[?25h\x1b[4 q\x1b[2J\x1b[HRESIZES=" + resizeCount);
+			process.exit(0);
+		});
+		process.stdout.write("\x1b[?25l\x1b[5 qREADY");
+	`);
+	let changes = 0;
+	const removeChangeHandler = projection.addChangeHandler(() => changes += 1);
+	await waitForText(projection, "READY");
+	assert.deepEqual(projection.frame().cursor, {
+		column: 5,
+		row: 0,
+		visible: false,
+		style: "bar",
+		blink: true,
+	});
+	assert.ok(changes > 0);
+
+	projection.resize(24, 6);
+	projection.writeInput("REPORT");
+	await projection.exited;
+	assert.equal(projection.frame().lines[0]?.text, "RESIZES=0");
+	assert.deepEqual(projection.frame().cursor, {
+		column: 9,
+		row: 0,
+		visible: true,
+		style: "underline",
+		blink: false,
+	});
+	removeChangeHandler();
 	await projection.dispose();
 });
 
