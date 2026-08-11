@@ -510,6 +510,7 @@ Future-platform extensibility gate:
 - Pi's standard CLI calls `main(process.argv.slice(2))`; the custom in-memory factory option exists in the exported composition function but is not part of the actual CLI launch contract.
 - The current coordinator is more tightly coupled to child Pi objects than the session factory alone suggests. Messages, evidence, delivery, interruption, selection, and shutdown directly use child `AgentSession` and `SessionManager`; the enabling Runtime Host/transcript refactor is mandatory before process cutover.
 - The complete child UI is easier to preserve by running a real Pi TUI in a PTY than by serializing extension UI callbacks or lying about mode.
+- Pi defers creating a new session JSONL until an assistant message exists; custom-only Agent Identity evidence remains only in the creating `SessionManager`. Exact `--session <path>` process launch therefore needs an explicit one-time transcript materialization step for the header and committed Identity before handing authority to the child.
 - The PoC forwarded physical input byte-for-byte. Pi slash-command autocomplete changed the final command argument before invoking the handler, so production tests must inspect raw transport bytes separately from editor completion behavior.
 - Process isolation does not automatically remove inherited external ownership identity. The child environment must omit Herdr's documented pane-ownership variables even though the Herdr module itself is isolated.
 
