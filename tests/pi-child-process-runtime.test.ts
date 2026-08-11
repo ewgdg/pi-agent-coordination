@@ -69,7 +69,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			ownerEnvironment: {
 				...process.env,
 				PI_SKIP_VERSION_CHECK: "1",
-				PROCESS_RUNTIME_RESPONSE_DELAY_MS: "200",
+				PROCESS_RUNTIME_RESPONSE_DELAY_MS: "1000",
 				HERDR_ENV: "owned",
 				HERDR_SOCKET_PATH: "/tmp/owner-herdr.sock",
 				HERDR_PANE_ID: "owner-pane",
@@ -151,23 +151,21 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 2);
 
 		const lifecycleBeforeDelivery = lifecycle.length;
-		assert.deepEqual(await runtime.channel.request("message.deliver", {
+		const activeDelivery = runtime.channel.request("message.deliver", {
 			runId: "process-runtime-delivery-run",
 			delivery: {
 				kind: "user",
 				content: "Commit before the delayed model turn settles.",
 			},
-		}), {
-			accepted: true,
-			transcriptCommitted: true,
-			modelCycleStarted: true,
-			queuedInputCount: 0,
 		});
-		assert.equal(
-			lifecycle.slice(lifecycleBeforeDelivery).includes("agent.settled"),
-			false,
-		);
-
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.start" &&
+			event.payload.runId === "process-runtime-delivery-run"
+		));
+		assert.equal(runtimeEvents.some((event) =>
+			event.event === "agent.settled" &&
+			event.payload.runId === "process-runtime-delivery-run"
+		), false);
 		const queuedDelivery = runtime.channel.request("message.deliver", {
 			runId: "process-runtime-delivery-run",
 			delivery: {
@@ -176,16 +174,26 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 				deliverAs: "steer",
 			},
 		});
-		assert.deepEqual(await runtime.channel.request("queue.clear", {
+		const clearedDelivery = runtime.channel.request("queue.clear", {
 			runId: "process-runtime-delivery-run",
-		}), {
+		});
+		const interruptedDelivery = runtime.channel.request("run.interrupt", {
+			runId: "process-runtime-delivery-run",
+		});
+		const activeDeliveryResult = await activeDelivery;
+		assert.equal(activeDeliveryResult.accepted, true);
+		assert.equal(activeDeliveryResult.transcriptCommitted, true);
+		assert.equal(activeDeliveryResult.modelCycleStarted, true);
+		assert.equal(
+			lifecycle.slice(lifecycleBeforeDelivery).includes("agent.settled"),
+			false,
+		);
+		assert.deepEqual(await clearedDelivery, {
 			steering: ["Clear this queued direction before it commits."],
 			followUp: [],
 			queuedInputCount: 0,
 		});
-		assert.deepEqual(await runtime.channel.request("run.interrupt", {
-			runId: "process-runtime-delivery-run",
-		}), { accepted: true });
+		assert.deepEqual(await interruptedDelivery, { accepted: true });
 		assert.deepEqual(await queuedDelivery, {
 			accepted: true,
 			transcriptCommitted: false,
