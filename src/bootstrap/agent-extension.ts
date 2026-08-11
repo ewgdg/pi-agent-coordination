@@ -65,7 +65,7 @@ function createParticipantBoundExtension<
 		registerSurfaces(pi, resolveView);
 		registerParticipantLifecycle(
 			pi,
-			participantLifecycleCoordinatorAdapter(resolveView),
+			participantLifecycleHandlers(resolveView),
 		);
 	};
 }
@@ -132,7 +132,7 @@ export function bindHiddenOwnerAgentExtension(options: {
 	registerAgentsCommand(pi, resolveView);
 	registerParticipantLifecycle(
 		pi,
-		participantLifecycleCoordinatorAdapter(resolveView),
+		participantLifecycleHandlers(resolveView),
 	);
 	pi.on("session_shutdown", (event) => {
 		if (
@@ -167,7 +167,7 @@ function requireOwnerAgentExtension(
 	return matchingExtensions[0]!;
 }
 
-function participantLifecycleCoordinatorAdapter(
+export function participantLifecycleHandlers(
 	resolveView: () => OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView,
 ): ParticipantLifecycleHandlers {
 	return {

@@ -123,7 +123,7 @@ export function registerOrdinaryAgentSurfaces(
 	registerParticipantCoordinationTools(
 		pi,
 		"ordinary",
-		participantCoordinatorAdapter("ordinary", resolveView),
+		participantCoordinatorHandlers("ordinary", resolveView),
 	);
 	registerAgentsCommand(pi, resolveView);
 }
@@ -135,7 +135,7 @@ export function registerOwnerAgentTools(
 	registerParticipantCoordinationTools(
 		pi,
 		"owner",
-		participantCoordinatorAdapter("owner", resolveView),
+		participantCoordinatorHandlers("owner", resolveView),
 	);
 }
 
@@ -146,24 +146,24 @@ export function registerModeratorAgentSurfaces(
 	registerParticipantCoordinationTools(
 		pi,
 		"moderator",
-		participantCoordinatorAdapter("moderator", resolveView),
+		participantCoordinatorHandlers("moderator", resolveView),
 	);
 	registerAgentsCommand(pi, resolveView);
 }
 
-function participantCoordinatorAdapter(
+export function participantCoordinatorHandlers(
 	role: "ordinary",
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): ParticipantCoordinationToolHandlers<"ordinary">;
-function participantCoordinatorAdapter(
+export function participantCoordinatorHandlers(
 	role: "owner",
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): ParticipantCoordinationToolHandlers<"owner">;
-function participantCoordinatorAdapter(
+export function participantCoordinatorHandlers(
 	role: "moderator",
 	resolveView: () => ModeratorAgentCoordinatorView,
 ): ParticipantCoordinationToolHandlers<"moderator">;
-function participantCoordinatorAdapter(
+export function participantCoordinatorHandlers(
 	role: ParticipantCoordinationRole,
 	resolveView: ViewResolver,
 ): ParticipantCoordinationToolHandlers<ParticipantCoordinationRole> {
