@@ -1,0 +1,103 @@
+import { isAbsolute } from "node:path";
+
+import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
+
+export type PiChildCliLaunch = Readonly<{
+	command: string;
+	arguments: readonly string[];
+	cwd: string;
+}>;
+
+export function buildPiChildCliLaunch(options: {
+	cliPath: string;
+	sessionPath: string;
+	configuration: EffectiveAgentRunConfiguration;
+	skillPaths: readonly string[];
+	bridgeExtensionPath: string;
+	projectContextPath?: string;
+	projectTrusted: boolean;
+}): PiChildCliLaunch {
+	const {
+		cliPath,
+		sessionPath,
+		configuration,
+		skillPaths,
+		bridgeExtensionPath,
+		projectContextPath,
+		projectTrusted,
+	} = options;
+	for (const [field, path] of [
+		["Pi CLI", cliPath],
+		["session", sessionPath],
+		["working directory", configuration.cwd],
+		["bridge extension", bridgeExtensionPath],
+		...(projectContextPath === undefined
+			? []
+			: [["Project Context", projectContextPath]]),
+	] as const) {
+		requireAbsolutePath(field, path);
+	}
+	for (const extensionPath of configuration.extensions) {
+		requireAbsolutePath("inherited extension", extensionPath);
+	}
+	for (const skillPath of skillPaths) requireAbsolutePath("skill", skillPath);
+	if (skillPaths.length !== configuration.skills.length) {
+		throw new Error(
+			`invalid_child_launch: skill path count ${skillPaths.length} does not match selected skill count ${configuration.skills.length}`,
+		);
+	}
+	if (new Set(skillPaths).size !== skillPaths.length) {
+		throw new Error("invalid_child_launch: resolved skill paths contain duplicates");
+	}
+	if (new Set(configuration.extensions).size !== configuration.extensions.length) {
+		throw new Error("invalid_child_launch: inherited extension paths contain duplicates");
+	}
+	if (configuration.extensions.includes(bridgeExtensionPath)) {
+		throw new Error(
+			"invalid_child_launch: bridge extension must not also be an inherited extension",
+		);
+	}
+	for (const toolName of configuration.tools) {
+		if (toolName.includes(",")) {
+			throw new Error(`invalid_child_launch: tool name cannot contain a comma: ${toolName}`);
+		}
+	}
+
+	const argumentsList = [
+		cliPath,
+		"--session",
+		sessionPath,
+		"--model",
+		`${configuration.model.provider}/${configuration.model.modelId}`,
+		"--thinking",
+		configuration.thinking,
+		...(configuration.tools.length === 0
+			? ["--no-tools"]
+			: ["--tools", configuration.tools.join(",")]),
+		"--no-extensions",
+		...configuration.extensions.flatMap((path) => ["--extension", path]),
+		"--extension",
+		bridgeExtensionPath,
+		"--no-skills",
+		...skillPaths.flatMap((path) => ["--skill", path]),
+		"--no-context-files",
+		...(projectContextPath === undefined
+			? []
+			: ["--append-system-prompt", projectContextPath]),
+		projectTrusted ? "--approve" : "--no-approve",
+		"--tui-mode",
+		"fullscreen",
+	];
+
+	return {
+		command: process.execPath,
+		arguments: argumentsList,
+		cwd: configuration.cwd,
+	};
+}
+
+function requireAbsolutePath(field: string, path: string): void {
+	if (!isAbsolute(path) || path.includes("\0")) {
+		throw new Error(`invalid_child_launch: ${field} path must be absolute`);
+	}
+}
