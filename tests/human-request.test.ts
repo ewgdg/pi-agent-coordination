@@ -476,6 +476,10 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 				failExactRun();
 			},
 		},
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 		spawnBoundaryHooks: {
 			afterRunStart({ identity: childIdentity }) {
@@ -584,6 +588,10 @@ test("Human Request fails before input_required when no interactive Agent editor
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});
 	view = coordinator.forAgent(identity.agentId);
@@ -634,6 +642,10 @@ async function createHumanRequestChild(options?: Pick<
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 		spawnBoundaryHooks: {
 			afterRunStart({ identity: childIdentity }) {

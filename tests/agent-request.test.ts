@@ -1461,6 +1461,10 @@ async function createDormantChildHarness(
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// This suite parks unanswered work to probe Request semantics. Suppress live
 		// Moderator Runs so incidental stall handling does not consume scripted replies.
 		incidentBoundaryHooks: {

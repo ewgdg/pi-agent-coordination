@@ -272,6 +272,192 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 	}
 });
 
+test("an overdue answer-obligated root call creates one minimal Operation Review Moderator", async (t) => {
+	const registryKey = Symbol.for("pi-agent-coordination.test.execution-gate");
+	let toolStarted!: () => void;
+	const started = new Promise<void>((resolve) => {
+		toolStarted = resolve;
+	});
+	let releaseTool!: () => void;
+	const released = new Promise<void>((resolve) => {
+		releaseTool = resolve;
+	});
+	t.after(() => releaseTool());
+	let releaseModerator!: () => void;
+	const moderatorGate = new Promise<void>((resolve) => {
+		releaseModerator = resolve;
+	});
+	t.after(() => releaseModerator());
+	(globalThis as Record<PropertyKey, unknown>)[registryKey] = {
+		async execute() {
+			toolStarted();
+			await released;
+		},
+	};
+	t.after(() => {
+		delete (globalThis as Record<PropertyKey, unknown>)[registryKey];
+	});
+	const clock = new ControllableOperationReviewClock();
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		implicitModeratorResponses: false,
+		additionalExtensionPaths: [
+			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
+		],
+	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(
+		host.runtime,
+		"<inline:pi-agent-coordination>",
+	);
+	const nativeProjectionHost = createPiNativeProjectionHost({
+		ownerRuntime: host.runtime,
+	});
+	const projectionsBySessionId = new Map<string, PiNativeAgentProjection>();
+	let coordinator!: WorkflowCoordinator;
+	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		projectionHost: {
+			async createProjection(options) {
+				const projection = await nativeProjectionHost.createProjection(options);
+				projectionsBySessionId.set(projection.sessionId, projection);
+				return projection;
+			},
+		},
+		workflowPolicy: new WorkflowPolicyStore(
+			parseWorkflowPolicy('{"operationReviewIntervalMs":1000}'),
+		),
+		operationReviewClock: clock,
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
+	});
+	const owner = coordinator.forAgent(identity.agentId);
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("execution_gate", {}, { id: "overdue-root-call" }),
+			{ stopReason: "toolUse" },
+		),
+		async (context) => {
+			const content = context.messages.flatMap((message) => {
+				if (message.role !== "user") return [];
+				if (typeof message.content === "string") return [message.content];
+				return message.content.flatMap((part) =>
+					part.type === "text" ? [part.text] : []
+				);
+			}).find((candidate) => candidate.includes('"kind":"operation_review"'));
+			assert.ok(content);
+			const trigger = (JSON.parse(content) as {
+				trigger: {
+					toolCall: { agentId: string; entryId: string; toolCallId: string };
+				};
+			}).trigger;
+			await moderatorGate;
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"moderator_control",
+					{
+						operation: "renew_review_deadline",
+						toolCall: trigger.toolCall,
+						nextReviewInMs: 500,
+						rationale: "The exact call remains safe to observe for another short interval.",
+					},
+					{ id: "renew-overdue-root-call" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		},
+		fauxAssistantMessage("The exact review interval was renewed."),
+		fauxAssistantMessage("The renewed interval expired and requires fresh review."),
+	]);
+
+	const child = await spawnFromView(
+		host.session,
+		owner,
+		"spawn-operation-review-agent",
+		"Keep the Creation Request open while one root call remains unresolved.",
+	);
+	await started;
+	clock.advanceBy(1_000);
+	await coordinator.forAgent(child.agentId).reachSafeBoundary();
+
+	const moderator = await waitForModeratorKind(host, "operation_review");
+	const ordinaryProjection = projectionsBySessionId.get(child.agentId);
+	const moderatorProjection = projectionsBySessionId.get(moderator.id);
+	assert.ok(ordinaryProjection);
+	assert.ok(moderatorProjection);
+	assert.match(
+		stripTerminalSequences(
+			ordinaryProjection.presentation.render(PROJECTION_RENDER_WIDTH).join("\n"),
+		),
+		/Keep the Creation Request open/,
+	);
+	assert.match(
+		stripTerminalSequences(
+			moderatorProjection.presentation.render(PROJECTION_RENDER_WIDTH).join("\n"),
+		),
+		/operation_review/,
+	);
+	releaseModerator();
+	const inputEntry = SessionManager.open(moderator.path).getEntries().find(
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.moderator-input",
+	);
+	assert.ok(inputEntry?.type === "custom_message" && typeof inputEntry.content === "string");
+	const input = JSON.parse(inputEntry.content) as {
+		trigger: {
+			kind: string;
+			toolCall: { agentId: string; entryId: string; toolCallId: string };
+			reviewIntervalMs: number;
+		};
+	};
+	assert.deepEqual(input.trigger, {
+		kind: "operation_review",
+		toolCall: {
+			agentId: child.agentId,
+			entryId: input.trigger.toolCall.entryId,
+			toolCallId: "overdue-root-call",
+		},
+		reviewIntervalMs: 1_000,
+	});
+	const childTranscriptPath = owner.status(child.agentId).primaryEvidence.transcriptPath;
+	assert.ok(childTranscriptPath);
+	assert.equal(
+		SessionManager.open(childTranscriptPath).getEntries().some(
+			(entry) =>
+				entry.id === input.trigger.toolCall.entryId &&
+				entry.type === "message" &&
+				entry.message.role === "assistant",
+		),
+		true,
+	);
+	const renewal = await waitForTranscriptEntry(
+		moderator.path,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "renew-overdue-root-call",
+	);
+	assert.ok(renewal.type === "message" && renewal.message.role === "toolResult");
+	assert.deepEqual(renewal.message.details, {
+		disposition: "renewed",
+		toolCall: input.trigger.toolCall,
+		nextReviewInMs: 500,
+	});
+
+	clock.advanceBy(499);
+	await coordinator.forAgent(child.agentId).reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 1);
+	clock.advanceBy(1);
+	await coordinator.forAgent(child.agentId).reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 2);
+
+	releaseTool();
+	await host.runtime.dispose();
+});
+
 test("one failed provider request creates Run Failure without regenerating an answer-obligated Run", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
@@ -1244,6 +1430,10 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 	let rejectNextCreationDelivery = true;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator!.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator!.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
 				if (!rejectNextCreationDelivery) return;
@@ -1322,6 +1512,10 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
 				if (rejectedCreationDeliveries >= 2) return;
@@ -1517,6 +1711,10 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 	let rejectedCreationDeliveries = 0;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator!.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator!.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
 				if (rejectedCreationDeliveries >= 2) return;
@@ -1645,6 +1843,10 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
 		},
@@ -2249,6 +2451,10 @@ async function createIncidentBoundaryHarness(
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
+		childExtensionFactory: (agentId) =>
+			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
+		moderatorExtensionFactory: (agentId) =>
+			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks,
 	});
 	return { host, coordinator, owner: coordinator.forAgent(identity.agentId) };
