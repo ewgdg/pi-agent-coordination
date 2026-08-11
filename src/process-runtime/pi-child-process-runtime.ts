@@ -125,6 +125,10 @@ export class PiChildProcessRuntime {
 	}
 
 	static async start(options: StartPiChildProcessRuntimeOptions): Promise<PiChildProcessRuntime> {
+		return await (await this.launch(options)).ready();
+	}
+
+	static async launch(options: StartPiChildProcessRuntimeOptions): Promise<PiChildProcessLaunch> {
 		const listener = await createPlatformControlListener({
 			workflowId: options.workflowId,
 			...(options.runtimeDirectory === undefined
@@ -148,17 +152,7 @@ export class PiChildProcessRuntime {
 		};
 		let projection: PtyTerminalProjection | undefined;
 		let channel: PiChildRuntimeChannel | undefined;
-		const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
-		let settleReady!: (ready: PiChildRuntimeReady) => void;
-		let rejectReady!: (error: Error) => void;
-		const ready = new Promise<PiChildRuntimeReady>((resolve, reject) => {
-			settleReady = resolve;
-			rejectReady = reject;
-		});
-		let rejectStartupFault!: (error: Error) => void;
-		const startupFault = new Promise<never>((_resolve, reject) => {
-			rejectStartupFault = reject;
-		});
+		let cleanupPromise: Promise<void> | undefined;
 		try {
 			await writeFile(bootstrapPath, `${JSON.stringify(bootstrap)}\n`, {
 				encoding: "utf8",
@@ -166,7 +160,7 @@ export class PiChildProcessRuntime {
 				flag: "wx",
 			});
 			const bridgeExtensionPath = options.bridgeExtensionPath ?? BRIDGE_EXTENSION_PATH;
-			const launch = buildPiChildCliLaunch({
+			const childLaunch = buildPiChildCliLaunch({
 				cliPath: options.cliPath ?? resolveInstalledPiCliPath(),
 				sessionPath: options.sessionPath,
 				configuration: options.configuration,
@@ -183,8 +177,17 @@ export class PiChildProcessRuntime {
 			});
 			environment.TERM = "xterm-256color";
 			environment.COLORTERM = "truecolor";
-			const timeoutMilliseconds = options.startupTimeoutMilliseconds
-				?? DEFAULT_STARTUP_TIMEOUT_MILLISECONDS;
+			const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+			let settleReady!: (ready: PiChildRuntimeReady) => void;
+			let rejectReady!: (error: Error) => void;
+			const bridgeReady = new Promise<PiChildRuntimeReady>((resolve, reject) => {
+				settleReady = resolve;
+				rejectReady = reject;
+			});
+			let rejectStartupFault!: (error: Error) => void;
+			const startupFault = new Promise<never>((_resolve, reject) => {
+				rejectStartupFault = reject;
+			});
 			const admission = admissionBroker.admit(
 				{
 					agentId: bootstrap.agentId,
@@ -207,62 +210,83 @@ export class PiChildProcessRuntime {
 					candidate.onClose((cause) => rejectReady(cause));
 				},
 			);
-			// Register the one-time token before the child can connect.
 			void admission.catch(() => undefined);
 			projection = spawnPtyTerminalProjection({
-				file: launch.command,
-				arguments: launch.arguments,
-				cwd: launch.cwd,
+				file: childLaunch.command,
+				arguments: childLaunch.arguments,
+				cwd: childLaunch.cwd,
 				environment,
 				columns: options.columns ?? DEFAULT_COLUMNS,
 				rows: options.rows ?? DEFAULT_ROWS,
 			});
-			channel = await raceStartup(
-				admission,
-				projection,
-				timeoutMilliseconds,
-				"control admission",
-			);
-			const readyPayload = await raceStartup(ready, projection, timeoutMilliseconds, "runtime.ready");
-			if (readyPayload.sessionId !== bootstrap.expectedSessionId) {
-				throw new Error(
-					`child_runtime_ready_mismatch: expected session ${bootstrap.expectedSessionId}, received ${readyPayload.sessionId}`,
-				);
-			}
-			const snapshot = await raceStartup(
-				Promise.race([channel.request("runtime.snapshot", {}), startupFault]),
-				projection,
-				timeoutMilliseconds,
-				"configuration snapshot",
-			);
-			assertRuntimeSnapshot(snapshot, options.configuration, bootstrap.expectedSessionId);
-			return new PiChildProcessRuntime({
-				projection,
-				admissionBroker,
-				channel,
-				ready: readyPayload,
-				snapshot,
+			const exactProjection = projection;
+			const cleanup = () => {
+				cleanupPromise ??= (async () => {
+					await channel?.close().catch(() => undefined);
+					forceKillProjection(exactProjection);
+					await exactProjection.dispose().catch(() => undefined);
+					await unlinkIfExists(bootstrapPath);
+					await admissionBroker.close().catch(() => undefined);
+				})();
+				return cleanupPromise;
+			};
+			const timeoutMilliseconds = options.startupTimeoutMilliseconds
+				?? DEFAULT_STARTUP_TIMEOUT_MILLISECONDS;
+			return new PiChildProcessLaunch({
+				projection: exactProjection,
 				bootstrapPath,
 				eventHandlers,
+				cleanup,
+				initialize: async (cancellation) => {
+					try {
+						channel = await raceStartup(
+							admission,
+							exactProjection,
+							timeoutMilliseconds,
+							"control admission",
+							cancellation,
+						);
+						const readyPayload = await raceStartup(
+							bridgeReady,
+							exactProjection,
+							timeoutMilliseconds,
+							"runtime.ready",
+							cancellation,
+						);
+						if (readyPayload.sessionId !== bootstrap.expectedSessionId) {
+							throw new Error(
+								`child_runtime_ready_mismatch: expected session ${bootstrap.expectedSessionId}, received ${readyPayload.sessionId}`,
+							);
+						}
+						const snapshot = await raceStartup(
+							Promise.race([channel.request("runtime.snapshot", {}), startupFault]),
+							exactProjection,
+							timeoutMilliseconds,
+							"configuration snapshot",
+							cancellation,
+						);
+						assertRuntimeSnapshot(snapshot, options.configuration, bootstrap.expectedSessionId);
+						return new PiChildProcessRuntime({
+							projection: exactProjection,
+							admissionBroker,
+							channel,
+							ready: readyPayload,
+							snapshot,
+							bootstrapPath,
+							eventHandlers,
+						});
+					} catch (error) {
+						throw await withTerminalDiagnostic(error, exactProjection);
+					}
+				},
 			});
 		} catch (error) {
-			let terminalDiagnostic = "";
-			if (projection && !projection.disposed) {
-				await projection.drain().catch(() => undefined);
-				terminalDiagnostic = projection.frame().lines
-					.map((line) => line.text)
-					.filter((line) => line.length > 0)
-					.join("\n");
-			}
 			await channel?.close().catch(() => undefined);
 			if (projection) forceKillProjection(projection);
 			await projection?.dispose().catch(() => undefined);
 			await unlinkIfExists(bootstrapPath);
 			await admissionBroker.close().catch(() => undefined);
-			const cause = error instanceof Error ? error : new Error(String(error));
-			throw terminalDiagnostic.length === 0
-				? cause
-				: new Error(`${cause.message}\nChild terminal:\n${terminalDiagnostic}`, { cause });
+			throw error;
 		}
 	}
 
@@ -353,6 +377,138 @@ export class PiChildProcessRuntime {
 	}
 }
 
+type PiChildProcessLaunchState =
+	| Readonly<{ kind: "pending" }>
+	| Readonly<{ kind: "admitted"; runtime: PiChildProcessRuntime }>
+	| Readonly<{ kind: "cancelled"; error: unknown }>
+	| Readonly<{ kind: "failed" }>;
+
+/** Real child PTY and exact admission settlement exposed before Runtime readiness. */
+export class PiChildProcessLaunch {
+	readonly #projection: PtyTerminalProjection;
+	readonly #eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
+	readonly #cleanupInitialization: () => Promise<void>;
+	readonly #readiness: Promise<PiChildProcessRuntime>;
+	#rejectCancellation!: (error: unknown) => void;
+	#state: PiChildProcessLaunchState = { kind: "pending" };
+	#cleanupPromise: Promise<void> | undefined;
+	#disposePromise: Promise<void> | undefined;
+	#disposed = false;
+	readonly bootstrapPath: string;
+	readonly exited: Promise<PtyExit>;
+
+	constructor(options: {
+		projection: PtyTerminalProjection;
+		bootstrapPath: string;
+		eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
+		cleanup(): Promise<void>;
+		initialize(cancellation: Promise<never>): Promise<PiChildProcessRuntime>;
+	}) {
+		this.#projection = options.projection;
+		this.bootstrapPath = options.bootstrapPath;
+		this.#eventHandlers = options.eventHandlers;
+		this.#cleanupInitialization = options.cleanup;
+		this.exited = options.projection.exited;
+		const cancellation = new Promise<never>((_resolve, reject) => {
+			this.#rejectCancellation = reject;
+		});
+		this.#readiness = options.initialize(cancellation).then(
+			(runtime) => {
+				if (this.#state.kind !== "pending") {
+					throw this.#state.kind === "cancelled"
+						? this.#state.error
+						: new Error("child_runtime_launch_not_pending");
+				}
+				this.#state = { kind: "admitted", runtime };
+				return runtime;
+			},
+			async (error) => {
+				const rejection = this.#state.kind === "cancelled"
+					? this.#state.error
+					: error;
+				if (this.#state.kind === "pending") this.#state = { kind: "failed" };
+				await this.#beginInitializationCleanup().catch(() => undefined);
+				throw rejection;
+			},
+		);
+		void this.#readiness.catch(() => undefined);
+	}
+
+	get pid(): number {
+		return this.#projection.pid;
+	}
+
+	get disposed(): boolean {
+		return this.#disposed;
+	}
+
+	frame(): TerminalProjectionFrame {
+		return this.#projection.frame();
+	}
+
+	addChangeHandler(handler: () => void): () => void {
+		return this.#projection.addChangeHandler(handler);
+	}
+
+	addFailureHandler(handler: (error: unknown) => void): () => void {
+		return this.#projection.addFailureHandler(handler);
+	}
+
+	writeInput(data: string | Buffer): void {
+		this.#projection.writeInput(data);
+	}
+
+	resize(columns: number, rows: number): void {
+		this.#projection.resize(columns, rows);
+	}
+
+	drain(): Promise<void> {
+		return this.#projection.drain();
+	}
+
+	onEvent(handler: (event: PiChildRuntimeEvent) => void): () => void {
+		this.#eventHandlers.add(handler);
+		return () => this.#eventHandlers.delete(handler);
+	}
+
+	ready(): Promise<PiChildProcessRuntime> {
+		return this.#readiness;
+	}
+
+	cancelInitialization(error: unknown): Promise<void> | undefined {
+		if (this.#state.kind !== "pending") return undefined;
+		this.#state = { kind: "cancelled", error };
+		const cleanup = this.#beginInitializationCleanup();
+		this.#rejectCancellation(error);
+		return cleanup;
+	}
+
+	dispose(): Promise<void> {
+		this.#disposePromise ??= this.#dispose();
+		return this.#disposePromise;
+	}
+
+	#beginInitializationCleanup(): Promise<void> {
+		this.#cleanupPromise ??= this.#cleanupInitialization().finally(() => {
+			this.#disposed = true;
+		});
+		return this.#cleanupPromise;
+	}
+
+	async #dispose(): Promise<void> {
+		if (this.#state.kind === "pending") {
+			await this.cancelInitialization(new Error("child runtime launch disposed"));
+			return;
+		}
+		if (this.#state.kind === "admitted") {
+			await this.#state.runtime.dispose();
+			this.#disposed = true;
+			return;
+		}
+		await this.#beginInitializationCleanup();
+	}
+}
+
 export function resolveInstalledPiCliPath(): string {
 	return join(getPackageDir(), "dist", "cli.js");
 }
@@ -383,11 +539,13 @@ async function raceStartup<T>(
 	projection: PtyTerminalProjection,
 	timeoutMilliseconds: number,
 	stage: string,
+	cancellation?: Promise<never>,
 ): Promise<T> {
 	let timer: NodeJS.Timeout | undefined;
 	try {
 		return await Promise.race([
 			operation,
+			...(cancellation === undefined ? [] : [cancellation]),
 			projection.exited.then((exit) => {
 				throw new Error(
 					`child_runtime_early_exit: ${stage} ended with code ${exit.exitCode} signal ${exit.signal}`,
@@ -403,6 +561,28 @@ async function raceStartup<T>(
 	} finally {
 		if (timer) clearTimeout(timer);
 	}
+}
+
+async function withTerminalDiagnostic(
+	error: unknown,
+	projection: PtyTerminalProjection,
+): Promise<Error> {
+	let terminalDiagnostic = "";
+	if (!projection.disposed) {
+		await projection.drain().catch(() => undefined);
+		try {
+			terminalDiagnostic = projection.frame().lines
+				.map((line) => line.text)
+				.filter((line) => line.length > 0)
+				.join("\n");
+		} catch {
+			// Concurrent cancellation can finish PTY cleanup before diagnostics render.
+		}
+	}
+	const cause = error instanceof Error ? error : new Error(String(error));
+	return terminalDiagnostic.length === 0
+		? cause
+		: new Error(`${cause.message}\nChild terminal:\n${terminalDiagnostic}`, { cause });
 }
 
 async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T | undefined> {

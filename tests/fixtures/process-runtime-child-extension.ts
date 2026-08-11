@@ -38,7 +38,7 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		pi.on("session_shutdown", () => new Promise<void>(() => undefined));
 	}
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
 		ctx.ui.setWidget("process-runtime-test", [
 			"PROCESS_RUNTIME_CHILD_WIDGET",
 			`PID=${process.pid}`,
@@ -46,6 +46,10 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 			`HERDR_SOCKET_PATH=${String(process.env.HERDR_SOCKET_PATH)}`,
 			`HERDR_PANE_ID=${String(process.env.HERDR_PANE_ID)}`,
 		]);
+		const delayMilliseconds = Number(process.env.PROCESS_RUNTIME_STARTUP_DELAY_MS ?? 0);
+		if (delayMilliseconds > 0) {
+			await new Promise((resolve) => setTimeout(resolve, delayMilliseconds));
+		}
 	});
 
 	pi.registerCommand("runtime-probe", {
