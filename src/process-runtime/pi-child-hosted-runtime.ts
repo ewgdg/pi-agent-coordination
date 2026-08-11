@@ -37,6 +37,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	readonly #removeEventHandler: () => void;
 	#removeChannelCloseHandler: () => void = () => undefined;
 	#snapshot: EffectiveRuntimeSnapshot | undefined;
+	#toolExecutionModes = new Map<string, "sequential" | "parallel">();
 	#workState: AgentRuntimeWorkState = "settled";
 	#queuedInputCount = 0;
 	#currentRunId: string | undefined;
@@ -61,12 +62,18 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#removeEventHandler = launch.onEvent((event) => this.#handleEvent(event));
 		this.#admitted = launch.ready();
 		this.ready = this.#admitted.then((runtime) => {
+			this.#toolExecutionModes = new Map(
+				runtime.snapshot.toolExecutionModes.map(({ name, executionMode }) => [
+					name,
+					executionMode,
+				]),
+			);
 			this.#snapshot = {
 				cwd: runtime.snapshot.cwd,
 				model: runtime.snapshot.model,
 				thinking: runtime.snapshot.thinking,
 				tools: [...runtime.snapshot.tools],
-				skills: runtime.snapshot.skills.map(({ name }) => name),
+				skills: [...runtime.snapshot.skills],
 				fileExtensionPaths: [...runtime.snapshot.extensions],
 				projectTrusted: runtime.snapshot.projectTrusted,
 				sessionId: runtime.snapshot.sessionId,
@@ -103,13 +110,15 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		return this.#queuedInputCount;
 	}
 
-	classifyToolBatch(_toolNames: readonly string[]): ToolBatchClassification {
-		// Execution modes currently live only in the child Pi process. This method
-		// stays explicitly unavailable until a lifecycle-intent snapshot seam exists;
-		// a synchronous Control RPC would lie about the Hosted interface.
-		throw new Error(
-			"temporarily_unavailable: process-hosted tool classification requires lifecycle intent",
-		);
+	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification {
+		for (const toolName of toolNames) {
+			const executionMode = this.#toolExecutionModes.get(toolName);
+			if (!executionMode) {
+				throw new Error(`invariant_violation: tool definition ${toolName} is unavailable`);
+			}
+			if (executionMode === "sequential") return "blocking";
+		}
+		return "asynchronous";
 	}
 
 	cancellationSignal(): AbortSignal {

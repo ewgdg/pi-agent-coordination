@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { realpath, writeFile, unlink } from "node:fs/promises";
+import { readFile, realpath, writeFile, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,8 +26,8 @@ import {
 } from "./child-process-environment.ts";
 import { buildPiChildCliLaunch } from "./pi-child-cli-launch.ts";
 import {
-	dispatchOwnerParticipantRequest,
-	type PiChildOwnerRequestHandlers,
+	dispatchParticipantRequestToOwner,
+	type OwnerParticipantRequestHandlers,
 } from "./remote-participant-control.ts";
 import {
 	spawnPtyTerminalProjection,
@@ -71,8 +71,8 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	cliPath?: string;
 	bridgeExtensionPath?: string;
 	ownerRequestHandlers?:
-		| PiChildOwnerRequestHandlers<"ordinary">
-		| PiChildOwnerRequestHandlers<"moderator">;
+		| OwnerParticipantRequestHandlers<"ordinary">
+		| OwnerParticipantRequestHandlers<"moderator">;
 }>;
 
 /** Standalone Owner-side host for one real Pi CLI/TUI process. */
@@ -203,7 +203,7 @@ export class PiChildProcessRuntime {
 				},
 				(candidate) => {
 					candidate.onRequest((request) =>
-						dispatchOwnerParticipantRequest(options.ownerRequestHandlers, request)
+						dispatchParticipantRequestToOwner(options.ownerRequestHandlers, request)
 					);
 					candidate.onEvent((event) => {
 						if (event.event === "runtime.ready") settleReady(event.payload);
@@ -537,24 +537,27 @@ async function assertRuntimeSnapshot(
 	sessionPath: string,
 	projectContextPath: string | undefined,
 ): Promise<void> {
+	assertToolExecutionModes(actual, expected.tools);
 	const expectedSnapshot: PiChildRuntimeSnapshot = {
-		cwd: await realpath(expected.cwd),
+		cwd: expected.cwd,
 		model: expected.model,
 		thinking: expected.thinking,
 		tools: [...expected.tools],
-		skills: await Promise.all(expected.skills.map(async (name, index) => ({
+		skills: [...expected.skills],
+		skillSources: await Promise.all(expected.skills.map(async (name, index) => ({
 			name,
 			filePath: await realpath(skillPaths[index]!),
 		}))),
 		extensions: await Promise.all(expected.extensions.map((path) => realpath(path))),
+		toolExecutionModes: [...actual.toolExecutionModes],
 		projectTrusted,
 		sessionId: expectedSessionId,
-		sessionPath: await realpath(sessionPath),
-		projectContext: expected.projectContext === undefined
+		sessionPath,
+		projectContext: projectContextPath === undefined
 			? null
 			: {
-				filePath: await realpath(requireProjectContextPath(projectContextPath)),
-				body: expected.projectContext.body,
+				filePath: await realpath(projectContextPath),
+				body: await readFile(projectContextPath, "utf8"),
 			},
 	};
 	if (JSON.stringify(actual) !== JSON.stringify(expectedSnapshot)) {
@@ -564,13 +567,16 @@ async function assertRuntimeSnapshot(
 	}
 }
 
-function requireProjectContextPath(path: string | undefined): string {
-	if (!path) {
+function assertToolExecutionModes(
+	actual: PiChildRuntimeSnapshot,
+	expectedTools: readonly string[],
+): void {
+	const modeNames = actual.toolExecutionModes.map(({ name }) => name);
+	if (JSON.stringify(modeNames) !== JSON.stringify(expectedTools)) {
 		throw new Error(
-			"invalid_child_launch: configured Project Context requires its file-backed artifact",
+			`child_runtime_tool_modes_mismatch: expected ${JSON.stringify(expectedTools)}, received ${JSON.stringify(modeNames)}`,
 		);
 	}
-	return path;
 }
 
 async function raceStartup<T>(

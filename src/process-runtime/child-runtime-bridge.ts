@@ -23,7 +23,10 @@ import { registerParticipantLifecycle } from "../pi-integration/participant-life
 import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
-import { createControlBackedParticipantHandlers } from "./remote-participant-control.ts";
+import {
+	createControlBackedChildParticipantHandlers,
+	type ChildParticipantControlRequester,
+} from "./remote-participant-control.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
 const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
@@ -46,15 +49,19 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	const bootstrap = await readBootstrapDescriptor();
 	const interactiveBridge = installInteractiveHostBridge(hostPi);
 	let state: RuntimeState | undefined;
-	const participantHandlers = createControlBackedParticipantHandlers(
-		bootstrap.role,
-		(method, payload, signal) => {
-			if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
-			return state.channel.request(method, payload, signal);
-		},
-	);
-	registerParticipantLifecycle(pi, participantHandlers.lifecycle);
-	registerParticipantCoordinationTools(pi, bootstrap.role, participantHandlers.coordination);
+	const participantRequest: ChildParticipantControlRequester = (method, payload, signal) => {
+		if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
+		return state.channel.request(method, payload, signal);
+	};
+	if (bootstrap.role === "ordinary") {
+		const handlers = createControlBackedChildParticipantHandlers("ordinary", participantRequest);
+		registerParticipantLifecycle(pi, handlers.lifecycle);
+		registerParticipantCoordinationTools(pi, "ordinary", handlers.coordination);
+	} else {
+		const handlers = createControlBackedChildParticipantHandlers("moderator", participantRequest);
+		registerParticipantLifecycle(pi, handlers.lifecycle);
+		registerParticipantCoordinationTools(pi, "moderator", handlers.coordination);
+	}
 	pi.on("session_before_fork", (_event, ctx) => cancelNativeSessionReplacement(ctx));
 	pi.on("session_before_switch", (_event, ctx) => cancelNativeSessionReplacement(ctx));
 
@@ -281,20 +288,32 @@ async function runtimeSnapshot(
 	}
 	const sessionPath = context.sessionManager.getSessionFile();
 	if (!sessionPath) throw new Error("child_runtime_session_path_unavailable");
+	const tools = session.getActiveToolNames();
+	const toolExecutionModes = tools.map((name) => {
+		const definition = session.getToolDefinition(name);
+		if (!definition) {
+			throw new Error(`child_runtime_tool_definition_unavailable: ${name}`);
+		}
+		return { name, executionMode: definition.executionMode ?? "parallel" };
+	});
+	const skillSources = await Promise.all(
+		runtime.services.resourceLoader.getSkills().skills.map(async ({ name, filePath }) => ({
+			name,
+			filePath: await canonicalFilePath(filePath, runtime.cwd),
+		})),
+	);
 	return {
-		cwd: await canonicalFilePath(runtime.cwd, runtime.cwd),
+		cwd: runtime.cwd,
 		model: requireModel(session.model),
 		thinking: session.thinkingLevel,
-		tools: session.getActiveToolNames(),
-		skills: await Promise.all(
-			runtime.services.resourceLoader.getSkills().skills.map(async ({ name, filePath }) => ({
-				name,
-				filePath: await canonicalFilePath(filePath, runtime.cwd),
-			}))),
+		tools,
+		skills: skillSources.map(({ name }) => name),
+		skillSources,
 		extensions: extensions.filter((path) => path !== bridgePath),
+		toolExecutionModes,
 		projectTrusted: runtime.services.settingsManager.isProjectTrusted(),
 		sessionId: session.sessionId,
-		sessionPath: await canonicalFilePath(sessionPath, runtime.cwd),
+		sessionPath,
 		projectContext: appendPrompt.length === 0
 			? null
 			: {

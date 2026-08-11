@@ -12,7 +12,7 @@ import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
-import type { PiChildOwnerRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
+import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import {
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
@@ -115,7 +115,9 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			thinking: "off",
 			tools: [],
 			skills: [],
+			skillSources: [],
 			extensions: [CHILD_EXTENSION],
+			toolExecutionModes: [],
 			projectTrusted: true,
 			sessionId: expectedSessionId,
 			sessionPath,
@@ -310,7 +312,12 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 	const sessionPath = join(sessionDirectory, "child.jsonl");
 	const skillPath = join(skillDirectory, "SKILL.md");
 	const projectContextPath = join(root, "project-context.md");
-	const projectContextBody = "Exact process child project context.";
+	const projectContextBody = [
+		"# Rendered child context",
+		"",
+		"## /workspace/AGENTS.md",
+		"Full rendered agentsFiles artifact.",
+	].join("\n");
 	await writeFile(sessionPath, `${JSON.stringify({
 		type: "session",
 		version: 3,
@@ -344,7 +351,6 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 				tools: [],
 				skills: ["review"],
 				extensions: [CHILD_EXTENSION],
-				projectContext: { mode: "append", body: projectContextBody },
 			},
 			skillPaths: [skillPath],
 			projectContextPath,
@@ -360,8 +366,10 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 			},
 			thinking: "off",
 			tools: [],
-			skills: [{ name: "review", filePath: skillPath }],
+			skills: ["review"],
+			skillSources: [{ name: "review", filePath: skillPath }],
 			extensions: [CHILD_EXTENSION],
+			toolExecutionModes: [],
 			projectTrusted: false,
 			sessionId: expectedSessionId,
 			sessionPath,
@@ -534,9 +542,9 @@ function ordinaryOwnerHandlers(options: Readonly<{
 	executionStarted?: () => void;
 	observe?: (input: { operation: "status" | "children"; agentId?: string }) => void;
 	message?: (toolCallId: string, input: unknown) => void;
-	observeReceipt?: Awaited<ReturnType<PiChildOwnerRequestHandlers<"ordinary">["coordination"]["observe"]>>;
-	messageReceipt?: Awaited<ReturnType<PiChildOwnerRequestHandlers<"ordinary">["coordination"]["message"]>>;
-}> = {}): PiChildOwnerRequestHandlers<"ordinary"> {
+	observeReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["observe"]>>;
+	messageReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["message"]>>;
+}> = {}): OwnerParticipantRequestHandlers<"ordinary"> {
 	return {
 		lifecycle: {
 			async executionStarted() { options.executionStarted?.(); },

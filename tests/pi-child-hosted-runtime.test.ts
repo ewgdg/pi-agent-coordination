@@ -13,7 +13,7 @@ import {
 	type PiChildProcessLaunch,
 	type PiChildRuntimeEvent,
 } from "../src/process-runtime/pi-child-process-runtime.ts";
-import type { PiChildOwnerRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
+import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { InProcessAgentHost } from "../src/runtime/in-process-agent-host.ts";
 import {
@@ -101,9 +101,10 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 		});
 		assert.equal(host.currentProjection(), runtime.projection);
 		assert.equal(host.currentWorkState(), "settled");
+		assert.equal(host.classifyToolBatch([]), "asynchronous");
 		assert.throws(
-			() => host.classifyToolBatch([]),
-			/temporarily_unavailable: process-hosted tool classification/,
+			() => host.classifyToolBatch(["missing-tool"]),
+			/invariant_violation: tool definition missing-tool is unavailable/,
 		);
 
 		const handled = host.deliverInLane(
@@ -208,9 +209,14 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 			cwd: "/runtime",
 			model: { provider: "test", modelId: "model" },
 			thinking: "off",
-			tools: [],
+			tools: ["parallel-tool", "sequential-tool"],
 			skills: [],
+			skillSources: [],
 			extensions: [],
+			toolExecutionModes: [
+				{ name: "parallel-tool", executionMode: "parallel" },
+				{ name: "sequential-tool", executionMode: "sequential" },
+			],
 			projectTrusted: true,
 			sessionId: "retry-runtime",
 			sessionPath: "/sessions/retry-runtime.jsonl",
@@ -250,6 +256,15 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 	} as unknown as PiChildProcessLaunch;
 	const runtime = new PiChildHostedRuntime(launch);
 	await runtime.ready;
+	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
+	assert.equal(
+		runtime.classifyToolBatch(["parallel-tool", "sequential-tool"]),
+		"blocking",
+	);
+	assert.throws(
+		() => runtime.classifyToolBatch(["missing-tool"]),
+		/invariant_violation: tool definition missing-tool is unavailable/,
+	);
 	const completion = runtime.deliver({ kind: "user", content: "Retry this Run." }).completion;
 	const emit = (event: PiChildRuntimeEvent) => {
 		for (const handler of eventHandlers) handler(event);
@@ -330,7 +345,7 @@ for (const failure of ["channel_loss", "process_kill"] as const) {
 	});
 }
 
-function ordinaryOwnerHandlers(): PiChildOwnerRequestHandlers<"ordinary"> {
+function ordinaryOwnerHandlers(): OwnerParticipantRequestHandlers<"ordinary"> {
 	return {
 		lifecycle: {
 			async executionStarted() {},

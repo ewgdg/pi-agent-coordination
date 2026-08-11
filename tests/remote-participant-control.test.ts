@@ -4,10 +4,10 @@ import test from "node:test";
 import type { ControlRequest } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import {
-	createControlBackedParticipantHandlers,
-	dispatchOwnerParticipantRequest,
-	type ParticipantControlRequester,
-	type PiChildOwnerRequestHandlers,
+	createControlBackedChildParticipantHandlers,
+	dispatchParticipantRequestToOwner,
+	type ChildParticipantControlRequester,
+	type OwnerParticipantRequestHandlers,
 } from "../src/process-runtime/remote-participant-control.ts";
 
 const status = {
@@ -42,8 +42,8 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 			case "coordination.askHuman": return { requestId: "human-1", answer: "Proceed." };
 			default: return {};
 		}
-	}) as ParticipantControlRequester;
-	const proxies = createControlBackedParticipantHandlers("ordinary", request);
+	}) as ChildParticipantControlRequester;
+	const proxies = createControlBackedChildParticipantHandlers("ordinary", request);
 
 	await proxies.lifecycle.executionStarted();
 	assert.equal(await proxies.lifecycle.humanInputSubmitted({ text: "resume", images: undefined }), true);
@@ -103,8 +103,8 @@ test("aborting a tool call cancels its askHuman Control request", async () => {
 			signal?.addEventListener("abort", () =>
 				reject(new DOMException("The operation was aborted", "AbortError")), { once: true });
 		});
-	}) as ParticipantControlRequester;
-	const proxies = createControlBackedParticipantHandlers("ordinary", request);
+	}) as ChildParticipantControlRequester;
+	const proxies = createControlBackedChildParticipantHandlers("ordinary", request);
 	const cancellation = new AbortController();
 	const pending = proxies.coordination.askUserQuestion(
 		"cancelled-human-call",
@@ -122,7 +122,7 @@ test("aborting a tool call cancels its askHuman Control request", async () => {
 
 test("Owner dispatch invokes scoped process-neutral handlers and returns exact receipts", async () => {
 	const calls: unknown[] = [];
-	const handlers: PiChildOwnerRequestHandlers<"moderator"> = {
+	const handlers: OwnerParticipantRequestHandlers<"moderator"> = {
 		lifecycle: {
 			async executionStarted() { calls.push(["begin"]); },
 			async humanInputSubmitted(input) { calls.push(["input", input]); return true; },
@@ -162,7 +162,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 		signal,
 	} as ControlRequest<typeof agentControlProtocol>;
 
-	assert.deepEqual(await dispatchOwnerParticipantRequest(handlers, request), {
+	assert.deepEqual(await dispatchParticipantRequestToOwner(handlers, request), {
 		messageId: "message-owner",
 		delivery: "pending",
 	});

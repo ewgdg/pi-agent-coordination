@@ -1,4 +1,3 @@
-import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import type { Static } from "typebox";
 import { Check } from "typebox/value";
 
@@ -22,23 +21,41 @@ type MethodResponse<M extends AgentControlMethod> = Static<
 	(typeof agentControlMethods)[M]["response"]
 >;
 
-export type ParticipantControlRequester = <M extends AgentControlMethod>(
+export type ChildParticipantControlRequester = <M extends AgentControlMethod>(
 	method: M,
 	payload: MethodRequest<M>,
 	signal?: AbortSignal,
 ) => Promise<MethodResponse<M>>;
 
 /** Agent-scoped Owner behavior; transport and framing stay outside this seam. */
-export type PiChildOwnerRequestHandlers<Role extends RemoteParticipantRole> = Readonly<{
+export type OwnerParticipantRequestHandlers<Role extends RemoteParticipantRole> = Readonly<{
 	lifecycle: ParticipantLifecycleHandlers;
 	coordination: ParticipantCoordinationToolHandlers<Role>;
 }>;
 
-/** Build the process-neutral registrars' handlers over one child Control requester. */
-export function createControlBackedParticipantHandlers<Role extends RemoteParticipantRole>(
-	role: Role,
-	request: ParticipantControlRequester,
-): PiChildOwnerRequestHandlers<Role> {
+export type ControlBackedChildParticipantHandlers<Role extends RemoteParticipantRole> = Readonly<{
+	lifecycle: ParticipantLifecycleHandlers;
+	coordination: ParticipantCoordinationToolHandlers<Role>;
+}>;
+
+type CommonChildCoordinationHandlers = Pick<
+	ParticipantCoordinationToolHandlers<"ordinary">,
+	"observe" | "message" | "control"
+>;
+
+/** Build the child registrars' process-neutral proxies over one Control requester. */
+export function createControlBackedChildParticipantHandlers(
+	role: "ordinary",
+	request: ChildParticipantControlRequester,
+): ControlBackedChildParticipantHandlers<"ordinary">;
+export function createControlBackedChildParticipantHandlers(
+	role: "moderator",
+	request: ChildParticipantControlRequester,
+): ControlBackedChildParticipantHandlers<"moderator">;
+export function createControlBackedChildParticipantHandlers(
+	role: RemoteParticipantRole,
+	request: ChildParticipantControlRequester,
+): ControlBackedChildParticipantHandlers<"ordinary"> | ControlBackedChildParticipantHandlers<"moderator"> {
 	const lifecycle: ParticipantLifecycleHandlers = {
 		async executionStarted() {
 			await request("runtime.executionBegin", {});
@@ -65,50 +82,39 @@ export function createControlBackedParticipantHandlers<Role extends RemotePartic
 			await request("runtime.executionEnd", {});
 		},
 	};
-	const common = {
-		observe: (input: Parameters<ParticipantCoordinationToolHandlers<Role>["observe"]>[0]) =>
-			request("coordination.observe", input),
-		message: (
-			toolCallId: string,
-			input: Parameters<ParticipantCoordinationToolHandlers<Role>["message"]>[1],
-		) => request("coordination.message", { toolCallId, input }),
-		control: (
-			toolCallId: string,
-			input: Parameters<ParticipantCoordinationToolHandlers<Role>["control"]>[1],
-		) => request("coordination.control", { toolCallId, input }),
+	const common: CommonChildCoordinationHandlers = {
+		observe: (input) => request("coordination.observe", input),
+		message: (toolCallId, input) =>
+			request("coordination.message", { toolCallId, input }),
+		control: (toolCallId, input) =>
+			request("coordination.control", { toolCallId, input }),
 	};
-	const coordination = role === "ordinary"
-		? {
+	if (role === "ordinary") {
+		const coordination: ParticipantCoordinationToolHandlers<"ordinary"> = {
 			...common,
-			spawn: (toolCallId: string, input: MethodRequest<"coordination.spawn">["input"]) =>
+			spawn: (toolCallId, input) =>
 				request("coordination.spawn", { toolCallId, input }),
-			askUserQuestion: (
-				toolCallId: string,
-				input: MethodRequest<"coordination.askHuman">["input"],
-				signal: AbortSignal | undefined,
-			) => request("coordination.askHuman", { toolCallId, input }, signal),
-		}
-		: {
-			...common,
-			askUserQuestion: (
-				toolCallId: string,
-				input: MethodRequest<"coordination.askHuman">["input"],
-				signal: AbortSignal | undefined,
-			) => request("coordination.askHuman", { toolCallId, input }, signal),
-			moderatorControl: (
-				toolCallId: string,
-				input: MethodRequest<"coordination.moderatorControl">["input"],
-			) => request("coordination.moderatorControl", { toolCallId, input }),
+			askUserQuestion: (toolCallId, input, signal) =>
+				request("coordination.askHuman", { toolCallId, input }, signal),
 		};
-	return {
-		lifecycle,
-		coordination: coordination as unknown as ParticipantCoordinationToolHandlers<Role>,
+		return { lifecycle, coordination };
+	}
+	const coordination: ParticipantCoordinationToolHandlers<"moderator"> = {
+		...common,
+		askUserQuestion: (toolCallId, input, signal) =>
+			request("coordination.askHuman", { toolCallId, input }, signal),
+		moderatorControl: (toolCallId, input) =>
+			request("coordination.moderatorControl", { toolCallId, input }),
 	};
+	return { lifecycle, coordination };
 }
 
 /** Dispatch one authenticated child intention into its scoped Owner handlers. */
-export async function dispatchOwnerParticipantRequest<Role extends RemoteParticipantRole>(
-	handlers: PiChildOwnerRequestHandlers<Role> | undefined,
+export async function dispatchParticipantRequestToOwner(
+	handlers:
+		| OwnerParticipantRequestHandlers<"ordinary">
+		| OwnerParticipantRequestHandlers<"moderator">
+		| undefined,
 	request: ControlRequest<typeof agentControlProtocol>,
 ): Promise<unknown> {
 	if (!handlers) throw new Error("child_runtime_owner_request_unavailable");
@@ -133,7 +139,7 @@ export async function dispatchOwnerParticipantRequest<Role extends RemotePartici
 		case "runtime.guardHumanToolResult":
 			response = {
 				result: await handlers.lifecycle.humanToolResultCommitting({
-					message: request.payload.message as MessageEndEvent["message"],
+					message: request.payload.message,
 				}) ?? null,
 			};
 			break;
