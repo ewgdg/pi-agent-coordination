@@ -63,6 +63,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 			extensions: [CHILD_EXTENSION],
 		},
 		skillPaths: [],
+		agentsFiles: [],
 		projectTrusted: true,
 		ownerEnvironment: {
 			...process.env,
@@ -334,6 +335,14 @@ for (const failure of ["channel_loss", "process_kill"] as const) {
 			const failedRunState = harness.host.observe();
 			assert.equal("work" in failedRunState && failedRunState.work, "settled");
 			await harness.launch.exited;
+			await waitUntil(async () => {
+				try {
+					await lstat(harness.contextArtifactPath);
+					return false;
+				} catch (error) {
+					return hasCode("ENOENT")(error);
+				}
+			});
 			await harness.host.lane.run(() =>
 				harness.host.discardAndEndInLane("failure")
 			).catch(() => undefined);
@@ -408,6 +417,10 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 			extensions: [CHILD_EXTENSION],
 		},
 		skillPaths: [],
+		agentsFiles: [{
+			path: "/project/AGENTS.md",
+			content: `Hosted failure context for ${name}`,
+		}],
 		projectTrusted: true,
 		ownerEnvironment: {
 			...process.env,
@@ -425,7 +438,9 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 		startSession: async () => ({ runtime, ready: runtime.ready }),
 	});
 	const handle = await host.lane.run(() => host.startInLane());
-	return { launch, host, handle, sessionPath };
+	const contextArtifactPath = (await launch.ready()).snapshot.projectContext?.filePath;
+	assert.ok(contextArtifactPath);
+	return { launch, host, handle, sessionPath, contextArtifactPath };
 }
 
 async function waitUntil(condition: () => boolean | Promise<boolean>): Promise<void> {

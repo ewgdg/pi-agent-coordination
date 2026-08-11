@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -95,7 +95,22 @@ test("cancelling pending launch rejects exact readiness and bounds all startup c
 	assert.throws(() => process.kill(pid, 0), hasCode("ESRCH"));
 	await assert.rejects(lstat(launch.bootstrapPath), hasCode("ENOENT"));
 	await assert.rejects(lstat(bootstrap.endpoint.address), hasCode("ENOENT"));
+	await assert.rejects(lstat(dirname(launch.bootstrapPath)), hasCode("ENOENT"));
 	await projection.dispose();
+});
+
+test("failed startup removes its owned context artifact and launch directory", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const options = await createLaunchOptions("startup-failure", 10_000);
+	const launch = await PiChildProcessRuntime.launch({
+		...options,
+		startupTimeoutMilliseconds: 10,
+	});
+
+	await assert.rejects(launch.ready(), /child_runtime_startup_timeout/);
+	await assert.rejects(lstat(dirname(launch.bootstrapPath)), hasCode("ENOENT"));
 });
 
 async function createLaunchOptions(
@@ -109,7 +124,9 @@ async function createLaunchOptions(
 	await mkdir(sessionDirectory, { recursive: true });
 	const expectedSessionId = name === "startup-frame"
 		? "019a6b4d-1b22-7000-8000-000000000101"
-		: "019a6b4d-1b22-7000-8000-000000000102";
+		: name === "startup-cancel"
+			? "019a6b4d-1b22-7000-8000-000000000102"
+			: "019a6b4d-1b22-7000-8000-000000000103";
 	const sessionPath = join(sessionDirectory, "child.jsonl");
 	await writeFile(sessionPath, `${JSON.stringify({
 		type: "session",
@@ -136,6 +153,10 @@ async function createLaunchOptions(
 			extensions: [CHILD_EXTENSION],
 		},
 		skillPaths: [],
+		agentsFiles: [{
+			path: "/project/AGENTS.md",
+			content: `Launch context for ${name}`,
+		}],
 		projectTrusted: true,
 		ownerEnvironment: {
 			...process.env,

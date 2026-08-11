@@ -14,7 +14,7 @@ export function buildPiChildCliLaunch(options: {
 	configuration: EffectiveAgentRunConfiguration;
 	skillPaths: readonly string[];
 	bridgeExtensionPath: string;
-	projectContextPath?: string;
+	contextArtifactPath?: string;
 	projectTrusted: boolean;
 }): PiChildCliLaunch {
 	const {
@@ -23,7 +23,7 @@ export function buildPiChildCliLaunch(options: {
 		configuration,
 		skillPaths,
 		bridgeExtensionPath,
-		projectContextPath,
+		contextArtifactPath,
 		projectTrusted,
 	} = options;
 	for (const [field, path] of [
@@ -31,9 +31,9 @@ export function buildPiChildCliLaunch(options: {
 		["session", sessionPath],
 		["working directory", configuration.cwd],
 		["bridge extension", bridgeExtensionPath],
-		...(projectContextPath === undefined
+		...(contextArtifactPath === undefined
 			? []
-			: [["Project Context", projectContextPath]]),
+			: [["Project Context", contextArtifactPath]]),
 	] as const) {
 		requireAbsolutePath(field, path);
 	}
@@ -81,9 +81,9 @@ export function buildPiChildCliLaunch(options: {
 		"--no-skills",
 		...skillPaths.flatMap((path) => ["--skill", path]),
 		"--no-context-files",
-		...(projectContextPath === undefined
+		...(contextArtifactPath === undefined
 			? []
-			: ["--append-system-prompt", projectContextPath]),
+			: ["--append-system-prompt", contextArtifactPath]),
 		projectTrusted ? "--approve" : "--no-approve",
 		"--tui-mode",
 		"fullscreen",

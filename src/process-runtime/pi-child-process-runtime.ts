@@ -24,6 +24,10 @@ import type { EffectiveAgentRunConfiguration } from "../templates/agent-configur
 import {
 	buildChildProcessEnvironment,
 } from "./child-process-environment.ts";
+import {
+	type ChildContextFile,
+	materializeNewChildContextArtifact,
+} from "./child-context-artifact.ts";
 import { buildPiChildCliLaunch } from "./pi-child-cli-launch.ts";
 import {
 	dispatchParticipantRequestToOwner,
@@ -61,8 +65,8 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	sessionPath: string;
 	configuration: EffectiveAgentRunConfiguration;
 	skillPaths: readonly string[];
+	agentsFiles: readonly ChildContextFile[];
 	projectTrusted: boolean;
-	projectContextPath?: string;
 	ownerEnvironment?: NodeJS.ProcessEnv;
 	runtimeDirectory?: string;
 	columns?: number;
@@ -100,6 +104,7 @@ export class PiChildProcessRuntime {
 		ready: PiChildRuntimeReady;
 		snapshot: PiChildRuntimeSnapshot;
 		bootstrapPath: string;
+		contextArtifactPath: string | undefined;
 		eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
 	}) {
 		this.#projection = options.projection;
@@ -112,6 +117,7 @@ export class PiChildProcessRuntime {
 		this.#cleanup = async () => {
 			await this.channel.close().catch(() => undefined);
 			await unlinkIfExists(this.bootstrapPath);
+			if (options.contextArtifactPath) await unlinkIfExists(options.contextArtifactPath);
 			await this.#admissionBroker.close().catch(() => undefined);
 			await this.#projection.dispose().catch(() => undefined);
 		};
@@ -148,19 +154,25 @@ export class PiChildProcessRuntime {
 			workflowId: options.workflowId,
 		});
 		const bootstrapPath = join(dirname(listener.endpoint.address), "bootstrap.json");
-		const bootstrap: ChildProcessBootstrap = {
-			protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
-			endpoint: listener.endpoint,
-			connectionToken: randomBytes(32).toString("hex"),
-			workflowId: requireIdentity("workflowId", options.workflowId),
-			agentId: requireIdentity("agentId", options.agentId),
-			role: options.role,
-			expectedSessionId: requireIdentity("expectedSessionId", options.expectedSessionId),
-		};
+		const contextArtifactCandidatePath = join(dirname(listener.endpoint.address), "context.md");
+		let contextArtifactPath: string | undefined;
 		let projection: PtyTerminalProjection | undefined;
 		let channel: PiChildRuntimeChannel | undefined;
 		let cleanupPromise: Promise<void> | undefined;
 		try {
+			const bootstrap: ChildProcessBootstrap = {
+				protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
+				endpoint: listener.endpoint,
+				connectionToken: randomBytes(32).toString("hex"),
+				workflowId: requireIdentity("workflowId", options.workflowId),
+				agentId: requireIdentity("agentId", options.agentId),
+				role: options.role,
+				expectedSessionId: requireIdentity("expectedSessionId", options.expectedSessionId),
+			};
+			contextArtifactPath = await materializeNewChildContextArtifact({
+				path: contextArtifactCandidatePath,
+				agentsFiles: options.agentsFiles,
+			});
 			await writeFile(bootstrapPath, `${JSON.stringify(bootstrap)}\n`, {
 				encoding: "utf8",
 				mode: 0o600,
@@ -173,9 +185,9 @@ export class PiChildProcessRuntime {
 				configuration: options.configuration,
 				skillPaths: options.skillPaths,
 				bridgeExtensionPath,
-				...(options.projectContextPath === undefined
+				...(contextArtifactPath === undefined
 					? {}
-					: { projectContextPath: options.projectContextPath }),
+					: { contextArtifactPath }),
 				projectTrusted: options.projectTrusted,
 			});
 			const environment = buildChildProcessEnvironment({
@@ -233,6 +245,7 @@ export class PiChildProcessRuntime {
 					forceKillProjection(exactProjection);
 					await exactProjection.dispose().catch(() => undefined);
 					await unlinkIfExists(bootstrapPath);
+					if (contextArtifactPath) await unlinkIfExists(contextArtifactPath);
 					await admissionBroker.close().catch(() => undefined);
 				})();
 				return cleanupPromise;
@@ -279,7 +292,7 @@ export class PiChildProcessRuntime {
 							options.projectTrusted,
 							bootstrap.expectedSessionId,
 							options.sessionPath,
-							options.projectContextPath,
+							contextArtifactPath,
 						);
 						return new PiChildProcessRuntime({
 							projection: exactProjection,
@@ -288,6 +301,7 @@ export class PiChildProcessRuntime {
 							ready: readyPayload,
 							snapshot,
 							bootstrapPath,
+							contextArtifactPath,
 							eventHandlers,
 						});
 					} catch (error) {
@@ -300,6 +314,7 @@ export class PiChildProcessRuntime {
 			if (projection) forceKillProjection(projection);
 			await projection?.dispose().catch(() => undefined);
 			await unlinkIfExists(bootstrapPath);
+			await unlinkIfExists(contextArtifactCandidatePath);
 			await admissionBroker.close().catch(() => undefined);
 			throw error;
 		}
@@ -535,7 +550,7 @@ async function assertRuntimeSnapshot(
 	projectTrusted: boolean,
 	expectedSessionId: string,
 	sessionPath: string,
-	projectContextPath: string | undefined,
+	contextArtifactPath: string | undefined,
 ): Promise<void> {
 	assertToolExecutionModes(actual, expected.tools);
 	const expectedSnapshot: PiChildRuntimeSnapshot = {
@@ -553,11 +568,11 @@ async function assertRuntimeSnapshot(
 		projectTrusted,
 		sessionId: expectedSessionId,
 		sessionPath,
-		projectContext: projectContextPath === undefined
+		projectContext: contextArtifactPath === undefined
 			? null
 			: {
-				filePath: await realpath(projectContextPath),
-				body: await readFile(projectContextPath, "utf8"),
+				filePath: await realpath(contextArtifactPath),
+				body: await readFile(contextArtifactPath, "utf8"),
 			},
 	};
 	if (JSON.stringify(actual) !== JSON.stringify(expectedSnapshot)) {

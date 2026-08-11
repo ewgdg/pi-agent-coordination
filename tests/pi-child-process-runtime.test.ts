@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -48,6 +48,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
 	let runtime: PiChildProcessRuntime | undefined;
 	let projection: ReturnType<typeof createAdmittedPiChildProcessProjection> | undefined;
+	let contextArtifactPath: string | undefined;
 	try {
 		runtime = await PiChildProcessRuntime.start({
 			workflowId: "process-runtime-test-workflow",
@@ -67,6 +68,10 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 				extensions: [CHILD_EXTENSION],
 			},
 			skillPaths: [],
+			agentsFiles: [{
+				path: "/project/AGENTS.md",
+				content: "Runtime-owned child context",
+			}],
 			projectTrusted: true,
 			ownerEnvironment: {
 				...process.env,
@@ -87,6 +92,9 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			}),
 		});
 		projection = createAdmittedPiChildProcessProjection(runtime);
+		contextArtifactPath = runtime.snapshot.projectContext?.filePath;
+		assert.equal(contextArtifactPath, join(dirname(runtime.bootstrapPath), "context.md"));
+		assert.equal((await stat(contextArtifactPath)).mode & 0o777, 0o600);
 		let projectionChanges = 0;
 		let projectionExits = 0;
 		const projectionFailures: unknown[] = [];
@@ -121,7 +129,21 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			projectTrusted: true,
 			sessionId: expectedSessionId,
 			sessionPath,
-			projectContext: null,
+			projectContext: {
+				filePath: contextArtifactPath,
+				body: [
+					"<project_context>",
+					"",
+					"Project-specific instructions and guidelines:",
+					"",
+					'<project_instructions path="/project/AGENTS.md">',
+					"Runtime-owned child context",
+					"</project_instructions>",
+					"",
+					"</project_context>",
+					"",
+				].join("\n"),
+			},
 		});
 		assert.equal((await stat(runtime.bootstrapPath)).mode & 0o777, 0o600);
 
@@ -291,6 +313,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.deepEqual(projectionFailures, []);
 		assert.throws(() => process.kill(pid, 0), hasProcessCode("ESRCH"));
 		await assert.rejects(lstat(bootstrapPath), hasFsCode("ENOENT"));
+		await assert.rejects(lstat(contextArtifactPath), hasFsCode("ENOENT"));
 	} finally {
 		await projection?.dispose();
 		await runtime?.dispose();
@@ -311,12 +334,21 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 	await mkdir(skillDirectory, { recursive: true });
 	const sessionPath = join(sessionDirectory, "child.jsonl");
 	const skillPath = join(skillDirectory, "SKILL.md");
-	const projectContextPath = join(root, "project-context.md");
+	const agentsFiles = [{
+		path: "/workspace/AGENTS.md",
+		content: "Full rendered agentsFiles artifact.",
+	}] as const;
 	const projectContextBody = [
-		"# Rendered child context",
+		"<project_context>",
 		"",
-		"## /workspace/AGENTS.md",
+		"Project-specific instructions and guidelines:",
+		"",
+		'<project_instructions path="/workspace/AGENTS.md">',
 		"Full rendered agentsFiles artifact.",
+		"</project_instructions>",
+		"",
+		"</project_context>",
+		"",
 	].join("\n");
 	await writeFile(sessionPath, `${JSON.stringify({
 		type: "session",
@@ -332,7 +364,6 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 		"---",
 		"Review the process state.",
 	].join("\n"));
-	await writeFile(projectContextPath, projectContextBody);
 	let runtime: PiChildProcessRuntime | undefined;
 	try {
 		runtime = await PiChildProcessRuntime.start({
@@ -353,11 +384,12 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 				extensions: [CHILD_EXTENSION],
 			},
 			skillPaths: [skillPath],
-			projectContextPath,
+			agentsFiles,
 			projectTrusted: false,
 			ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
 			runtimeDirectory: root,
 		});
+		const projectContextPath = join(dirname(runtime.bootstrapPath), "context.md");
 		assert.deepEqual(runtime.snapshot, {
 			cwd,
 			model: {
@@ -432,6 +464,7 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 				extensions: [CHILD_EXTENSION],
 			},
 			skillPaths: [],
+			agentsFiles: [],
 			projectTrusted: true,
 			ownerEnvironment: {
 				...process.env,
@@ -517,6 +550,7 @@ test("process Runtime Host force-kills a child whose session shutdown never comp
 				extensions: [CHILD_EXTENSION],
 			},
 			skillPaths: [],
+			agentsFiles: [],
 			projectTrusted: true,
 			ownerEnvironment: {
 				...process.env,

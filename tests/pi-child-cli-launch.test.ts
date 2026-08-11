@@ -18,7 +18,7 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 			},
 			skillPaths: ["/skills/review/SKILL.md", "/skills/testing/SKILL.md"],
 			bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
-			projectContextPath: "/runtime/child-project-context.md",
+			contextArtifactPath: "/runtime/child-project-context.md",
 			projectTrusted: true,
 		}),
 		{
