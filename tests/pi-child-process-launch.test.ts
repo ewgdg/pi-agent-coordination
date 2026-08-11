@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
+
+import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
 import {
 	PiChildProcessRuntime,
 	type PiChildProcessLaunch,
@@ -28,8 +31,22 @@ test("launch exposes the real startup PTY frame before runtime admission", {
 	let launch: PiChildProcessLaunch | undefined;
 	try {
 		launch = await PiChildProcessRuntime.launch(options);
-		const readiness = launch.ready();
+		const projection = createPiChildProcessProjection(launch);
+		const readiness = projection.ready();
 		await waitForFrame(launch, "PROCESS_RUNTIME_CHILD_WIDGET");
+		assert.match(
+			projection.presentation.render(80).map(stripTerminalSequences).join("\n"),
+			/PROCESS_RUNTIME_CHILD_WIDGET/,
+		);
+		let changes = 0;
+		projection.addChangeHandler(() => changes += 1);
+		projection.resize(100, 30);
+		projection.dispatchInput("/runtime-probe STARTUP_INPUT_OK\r");
+		assert.deepEqual(
+			{ columns: launch.frame().columns, rows: launch.frame().rows },
+			{ columns: 100, rows: 30 },
+		);
+		assert.ok(changes > 0);
 		assert.equal(
 			await Promise.race([
 				readiness.then(() => "ready" as const),
@@ -38,14 +55,16 @@ test("launch exposes the real startup PTY frame before runtime admission", {
 			"pending",
 		);
 
-		const runtime = await readiness;
+		await readiness;
+		const runtime = await launch.ready();
 		assert.equal(runtime.pid, launch.pid);
 		assert.deepEqual(runtime.ready, {
 			sessionId: options.expectedSessionId,
 			mode: "tui",
 			hasUI: true,
 		});
-		assert.match(frameText(launch), /PROCESS_RUNTIME_CHILD_WIDGET/);
+		await waitForFrame(launch, "INPUT=STARTUP_INPUT_OK");
+		assert.match(frameText(launch), /SIZE=100x30/);
 	} finally {
 		await launch?.dispose();
 	}
@@ -57,7 +76,8 @@ test("cancelling pending launch rejects exact readiness and bounds all startup c
 }, async () => {
 	const options = await createLaunchOptions("startup-cancel", 10_000);
 	const launch = await PiChildProcessRuntime.launch(options);
-	const readiness = launch.ready();
+	const projection = createPiChildProcessProjection(launch);
+	const readiness = projection.ready();
 	void readiness.catch(() => undefined);
 	await waitForFrame(launch, "PROCESS_RUNTIME_CHILD_WIDGET");
 	const bootstrap = JSON.parse(await readFile(launch.bootstrapPath, "utf8")) as {
@@ -66,16 +86,16 @@ test("cancelling pending launch rejects exact readiness and bounds all startup c
 	const pid = launch.pid;
 	const cancellation = new Error("deterministic pending launch cancellation");
 
-	const cleanup = launch.cancelInitialization(cancellation);
+	const cleanup = projection.cancelInitialization(cancellation);
 	assert.ok(cleanup);
-	assert.equal(launch.cancelInitialization(new Error("too late")), undefined);
+	assert.equal(projection.cancelInitialization(new Error("too late")), undefined);
 	await assert.rejects(readiness, (error) => error === cancellation);
 	await cleanup;
 	assert.equal(launch.disposed, true);
 	assert.throws(() => process.kill(pid, 0), hasCode("ESRCH"));
 	await assert.rejects(lstat(launch.bootstrapPath), hasCode("ENOENT"));
 	await assert.rejects(lstat(bootstrap.endpoint.address), hasCode("ENOENT"));
-	await launch.dispose();
+	await projection.dispose();
 });
 
 async function createLaunchOptions(

@@ -7,6 +7,10 @@ import {
 	createAdmittedPiChildProcessProjection,
 	type AdmittedPiChildProjectionRuntime,
 } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
+import {
+	createPiChildProcessProjection,
+	type PiChildProjectionLaunch,
+} from "../src/process-runtime/pi-child-process-projection.ts";
 import type { PiChildRuntimeEvent } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type {
 	PtyExit,
@@ -218,6 +222,25 @@ test("admitted process terminal projection maps terminal operations and events w
 	assert.equal(runtime.disposeCount, 1);
 });
 
+test("hosted child launch observes only the synchronous PTY dispatch idle boundary", async () => {
+	const launch = new FakeLaunch(frameWithText("starting", 8, 3));
+	const projection = createPiChildProcessProjection(launch);
+	assert.equal(projection.ready(), projection.ready());
+	let dispatchIdle: Promise<void> | undefined;
+	launch.observeWrite = () => {
+		assert.equal(projection.isProcessingInput(), true);
+		dispatchIdle = projection.whenInputIdle();
+	};
+
+	projection.dispatchInput("byte-exact");
+	assert.equal(projection.isProcessingInput(), false);
+	assert.ok(dispatchIdle);
+	await dispatchIdle;
+	launch.settleReady();
+	await projection.ready();
+	await projection.dispose();
+});
+
 test("abnormal process exit is both a projection failure and an exit request", async () => {
 	const runtime = new FakeRuntime(frameWithText("failed", 8, 3));
 	const projection = createAdmittedPiChildProcessProjection(runtime);
@@ -257,6 +280,7 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 	readonly #eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
 	#frame: TerminalProjectionFrame;
 	#settleExit!: (exit: PtyExit) => void;
+	observeWrite: (() => void) | undefined;
 	disposeCount = 0;
 	readonly exited = new Promise<PtyExit>((resolve) => this.#settleExit = resolve);
 
@@ -270,6 +294,7 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 
 	writeInput(data: string | Buffer): void {
 		this.inputs.push(typeof data === "string" ? data : data.toString("utf8"));
+		this.observeWrite?.();
 	}
 
 	resize(columns: number, rows: number): void {
@@ -312,5 +337,32 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 
 	settleExit(exit: PtyExit): void {
 		this.#settleExit(exit);
+	}
+}
+
+class FakeLaunch extends FakeRuntime implements PiChildProjectionLaunch {
+	#settleReady!: () => void;
+	#rejectReady!: (error: unknown) => void;
+	#pending = true;
+	readonly #readiness = new Promise<void>((resolve, reject) => {
+		this.#settleReady = resolve;
+		this.#rejectReady = reject;
+	});
+
+	ready(): Promise<void> {
+		return this.#readiness;
+	}
+
+	cancelInitialization(error: unknown): Promise<void> | undefined {
+		if (!this.#pending) return undefined;
+		this.#pending = false;
+		this.#rejectReady(error);
+		return Promise.resolve();
+	}
+
+	settleReady(): void {
+		if (!this.#pending) return;
+		this.#pending = false;
+		this.#settleReady();
 	}
 }
