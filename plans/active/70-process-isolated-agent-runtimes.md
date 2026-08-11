@@ -506,7 +506,7 @@ Future-platform extensibility gate:
 - [x] Committed role-bound immutable Runtime Blueprint evidence for ordinary and Moderator admissions, including exact selected skill sources, trust, and effective context files.
 - [x] Routed coordination through process-neutral Runtime Host intentions and removed live child `AgentSession`/services reach-through from coordination operations.
 - [x] Extracted handler-driven participant coordination tool schemas, renderers, role sets, and registration without changing local receipts.
-- [x] Adapted real child PTY frames to the Terminal Projection surface, including styled/wide cells, cursor presentation, focus, resize, failure/exit, and final-output drain.
+- [x] Adapted real child PTY frames to the Terminal Projection surface, including styled/wide cells, cursor presentation, focus, resize, failure/exit, final-output drain, and owned process-group cleanup.
 - [ ] Finish the internal hosted-Runtime Adapter cut, truthful pre-admission launch projection/cancellation, coordination tool proxying, and Milestones 4–10.
 
 ## Surprises and discoveries
@@ -531,6 +531,7 @@ Future-platform extensibility gate:
 - Make the child process sole transcript authority while live.
 - Reconstruct Pi-owned inline factories locally and remove arbitrary named-inline inheritance.
 - Snapshot file-backed extensions and skill paths automatically; do not introduce user-maintained lists.
+- Resolve Template and resources once before Agent Identity; successor and cold Runtimes reuse that one committed immutable blueprint rather than rerunning mutable Template/resource discovery.
 - Strip Herdr physical-pane ownership through one isolated environment Adapter.
 - Preserve complete TUI behavior and `/agents`; do not replace it with RPC or read-only rendering.
 - Fail closed on protocol/channel loss and recover by starting a fresh process from durable evidence, not by reconnecting.
