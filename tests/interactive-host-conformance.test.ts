@@ -35,6 +35,7 @@ test("child session_start UI side effects stay detached before, during, and afte
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	t.after(() => host.runtime.dispose());
@@ -77,6 +78,7 @@ test("repeated Agent view attachment does not replay either session startup life
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	t.after(() => host.runtime.dispose());
@@ -103,7 +105,10 @@ test("repeated Agent view attachment does not replay either session startup life
 });
 
 test("an open Agent view rejects exact-Run termination and closing permits ordinary termination", async (t) => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		fauxTokensPerSecond: 1,
+	});
 	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Remain live until interactive view retention is released."),
@@ -143,6 +148,7 @@ test("a third-party child-view command remains unique and does not interfere wit
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	t.after(() => host.runtime.dispose());
@@ -180,7 +186,10 @@ test("the named llama.cpp extension remains usable through child startup and shu
 	process.env.LLAMA_BASE_URL = router.baseUrl;
 	process.env.LLAMA_API_KEY = "local-conformance-key";
 	hostPi.initTheme();
-	const host = await createPiCliTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createPiCliTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		fauxTokensPerSecond: 1,
+	});
 	try {
 		const ownerSession = host.runtime.session;
 		const sharedModelRuntime = host.services.modelRuntime;
