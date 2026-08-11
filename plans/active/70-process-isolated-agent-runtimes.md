@@ -509,7 +509,9 @@ Future-platform extensibility gate:
 - [x] Extracted handler-driven participant coordination tool schemas, renderers, role sets, and registration without changing local receipts.
 - [x] Adapted real child PTY frames to the Terminal Projection surface, including styled/wide cells, cursor presentation, focus, resize, failure/exit, final-output drain, and owned process-group cleanup.
 - [x] Finished the Control-backed hosted-Runtime Adapter and truthful pre-admission projection/cancellation, including exact Run targeting, durable Delivery commit proof, terminal channel/exit failure synthesis, and ordered queue intentions.
-- [ ] Finish awaited participant lifecycle and coordination tool proxying, then ordinary/Moderator process cutover and Milestones 4–10.
+- [x] Added awaited child→Owner participant lifecycle and role-exact coordination tool RPC, cancellation, exact resource/context/session handshake evidence, and synchronous tool-batch classification.
+- [x] Removed `SessionManager` from the common Runtime supervisor and added a process-visible deterministic model broker for real child tests.
+- [ ] Cut ordinary and Moderator creation/recovery to the process-only factory, reproduce Herdr settlement, then remove obsolete embedded-child machinery.
 
 ## Surprises and discoveries
 
