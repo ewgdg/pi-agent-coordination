@@ -350,7 +350,7 @@ export class InProcessAgentHost implements AgentRuntimeHost {
 		run.expectedInterruption = true;
 		this.#interrupting = true;
 		try {
-			const cleared = run.runtime.clearQueue();
+			const cleared = await run.runtime.clearQueue();
 			if (
 				cleared.steering.length > 0 ||
 				cleared.followUp.length > 0 ||

@@ -1,0 +1,55 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+
+import { InProcessAgentHost } from "../src/runtime/in-process-agent-host.ts";
+import type { HostedAgentRuntime } from "../src/runtime/hosted-agent-runtime.ts";
+
+const snapshot = {
+	cwd: "/runtime/project",
+	model: { provider: "test", modelId: "model" },
+	thinking: "off" as const,
+	tools: [],
+	skills: [],
+	fileExtensionPaths: [],
+	projectTrusted: true,
+	sessionId: "async-clear-runtime",
+};
+
+test("the common Runtime Host awaits remote queue clearing before aborting", async () => {
+	const calls: string[] = [];
+	let workState: "active" | "settled" = "active";
+	const runtime = {
+		projection: undefined,
+		snapshot: () => snapshot,
+		workState: () => workState,
+		queuedInputCount: () => 1,
+		classifyToolBatch: () => "asynchronous" as const,
+		cancellationSignal: () => new AbortController().signal,
+		deliver: () => ({ completion: Promise.resolve() }),
+		continueFromCommittedInput: async () => undefined,
+		subscribe: () => () => undefined,
+		async clearQueue() {
+			calls.push("clear:start");
+			await new Promise((resolve) => setImmediate(resolve));
+			calls.push("clear:end");
+			return { steering: ["queued direction"], followUp: [] };
+		},
+		async abort() {
+			calls.push("abort");
+			workState = "settled";
+		},
+		waitForIdle: async () => undefined,
+		dispose: async () => undefined,
+	} as unknown as HostedAgentRuntime;
+	const host = InProcessAgentHost.createChild({
+		sessionManager: SessionManager.inMemory(),
+		startSession: async () => ({ runtime }),
+	});
+	await host.lane.run(() => host.startInLane());
+
+	assert.equal(await host.lane.run(() => host.interruptCurrentRunInLane()), "held");
+	assert.deepEqual(calls, ["clear:start", "clear:end", "abort"]);
+	assert.equal(host.queuedInputCount(), 2);
+});

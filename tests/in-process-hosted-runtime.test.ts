@@ -94,7 +94,7 @@ test("InProcessHostedRuntime translates Pi lifecycle and owns Pi intentions", as
 	assert.equal(runtime.classifyToolBatch(["read"]), "asynchronous");
 	assert.equal(runtime.classifyToolBatch(["read", "sequential"]), "blocking");
 	assert.equal(runtime.cancellationSignal(), cancellation.signal);
-	assert.deepEqual(runtime.clearQueue(), {
+	assert.deepEqual(await runtime.clearQueue(), {
 		steering: ["steer"],
 		followUp: ["follow-up"],
 	});

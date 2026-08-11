@@ -31,7 +31,7 @@ export interface HostedAgentRuntime {
 	): AgentRuntimeDeliveryDispatch;
 	continueFromCommittedInput(): Promise<void>;
 	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void;
-	clearQueue(): Readonly<{ steering: string[]; followUp: string[] }>;
+	clearQueue(): Promise<Readonly<{ steering: string[]; followUp: string[] }>>;
 	abort(): Promise<void>;
 	waitForIdle(): Promise<void>;
 	dispose(): Promise<void>;

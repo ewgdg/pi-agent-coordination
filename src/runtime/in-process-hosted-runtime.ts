@@ -120,7 +120,7 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		});
 	}
 
-	clearQueue(): Readonly<{ steering: string[]; followUp: string[] }> {
+	async clearQueue(): Promise<Readonly<{ steering: string[]; followUp: string[] }>> {
 		return this.#session.clearQueue();
 	}
 
