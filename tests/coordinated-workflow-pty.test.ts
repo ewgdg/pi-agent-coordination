@@ -569,13 +569,13 @@ test("real Pi CLI can return to Owner and attach the same Agent again", {
 		terminal.write("Create one Agent with agent_spawn. Use label CLI Repeat Worker and request: Remain available for repeated CLI Agent view attachment.\r");
 		await terminal.waitFor("CLI worker is ready for");
 
-		await attachCliRepeatWorker(terminal, "CLI child first attachment input");
+		await attachCliRepeatWorker(terminal, "CLI child first attachment input", false);
 		await returnPtyAgentViewToOwner(terminal);
 		await terminal.waitForScreen((frame) =>
 			!frame.some((line) => line.includes("Tab views")) &&
 			frame.some((line) => line.includes("deterministic-owner"))
 		);
-		await attachCliRepeatWorker(terminal, "CLI child second attachment input");
+		await attachCliRepeatWorker(terminal, "CLI child second attachment input", true);
 		await returnPtyAgentViewToOwner(terminal);
 		await terminal.waitForScreen((frame) =>
 			!frame.some((line) => line.includes("Tab views")) &&
@@ -680,6 +680,7 @@ test("interactive /resume retains the compact historical agent_spawn renderer", 
 async function attachCliRepeatWorker(
 	terminal: PtyFixture,
 	input: string,
+	expectDormantStartupSpinner: boolean,
 ): Promise<void> {
 	const deadline = Date.now() + PTY_WAIT_TIMEOUT_MS;
 	let selector: readonly string[] | undefined;
@@ -714,6 +715,13 @@ async function attachCliRepeatWorker(
 		frame.some((line) => line.includes("→ CLI Repeat Worker"))
 	);
 	terminal.write("\r");
+	if (expectDormantStartupSpinner) {
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				/→ CLI Repeat Worker\s+[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] loading/.test(line)
+			) && frame.some((line) => line.includes("Tab views"))
+		);
+	}
 	await terminal.waitForScreen((frame) =>
 		frame.some((line) => line.includes("CLI worker is ready for repeated attachment.")) &&
 		!frame.some((line) => line.includes("Tab views"))
