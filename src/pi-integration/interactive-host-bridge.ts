@@ -24,6 +24,10 @@ type HostModule = {
 
 export type InteractiveCapture = Readonly<{
 	runtime: AgentSessionRuntime;
+	observeInputLifecycle(observer: Readonly<{
+		started(): Promise<void>;
+		completed(): Promise<void>;
+	}>): void;
 	reinitializePresentation(): void;
 }>;
 
@@ -108,6 +112,10 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 			}
 			const sessionManager = runtime.session.sessionManager;
 			const interactive = this as {
+				observeInputLifecycle?: Readonly<{
+					started(): Promise<void>;
+					completed(): Promise<void>;
+				}>;
 				ui: {
 					stop(options?: { preserveScreen?: boolean }): void;
 					start(): void;
@@ -116,6 +124,12 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 			};
 			const capture = {
 				runtime,
+				observeInputLifecycle(observer: Readonly<{
+					started(): Promise<void>;
+					completed(): Promise<void>;
+				}>) {
+					interactive.observeInputLifecycle = observer;
+				},
 				reinitializePresentation() {
 					// Restarting the exact child TUI makes Pi itself replay terminal modes
 					// and a complete frame when physical attachment changes.

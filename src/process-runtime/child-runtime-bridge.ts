@@ -1,3 +1,5 @@
+import "./child-runtime-interactive-mode.ts";
+
 import * as hostPi from "@earendil-works/pi-coding-agent";
 import type {
 	AgentSession,
@@ -183,6 +185,11 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			ctx.sessionManager,
 			createParticipantInputHandler(participantLifecycle),
 		);
+		const inputLifecycle = {
+			started: () => currentState.channel.sendEvent("runtime.input.started", {}),
+			completed: () => currentState.channel.sendEvent("runtime.input.completed", {}),
+		};
+		capture.observeInputLifecycle(inputLifecycle);
 		const channel = currentState.channel;
 		try {
 			assertExpectedSession(binding.runtime, bootstrap);

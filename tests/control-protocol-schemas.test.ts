@@ -88,6 +88,8 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.deepEqual(Object.keys(agentControlEvents), [
 		"runtime.ready",
 		"runtime.snapshot.changed",
+		"runtime.input.started",
+		"runtime.input.completed",
 		"agent.start",
 		"agent.end",
 		"agent.settled",
@@ -105,6 +107,8 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, { extra: true }), false);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.unknown"), false);
 	assert.equal(Check(AgentControlEventSchema, "runtime.snapshot.changed"), true);
+	assert.equal(Check(AgentControlEventSchema, "runtime.input.started"), true);
+	assert.equal(Check(AgentControlEventSchema, "runtime.input.completed"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.settled"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.unknown"), false);
 	for (const definition of Object.values(agentControlMethods)) {

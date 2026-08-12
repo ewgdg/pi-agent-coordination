@@ -11,10 +11,10 @@ export type PiChildProjectionLaunch = AdmittedPiChildProjectionRuntime & Readonl
 
 /**
  * Project one live child launch before and after exact Runtime admission.
- * Input-idle begins at PTY dispatch and ends when the child's ordered Control
- * stream admits the resulting Agent Run. Keeping the edge here lets Runtime
- * release wait without exposing PTY or Control details above the projection
- * boundary.
+ * Child input-idle follows explicit interactive lifecycle events. PTY dispatch
+ * remains byte-transparent, so embedded newlines in bracketed paste cannot be
+ * mistaken for submission. Keeping the edge here lets Runtime release wait
+ * without exposing PTY or Control details above the projection boundary.
  */
 export function createPiChildProcessProjection(
 	launch: PiChildProjectionLaunch,
@@ -25,17 +25,30 @@ export function createPiChildProcessProjection(
 	let processingInput = false;
 	let inputIdle = Promise.resolve();
 	let settleInputIdle: (() => void) | undefined;
-	let inputSubmissionPending = false;
-	let acceptanceDispatch: Promise<void> | undefined;
+	let childInputActive = false;
+	let dispatchSettlement: Promise<void> | undefined;
 	const finishInput = () => {
-		inputSubmissionPending = false;
+		childInputActive = false;
 		processingInput = false;
 		settleInputIdle?.();
 		settleInputIdle = undefined;
 	};
 	const removeRuntimeEventHandler = launch.onEvent((event) => {
-		if (!inputSubmissionPending || event.event !== "agent.start") return;
-		finishInput();
+		if (event.event === "runtime.input.started") {
+			childInputActive = true;
+			processingInput = true;
+			if (!settleInputIdle) {
+				inputIdle = new Promise<void>((resolve) => {
+					settleInputIdle = resolve;
+				});
+			}
+			return;
+		}
+		if (event.event === "runtime.input.completed") {
+			finishInput();
+			return;
+		}
+		if (childInputActive && event.event === "agent.start") finishInput();
 	});
 
 	return Object.freeze({
@@ -49,15 +62,12 @@ export function createPiChildProcessProjection(
 					settleInputIdle = resolve;
 				});
 			}
-			if (containsInputSubmission(data)) {
-				inputSubmissionPending = true;
-			}
 			try {
 				terminal.dispatchInput(data);
 			} finally {
-				acceptanceDispatch ??= Promise.resolve().then(() => {
-					acceptanceDispatch = undefined;
-					if (inputSubmissionPending) return;
+				dispatchSettlement ??= Promise.resolve().then(() => {
+					dispatchSettlement = undefined;
+					if (childInputActive) return;
 					finishInput();
 				});
 			}
@@ -76,9 +86,4 @@ export function createPiChildProcessProjection(
 			await terminal.dispose();
 		},
 	});
-}
-
-function containsInputSubmission(data: string | Buffer): boolean {
-	const text = typeof data === "string" ? data : data.toString("utf8");
-	return text.includes("\r") || text.includes("\n");
 }

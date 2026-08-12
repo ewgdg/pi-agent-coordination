@@ -249,17 +249,54 @@ test("hosted child launch keeps submitted PTY input active until Agent Run admis
 	};
 
 	projection.dispatchInput("byte-exact\r");
-	assert.equal(projection.isProcessingInput(), true);
 	assert.ok(dispatchIdle);
+	launch.notifyEvent({
+		event: "runtime.input.started",
+		payload: {},
+		sequence: 1,
+	});
+	assert.equal(projection.isProcessingInput(), true);
 	launch.notifyEvent({
 		event: "agent.start",
 		payload: { runId: "native-1", queuedInputCount: 0 },
-		sequence: 1,
+		sequence: 2,
 	});
 	assert.equal(projection.isProcessingInput(), false);
 	await dispatchIdle;
 	launch.settleReady();
 	await projection.ready();
+	await projection.dispose();
+});
+
+test("hosted child launch settles handled input without an Agent Run", async () => {
+	const launch = new FakeLaunch(frameWithText("starting", 8, 3));
+	const projection = createPiChildProcessProjection(launch);
+
+	projection.dispatchInput("handled\r");
+	const inputIdle = projection.whenInputIdle();
+	launch.notifyEvent({
+		event: "runtime.input.started",
+		payload: {},
+		sequence: 1,
+	});
+	assert.equal(projection.isProcessingInput(), true);
+	launch.notifyEvent({
+		event: "runtime.input.completed",
+		payload: {},
+		sequence: 2,
+	});
+	await inputIdle;
+	assert.equal(projection.isProcessingInput(), false);
+	await projection.dispose();
+});
+
+test("hosted child launch does not treat multiline paste data as submission", async () => {
+	const launch = new FakeLaunch(frameWithText("starting", 8, 3));
+	const projection = createPiChildProcessProjection(launch);
+
+	projection.dispatchInput("\u001b[200~first\nsecond\u001b[201~");
+	await projection.whenInputIdle();
+	assert.equal(projection.isProcessingInput(), false);
 	await projection.dispose();
 });
 

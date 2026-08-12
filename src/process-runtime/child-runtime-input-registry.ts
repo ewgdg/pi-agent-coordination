@@ -16,8 +16,8 @@ const globalChildRuntimeInputRegistry = globalThis as typeof globalThis & {
 	[CHILD_RUNTIME_INPUT_REGISTRY_KEY]?: ChildRuntimeInputRegistry;
 };
 
-// Bridge and tail-input extensions are separate Pi extension entries but share
-// one process and retained AgentSession across /reload.
+// Bridge and tail-input extensions share one process and retained AgentSession
+// across /reload.
 export const childRuntimeInputs = (
 	globalChildRuntimeInputRegistry[CHILD_RUNTIME_INPUT_REGISTRY_KEY] ??= new WeakMap()
 );

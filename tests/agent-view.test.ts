@@ -626,6 +626,23 @@ test("a handled Dormant Agent input can return to Owner after prompt preflight",
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
 		(entry) => entry.kind === "input_preflight_finished",
 	));
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionShutdowns(entries, agentId).length === 2
+	);
+	const handledRuntime = childProcessSessionStarts(
+		await readProcessAgentViewEvidence(probe.evidencePath),
+		agentId,
+	).at(-1);
+	assert.ok(handledRuntime);
+	await waitForCondition(() => {
+		try {
+			process.kill(handledRuntime.pid, 0);
+			return false;
+		} catch (error) {
+			return (error as NodeJS.ErrnoException).code === "ESRCH";
+		}
+	});
+	assertProcessExited(handledRuntime.pid);
 	assert.equal(host.ui.customSurfaces.length, 0);
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
 });
