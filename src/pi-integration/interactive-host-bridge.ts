@@ -22,8 +22,9 @@ type HostModule = {
 	};
 };
 
-type InteractiveCapture = Readonly<{
+export type InteractiveCapture = Readonly<{
 	runtime: AgentSessionRuntime;
+	reinitializePresentation(): void;
 }>;
 
 type RuntimeWaiter = {
@@ -106,7 +107,23 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 				throw error;
 			}
 			const sessionManager = runtime.session.sessionManager;
-			const capture = { runtime };
+			const interactive = this as {
+				ui: {
+					stop(options?: { preserveScreen?: boolean }): void;
+					start(): void;
+					requestRender(force?: boolean): void;
+				};
+			};
+			const capture = {
+				runtime,
+				reinitializePresentation() {
+					// Restarting the exact child TUI makes Pi itself replay terminal modes
+					// and a complete frame when physical attachment changes.
+					interactive.ui.stop({ preserveScreen: true });
+					interactive.ui.start();
+					interactive.ui.requestRender(true);
+				},
+			};
 			// TUI binding is Pi's first mode-specific seam. The WeakMap association
 			// cannot retain a failed or disposed Owner session by itself.
 			state.capturesBySessionManager.set(sessionManager, capture);

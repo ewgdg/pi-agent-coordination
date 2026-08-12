@@ -9,7 +9,6 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 	readonly #changeHandlers = new Set<() => void>();
 	readonly #closeHandlers = new Set<() => void>();
 	#projection: TerminalProjection;
-	#removeProjectionChangeHandler: () => void;
 	#closed = false;
 
 	constructor(options: {
@@ -24,9 +23,6 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 		this.#projection = options.projection;
 		this.#requestClose = options.requestClose;
 		this.#reportFailure = options.reportFailure;
-		this.#removeProjectionChangeHandler = this.#observeProjection(
-			options.projection,
-		);
 	}
 
 	get agentId(): string {
@@ -71,27 +67,18 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 		projection: TerminalProjection;
 	}): void {
 		if (this.#closed) return;
-		this.#removeProjectionChangeHandler();
 		this.#agentId = options.agentId;
 		this.#label = options.label;
 		this.#projection = options.projection;
-		this.#removeProjectionChangeHandler = this.#observeProjection(
-			options.projection,
-		);
 		this.#notifyChanged();
 	}
 
 	settleClosed(): void {
 		if (this.#closed) return;
 		this.#closed = true;
-		this.#removeProjectionChangeHandler();
 		this.#changeHandlers.clear();
 		for (const handler of this.#closeHandlers) handler();
 		this.#closeHandlers.clear();
-	}
-
-	#observeProjection(projection: TerminalProjection): () => void {
-		return projection.addChangeHandler(() => this.#notifyChanged());
 	}
 
 	#notifyChanged(): void {

@@ -70,6 +70,10 @@ export interface PtyTerminalProjection {
 	frame(): TerminalProjectionFrame;
 	addChangeHandler(handler: () => void): () => void;
 	addFailureHandler(handler: (error: unknown) => void): () => void;
+	addOutputHandler(handler: (data: string) => void): () => void;
+	setPhysicalTerminalAttached(attached: boolean): void;
+	pauseOutput(): void;
+	resumeOutput(): void;
 	writeInput(data: string | Buffer): void;
 	resize(columns: number, rows: number): void;
 	kill(signal: NodeJS.Signals): void;
@@ -113,6 +117,8 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	readonly #drainWaiters = new Set<() => void>();
 	readonly #changeHandlers = new Set<() => void>();
 	readonly #failureHandlers = new Set<(error: unknown) => void>();
+	readonly #outputHandlers = new Set<(data: string) => void>();
+	#physicalTerminalAttached = false;
 	#cursorVisible = true;
 	#cursorStyle: TerminalCursorStyle = "block";
 	#cursorBlink = false;
@@ -220,6 +226,27 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		return () => this.#failureHandlers.delete(handler);
 	}
 
+	addOutputHandler(handler: (data: string) => void): () => void {
+		if (this.#disposed) return () => undefined;
+		this.#outputHandlers.add(handler);
+		return () => this.#outputHandlers.delete(handler);
+	}
+
+	setPhysicalTerminalAttached(attached: boolean): void {
+		this.#requireActive();
+		this.#physicalTerminalAttached = attached;
+	}
+
+	pauseOutput(): void {
+		this.#requireActive();
+		this.#child.pause();
+	}
+
+	resumeOutput(): void {
+		this.#requireActive();
+		this.#child.resume();
+	}
+
 	writeInput(data: string | Buffer): void {
 		this.#requireWritable();
 		try {
@@ -272,6 +299,13 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 
 	#parseOutput(data: string): void {
 		if (this.#disposed) return;
+		for (const handler of this.#outputHandlers) {
+			try {
+				handler(data);
+			} catch (error) {
+				this.#notifyFailure(error);
+			}
+		}
 		this.#pendingWrites += 1;
 		try {
 			this.#terminal.write(data, () => {
@@ -285,7 +319,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	}
 
 	#writeGeneratedReply(data: string | Buffer): void {
-		if (this.#disposed || this.#exitObserved) return;
+		if (this.#disposed || this.#exitObserved || this.#physicalTerminalAttached) return;
 		try {
 			this.#child.write(data);
 		} catch (error) {
@@ -373,6 +407,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			this.#subscriptions.length = 0;
 			this.#changeHandlers.clear();
 			this.#failureHandlers.clear();
+			this.#outputHandlers.clear();
 			this.#terminal.dispose();
 			if (processGroupCleanupError) throw processGroupCleanupError;
 		}

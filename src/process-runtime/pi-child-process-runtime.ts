@@ -350,6 +350,26 @@ export class PiChildProcessRuntime {
 		return this.#projection.addFailureHandler(handler);
 	}
 
+	addOutputHandler(handler: (data: string) => void): () => void {
+		return this.#projection.addOutputHandler(handler);
+	}
+
+	setPhysicalTerminalAttached(attached: boolean): void {
+		this.#projection.setPhysicalTerminalAttached(attached);
+	}
+
+	pauseOutput(): void {
+		this.#projection.pauseOutput();
+	}
+
+	resumeOutput(): void {
+		this.#projection.resumeOutput();
+	}
+
+	reinitializePresentation(): Promise<void> {
+		return this.channel.request("presentation.reinitialize", {}).then(() => undefined);
+	}
+
 	writeInput(data: string | Buffer): void {
 		this.#projection.writeInput(data);
 	}
@@ -496,6 +516,26 @@ export class PiChildProcessLaunch {
 
 	addFailureHandler(handler: (error: unknown) => void): () => void {
 		return this.#projection.addFailureHandler(handler);
+	}
+
+	addOutputHandler(handler: (data: string) => void): () => void {
+		return this.#projection.addOutputHandler(handler);
+	}
+
+	setPhysicalTerminalAttached(attached: boolean): void {
+		this.#projection.setPhysicalTerminalAttached(attached);
+	}
+
+	pauseOutput(): void {
+		this.#projection.pauseOutput();
+	}
+
+	resumeOutput(): void {
+		this.#projection.resumeOutput();
+	}
+
+	reinitializePresentation(): Promise<void> {
+		return this.#readiness.then((runtime) => runtime.reinitializePresentation());
 	}
 
 	writeInput(data: string | Buffer): void {

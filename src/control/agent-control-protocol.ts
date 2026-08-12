@@ -538,6 +538,10 @@ export const agentControlMethods = {
 		request: AgentSelectorActionSchema,
 		response: EmptyResponseSchema,
 	},
+	"presentation.reinitialize": {
+		request: EmptySchema,
+		response: EmptyResponseSchema,
+	},
 	"run.prompt": {
 		request: closed({
 			runId: NonEmptyStringSchema,

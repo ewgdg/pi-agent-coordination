@@ -26,6 +26,7 @@ export function createPiChildProcessProjection(
 
 	return Object.freeze({
 		presentation: terminal.presentation,
+		physicalTerminal: terminal.physicalTerminal,
 		resize: terminal.resize,
 		dispatchInput(data) {
 			processingInput = true;

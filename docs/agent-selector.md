@@ -28,13 +28,13 @@ The selector keeps focus while the Runtime is prepared. Its mode is attached bef
 
 ## Full-window Agent view
 
-The outer overlay adds no fixed header. It presents the child mode's complete Pi fullscreen frame: transcript, pending and working state, tool rendering, widgets, editor, footer, notifications, selectors, dialogs, and child-local extension overlays.
+The attachment adds no fixed header. It suspends Owner rendering and presents the selected child PTY directly, so the physical terminal receives the child mode's complete native Pi fullscreen output: transcript, pending and working state, tool rendering, widgets, editor, footer, notifications, selectors, dialogs, and child-local extension overlays.
 
 A scoped activity dock lives inside the native above-editor widget area. For a selected non-Owner Agent, its first row is `label · compact Agent ID · status`; the label is accented and bold, the identity is dim, and only the status receives its semantic status color. Rendered statuses are lowercase: `dormant` when no exact Run exists, `active` while a Run executes work, `idle` when a current Run is settled, `waiting` with a named reason when progress needs human input, an Agent answer, or resumption, and `starting`, `ending`, or `failed` during those lifecycle conditions. While the selected Agent awaits a Human Answer, the dock also shows `ANSWER · Enter submits` directly above the unchanged native editor.
 
 With Owner selected, the dock shows the Owner-only Attention Inbox before Owner's direct children that have a current Run. With another Agent selected, it shows only that Agent's identity and direct children that have a current Run. Starting, live, and ending child rows stay in creation order and project Run state, attention, model/thinking configuration, and queued-input count. Dormant Agents remain available through `/agents` but do not appear in the activity dock. Human `DECIDE` and exhausted operational `ATTENTION` occur only in the Owner dock; `/agents` retains their existing actions.
 
-All input is routed through the child TUI's detached terminal. Printable text, paste, completion, commands, extension shortcuts, custom editors, and focused child overlays behave as they do in native Pi. The outer view does not steal Escape; custom editors such as pi-vim keep their normal Escape semantics.
+All input is routed directly to the selected child PTY. Printable text, paste, completion, commands, extension shortcuts, custom editors, and focused child overlays behave as they do in native Pi. The attachment does not steal Escape; custom editors such as pi-vim keep their normal Escape semantics.
 
 `/agents` remains available inside the child mode:
 
@@ -42,7 +42,7 @@ All input is routed through the child TUI's detached terminal. Printable text, p
 - select another Agent to retarget the same full-window attachment without exposing the Owner editor; or
 - select the current Agent to keep the existing mode.
 
-Pi's fullscreen transcript viewport and editor dock coexist. Page Up/Page Down, Home/End, configured prompt navigation, and mouse scrolling move the transcript while the editor remains available. At the tail, new output follows automatically. Scrolling away preserves the inspected region until the native end action restores tail following. Resize updates the detached terminal and reflows the complete child frame within the available rows.
+Pi's fullscreen transcript viewport and editor dock coexist. Page Up/Page Down, Home/End, configured prompt navigation, and mouse scrolling move the transcript while the editor remains available. At the tail, new output follows automatically. Scrolling away preserves the inspected region until the native end action restores tail following. Resize updates the selected PTY and lets the child TUI reflow its complete native frame within the available rows.
 
 A terminally failed selected Run leaves the same Agent Runtime and full-window view in place while the Agent becomes Dormant. The failed transcript remains visible. Explicit input, extension effects, or ordinary coordination may activate a successor in that Runtime without replacing the projection. Switching or Workflow-driven disposal settles the attachment once, removes Runtime retention, and restores the untouched Owner when appropriate.
 

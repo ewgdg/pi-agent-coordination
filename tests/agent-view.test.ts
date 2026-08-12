@@ -43,7 +43,7 @@ const PROCESS_AGENT_VIEW_PROBE = fileURLToPath(
 	new URL("./fixtures/process-agent-view-probe-extension.ts", import.meta.url),
 );
 
-test("/agents presents the live Agent's complete interactive mode while Owner stays bound", async (t) => {
+test("/agents presents the live Agent's native interactive mode while Owner stays bound", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "interactive");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
@@ -91,18 +91,18 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 	});
 
 	const { command, view } = await openSelectedAgentView(host, agentId);
-	await waitForCondition(() =>
-		stripTerminalSequences(view.render(80).join("\n"))
-			.replace(/\s+/g, "")
-			.includes("Thechildisreadyfordirectinteractiveinput")
-	);
+	await waitForCondition(() => {
+		const frame = stripTerminalSequences(view.render(80).join("\n"));
+		return frame.replace(/\s+/g, "").includes(
+			"Thechildisreadyfordirectinteractiveinput",
+		) && frame.includes(`Agent footer · ${agentId}`);
+	});
 	const rendered = stripTerminalSequences(view.render(80).join("\n"));
 	assert.match(rendered, /Viewed Worker/);
 	assert.match(rendered, new RegExp(agentId.slice(-8)));
 	assert.match(rendered, new RegExp(`Agent editor · ${agentId}`));
 	assert.match(rendered, new RegExp(`Agent footer · ${agentId}`));
 	assert.match(rendered, new RegExp(`Agent widget · ${agentId}`));
-	assert.match(rendered, new RegExp(`Agent notification · ${agentId}`));
 	assert.match(
 		rendered.replace(/\s+/g, ""),
 		/Thechildisreadyfordirectinteractiveinput/,
@@ -120,7 +120,7 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 	assert.equal(nativeRebinds, 0);
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), true);
 
-	for (const character of "/agent-view-probe") view.handleInput?.(character);
+	view.handleInput?.("/agent-view-probe");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
@@ -173,7 +173,7 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 	assert.equal(host.ui.statuses.get("owner-peer-status"), "Owner Peer");
 	assert.equal(nativeRebinds, 0);
 
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
@@ -255,7 +255,7 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 	await host.session.waitForIdle();
 });
 
-test("a real child render failure returns a bounded frame and restores Owner input", async (t) => {
+test("a real child render failure closes the view and restores Owner input", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "failure-render");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
@@ -291,20 +291,10 @@ test("a real child render failure returns a bounded frame and restores Owner inp
 		childProcessSessionStarts(entries, agentId).length === 2
 	);
 
-	view.handleInput?.("x");
-	let failedFrame: string[] = [];
-	assert.doesNotThrow(() => {
-		failedFrame = view.render(80);
-	});
+	assert.doesNotThrow(() => view.handleInput?.("x"));
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.filter(
 		(entry) => entry.kind === "failure_trigger" && entry.failureKind === "render" && entry.pid !== process.pid,
 	).length === 1);
-	await waitForCondition(() => {
-		assert.doesNotThrow(() => {
-			failedFrame = view.render(80);
-		});
-		return failedFrame.join("\n").includes("Agent view failed; returning to Owner");
-	});
 	await command;
 	assert.equal(host.ui.customSurfaces.length, 0);
 	assert.equal(host.runtime.session, ownerSession);
@@ -466,7 +456,7 @@ test("an unexpected child-process exit closes the exact selected view", async (t
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
 		childProcessSessionStarts(entries, agentId).length === 2
 	);
-	for (const character of "/exit-agent-process") view.handleInput?.(character);
+	view.handleInput?.("/exit-agent-process");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("/exit-agent-process")
 	);
@@ -652,7 +642,7 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	assert.equal(successorModelRequests, 0);
 
-	for (const character of "/mark-dormant-view") view.handleInput?.(character);
+	view.handleInput?.("/mark-dormant-view");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
@@ -699,7 +689,7 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 	);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
 
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
@@ -766,9 +756,7 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 		(passiveTermination.details as { disposition: string }).disposition,
 		"not_running",
 	);
-	for (const character of "/wake-dormant-agent") {
-		opened.view.handleInput?.(character);
-	}
+	opened.view.handleInput?.("/wake-dormant-agent");
 	opened.view.handleInput?.("\r");
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, agentId)).includes(
@@ -1120,14 +1108,14 @@ test("/agents switches the mounted durable view between independent child modes"
 			`Independent shortcut · ${firstAgentId}`,
 		)
 	);
-	for (const character of "/mark-independent-view") view.handleInput?.(character);
+	view.handleInput?.("/mark-independent-view");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
 			`Independent widget · ${firstAgentId}`,
 		)
 	);
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
@@ -1144,7 +1132,7 @@ test("/agents switches the mounted durable view between independent child modes"
 	assert.match(secondFrame, new RegExp(`Independent footer · ${secondAgentId}`));
 	assert.doesNotMatch(secondFrame, new RegExp(`Independent widget · ${firstAgentId}`));
 	assert.doesNotMatch(secondFrame, new RegExp(`Independent shortcut · ${firstAgentId}`));
-	for (const character of "/mark-independent-view") view.handleInput?.(character);
+	view.handleInput?.("/mark-independent-view");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
@@ -1152,7 +1140,7 @@ test("/agents switches the mounted durable view between independent child modes"
 		)
 	);
 
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
@@ -1173,7 +1161,7 @@ test("/agents switches the mounted durable view between independent child modes"
 		new RegExp(`Independent widget · ${secondAgentId}`),
 	);
 
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
@@ -1614,7 +1602,7 @@ async function returnAgentViewToOwner(
 	view: Component,
 	command: Promise<void>,
 ): Promise<void> {
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("/agents")
 	);

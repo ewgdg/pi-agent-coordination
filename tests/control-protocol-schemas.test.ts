@@ -77,6 +77,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		"coordination.moderatorControl",
 		"presentation.agents.snapshot",
 		"presentation.agents.select",
+		"presentation.reinitialize",
 		"run.prompt",
 		"message.deliver",
 		"run.continue",
@@ -98,6 +99,9 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.equal(Check(AgentControlMethodSchema, "run.continue"), true);
 	assert.equal(Check(AgentControlMethodSchema, "queue.clear"), true);
 	assert.equal(Check(AgentControlMethodSchema, "run.interrupt"), true);
+	assert.equal(Check(AgentControlMethodSchema, "presentation.reinitialize"), true);
+	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, {}), true);
+	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, { extra: true }), false);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.unknown"), false);
 	assert.equal(Check(AgentControlEventSchema, "agent.settled"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.unknown"), false);

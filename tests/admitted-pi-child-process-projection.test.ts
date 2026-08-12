@@ -198,6 +198,22 @@ test("admitted process terminal projection maps terminal operations and events w
 	assert.deepEqual(runtime.inputs, [input]);
 	projection.focusEditor();
 	assert.deepEqual(runtime.inputs, [input]);
+	const physicalOutput: string[] = [];
+	const removeOutputHandler = projection.physicalTerminal.addOutputHandler((data) => {
+		physicalOutput.push(data);
+	});
+	projection.physicalTerminal.setAttached(true);
+	projection.physicalTerminal.pauseOutput();
+	projection.physicalTerminal.resumeOutput();
+	runtime.notifyOutput("raw-output");
+	await projection.physicalTerminal.reinitializePresentation();
+	projection.physicalTerminal.setAttached(false);
+	removeOutputHandler();
+	assert.deepEqual(physicalOutput, ["raw-output"]);
+	assert.deepEqual(runtime.physicalAttachmentStates, [true, false]);
+	assert.equal(runtime.pauseOutputCount, 1);
+	assert.equal(runtime.resumeOutputCount, 1);
+	assert.equal(runtime.reinitializePresentationCount, 1);
 
 	runtime.notifyChange();
 	const terminalFailure = new Error("terminal parser failed");
@@ -277,7 +293,12 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 	readonly resizes: Array<{ columns: number; rows: number }> = [];
 	readonly #changeHandlers = new Set<() => void>();
 	readonly #failureHandlers = new Set<(error: unknown) => void>();
+	readonly #outputHandlers = new Set<(data: string) => void>();
 	readonly #eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+	readonly physicalAttachmentStates: boolean[] = [];
+	pauseOutputCount = 0;
+	resumeOutputCount = 0;
+	reinitializePresentationCount = 0;
 	#frame: TerminalProjectionFrame;
 	#settleExit!: (exit: PtyExit) => void;
 	observeWrite: (() => void) | undefined;
@@ -313,6 +334,28 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 		return () => this.#failureHandlers.delete(handler);
 	}
 
+	addOutputHandler(handler: (data: string) => void): () => void {
+		this.#outputHandlers.add(handler);
+		return () => this.#outputHandlers.delete(handler);
+	}
+
+	setPhysicalTerminalAttached(attached: boolean): void {
+		this.physicalAttachmentStates.push(attached);
+	}
+
+	pauseOutput(): void {
+		this.pauseOutputCount += 1;
+	}
+
+	resumeOutput(): void {
+		this.resumeOutputCount += 1;
+	}
+
+	reinitializePresentation(): Promise<void> {
+		this.reinitializePresentationCount += 1;
+		return Promise.resolve();
+	}
+
 	onEvent(handler: (event: PiChildRuntimeEvent) => void): () => void {
 		this.#eventHandlers.add(handler);
 		return () => this.#eventHandlers.delete(handler);
@@ -329,6 +372,10 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 
 	notifyFailure(error: unknown): void {
 		for (const handler of this.#failureHandlers) handler(error);
+	}
+
+	notifyOutput(data: string): void {
+		for (const handler of this.#outputHandlers) handler(data);
 	}
 
 	notifyEvent(event: PiChildRuntimeEvent): void {

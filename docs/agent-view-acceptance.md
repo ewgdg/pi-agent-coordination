@@ -5,11 +5,12 @@ This matrix records the production process-backed Agent-view contract and its re
 ## Production paths
 
 - `src/process-runtime/pi-child-process-runtime.ts` — exact Pi CLI process, PTY, Control admission, transcript handoff, and process-group cleanup.
-- `src/process-runtime/pty-terminal-projection.ts` — ANSI terminal state, cursor, generated replies, input, resize, and exact exit.
+- `src/process-runtime/pty-terminal-projection.ts` — detached ANSI terminal state, raw output subscription, terminal-reply ownership, input, resize, and exact exit.
 - `src/process-runtime/pi-child-hosted-runtime.ts` — process-neutral Run intentions and lifecycle settlement.
 - `src/process-runtime/child-runtime-bridge.ts` — truthful child TUI binding, lifecycle reporting, coordination tools, activity dock, and `/agents` registration.
 - `src/process-runtime/remote-agent-selector.ts` — scoped selector snapshots and awaited Owner selection actions.
-- `src/presentation/agent-view-surface.ts` — full-window projection, prioritized physical input, failure handling, and Owner restoration.
+- `src/presentation/physical-terminal-attachment.ts` — Owner TUI suspension, atomic handoff buffering, physical-output backpressure, direct raw child PTY routing, retargeting, terminal reset, and Owner restoration.
+- `src/presentation/agent-view-surface.ts` — attachment lifecycle, failure handling, and host-close integration.
 - `src/coordination/durable-agent-view.ts` — one retargetable Workflow attachment.
 - `src/coordination/workflow-coordinator.ts` — view authority, retention, retargeting, Human Attention focus, and shutdown.
 
@@ -30,7 +31,7 @@ This matrix records the production process-backed Agent-view contract and its re
 |---|---|
 | Child editor, footer, status, widgets, notifications, commands, shortcuts, dialogs, and overlays remain native | `tests/agent-view.test.ts` file-backed process probes |
 | Long transcript navigation, mouse input, streaming, and reflow work through a real PTY | `tests/coordinated-workflow-pty.test.ts` |
-| Input bytes, generated terminal replies, cursor, styles, wide cells, and resize remain separate and exact | PTY Terminal Projection tests |
+| Raw output and physical input remain buffered until native presentation reinitialization completes; physical-versus-emulated terminal replies, cursor, styles, wide cells, and resize remain separate and exact | physical attachment and PTY Terminal Projection tests |
 | Startup dialogs are visible before Runtime admission | Agent-view startup modal and process launch tests |
 | Child input/render/initialization/process failures restore the Owner or retain the failed view according to Run state | Agent-view unit and fullscreen failure PTYs |
 | Closing a pending view cannot orphan a hidden startup UI process | Dormant startup cancellation and Workflow shutdown tests |
@@ -41,8 +42,8 @@ This matrix records the production process-backed Agent-view contract and its re
 |---|---|
 | Owner and process children render the complete scoped selector | selector surface and remote selector snapshot tests |
 | Selecting Owner closes only the attachment and keeps retained child work alive | fullscreen return and interactive host conformance tests |
-| Selecting another child retargets one attachment | independent process-child switch tests and fullscreen PTY switch |
-| Input and resize continue after retarget | complete-frame/input and 100×30 PTY cases |
+| Selecting another child retargets one physical attachment without restoring Owner between children | physical attachment tests, independent process-child switch tests, and fullscreen PTY switch |
+| Raw output, native mouse input, ordinary input, and resize continue after retarget | physical attachment, mouse-scroll, complete-frame/input, and 100×30 PTY cases |
 | Selecting the same child is safe; cancellation preserves selection | remote selector domain tests |
 | Stale Human Attention or focus failure restores the previous Agent | `tests/remote-agent-selector.test.ts` |
 | Escape remains native child input | custom editor and overlay tests |

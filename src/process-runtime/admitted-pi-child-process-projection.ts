@@ -38,6 +38,11 @@ export type AdmittedPiChildProjectionRuntime = Readonly<{
 	resize(columns: number, rows: number): void;
 	addChangeHandler(handler: () => void): () => void;
 	addFailureHandler(handler: (error: unknown) => void): () => void;
+	addOutputHandler(handler: (data: string) => void): () => void;
+	setPhysicalTerminalAttached(attached: boolean): void;
+	pauseOutput(): void;
+	resumeOutput(): void;
+	reinitializePresentation(): Promise<void>;
 	onEvent(handler: (event: PiChildRuntimeEvent) => void): () => void;
 	dispose(): Promise<void>;
 }>;
@@ -101,6 +106,13 @@ export function createAdmittedPiChildProcessProjection(
 
 	return Object.freeze({
 		presentation,
+		physicalTerminal: Object.freeze({
+			addOutputHandler: (handler: (data: string) => void) => runtime.addOutputHandler(handler),
+			setAttached: (attached: boolean) => runtime.setPhysicalTerminalAttached(attached),
+			pauseOutput: () => runtime.pauseOutput(),
+			resumeOutput: () => runtime.resumeOutput(),
+			reinitializePresentation: () => runtime.reinitializePresentation(),
+		}),
 		resize(columns, rows) {
 			const frame = runtime.frame();
 			if (columns === frame.columns && rows === frame.rows) return;

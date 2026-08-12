@@ -54,6 +54,13 @@ test("InProcessHostedRuntime translates Pi lifecycle and owns Pi intentions", as
 	const projection = {
 		sessionId: snapshot.sessionId,
 		presentation: { render: () => [], invalidate() {} },
+		physicalTerminal: {
+			addOutputHandler: () => () => undefined,
+			setAttached() {},
+			pauseOutput() {},
+			resumeOutput() {},
+			async reinitializePresentation() {},
+		},
 		resize() {},
 		dispatchInput() {},
 		focusEditor() {},

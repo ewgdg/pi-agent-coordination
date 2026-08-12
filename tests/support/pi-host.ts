@@ -315,6 +315,8 @@ async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
 			},
 			invalidate() {},
 			requestRender() {},
+			start() {},
+			stop() {},
 		},
 		renderer: {
 			terminal: {
@@ -359,6 +361,8 @@ function createTestUi(): TestUi {
 			return () => { inputListeners.delete(listener); };
 		},
 		requestRender() {},
+		start() {},
+		stop() {},
 	} as unknown as TUI;
 	const testTheme = {
 		fg: (_color: string, text: string) => text,

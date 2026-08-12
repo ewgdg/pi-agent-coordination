@@ -56,6 +56,7 @@ type RuntimeState = {
 	currentRunOutcome: "completed" | "interrupted" | "failed";
 	nativeRunSequence: number;
 	activity: RemoteAgentActivitySource;
+	reinitializePresentation(): void;
 	queueIntentionTail: Promise<void>;
 	shutdownStarted: boolean;
 };
@@ -111,6 +112,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			currentRunOutcome: "completed",
 			nativeRunSequence: 0,
 			activity,
+			reinitializePresentation: capture.reinitializePresentation,
 			queueIntentionTail: Promise.resolve(),
 			shutdownStarted: false,
 		};
@@ -283,6 +285,9 @@ async function handleOwnerRequest(
 			}
 			return { accepted };
 		}
+		case "presentation.reinitialize":
+			state.reinitializePresentation();
+			return {};
 		case "runtime.shutdown":
 			state.shutdownStarted = true;
 			setImmediate(() => state.context.shutdown());

@@ -115,6 +115,80 @@ test("xterm-generated terminal replies use a separate PTY write path", { timeout
 	await projection.dispose();
 });
 
+test("physical attachment receives raw output and becomes the only terminal reply path", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+	const projection = await spawnNodeScript(String.raw`
+		process.stdin.setRawMode(true);
+		process.stdin.resume();
+		process.stdin.once("data", () => {
+			process.stdin.once("data", reply => {
+				process.stdout.write("\x1b[2J\x1b[HGOT_HEX=" + reply.toString("hex"));
+				process.exit(0);
+			});
+			process.stdout.write("QUERY\x1b[6n");
+			setTimeout(() => process.stdout.write("NO_EMULATED_REPLY"), 30);
+		});
+		process.stdout.write("READY");
+	`);
+	t.after(async () => {
+		if (!projection.disposed) await projection.dispose();
+	});
+	const rawOutput: string[] = [];
+	const removeOutputHandler = projection.addOutputHandler((data) => rawOutput.push(data));
+	projection.setPhysicalTerminalAttached(true);
+	await waitForText(projection, "READY");
+
+	projection.writeInput("GO");
+	await new Promise((resolve) => setTimeout(resolve, 60));
+	await projection.drain();
+	assert.match(rawOutput.join(""), /QUERY\x1b\[6n/);
+	assert.match(rawOutput.join(""), /NO_EMULATED_REPLY/);
+	assert.doesNotMatch(rawOutput.join(""), /GOT_HEX=/);
+
+	const physicalReply = "PHYSICAL_REPLY";
+	projection.writeInput(physicalReply);
+	await projection.exited;
+	assert.match(
+		rawOutput.join(""),
+		new RegExp(`GOT_HEX=${Buffer.from(physicalReply).toString("hex")}`),
+	);
+	projection.setPhysicalTerminalAttached(false);
+	removeOutputHandler();
+	await projection.dispose();
+});
+
+test("physical output backpressure pauses and resumes PTY reads", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+	const projection = await spawnNodeScript(String.raw`
+		process.stdin.setRawMode(true);
+		process.stdin.resume();
+		process.stdin.once("data", () => process.exit(0));
+		process.stdout.write("READY");
+		setTimeout(() => process.stdout.write("BACKPRESSURED_OUTPUT"), 20);
+	`);
+	t.after(async () => {
+		if (!projection.disposed) await projection.dispose();
+	});
+	const raw: string[] = [];
+	const removeOutputHandler = projection.addOutputHandler((data) => raw.push(data));
+	await waitForText(projection, "READY");
+
+	projection.pauseOutput();
+	await new Promise((resolve) => setTimeout(resolve, 50));
+	assert.doesNotMatch(
+		projection.frame().lines.map(({ text }) => text).join("\n"),
+		/BACKPRESSURED_OUTPUT/,
+	);
+	projection.resumeOutput();
+	await waitForRawOutput(raw, "BACKPRESSURED_OUTPUT");
+	assert.match(
+		projection.frame().lines.map(({ text }) => text).join(""),
+		/BACKPRESSURED_OUTPUT/,
+	);
+	projection.writeInput("EXIT");
+	await projection.exited;
+	removeOutputHandler();
+	await projection.dispose();
+});
+
 test("live disposal parses final PTY output before releasing terminal state", { timeout: TEST_TIMEOUT_MS }, async () => {
 	const projection = await spawnNodeScript(String.raw`
 		process.on("SIGHUP", () => {
@@ -278,6 +352,18 @@ async function waitForProcessExit(pid: number): Promise<void> {
 		await new Promise((resolve) => setTimeout(resolve, 5));
 	}
 	throw new Error(`PTY descendant ${pid} remained alive after disposal`);
+}
+
+async function waitForRawOutput(
+	chunks: readonly string[],
+	text: string,
+): Promise<void> {
+	const deadline = Date.now() + TEST_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		if (chunks.join("").includes(text)) return;
+		await new Promise((resolve) => setTimeout(resolve, 5));
+	}
+	throw new Error(`PTY raw output did not contain ${JSON.stringify(text)}`);
 }
 
 async function waitForText(

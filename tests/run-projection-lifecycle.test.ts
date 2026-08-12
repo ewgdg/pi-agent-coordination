@@ -546,6 +546,13 @@ function createRunResource(options?: {
 	};
 	const projection: HostedAgentProjection = {
 		presentation: component,
+		physicalTerminal: {
+			addOutputHandler: () => () => undefined,
+			setAttached() {},
+			pauseOutput() {},
+			resumeOutput() {},
+			async reinitializePresentation() {},
+		},
 		resize() {},
 		dispatchInput() {},
 		focusEditor() {},

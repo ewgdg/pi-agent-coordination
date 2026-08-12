@@ -282,7 +282,7 @@ export function assertInteractiveModeInstanceShape(value: unknown, version?: unk
 	requireRecord(runtimeHost.session, "InteractiveMode.runtimeHost.session", version);
 	const ui = requireRecord(interactiveMode.ui, "InteractiveMode.ui", version);
 	assertPrioritizedTuiInputListenerShape(ui, version);
-	for (const member of ["invalidate", "requestRender"] as const) {
+	for (const member of ["invalidate", "requestRender", "start", "stop"] as const) {
 		requireFunction(ui, member, `InteractiveMode.ui.${member}`, version);
 	}
 	const renderer = requireRecord(

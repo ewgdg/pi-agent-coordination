@@ -339,6 +339,8 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 			addInputListener() { return () => undefined; },
 			invalidate() {},
 			requestRender() {},
+			start() {},
+			stop() {},
 		},
 		renderer: {
 			terminal: {
@@ -363,6 +365,8 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 		[["ui", "inputListeners"], "TUI.inputListeners"],
 		[["ui", "invalidate"], "InteractiveMode.ui.invalidate"],
 		[["ui", "requestRender"], "InteractiveMode.ui.requestRender"],
+		[["ui", "start"], "InteractiveMode.ui.start"],
+		[["ui", "stop"], "InteractiveMode.ui.stop"],
 		[["renderer"], "InteractiveMode.renderer"],
 		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
 		[["renderer", "terminal", "columns"], "InteractiveMode.renderer.terminal.columns"],
