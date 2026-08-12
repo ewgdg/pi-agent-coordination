@@ -16,6 +16,7 @@ import type { PhysicalTerminalPort } from "../src/presentation/physical-terminal
 import type { TerminalProjection } from "../src/presentation/terminal-projection.ts";
 import {
 	openAgentViewSurface,
+	startPhysicalAgentViewSurface,
 	type DurableAgentView,
 } from "../src/presentation/agent-view-surface.ts";
 
@@ -56,6 +57,28 @@ test("selected child owns raw output, physical input, and resize until Owner res
 	assert.equal(view.cleanupCount(), 1);
 });
 
+test("a prepared physical surface becomes ready without waiting for its view to close", async () => {
+	const projection = createProjectionHarness("prepared");
+	const view = createViewHarness(projection.projection);
+	const surface = createSurfaceHarness();
+
+	const prepared = startPhysicalAgentViewSurface(view.view, {
+		ownerTui: surface.ownerTui,
+		physicalTerminal: surface.physicalTerminal,
+		requestShutdown() {},
+	});
+	assert.ok(prepared);
+	await projection.finishReinitialization();
+	await prepared.ready;
+	assert.equal(view.cleanupCount(), 0);
+	assert.deepEqual(surface.ownerStops(), [{ preserveScreen: true }]);
+
+	await view.closeFromHost();
+	await prepared.closed;
+	assert.equal(view.cleanupCount(), 1);
+	assert.equal(surface.ownerStarts(), 1);
+});
+
 test("handoff buffers child output and physical input until presentation reinitializes", async () => {
 	const projection = createProjectionHarness("buffered", undefined, true);
 	const view = createViewHarness(projection.projection);
@@ -69,9 +92,18 @@ test("handoff buffers child output and physical input until presentation reiniti
 	projection.emitOutput("complete-native-frame");
 	surface.emitInput("input-after-handoff");
 
+	assert.deepEqual(
+		surface.ownerStops(),
+		[],
+		"Owner must remain visible until the replacement child frame is complete",
+	);
+	assert.equal(surface.physicalStarts(), 0);
 	assert.deepEqual(surface.physicalWrites(), []);
 	assert.deepEqual(projection.inputs(), []);
 	await projection.finishReinitialization();
+
+	assert.deepEqual(surface.ownerStops(), [{ preserveScreen: true }]);
+	assert.equal(surface.physicalStarts(), 1);
 	assert.deepEqual(surface.physicalWrites(), ["complete-native-frame"]);
 	assert.deepEqual(projection.inputs(), ["input-after-handoff"]);
 
@@ -167,8 +199,10 @@ test("attachment setup failure restores Owner exactly once and reports the view 
 
 	assert.deepEqual(view.failures().map(String), [String(setupFailure)]);
 	assert.deepEqual(projection.attachedStates(), [true, false]);
-	assert.equal(surface.physicalStops(), 1);
-	assert.equal(surface.ownerStarts(), 1);
+	assert.deepEqual(surface.ownerStops(), []);
+	assert.equal(surface.physicalStarts(), 0);
+	assert.equal(surface.physicalStops(), 0);
+	assert.equal(surface.ownerStarts(), 0);
 	assert.equal(view.cleanupCount(), 1);
 });
 
@@ -372,6 +406,7 @@ function createSurfaceHarness(options: Readonly<{
 	writeFailure?: Error;
 }> = {}): {
 	ui: ExtensionUIContext;
+	ownerTui: TUI;
 	physicalTerminal: PhysicalTerminalPort;
 	emitInput(data: string): void;
 	emitDiagnosticInput(data: string): void;
@@ -436,9 +471,19 @@ function createSurfaceHarness(options: Readonly<{
 		},
 		isFocused: () => focused,
 	};
+	const inputListeners = new Set<(
+		data: string,
+	) => Readonly<{ consume?: boolean; data?: string }> | undefined>();
 	const tui = {
 		mode: "fullscreen",
 		terminal: { columns: 80, rows: 24, write() {} },
+		inputListeners,
+		addInputListener(listener: (
+			data: string,
+		) => Readonly<{ consume?: boolean; data?: string }> | undefined) {
+			inputListeners.add(listener);
+			return () => inputListeners.delete(listener);
+		},
 		stop(options?: { preserveScreen?: boolean }) {
 			ownerStops.push(options ?? {});
 		},
@@ -470,9 +515,19 @@ function createSurfaceHarness(options: Readonly<{
 	} as unknown as ExtensionUIContext;
 	return {
 		ui,
+		ownerTui: tui,
 		physicalTerminal,
 		emitInput(data) {
-			activeInput?.(data);
+			if (activeInput) {
+				activeInput(data);
+				return;
+			}
+			let current = data;
+			for (const listener of inputListeners) {
+				const result = listener(current);
+				if (result?.consume) return;
+				if (result?.data !== undefined) current = result.data;
+			}
 		},
 		emitDiagnosticInput(data) {
 			customComponent?.handleInput?.(data);

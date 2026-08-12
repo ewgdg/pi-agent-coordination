@@ -6,7 +6,11 @@ import type {
 	OrdinaryAgentCoordinatorView,
 } from "../coordination/workflow-coordinator.ts";
 import { openAgentSelectorSurface } from "../presentation/agent-selector-surface.ts";
-import { openAgentViewSurface } from "../presentation/agent-view-surface.ts";
+import {
+	openAgentViewSurface,
+	startPhysicalAgentViewSurface,
+	type PhysicalAgentViewSurface,
+} from "../presentation/agent-view-surface.ts";
 import {
 	createAgentSelectionSession,
 	createAgentSelectorSnapshot,
@@ -51,9 +55,19 @@ export function registerAgentsCommand(
 			const view = resolveView();
 			const selectedAgentId = view.status().agentId;
 			const selection = createAgentSelectionSession(view, selectedAgentId);
+			let physicalSurface: PhysicalAgentViewSurface | undefined;
 			const action = await openAgentSelectorSurface(ctx.ui, {
 				...createAgentSelectorSnapshot(view, selectedAgentId),
-				prepareSelection: (action) => selection.prepare(action),
+				async prepareSelection(action, ownerTui) {
+					await selection.prepare(action);
+					const preparedAgentView = selection.preparedView();
+					if (!preparedAgentView) return;
+					physicalSurface = startPhysicalAgentViewSurface(preparedAgentView, {
+						ownerTui,
+						requestShutdown: () => ctx.shutdown(),
+					});
+					await physicalSurface?.ready;
+				},
 				onSelectionError(error) {
 					ctx.ui.notify(
 						`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -65,6 +79,7 @@ export function registerAgentsCommand(
 				try {
 					await selection.complete(action);
 				} catch (error) {
+					physicalSurface?.close();
 					ctx.ui.notify(
 						`Human Request selection failed: ${error instanceof Error ? error.message : String(error)}`,
 						"error",
@@ -74,10 +89,15 @@ export function registerAgentsCommand(
 			}
 			if (action) {
 				const preparedAgentView = selection.preparedView();
-				if (preparedAgentView) {
+				if (preparedAgentView && !physicalSurface) {
 					await openAgentViewSurface(ctx.ui, preparedAgentView, {
 						requestShutdown: () => ctx.shutdown(),
 					});
+				} else {
+					void physicalSurface?.closed.catch((error) => ctx.ui.notify(
+						`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
+						"error",
+					));
 				}
 			}
 		},

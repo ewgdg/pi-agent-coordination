@@ -58,7 +58,10 @@ export type AgentSelectorOptions = Readonly<{
 	selectedAgentId: string;
 	humanAttention?: readonly HumanAttentionItem[];
 	operationalAttention?: readonly OperationalIncidentAttention[];
-	prepareSelection?(action: AgentSelectorAction): Promise<void> | void;
+	prepareSelection?(
+		action: AgentSelectorAction,
+		tui: TUI,
+	): Promise<void> | void;
 	onSelectionError?(error: unknown): void;
 }>;
 
@@ -249,7 +252,7 @@ class AgentSelectorSurface implements Component {
 		if (this.#selectionPending) return;
 		this.#selectionPending = true;
 		try {
-			const preparation = this.#options.prepareSelection?.(action);
+			const preparation = this.#options.prepareSelection?.(action, this.#tui);
 			if (preparation) await preparation;
 			this.#done(action);
 		} catch (error) {

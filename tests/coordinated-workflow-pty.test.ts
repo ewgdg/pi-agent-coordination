@@ -11,8 +11,12 @@ import xtermHeadless from "@xterm/headless";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	type AssistantMessage,
+	type Context,
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+
+import { createProcessModelBroker } from "./support/process-model-broker.ts";
 
 const SCRIPT = "/usr/bin/script";
 const PTY_WAIT_TIMEOUT_MS = 20_000;
@@ -259,6 +263,10 @@ test("real fullscreen PTY keeps a terminally failed selected Run in its Agent vi
 		await openDormantAgentSelector(terminal, "PTY Failure Worker");
 		terminal.write("\t");
 		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Owner failure baseline remains mounted."))
+		);
+		terminal.write("Owner input confirms selected Run closure");
 		await terminal.waitFor("__PTY_AGENT_VIEW_FAILURE_RESTORED__run");
 		await terminal.closed();
 		assert.match(terminal.output(), /Owner failure baseline remains mounted/);
@@ -279,6 +287,111 @@ test("real fullscreen PTY disposes an unviewed child mode exactly once", {
 		await terminal.closed();
 	} finally {
 		terminal.kill();
+	}
+});
+
+test("real fullscreen PTY command returns as soon as physical child attachment is ready", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const returnedDirectory = await mkdtemp(join(tmpdir(), "pi-agent-view-returned-"));
+	const returnedPath = join(returnedDirectory, "returned");
+	const releasePath = join(returnedDirectory, "release");
+	const terminal = launchFixture(FIXTURE, {
+		PTY_FIRST_VIEW_COMMAND_RETURNED_PATH: returnedPath,
+		PTY_FIRST_VIEW_COMMAND_RELEASE_PATH: releasePath,
+	});
+	try {
+		await terminal.marker("__PTY_AGENT_VIEW_SETUP__");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("PTY Viewed Worker")) &&
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("j");
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Viewed child transcript line 59")) &&
+			!frame.some((line) => line.includes("Tab views"))
+		);
+		await waitForFile(returnedPath);
+
+		terminal.write(DIRECT_AGENT_INPUT);
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
+		);
+		terminal.write("\r");
+		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
+		await returnPtyAgentViewToOwner(terminal);
+		await writeFile(releasePath, "release\n");
+		await terminal.closed();
+		assert.match(terminal.output(), /__PTY_AGENT_VIEW_CLOSED__/);
+	} finally {
+		terminal.kill();
+		await import("node:fs/promises").then(({ rm }) =>
+			rm(returnedDirectory, { recursive: true, force: true })
+		);
+	}
+});
+
+test("real fullscreen PTY can return to Owner and attach the same Agent again", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const repeatDirectory = await mkdtemp(join(tmpdir(), "pi-agent-view-repeat-"));
+	const readyPath = join(repeatDirectory, "ready");
+	const releasePath = join(repeatDirectory, "release");
+	const terminal = launchFixture(FIXTURE, {
+		PTY_REPEAT_VIEW_READY_PATH: readyPath,
+		PTY_REPEAT_VIEW_RELEASE_PATH: releasePath,
+	});
+	try {
+		await terminal.marker("__PTY_AGENT_VIEW_SETUP__");
+		terminal.write("/agents\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("PTY Viewed Worker")) &&
+			frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("j\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Viewed child transcript line 59")) &&
+			!frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write(DIRECT_AGENT_INPUT);
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes(DIRECT_AGENT_INPUT))
+		);
+		terminal.write("\r");
+		await terminal.waitFor("__PTY_CHILD_INPUT_SETTLED__");
+		await returnPtyAgentViewToOwner(terminal);
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
+			!frame.some((line) => line.includes("Tab views"))
+		);
+		await waitForFile(readyPath);
+		terminal.write("/agents\r");
+		await terminal.waitForScreen((frame) => frame.some((line) => line.includes("Tab views")));
+		terminal.write("j\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Streaming child update 39")) &&
+			!frame.some((line) => line.includes("Tab views"))
+		);
+		terminal.write("second attachment remains interactive\r");
+		await terminal.waitFor("Second attachment accepted direct input.");
+		terminal.write("/agents");
+		await terminal.waitForScreen((frame) => frame.some((line) => line.includes("/agents")));
+		terminal.write("\r");
+		await terminal.waitForScreen((frame) => frame.some((line) => line.includes("Tab views")));
+		terminal.write("k\r");
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
+			!frame.some((line) => line.includes("Tab views"))
+		);
+		await writeFile(releasePath, "release\n");
+		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+		await import("node:fs/promises").then(({ rm }) =>
+			rm(repeatDirectory, { recursive: true, force: true })
+		);
 	}
 });
 
@@ -432,6 +545,53 @@ test("real fullscreen PTY reflows the complete Agent view at 100x30", {
 	}
 });
 
+test("real Pi CLI can return to Owner and attach the same Agent again", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-agent-cli-repeat-"));
+	const agentDir = join(root, "agent");
+	const sessionDir = join(root, "sessions");
+	const broker = await createProcessModelBroker({
+		responseOverride: routeCliRepeatResponse,
+		tokensPerSecond: 20_000,
+	});
+	const terminal = launchPiCli({
+		agentDir,
+		sessionDir,
+		additionalExtensionPaths: [broker.extensionPath],
+		provider: broker.providerId,
+		model: broker.modelId,
+	});
+	try {
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("deterministic-owner"))
+		);
+		terminal.write("Create one Agent with agent_spawn. Use label CLI Repeat Worker and request: Remain available for repeated CLI Agent view attachment.\r");
+		await terminal.waitFor("CLI worker is ready for");
+
+		await attachCliRepeatWorker(terminal, "CLI child first attachment input");
+		await returnPtyAgentViewToOwner(terminal);
+		await terminal.waitForScreen((frame) =>
+			!frame.some((line) => line.includes("Tab views")) &&
+			frame.some((line) => line.includes("deterministic-owner"))
+		);
+		await attachCliRepeatWorker(terminal, "CLI child second attachment input");
+		await returnPtyAgentViewToOwner(terminal);
+		await terminal.waitForScreen((frame) =>
+			!frame.some((line) => line.includes("Tab views")) &&
+			frame.some((line) => line.includes("deterministic-owner"))
+		);
+		terminal.write("/quit\r");
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+		await broker.close();
+		await import("node:fs/promises").then(({ rm }) =>
+			rm(root, { recursive: true, force: true })
+		);
+	}
+});
+
 test("interactive /resume retains the compact historical agent_spawn renderer", {
 	skip: !existsSync(SCRIPT),
 }, async () => {
@@ -517,7 +677,130 @@ test("interactive /resume retains the compact historical agent_spawn renderer", 
 	}
 });
 
-function launchPiCli(options: { agentDir: string; sessionDir: string }): PtyFixture {
+async function attachCliRepeatWorker(
+	terminal: PtyFixture,
+	input: string,
+): Promise<void> {
+	const deadline = Date.now() + PTY_WAIT_TIMEOUT_MS;
+	let selector: readonly string[] | undefined;
+	while (Date.now() < deadline) {
+		terminal.write("/agents\r");
+		selector = await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("Tab views"))
+		);
+		if (selector.some(isCliRepeatWorkerRow)) break;
+		terminal.write("\t");
+		selector = await terminal.waitForScreen((frame) =>
+			frame.some(isCliRepeatWorkerRow) &&
+			frame.some((line) => line.includes("Dormant Agents"))
+		);
+		if (selector.some(isCliRepeatWorkerRow)) break;
+		terminal.write("\x1b");
+		await terminal.waitForScreen((frame) =>
+			!frame.some((line) => line.includes("Tab views"))
+		);
+		await new Promise<void>((resolve) => setTimeout(resolve, 50));
+	}
+	if (!selector?.some(isCliRepeatWorkerRow)) {
+		throw new Error("CLI Repeat Worker did not become selectable");
+	}
+	for (let step = 0; step < 3; step += 1) {
+		const selector = await terminal.screen();
+		if (selector.some((line) => line.includes("→ CLI Repeat Worker"))) break;
+		terminal.write("j");
+		await new Promise<void>((resolve) => setTimeout(resolve, SCREEN_POLL_INTERVAL_MS));
+	}
+	await terminal.waitForScreen((frame) =>
+		frame.some((line) => line.includes("→ CLI Repeat Worker"))
+	);
+	terminal.write("\r");
+	await terminal.waitForScreen((frame) =>
+		frame.some((line) => line.includes("CLI worker is ready for repeated attachment.")) &&
+		!frame.some((line) => line.includes("Tab views"))
+	);
+	terminal.write(`${input}\r`);
+	await terminal.waitForScreen((frame) =>
+		frame.some((line) => line.includes(`acknowledged: ${input}`))
+	);
+}
+
+function isCliRepeatWorkerRow(line: string): boolean {
+	return /CLI Repeat Worker\s+(?:live\/|dormant)/.test(line);
+}
+
+function routeCliRepeatResponse(context: Context): AssistantMessage {
+	const transcript = JSON.stringify(context.messages);
+	const latestUserText = [...context.messages].reverse().find(
+		(message) => message.role === "user",
+	);
+	const text = latestUserText?.role === "user"
+		? typeof latestUserText.content === "string"
+			? latestUserText.content
+			: latestUserText.content.find((content) => content.type === "text")?.text
+		: undefined;
+	if (text?.startsWith("CLI child ")) {
+		return fauxAssistantMessage(`acknowledged: ${text}`);
+	}
+	if (transcript.includes('"toolCallId":"cli-repeat-answer"')) {
+		return fauxAssistantMessage("CLI worker is ready for repeated attachment.");
+	}
+	if (transcript.includes('"toolCallId":"cli-repeat-spawn"')) {
+		return fauxAssistantMessage("CLI worker completed its Creation Request.");
+	}
+	const requestId = findCreationRequestId(context.messages);
+	if (requestId) {
+		return fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "answer",
+				requestId,
+				answer: "CLI worker is ready for repeated attachment.",
+			}, { id: "cli-repeat-answer" }),
+			{ stopReason: "toolUse" },
+		);
+	}
+	return fauxAssistantMessage(
+		fauxToolCall("agent_spawn", {
+			request: "Remain available for repeated CLI Agent view attachment.",
+			label: "CLI Repeat Worker",
+		}, { id: "cli-repeat-spawn" }),
+		{ stopReason: "toolUse" },
+	);
+}
+
+function findCreationRequestId(value: unknown): string | undefined {
+	if (typeof value === "string") {
+		try {
+			return findCreationRequestId(JSON.parse(value));
+		} catch {
+			return undefined;
+		}
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const requestId = findCreationRequestId(item);
+			if (requestId) return requestId;
+		}
+		return undefined;
+	}
+	if (typeof value !== "object" || value === null) return undefined;
+	const record = value as Record<string, unknown>;
+	if (record.kind === "request" && typeof record.requestId === "string") {
+		return record.requestId;
+	}
+	for (const nested of Object.values(record)) {
+		const requestId = findCreationRequestId(nested);
+		if (requestId) return requestId;
+	}
+	return undefined;
+}
+
+function launchPiCli(options: {
+	agentDir: string;
+	sessionDir: string;
+	additionalExtensionPaths?: readonly string[];
+	provider?: string;
+	model?: string;
+}): PtyFixture {
 	const command = [
 		process.execPath,
 		PI_CLI,
@@ -528,15 +811,16 @@ function launchPiCli(options: { agentDir: string; sessionDir: string }): PtyFixt
 		"--no-context-files",
 		"--extension",
 		COORDINATION_EXTENSION,
+		...(options.additionalExtensionPaths ?? []).flatMap((path) => ["--extension", path]),
 		"--approve",
 		"--tui-mode",
 		"fullscreen",
 		"--session-dir",
 		options.sessionDir,
 		"--provider",
-		"openai",
+		options.provider ?? "openai",
 		"--model",
-		"gpt-4o-mini",
+		options.model ?? "gpt-4o-mini",
 	].map(quoteShell).join(" ");
 	const child = spawn(
 		SCRIPT,
@@ -579,6 +863,29 @@ function launchFixture(
 		Number(environment.PTY_TEST_COLUMNS) || 80,
 		Number(environment.PTY_TEST_ROWS) || 24,
 	);
+}
+
+async function returnPtyAgentViewToOwner(terminal: PtyFixture): Promise<void> {
+	terminal.write("/agents");
+	await terminal.waitForScreen((frame) => frame.some((line) => line.includes("/agents")));
+	terminal.write("\r");
+	const selector = await terminal.waitForScreen((frame) =>
+		frame.some((line) => line.includes("Tab views"))
+	);
+	terminal.write(selector.some((line) => line.includes("Dormant Agents")) ? "\t" : "k");
+	await terminal.waitForScreen((frame) => frame.some((line) =>
+		line.includes("→") && line.includes("owner")
+	));
+	terminal.write("\r");
+}
+
+async function waitForFile(path: string): Promise<void> {
+	const deadline = Date.now() + PTY_WAIT_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		if (existsSync(path)) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, SCREEN_POLL_INTERVAL_MS));
+	}
+	throw new Error(`Timed out waiting for ${path}`);
 }
 
 async function openDormantAgentSelector(
@@ -730,14 +1037,15 @@ class PtyFixture {
 	}
 
 	async waitFor(value: string): Promise<void> {
-		if (this.#output.includes(value)) return;
+		const matches = () => this.#output.includes(value);
+		if (matches()) return;
 		await new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(() => {
 				cleanup();
 				reject(new Error(`Timed out waiting for ${JSON.stringify(value)}\n${this.#output}`));
 			}, PTY_WAIT_TIMEOUT_MS);
 			const inspect = () => {
-				if (!this.#output.includes(value)) return;
+				if (!matches()) return;
 				cleanup();
 				resolve();
 			};

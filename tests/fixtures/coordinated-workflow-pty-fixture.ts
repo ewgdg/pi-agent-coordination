@@ -109,10 +109,14 @@ await waitFor(() =>
 );
 host.model.setResponses([
 	fauxAssistantMessage(STREAMING_CHILD_RESPONSE),
+	fauxAssistantMessage("Second attachment accepted direct input."),
 ]);
 const ownerEntryIds = ownerSession.sessionManager.getEntries().map(({ id }) => id);
 const ownerEditorFactory = ownerSession.extensionRunner.createContext().ui.getEditorComponent();
-ownerSession.extensionRunner.createContext().ui.setEditorText(OWNER_EDITOR_TEXT);
+const repeatAgentViewReadyPath = process.env.PTY_REPEAT_VIEW_READY_PATH;
+const repeatAgentViewReleasePath = process.env.PTY_REPEAT_VIEW_RELEASE_PATH;
+const ownerEditorText = repeatAgentViewReadyPath ? "" : OWNER_EDITOR_TEXT;
+ownerSession.extensionRunner.createContext().ui.setEditorText(ownerEditorText);
 const ownerEditor = (mode as unknown as {
 	editor: {
 		getCursor(): Readonly<{ line: number; col: number }>;
@@ -121,13 +125,15 @@ const ownerEditor = (mode as unknown as {
 }).editor;
 for (let offset = 0; offset < 7; offset += 1) ownerEditor.handleInput("\x1b[D");
 const ownerEditorCursor = ownerEditor.getCursor();
+const firstAgentViewCommandReturnedPath = process.env.PTY_FIRST_VIEW_COMMAND_RETURNED_PATH;
+const firstAgentViewCommandReleasePath = process.env.PTY_FIRST_VIEW_COMMAND_RELEASE_PATH;
 
 process.stdout.write(`\n__PTY_AGENT_VIEW_SETUP__${JSON.stringify({
 	ownerId: ownerSession.sessionId,
 	childAgentId,
 	secondChildAgentId,
 	cwd: host.cwd,
-	ownerEditorText: OWNER_EDITOR_TEXT,
+	ownerEditorText,
 	ownerEditorCursor,
 	terminalColumns: process.stdout.columns,
 	terminalRows: process.stdout.rows,
@@ -150,12 +156,72 @@ void (async () => {
 	}, CONDITION_TIMEOUT_MS, "streamed child Run settlement");
 	process.stdout.write("\n__PTY_CHILD_INPUT_SETTLED__\n");
 })();
-await openAgents(ownerSession);
-
+if (repeatAgentViewReadyPath) {
+	await waitForAsync(async () => {
+		const status = await observeAgent(childAgentId);
+		const run = (status.details as {
+			run: { retentionReasons?: readonly { reason: string }[] };
+		}).run;
+		return run.retentionReasons?.some(
+			({ reason }) => reason === "interactive_selection",
+		) ?? false;
+	}, 20_000, "first typed physical Agent view attachment");
+} else {
+	await openAgents(ownerSession);
+}
+if (firstAgentViewCommandReturnedPath) {
+	await import("node:fs/promises").then(({ writeFile }) =>
+		writeFile(firstAgentViewCommandReturnedPath, "returned\n")
+	);
+	if (!firstAgentViewCommandReleasePath) {
+		throw new Error("PTY command-return gate has no release path");
+	}
+	await waitFor(
+		() => readFileIfExists(firstAgentViewCommandReleasePath) === "release\n",
+		20_000,
+		"command-return release",
+	);
+}
+await waitForAsync(async () => {
+	const statuses = await Promise.all([
+		observeAgent(childAgentId),
+		observeAgent(secondChildAgentId),
+	]);
+	return statuses.every((status) => {
+		const run = (status.details as {
+			run: { retentionReasons?: readonly { reason: string }[] };
+		}).run;
+		return !run.retentionReasons?.some(
+			({ reason }) => reason === "interactive_selection",
+		);
+	});
+}, 20_000, "physical Agent view closure");
+if (repeatAgentViewReadyPath) {
+	if (!repeatAgentViewReleasePath) {
+		throw new Error("PTY repeated-view gate has no release path");
+	}
+	await import("node:fs/promises").then(({ writeFile }) =>
+		writeFile(repeatAgentViewReadyPath, "ready\n")
+	);
+	await waitFor(
+		() => readFileIfExists(repeatAgentViewReleasePath) === "release\n",
+		20_000,
+		"repeated-view release",
+	);
+	await waitForAsync(async () => {
+		const status = await observeAgent(childAgentId);
+		const run = (status.details as {
+			run: { retentionReasons?: readonly { reason: string }[] };
+		}).run;
+		return !run.retentionReasons?.some(
+			({ reason }) => reason === "interactive_selection",
+		);
+	}, 20_000, "repeated physical Agent view closure");
+}
 if (host.runtime.session !== ownerSession) {
 	throw new Error(`Agent view rebound runtime to ${host.runtime.session.sessionId}`);
 }
-if (ownerSession.extensionRunner.createContext().ui.getEditorText() !== OWNER_EDITOR_TEXT) {
+if (ownerSession.extensionRunner.createContext().ui.getEditorText() !== ownerEditorText) {
 	throw new Error("Agent view changed Owner editor text");
 }
 if (ownerSession.extensionRunner.createContext().ui.getEditorComponent() !== ownerEditorFactory) {
@@ -289,6 +355,18 @@ function detailString(details: unknown, key: string): string {
 		typeof (details as Record<string, unknown>)[key] !== "string"
 	) throw new Error(`PTY receipt is missing ${key}`);
 	return (details as Record<string, string>)[key]!;
+}
+
+function readFileIfExists(path: string): string | undefined {
+	try {
+		return readFileSync(path, "utf8");
+	} catch (error) {
+		if (
+			typeof error === "object" && error !== null &&
+			"code" in error && error.code === "ENOENT"
+		) return undefined;
+		throw error;
+	}
 }
 
 async function waitForAsync(

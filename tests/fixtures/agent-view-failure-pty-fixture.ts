@@ -73,8 +73,11 @@ if (failureKind === "initialization") {
 }
 const spawn = failureKind === "initialization" ? undefined : await spawning;
 const childAgentId = spawn ? detailString(spawn.details, "agentId") : undefined;
+const childTranscriptPath = childAgentId
+	? await transcriptPathFor(childAgentId)
+	: undefined;
 if (failureKind === "run") {
-	const transcriptPath = await transcriptPathFor(childAgentId as string);
+	const transcriptPath = childTranscriptPath!;
 	await waitForEvidenceCondition(() =>
 		readFileText(transcriptPath).includes("Failure PTY child is ready.")
 	);
@@ -84,16 +87,6 @@ if (failureKind === "run") {
 			errorMessage: "deterministic PTY terminal Run failure",
 		}),
 	]);
-	void (async () => {
-		await waitForEvidenceCondition(
-			() => readFileText(transcriptPath).includes("trigger selected Run failure"),
-			20_000,
-		);
-		await waitForEvidenceCondition(
-			() => readFileText(transcriptPath).includes("Deterministic PTY terminal Run failure"),
-		);
-		process.stdout.write("\n__PTY_SELECTED_RUN_FAILED__\n");
-	})();
 }
 if (failureKind === "noninteractive") {
 	await host.runtime.dispose();
@@ -115,6 +108,26 @@ async function finishInteractiveFailure(): Promise<void> {
 		ownerEditorText: OWNER_EDITOR_TEXT,
 	})}\n`);
 	await openAgents(ownerSession);
+	if (failureKind === "input" || failureKind === "render") {
+		await waitForEvidence((entries) => entries.some(
+			(entry) => entry.kind === "failure_trigger" && entry.failureKind === failureKind,
+		));
+		await waitForDiagnostic((message) =>
+			message.startsWith("Agent view failed: child_runtime_unexpected_exit:")
+		);
+	} else if (failureKind === "run") {
+		await waitForEvidenceCondition(
+			() => readFileText(childTranscriptPath!).includes("trigger selected Run failure"),
+			20_000,
+		);
+		await waitForAgentPhase(childAgentId as string, "dormant");
+		process.stdout.write("\n__PTY_SELECTED_RUN_FAILED__\n");
+		await waitForEvidenceCondition(() =>
+			ownerSession.extensionRunner.createContext().ui.getEditorText()
+				.endsWith("Owner input confirms selected Run closure")
+		);
+		return finishRestoredFailure();
+	}
 	const settledSpawn = spawn ?? await spawning;
 	if (
 		failureKind === "initialization" &&
@@ -143,6 +156,10 @@ async function finishInteractiveFailure(): Promise<void> {
 			throw new Error(`Expected one bounded Owner process-exit diagnostic; received ${JSON.stringify(host.services.diagnostics)}`);
 		}
 	}
+	await finishRestoredFailure();
+}
+
+async function finishRestoredFailure(): Promise<void> {
 	process.stdout.write(`\n__PTY_AGENT_VIEW_FAILURE_RESTORED__${failureKind}\n`);
 	(mode as unknown as { renderer: { renderNow(force?: boolean): void } }).renderer.renderNow(true);
 	await new Promise<void>((resolve) => setImmediate(resolve));
@@ -155,6 +172,35 @@ async function openAgents(session: AgentSession): Promise<void> {
 	const command = session.extensionRunner.getCommand("agents");
 	if (!command) throw new Error("PTY /agents command is unavailable");
 	await command.handler("", session.extensionRunner.createCommandContext());
+}
+
+async function waitForAgentPhase(agentId: string, phase: string): Promise<void> {
+	const observe = ownerSession.getToolDefinition("agent_observe");
+	if (!observe) throw new Error("PTY agent_observe is unavailable");
+	const deadline = Date.now() + 20_000;
+	while (Date.now() < deadline) {
+		const status = await observe.execute(
+			`observe-phase-${agentId}`,
+			{ operation: "status", agentId },
+			undefined,
+			undefined,
+			ownerSession.extensionRunner.createContext(),
+		);
+		if ((status.details as { run: { phase: string } }).run.phase === phase) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`PTY Agent ${agentId} did not enter ${phase}`);
+}
+
+async function waitForDiagnostic(
+	predicate: (message: string) => boolean,
+): Promise<void> {
+	const deadline = Date.now() + 20_000;
+	while (Date.now() < deadline) {
+		if (host.services.diagnostics.some(({ message }) => predicate(message))) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("PTY Owner diagnostic did not become available");
 }
 
 async function transcriptPathFor(agentId: string): Promise<string> {

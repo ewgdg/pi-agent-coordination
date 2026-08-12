@@ -49,9 +49,9 @@ export function createAgentSelectionSession(
 		view.humanAttention().some(
 			(item) => item.requestId === decision.requestId && item.agentId === decision.agentId,
 		);
-	const restorePreviousSelection = async () => {
+	const restorePreviousSelection = async (restoreIdentity: boolean) => {
 		if (preparedAgentView) await preparedAgentView.close();
-		else await view.openAgentView(selectedAgentId);
+		else if (restoreIdentity) await view.openAgentView(selectedAgentId);
 		preparedAgentView = undefined;
 	};
 	return {
@@ -62,9 +62,10 @@ export function createAgentSelectionSession(
 			}
 			preparedAgentView = await view.openAgentView(action.agentId);
 			if (signal?.aborted || (action.kind === "decide" && !isPendingDecision(action))) {
-				// Preparation may have acquired or retargeted the attachment while the
-				// selector retained focus. Cancellation and stale Attention both undo it.
-				await restorePreviousSelection();
+				// A cancelled child Control request means its view was already closed or
+				// retargeted. Reopening that identity would resurrect the Runtime being
+				// navigated away from; stale Attention still restores the prior selection.
+				await restorePreviousSelection(!signal?.aborted);
 				throwIfCancelled(signal);
 				throw new Error("stale_request: Human Request is no longer pending");
 			}
@@ -72,7 +73,7 @@ export function createAgentSelectionSession(
 		async complete(action, signal) {
 			if (action.kind !== "decide") {
 				if (signal?.aborted) {
-					await restorePreviousSelection();
+					await restorePreviousSelection(false);
 					throwIfCancelled(signal);
 				}
 				return;
@@ -82,7 +83,7 @@ export function createAgentSelectionSession(
 				await view.focusHumanAnswer(action.agentId, action.requestId);
 				throwIfCancelled(signal);
 			} catch (error) {
-				await restorePreviousSelection();
+				await restorePreviousSelection(!signal?.aborted);
 				throw error;
 			}
 		},

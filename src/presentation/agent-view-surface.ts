@@ -1,5 +1,5 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 
 import type { TerminalProjection } from "./terminal-projection.ts";
 import {
@@ -13,6 +13,67 @@ type AgentTerminalAttachment = Readonly<{
 	dispatchInput(data: string): void;
 	close(): void;
 }>;
+
+export type PhysicalAgentViewSurface = Readonly<{
+	ready: Promise<void>;
+	closed: Promise<void>;
+	close(): void;
+}>;
+
+export function startPhysicalAgentViewSurface(
+	view: DurableAgentView,
+	options: Readonly<{
+		ownerTui: TUI;
+		requestShutdown(): void;
+		physicalTerminal?: PhysicalTerminalPort;
+	}>,
+): PhysicalAgentViewSurface | undefined {
+	const physicalTerminal = options.physicalTerminal
+		?? createProcessPhysicalTerminalPort(options.ownerTui);
+	if (!physicalTerminal.supportsPhysicalAttachment) return undefined;
+	let closed = false;
+	let settleClosed!: () => void;
+	const closedPromise = new Promise<void>((resolve) => {
+		settleClosed = resolve;
+	});
+	const closeFromHost = () => {
+		if (closed) return;
+		closed = true;
+		attachment.close();
+		settleClosed();
+	};
+	const failFromAttachment = (error: unknown) => {
+		if (closed) return;
+		try {
+			view.fail(error);
+		} finally {
+			closeFromHost();
+		}
+	};
+	const attachment = new PhysicalTerminalAttachment({
+		ownerTui: options.ownerTui,
+		physicalTerminal,
+		fail: failFromAttachment,
+		requestExit() {
+			closeFromHost();
+			options.requestShutdown();
+		},
+	});
+	const attachCurrentProjection = () => {
+		if (closed) return;
+		void attachment.attach(view.projection()).catch(failFromAttachment);
+	};
+	const removeViewChangeHandler = view.addChangeHandler(attachCurrentProjection);
+	const removeViewCloseHandler = view.addCloseHandler(closeFromHost);
+	const ready = attachment.attach(view.projection()).catch(failFromAttachment);
+	const cleanup = closedPromise.then(async () => {
+		removeViewChangeHandler();
+		removeViewCloseHandler();
+		attachment.close();
+		await view.close();
+	});
+	return { ready, closed: cleanup, close: closeFromHost };
+}
 
 export type DurableAgentView = Readonly<{
 	agentId: string;

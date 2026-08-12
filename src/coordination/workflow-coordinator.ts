@@ -674,7 +674,17 @@ export class WorkflowCoordinator {
 		if (phase === "dormant" && !record.host.currentProjection()) {
 			return this.#prepareAgentViewTarget(record);
 		}
-		return record.host.lane.run(() => this.#acquireAgentViewTargetInLane(record));
+		const liveTarget = await record.host.lane.run(() => {
+			// Release may have won the lane after selection observed an ending Runtime.
+			// Re-check at the serialized boundary instead of applying a stale live path
+			// to the now-dormant Agent.
+			if (
+				record.host.observe().phase === "dormant" &&
+				!record.host.currentProjection()
+			) return undefined;
+			return this.#acquireAgentViewTargetInLane(record);
+		});
+		return liveTarget ?? this.#prepareAgentViewTarget(record);
 	}
 
 	async #prepareAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {

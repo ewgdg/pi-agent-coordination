@@ -134,7 +134,7 @@ test("Human Answer focus failure restores the exact previous selection", async (
 	assert.deepEqual(opened, ["target", "child"]);
 });
 
-test("Owner selection handler is awaited and restores after Control cancellation", async () => {
+test("Owner selection handler is awaited and does not resurrect the previous child after Control cancellation", async () => {
 	let finishPreparation!: () => void;
 	const preparation = new Promise<void>((resolve) => { finishPreparation = resolve; });
 	const opened: string[] = [];
@@ -157,5 +157,5 @@ test("Owner selection handler is awaited and restores after Control cancellation
 	await assert.rejects(pending, (error: unknown) =>
 		error instanceof Error && error.name === "AbortError"
 	);
-	assert.deepEqual(opened, ["target", "child"]);
+	assert.deepEqual(opened, ["target"]);
 });
