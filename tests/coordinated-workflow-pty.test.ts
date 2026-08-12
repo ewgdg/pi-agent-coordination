@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -576,6 +576,53 @@ test("real Pi CLI can return to Owner and attach the same Agent again", {
 			frame.some((line) => line.includes("deterministic-owner"))
 		);
 		await attachCliRepeatWorker(terminal, "CLI child second attachment input", true);
+		await returnPtyAgentViewToOwner(terminal);
+		await terminal.waitForScreen((frame) =>
+			!frame.some((line) => line.includes("Tab views")) &&
+			frame.some((line) => line.includes("deterministic-owner"))
+		);
+		terminal.write("/quit\r");
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+		await broker.close();
+		await import("node:fs/promises").then(({ rm }) =>
+			rm(root, { recursive: true, force: true })
+		);
+	}
+});
+
+test("interactive /reload keeps a selected process child alive after inherited extension changes", {
+	skip: !existsSync(SCRIPT),
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-agent-child-reload-"));
+	const agentDir = join(root, "agent");
+	const sessionDir = join(root, "sessions");
+	const broker = await createProcessModelBroker({
+		responseOverride: routeCliRepeatResponse,
+		tokensPerSecond: 20_000,
+	});
+	const terminal = launchPiCli({
+		agentDir,
+		sessionDir,
+		additionalExtensionPaths: [broker.extensionPath],
+		provider: broker.providerId,
+		model: broker.modelId,
+	});
+	try {
+		await terminal.waitForScreen((frame) =>
+			frame.some((line) => line.includes("deterministic-owner"))
+		);
+		terminal.write("Create one Agent with agent_spawn. Use label CLI Repeat Worker and request: Remain available for repeated CLI Agent view attachment.\r");
+		await terminal.waitFor("CLI worker is ready for");
+		await attachCliRepeatWorker(terminal, "CLI child before reload", false);
+
+		terminal.write("\x15");
+		await appendFile(broker.extensionPath, "\n// Selected-child reload regression generation.\n");
+		terminal.write("/reload\r");
+		await terminal.waitFor("Reloaded keybindings, extensions, skills, prompts, themes, and context files");
+		terminal.write("CLI child after reload\r");
+		await terminal.waitFor("acknowledged: CLI child after reload");
 		await returnPtyAgentViewToOwner(terminal);
 		await terminal.waitForScreen((frame) =>
 			!frame.some((line) => line.includes("Tab views")) &&

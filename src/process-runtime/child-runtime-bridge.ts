@@ -1,5 +1,6 @@
 import * as hostPi from "@earendil-works/pi-coding-agent";
 import type {
+	AgentSession,
 	AgentSessionEvent,
 	AgentSessionRuntime,
 	ExtensionContext,
@@ -47,25 +48,44 @@ const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
 
 type ChildChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
 
-type RuntimeState = {
-	channel: ChildChannel;
+type ChildRuntimeBinding = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
+	activity: RemoteAgentActivitySource;
+	reinitializePresentation(): void;
+	handleOwnerRequest(
+		request: Parameters<Parameters<ChildChannel["onRequest"]>[0]>[0],
+	): Promise<unknown>;
+	handleOwnerEvent(event: Parameters<Parameters<ChildChannel["onEvent"]>[0]>[0]): void;
+	handleControlClose(): void;
+	dispose(): void;
+};
+
+type ChildControlState = {
+	channel: ChildChannel;
+	currentBinding?: ChildRuntimeBinding;
 	currentRunId?: string;
 	latestRunId?: string;
 	currentRunOutcome: "completed" | "interrupted" | "failed";
 	nativeRunSequence: number;
-	activity: RemoteAgentActivitySource;
-	reinitializePresentation(): void;
 	queueIntentionTail: Promise<void>;
 	shutdownStarted: boolean;
 };
 
+const CHILD_CONTROL_REGISTRY_KEY = "__piAgentCoordinationChildControls";
+const globalChildControlRegistry = globalThis as typeof globalThis & {
+	[CHILD_CONTROL_REGISTRY_KEY]?: WeakMap<AgentSession, ChildControlState>;
+};
+// Pi retains the exact AgentSession across /reload. Preserve only its authenticated
+// Control and continuity state; every extension generation replaces currentBinding.
+const childControls = (
+	globalChildControlRegistry[CHILD_CONTROL_REGISTRY_KEY] ??= new WeakMap()
+);
+
 const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	const bootstrap = await readBootstrapDescriptor();
 	const interactiveBridge = installInteractiveHostBridge(hostPi);
-	const activity = new RemoteAgentActivitySource(bootstrap.agentId);
-	let state: RuntimeState | undefined;
+	let state: ChildControlState | undefined;
 	const participantRequest: ChildParticipantControlRequester = (method, payload, signal) => {
 		if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
 		return state.channel.request(method, payload, signal);
@@ -89,66 +109,75 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	pi.on("session_before_fork", (_event, ctx) => cancelNativeSessionReplacement(ctx));
 	pi.on("session_before_switch", (_event, ctx) => cancelNativeSessionReplacement(ctx));
 
-	pi.on("session_start", async (_event, ctx) => {
+	pi.on("session_start", async (event, ctx) => {
 		if (state) throw new Error("child_runtime_bridge_rebound: session replacement is not supported");
 		if (ctx.mode !== "tui" || !ctx.hasUI) {
 			throw new Error("child_runtime_bridge_requires_tui: expected mode=tui and hasUI=true");
 		}
-		const transport = await connectControlTransport(bootstrap.endpoint);
-		const channel = new FramedAgentControlChannel({
-			identity: {
-				protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
-				workflowId: bootstrap.workflowId,
-				agentId: bootstrap.agentId,
-			},
-			protocol: agentControlProtocol,
-			transport,
-		});
 		const capture = await interactiveBridge.capture(ctx.sessionManager as hostPi.SessionManager);
-		state = {
-			channel,
-			context: ctx,
-			runtime: capture.runtime,
-			currentRunOutcome: "completed",
-			nativeRunSequence: 0,
-			activity,
-			reinitializePresentation: capture.reinitializePresentation,
-			queueIntentionTail: Promise.resolve(),
-			shutdownStarted: false,
-		};
+		assertExpectedSession(capture.runtime, bootstrap);
+		const retained = childControls.get(capture.runtime.session);
+		if (retained && event.reason !== "reload") {
+			throw new Error("child_runtime_bridge_rebound: session replacement is not supported");
+		}
+		if (retained) {
+			state = retained;
+		} else {
+			const transport = await connectControlTransport(bootstrap.endpoint);
+			const channel = new FramedAgentControlChannel({
+				identity: {
+					protocolVersion: AGENT_CONTROL_PROTOCOL_VERSION,
+					workflowId: bootstrap.workflowId,
+					agentId: bootstrap.agentId,
+				},
+				protocol: agentControlProtocol,
+				transport,
+			});
+			state = {
+				channel,
+				currentRunOutcome: "completed",
+				nativeRunSequence: 0,
+				queueIntentionTail: Promise.resolve(),
+				shutdownStarted: false,
+			};
+			childControls.set(capture.runtime.session, state);
+			channel.onRequest((request) => requireCurrentBinding(state as ChildControlState)
+				.handleOwnerRequest(request));
+			channel.onEvent((event) => requireCurrentBinding(state as ChildControlState)
+				.handleOwnerEvent(event));
+			channel.onClose(() => state?.currentBinding?.handleControlClose());
+		}
+		const currentState = state;
+		currentState.currentBinding?.dispose();
+		const binding = createChildRuntimeBinding(
+			currentState,
+			capture.runtime,
+			ctx,
+			capture.reinitializePresentation,
+			bootstrap.agentId,
+		);
+		currentState.currentBinding = binding;
+		currentState.shutdownStarted = false;
 		// Inherited input preflights must run before coordination consumes an exact
 		// interactive submission, while the other lifecycle and tools must exist
 		// before inherited session_start hooks can initiate work.
 		registerParticipantInput();
-		capture.runtime.session.subscribe((event) => {
-			const current = state;
-			if (!current) return;
-			void reportRuntimeLifecycle(current, event).catch((error: unknown) =>
-				reportFault(current.channel, "runtime_lifecycle_failed", error)
-			);
-		});
-		channel.onRequest((request) => handleOwnerRequest(state as RuntimeState, request));
-		channel.onEvent((event) => {
-			if (event.event === "presentation.agents.changed") {
-				activity.update(event.payload);
-			}
-		});
-		channel.onClose(() => {
-			const current = state;
-			if (!current || current.shutdownStarted) return;
-			current.shutdownStarted = true;
-			current.context.shutdown();
-		});
+		const channel = currentState.channel;
 		try {
-			assertExpectedSession(state.runtime, bootstrap);
-			await channel.sendHello({
-				connectionToken: bootstrap.connectionToken,
-				expectedSessionId: bootstrap.expectedSessionId,
-			});
-			if (bootstrap.ownerPresentation) {
-				activity.update(await participantRequest("presentation.agents.snapshot", {}));
-				installAgentActivityDock(ctx.ui, activity);
+			assertExpectedSession(binding.runtime, bootstrap);
+			if (!retained) {
+				await channel.sendHello({
+					connectionToken: bootstrap.connectionToken,
+					expectedSessionId: bootstrap.expectedSessionId,
+				});
 			}
+			if (bootstrap.ownerPresentation) {
+				binding.activity.update(
+					await participantRequest("presentation.agents.snapshot", {}),
+				);
+				installAgentActivityDock(ctx.ui, binding.activity);
+			}
+			if (retained) return;
 			await channel.sendEvent("runtime.ready", {
 				sessionId: ctx.sessionManager.getSessionId(),
 				mode: "tui",
@@ -164,19 +193,64 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	pi.on("session_shutdown", async (event) => {
 		const current = state;
 		if (!current) return;
-		current.shutdownStarted = true;
+		// Reload invalidates this extension runner but retains the exact AgentSession
+		// and process. The fresh session_start evaluation rebinds the same channel.
+		if (event.reason !== "reload") current.shutdownStarted = true;
 		await current.channel.sendEvent("session.shutdown", { reason: event.reason })
 			.catch(() => undefined);
 	});
 };
 
+function createChildRuntimeBinding(
+	state: ChildControlState,
+	runtime: AgentSessionRuntime,
+	context: ExtensionContext,
+	reinitializePresentation: () => void,
+	agentId: string,
+): ChildRuntimeBinding {
+	let binding!: ChildRuntimeBinding;
+	const activity = new RemoteAgentActivitySource(agentId);
+	const removeLifecycleSubscription = runtime.session.subscribe((event) => {
+		void reportRuntimeLifecycle(state, runtime, activity, event).catch((error: unknown) =>
+			reportFault(state.channel, "runtime_lifecycle_failed", error)
+		);
+	});
+	binding = {
+		context,
+		runtime,
+		activity,
+		reinitializePresentation,
+		handleOwnerRequest: (request) => handleOwnerRequest(state, binding, request),
+		handleOwnerEvent(event) {
+			if (event.event === "presentation.agents.changed") {
+				binding.activity.update(event.payload);
+			}
+		},
+		handleControlClose() {
+			if (state.shutdownStarted) return;
+			state.shutdownStarted = true;
+			context.shutdown();
+		},
+		dispose: removeLifecycleSubscription,
+	};
+	return binding;
+}
+
+function requireCurrentBinding(state: ChildControlState): ChildRuntimeBinding {
+	if (!state.currentBinding) {
+		throw new Error("child_runtime_control_unavailable: Runtime binding is unavailable");
+	}
+	return state.currentBinding;
+}
+
 async function handleOwnerRequest(
-	state: RuntimeState,
+	state: ChildControlState,
+	binding: ChildRuntimeBinding,
 	request: Parameters<Parameters<ChildChannel["onRequest"]>[0]>[0],
 ): Promise<unknown> {
 	switch (request.method) {
 		case "runtime.snapshot":
-			return runtimeSnapshot(state.runtime, state.context);
+			return runtimeSnapshot(binding.runtime, binding.context);
 		case "run.prompt": {
 			if (state.currentRunId) {
 				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
@@ -188,11 +262,17 @@ async function handleOwnerRequest(
 			const preflight = new Promise<boolean>((resolve) => {
 				resolvePreflight = resolve;
 			});
-			void state.runtime.session.prompt(request.payload.input, {
+			void binding.runtime.session.prompt(request.payload.input, {
 				source: "extension",
 				preflightResult: resolvePreflight,
 			}).catch(async (error: unknown) => {
-				await failCurrentRun(state, request.payload.runId, error);
+				await failCurrentRun(
+					state,
+					binding.runtime,
+					binding.activity,
+					request.payload.runId,
+					error,
+				);
 			});
 			const accepted = await preflight;
 			if (!accepted && state.currentRunId === request.payload.runId) {
@@ -202,23 +282,23 @@ async function handleOwnerRequest(
 		}
 		case "message.deliver": {
 			admitRun(state, request.payload.runId);
-			const wasActive = !state.runtime.session.isIdle;
+			const wasActive = !binding.runtime.session.isIdle;
 			const commit = observeDeliveryCommit(
-				state.runtime,
-				state.context.sessionManager,
+				binding.runtime,
+				binding.context.sessionManager,
 				request.payload.delivery,
 			);
 			const completion = wasActive
 				? sequenceQueueIntention(state, () => {
 					if (request.signal.aborted) throw requestCancellationError(request.signal);
-					return dispatchDelivery(state.runtime, request.payload.delivery);
+					return dispatchDelivery(binding.runtime, request.payload.delivery);
 				})
-				: dispatchDelivery(state.runtime, request.payload.delivery);
+				: dispatchDelivery(binding.runtime, request.payload.delivery);
 			const cancel = () => {
 				commit.reject(requestCancellationError(request.signal));
 				if (state.currentRunId !== request.payload.runId) return;
-				state.runtime.session.clearQueue();
-				void state.runtime.session.abort().catch((error: unknown) =>
+				binding.runtime.session.clearQueue();
+				void binding.runtime.session.abort().catch((error: unknown) =>
 					reportFault(state.channel, "run_cancellation_failed", error)
 				);
 			};
@@ -232,11 +312,17 @@ async function handleOwnerRequest(
 			}
 			void completion.catch(async (error: unknown) => {
 				commit.reject(error);
-				await failCurrentRun(state, request.payload.runId, error);
+				await failCurrentRun(
+					state,
+					binding.runtime,
+					binding.activity,
+					request.payload.runId,
+					error,
+				);
 			});
 			try {
 				const transcriptCommitted = await commit.result;
-				const modelCycleStarted = wasActive || !state.runtime.session.isIdle;
+				const modelCycleStarted = wasActive || !binding.runtime.session.isIdle;
 				if (
 					!modelCycleStarted &&
 					state.currentRunId === request.payload.runId
@@ -245,7 +331,7 @@ async function handleOwnerRequest(
 					accepted: true,
 					transcriptCommitted,
 					modelCycleStarted,
-					queuedInputCount: state.runtime.session.pendingMessageCount,
+					queuedInputCount: binding.runtime.session.pendingMessageCount,
 				};
 			} finally {
 				request.signal.removeEventListener("abort", cancel);
@@ -262,8 +348,14 @@ async function handleOwnerRequest(
 			// The Control response owns dispatch acceptance only. Exact completion and
 			// cancellation remain the agent lifecycle events and run.interrupt request;
 			// no long-running request is left pretending to own the model cycle.
-			void continueFromCommittedInput(state.runtime.session).catch((error: unknown) =>
-				failCurrentRun(state, request.payload.runId, error)
+			void continueFromCommittedInput(binding.runtime.session).catch((error: unknown) =>
+				failCurrentRun(
+					state,
+					binding.runtime,
+					binding.activity,
+					request.payload.runId,
+					error,
+				)
 			);
 			return { accepted: true };
 		}
@@ -271,26 +363,26 @@ async function handleOwnerRequest(
 			requireCurrentOrLatestRun(state, request.payload.runId);
 			const cleared = await sequenceQueueIntention(
 				state,
-				() => state.runtime.session.clearQueue(),
+				() => binding.runtime.session.clearQueue(),
 			);
 			return {
 				...cleared,
-				queuedInputCount: state.runtime.session.pendingMessageCount,
+				queuedInputCount: binding.runtime.session.pendingMessageCount,
 			};
 		}
 		case "run.interrupt": {
 			const accepted = requireCurrentOrLatestRun(state, request.payload.runId);
 			if (accepted) {
-				await sequenceQueueIntention(state, () => state.runtime.session.abort());
+				await sequenceQueueIntention(state, () => binding.runtime.session.abort());
 			}
 			return { accepted };
 		}
 		case "presentation.reinitialize":
-			state.reinitializePresentation();
+			binding.reinitializePresentation();
 			return {};
 		case "runtime.shutdown":
 			state.shutdownStarted = true;
-			setImmediate(() => state.context.shutdown());
+			setImmediate(() => binding.context.shutdown());
 			return { accepted: true };
 		case "runtime.executionBegin":
 		case "runtime.humanInput":
@@ -368,11 +460,13 @@ async function runtimeSnapshot(
 }
 
 async function reportRuntimeLifecycle(
-	state: RuntimeState,
+	state: ChildControlState,
+	runtime: AgentSessionRuntime,
+	activity: RemoteAgentActivitySource,
 	event: AgentSessionEvent,
 ): Promise<void> {
 	if (event.type === "agent_start") {
-		state.activity.setScopeFailed(false);
+		activity.setScopeFailed(false);
 		// Interactive and extension-local Pi input is admitted through the child →
 		// Owner lifecycle request before this awaited event. It has no Owner-issued
 		// run.prompt request from which to inherit a transport cycle identity.
@@ -380,7 +474,7 @@ async function reportRuntimeLifecycle(
 		state.latestRunId = state.currentRunId;
 		await state.channel.sendEvent("agent.start", {
 			runId: state.currentRunId,
-			queuedInputCount: state.runtime.session.pendingMessageCount,
+			queuedInputCount: runtime.session.pendingMessageCount,
 		});
 		return;
 	}
@@ -394,12 +488,12 @@ async function reportRuntimeLifecycle(
 			: assistant?.role === "assistant" && assistant.stopReason === "error"
 				? "failed"
 				: "completed";
-		state.activity.setScopeFailed(state.currentRunOutcome === "failed");
+		activity.setScopeFailed(state.currentRunOutcome === "failed");
 		await state.channel.sendEvent("agent.end", {
 			runId: state.currentRunId,
 			outcome: state.currentRunOutcome,
 			willRetry: event.willRetry,
-			queuedInputCount: state.runtime.session.pendingMessageCount,
+			queuedInputCount: runtime.session.pendingMessageCount,
 			...(assistant?.role === "assistant" && assistant.errorMessage
 				? { error: assistant.errorMessage }
 				: {}),
@@ -411,12 +505,12 @@ async function reportRuntimeLifecycle(
 	await state.channel.sendEvent("agent.settled", {
 		runId,
 		outcome: state.currentRunOutcome,
-		queuedInputCount: state.runtime.session.pendingMessageCount,
+		queuedInputCount: runtime.session.pendingMessageCount,
 	});
 	if (state.currentRunId === runId) state.currentRunId = undefined;
 }
 
-function admitRun(state: RuntimeState, runId: string): void {
+function admitRun(state: ChildControlState, runId: string): void {
 	if (state.currentRunId && state.currentRunId !== runId) {
 		throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
 	}
@@ -426,7 +520,7 @@ function admitRun(state: RuntimeState, runId: string): void {
 	state.currentRunOutcome = "completed";
 }
 
-function requireCurrentOrLatestRun(state: RuntimeState, runId: string): boolean {
+function requireCurrentOrLatestRun(state: ChildControlState, runId: string): boolean {
 	const expectedRunId = state.currentRunId ?? state.latestRunId;
 	if (runId !== expectedRunId) {
 		throw new Error(
@@ -437,7 +531,7 @@ function requireCurrentOrLatestRun(state: RuntimeState, runId: string): boolean 
 }
 
 function sequenceQueueIntention<T>(
-	state: RuntimeState,
+	state: ChildControlState,
 	operation: () => T | Promise<T>,
 ): Promise<T> {
 	const result = state.queueIntentionTail.then(operation);
@@ -578,21 +672,27 @@ function cancelNativeSessionReplacement(
 	return { cancel: true };
 }
 
-async function failCurrentRun(state: RuntimeState, runId: string, error: unknown): Promise<void> {
-	state.activity.setScopeFailed(true);
+async function failCurrentRun(
+	state: ChildControlState,
+	runtime: AgentSessionRuntime,
+	activity: RemoteAgentActivitySource,
+	runId: string,
+	error: unknown,
+): Promise<void> {
+	activity.setScopeFailed(true);
 	await reportFault(state.channel, "run_prompt_failed", error);
 	if (state.currentRunId !== runId) return;
 	await state.channel.sendEvent("agent.end", {
 		runId,
 		outcome: "failed",
 		willRetry: false,
-		queuedInputCount: state.runtime.session.pendingMessageCount,
+		queuedInputCount: runtime.session.pendingMessageCount,
 		error: errorMessage(error),
 	}).catch(() => undefined);
 	await state.channel.sendEvent("agent.settled", {
 		runId,
 		outcome: "failed",
-		queuedInputCount: state.runtime.session.pendingMessageCount,
+		queuedInputCount: runtime.session.pendingMessageCount,
 	})
 		.catch(() => undefined);
 	if (state.currentRunId === runId) state.currentRunId = undefined;
