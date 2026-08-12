@@ -827,10 +827,21 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 				);
 			}
 			if (!retainRuntime) await attemptCleanup(() => run.unsubscribe());
-			await attemptCleanup(() => run.runtime.clearQueue());
+			// A terminal Runtime fault already owns cancellation and queue fencing.
+			// Do not turn its dead-Control fallout into duplicate cleanup failures.
+			const runtimeAvailable = () => run.runtime.workState() !== "unavailable";
+			if (runtimeAvailable()) {
+				await attemptCleanup(async () => {
+					try {
+						await run.runtime.clearQueue();
+					} catch (error) {
+						if (runtimeAvailable()) throw error;
+					}
+				});
+			}
 			if (disposeRuntime) {
 				await attemptCleanup(disposeRuntime);
-			} else {
+			} else if (runtimeAvailable()) {
 				await attemptCleanup(() => run.runtime.abort());
 				await attemptCleanup(() => run.runtime.waitForIdle());
 			}

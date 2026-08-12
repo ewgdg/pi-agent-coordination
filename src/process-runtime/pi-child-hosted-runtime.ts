@@ -51,6 +51,17 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	constructor(launch: PiChildProcessLaunch) {
 		this.#launch = launch;
+		// Fence volatile Run state before presentation reports the same process exit.
+		// Otherwise Owner restoration can race cleanup intentions over dead Control.
+		void launch.exited.then(
+			(exit) => {
+				if (this.#shutdownExpected) return;
+				this.#fail(new Error(
+					`child_runtime_unexpected_exit: code ${exit.exitCode} signal ${exit.signal}`,
+				));
+			},
+			(error: unknown) => this.#fail(error),
+		);
 		const projection = createPiChildProcessProjection(launch);
 		this.projection = Object.freeze({
 			...projection,
@@ -88,15 +99,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			});
 		});
 		void this.ready.catch((error: unknown) => this.#fail(error));
-		void launch.exited.then(
-			(exit) => {
-				if (this.#shutdownExpected) return;
-				this.#fail(new Error(
-					`child_runtime_unexpected_exit: code ${exit.exitCode} signal ${exit.signal}`,
-				));
-			},
-			(error: unknown) => this.#fail(error),
-		);
 	}
 
 	snapshot(): EffectiveRuntimeSnapshot {
