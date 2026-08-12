@@ -332,6 +332,9 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		processVisibleModel: false,
 		additionalExtensionPaths: [broker.extensionPath, moderatorWidgetExtension],
 	});
+	await mkdir(host.services.agentDir, { recursive: true });
+	const childSettingsPath = join(host.services.agentDir, "settings.json");
+	await writeFile(childSettingsPath, `${JSON.stringify({ theme: "dark" })}\n`);
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let moderatorProviderRequests = 0;
@@ -460,6 +463,11 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 			(globalThis as Record<PropertyKey, unknown>)[THEME_KEY],
 			ownerTheme,
 			"child-local theme changes must not mutate Owner process globals",
+		);
+		assert.equal(
+			(JSON.parse(await readFile(childSettingsPath, "utf8")) as { theme?: string }).theme,
+			"light",
+			"child Pi settings must use the same Agent directory as its Owner Runtime",
 		);
 		await view.close();
 		assert.equal(moderatorProviderRequests, 3);

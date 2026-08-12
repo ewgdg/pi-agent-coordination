@@ -340,6 +340,7 @@ export class ProcessChildSessionFactory {
 			configuration: prepared.configuration,
 			skillPaths: prepared.skillSources.map(({ path }) => path),
 			projectTrusted: prepared.projectTrusted,
+			agentDir: this.#ownerRuntime.services.agentDir,
 			agentsFiles: prepared.agentsFiles,
 			ownerRequestHandlers: this.#ownerRequestHandlers(
 				prepared.role,

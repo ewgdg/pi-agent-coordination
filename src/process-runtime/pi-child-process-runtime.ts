@@ -67,6 +67,7 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	skillPaths: readonly string[];
 	agentsFiles: readonly ChildContextFile[];
 	projectTrusted: boolean;
+	agentDir?: string;
 	ownerEnvironment?: NodeJS.ProcessEnv;
 	runtimeDirectory?: string;
 	columns?: number;
@@ -195,6 +196,9 @@ export class PiChildProcessRuntime {
 				ownerEnvironment: options.ownerEnvironment ?? process.env,
 				bootstrapPath,
 			});
+			if (options.agentDir !== undefined) {
+				environment.PI_CODING_AGENT_DIR = options.agentDir;
+			}
 			environment.TERM = "xterm-256color";
 			environment.COLORTERM = "truecolor";
 			const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
