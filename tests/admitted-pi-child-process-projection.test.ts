@@ -250,16 +250,27 @@ test("hosted child launch keeps submitted PTY input active until Agent Run admis
 
 	projection.dispatchInput("byte-exact\r");
 	assert.ok(dispatchIdle);
+	let inputSettled = false;
+	void dispatchIdle.then(() => inputSettled = true);
+	await Promise.resolve();
+	await Promise.resolve();
+	assert.equal(inputSettled, false);
+	assert.equal(projection.isProcessingInput(), true);
 	launch.notifyEvent({
 		event: "runtime.input.started",
 		payload: {},
 		sequence: 1,
 	});
+	launch.notifyEvent({
+		event: "runtime.input.submissionAcknowledged",
+		payload: { sequence: 1 },
+		sequence: 2,
+	});
 	assert.equal(projection.isProcessingInput(), true);
 	launch.notifyEvent({
 		event: "agent.start",
 		payload: { runId: "native-1", queuedInputCount: 0 },
-		sequence: 2,
+		sequence: 3,
 	});
 	assert.equal(projection.isProcessingInput(), false);
 	await dispatchIdle;
@@ -279,11 +290,16 @@ test("hosted child launch settles handled input without an Agent Run", async () 
 		payload: {},
 		sequence: 1,
 	});
+	launch.notifyEvent({
+		event: "runtime.input.submissionAcknowledged",
+		payload: { sequence: 1 },
+		sequence: 2,
+	});
 	assert.equal(projection.isProcessingInput(), true);
 	launch.notifyEvent({
 		event: "runtime.input.completed",
 		payload: {},
-		sequence: 2,
+		sequence: 3,
 	});
 	await inputIdle;
 	assert.equal(projection.isProcessingInput(), false);
@@ -298,6 +314,24 @@ test("hosted child launch does not treat multiline paste data as submission", as
 	await projection.whenInputIdle();
 	assert.equal(projection.isProcessingInput(), false);
 	await projection.dispose();
+});
+
+test("hosted child launch ignores late input lifecycle events after release", async () => {
+	const launch = new FakeLaunch(frameWithText("starting", 8, 3));
+	const projection = createPiChildProcessProjection(launch);
+
+	projection.dispatchInput("late\r");
+	const inputIdle = projection.whenInputIdle();
+	await projection.dispose();
+	await inputIdle;
+	launch.notifyEvent({ event: "runtime.input.started", payload: {}, sequence: 1 });
+	launch.notifyEvent({ event: "runtime.input.completed", payload: {}, sequence: 2 });
+	launch.notifyEvent({
+		event: "runtime.input.submissionAcknowledged",
+		payload: { sequence: 1 },
+		sequence: 3,
+	});
+	assert.equal(projection.isProcessingInput(), false);
 });
 
 test("abnormal process exit is both a projection failure and an exit request", async () => {

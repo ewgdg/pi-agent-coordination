@@ -562,10 +562,12 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 			.includes(submittedInput)
 	);
 	activeView.projection().dispatchInput("\r");
+	// Request release in the same Owner turn as Enter, before the child can
+	// acknowledge the PTY submission over Control.
+	const returningToOwner = owner.openAgentView(identity.agentId);
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
 		(entry) => entry.kind === "input_preflight_started" && entry.sessionId === agentId,
 	));
-	const returningToOwner = owner.openAgentView(identity.agentId);
 	await releaseProcessAgentViewProbe(probe.releasePath);
 	await returningToOwner;
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(

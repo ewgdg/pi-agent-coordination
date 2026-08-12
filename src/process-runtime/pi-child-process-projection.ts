@@ -3,6 +3,7 @@ import {
 	createAdmittedPiChildProcessProjection,
 	type AdmittedPiChildProjectionRuntime,
 } from "./admitted-pi-child-process-projection.ts";
+import { TerminalInputSubmissionTracker } from "./terminal-input-submission-tracker.ts";
 
 export type PiChildProjectionLaunch = AdmittedPiChildProjectionRuntime & Readonly<{
 	ready(): Promise<unknown>;
@@ -20,20 +21,35 @@ export function createPiChildProcessProjection(
 	launch: PiChildProjectionLaunch,
 ): HostedAgentProjection {
 	const terminal = createAdmittedPiChildProcessProjection(launch);
+	const inputSubmissions = new TerminalInputSubmissionTracker();
 	const readiness = launch.ready().then(() => undefined);
 	void readiness.catch(() => undefined);
 	let processingInput = false;
 	let inputIdle = Promise.resolve();
 	let settleInputIdle: (() => void) | undefined;
 	let childInputActive = false;
-	let dispatchSettlement: Promise<void> | undefined;
+	let latestSubmissionSequence = 0;
+	let acknowledgedSubmissionSequence = 0;
+	let disposed = false;
+	const hasPendingSubmission = () => acknowledgedSubmissionSequence < latestSubmissionSequence;
 	const finishInput = () => {
 		childInputActive = false;
-		processingInput = false;
-		settleInputIdle?.();
+		processingInput = hasPendingSubmission();
+		if (processingInput) return;
+		const settle = settleInputIdle;
 		settleInputIdle = undefined;
+		settle?.();
 	};
 	const removeRuntimeEventHandler = launch.onEvent((event) => {
+		if (disposed) return;
+		if (event.event === "runtime.input.submissionAcknowledged") {
+			acknowledgedSubmissionSequence = Math.max(
+				acknowledgedSubmissionSequence,
+				event.payload.sequence,
+			);
+			if (!childInputActive && !hasPendingSubmission()) finishInput();
+			return;
+		}
 		if (event.event === "runtime.input.started") {
 			childInputActive = true;
 			processingInput = true;
@@ -56,21 +72,15 @@ export function createPiChildProcessProjection(
 		physicalTerminal: terminal.physicalTerminal,
 		resize: terminal.resize,
 		dispatchInput(data) {
-			processingInput = true;
-			if (!settleInputIdle) {
+			const previousSubmissionSequence = latestSubmissionSequence;
+			latestSubmissionSequence = inputSubmissions.observe(data);
+			if (latestSubmissionSequence > previousSubmissionSequence) processingInput = true;
+			if (processingInput && !settleInputIdle) {
 				inputIdle = new Promise<void>((resolve) => {
 					settleInputIdle = resolve;
 				});
 			}
-			try {
-				terminal.dispatchInput(data);
-			} finally {
-				dispatchSettlement ??= Promise.resolve().then(() => {
-					dispatchSettlement = undefined;
-					if (childInputActive) return;
-					finishInput();
-				});
-			}
+			terminal.dispatchInput(data);
 		},
 		focusEditor: terminal.focusEditor,
 		addChangeHandler: terminal.addChangeHandler,
@@ -81,7 +91,10 @@ export function createPiChildProcessProjection(
 		ready: () => readiness,
 		cancelInitialization: (error) => launch.cancelInitialization(error),
 		dispose: async () => {
+			disposed = true;
 			removeRuntimeEventHandler();
+			inputSubmissions.dispose();
+			acknowledgedSubmissionSequence = latestSubmissionSequence;
 			finishInput();
 			await terminal.dispose();
 		},

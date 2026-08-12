@@ -40,6 +40,7 @@ import { registerParticipantCoordinationTools } from "../tools/participant-coord
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
 import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
+import { isTerminalInputSubmission } from "./terminal-input-submission-tracker.ts";
 import {
 	createControlBackedChildParticipantHandlers,
 	createControlBackedChildPresentationHandlers,
@@ -185,6 +186,18 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			ctx.sessionManager,
 			createParticipantInputHandler(participantLifecycle),
 		);
+		let inputSubmissionSequence = 0;
+		ctx.ui.onTerminalInput((data) => {
+			if (!isTerminalInputSubmission(data)) return undefined;
+			const sequence = ++inputSubmissionSequence;
+			// Pi resolves getUserInput() in this same input turn. Delay only to the
+			// check phase so runtime.input.started enters ordered Control first.
+			setImmediate(() => void currentState.channel.sendEvent(
+				"runtime.input.submissionAcknowledged",
+				{ sequence },
+			).catch(() => undefined));
+			return undefined;
+		});
 		const inputLifecycle = {
 			started: () => currentState.channel.sendEvent("runtime.input.started", {}),
 			completed: () => currentState.channel.sendEvent("runtime.input.completed", {}),

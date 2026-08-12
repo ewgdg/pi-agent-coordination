@@ -590,6 +590,9 @@ export const agentControlEvents = {
 		payload: closed({ sessionId: NonEmptyStringSchema, mode: Type.Literal("tui"), hasUI: Type.Literal(true) }),
 	},
 	"runtime.snapshot.changed": { payload: RuntimeSnapshotSchema },
+	"runtime.input.submissionAcknowledged": {
+		payload: closed({ sequence: Type.Integer({ minimum: 1 }) }),
+	},
 	"runtime.input.started": { payload: EmptySchema },
 	"runtime.input.completed": { payload: EmptySchema },
 	"agent.start": {
