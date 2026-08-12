@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
 import { FramedAgentControlChannel } from "../control/agent-control-channel.ts";
@@ -29,12 +30,14 @@ import {
 } from "../presentation/agent-activity-surface.ts";
 import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
 import {
-	registerParticipantInputLifecycle,
+	createParticipantInputHandler,
+	type ParticipantLifecycleHandlers,
 	registerParticipantLifecycle,
 } from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
+import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
 import {
 	createControlBackedChildParticipantHandlers,
 	createControlBackedChildPresentationHandlers,
@@ -43,6 +46,7 @@ import {
 import { registerRemoteAgentsCommand } from "./remote-agent-selector.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
+const INPUT_MODULE_PATH = fileURLToPath(new URL("./child-runtime-input.ts", import.meta.url));
 const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
 	"Return to Owner before replacing or forking the native session.";
 
@@ -52,6 +56,7 @@ type ChildRuntimeBinding = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
 	activity: RemoteAgentActivitySource;
+	publishRuntimeSnapshot(): Promise<void>;
 	reinitializePresentation(): void;
 	handleOwnerRequest(
 		request: Parameters<Parameters<ChildChannel["onRequest"]>[0]>[0],
@@ -94,20 +99,34 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		pi,
 		createControlBackedChildPresentationHandlers(participantRequest),
 	);
-	let registerParticipantInput: () => void;
+	let participantLifecycle: ParticipantLifecycleHandlers;
 	if (bootstrap.role === "ordinary") {
-		const handlers = createControlBackedChildParticipantHandlers("ordinary", participantRequest);
-		registerParticipantLifecycle(pi, handlers.lifecycle, { registerInput: false });
-		registerParticipantCoordinationTools(pi, "ordinary", handlers.coordination);
-		registerParticipantInput = () => registerParticipantInputLifecycle(pi, handlers.lifecycle);
+		const participant = createControlBackedChildParticipantHandlers("ordinary", participantRequest);
+		participantLifecycle = participant.lifecycle;
+		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
+		registerParticipantCoordinationTools(pi, "ordinary", participant.coordination);
 	} else {
-		const handlers = createControlBackedChildParticipantHandlers("moderator", participantRequest);
-		registerParticipantLifecycle(pi, handlers.lifecycle, { registerInput: false });
-		registerParticipantCoordinationTools(pi, "moderator", handlers.coordination);
-		registerParticipantInput = () => registerParticipantInputLifecycle(pi, handlers.lifecycle);
+		const participant = createControlBackedChildParticipantHandlers("moderator", participantRequest);
+		participantLifecycle = participant.lifecycle;
+		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
+		registerParticipantCoordinationTools(pi, "moderator", participant.coordination);
 	}
 	pi.on("session_before_fork", (_event, ctx) => cancelNativeSessionReplacement(ctx));
 	pi.on("session_before_switch", (_event, ctx) => cancelNativeSessionReplacement(ctx));
+	const publishCurrentRuntimeSnapshot = async () => {
+		const binding = state?.currentBinding;
+		if (binding) await binding.publishRuntimeSnapshot();
+	};
+	const deferRuntimeSnapshot = () => {
+		queueMicrotask(() => void publishCurrentRuntimeSnapshot().catch((error: unknown) => {
+			if (state) return reportFault(state.channel, "runtime_snapshot_failed", error);
+		}));
+	};
+	pi.on("model_select", deferRuntimeSnapshot);
+	pi.on("thinking_level_select", deferRuntimeSnapshot);
+	// Active tools have no Pi change event. This authoritative pre-generation
+	// boundary publishes extension-driven tool mutations before they can execute.
+	pi.on("before_agent_start", publishCurrentRuntimeSnapshot);
 
 	pi.on("session_start", async (event, ctx) => {
 		if (state) throw new Error("child_runtime_bridge_rebound: session replacement is not supported");
@@ -148,7 +167,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			channel.onClose(() => state?.currentBinding?.handleControlClose());
 		}
 		const currentState = state;
-		currentState.currentBinding?.dispose();
+		if (retained) currentState.currentBinding?.dispose();
 		const binding = createChildRuntimeBinding(
 			currentState,
 			capture.runtime,
@@ -158,10 +177,12 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		);
 		currentState.currentBinding = binding;
 		currentState.shutdownStarted = false;
-		// Inherited input preflights must run before coordination consumes an exact
-		// interactive submission, while the other lifecycle and tools must exist
-		// before inherited session_start hooks can initiate work.
-		registerParticipantInput();
+		// The input-only extension is last in Pi load order. Replace its delegate on
+		// every bridge generation while keeping lifecycle and Control available first.
+		childRuntimeInputs.set(
+			ctx.sessionManager,
+			createParticipantInputHandler(participantLifecycle),
+		);
 		const channel = currentState.channel;
 		try {
 			assertExpectedSession(binding.runtime, bootstrap);
@@ -177,6 +198,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				);
 				installAgentActivityDock(ctx.ui, binding.activity);
 			}
+			await binding.publishRuntimeSnapshot();
 			if (retained) return;
 			await channel.sendEvent("runtime.ready", {
 				sessionId: ctx.sessionManager.getSessionId(),
@@ -215,10 +237,17 @@ function createChildRuntimeBinding(
 			reportFault(state.channel, "runtime_lifecycle_failed", error)
 		);
 	});
+	const publishRuntimeSnapshot = async () => {
+		await state.channel.sendEvent(
+			"runtime.snapshot.changed",
+			await runtimeSnapshot(runtime, context),
+		);
+	};
 	binding = {
 		context,
 		runtime,
 		activity,
+		publishRuntimeSnapshot,
 		reinitializePresentation,
 		handleOwnerRequest: (request) => handleOwnerRequest(state, binding, request),
 		handleOwnerEvent(event) {
@@ -411,6 +440,7 @@ async function runtimeSnapshot(
 ) {
 	const session = runtime.session;
 	const bridgePath = await canonicalFilePath(ENTRY_MODULE_PATH, runtime.cwd);
+	const inputPath = await canonicalFilePath(INPUT_MODULE_PATH, runtime.cwd);
 	const extensions = await Promise.all(
 		runtime.services.resourceLoader.getExtensions().extensions
 			.map((extension) => extension.resolvedPath)
@@ -445,7 +475,7 @@ async function runtimeSnapshot(
 		tools,
 		skills: skillSources.map(({ name }) => name),
 		skillSources,
-		extensions: extensions.filter((path) => path !== bridgePath),
+		extensions: extensions.filter((path) => path !== bridgePath && path !== inputPath),
 		toolExecutionModes,
 		projectTrusted: runtime.services.settingsManager.isProjectTrusted(),
 		sessionId: session.sessionId,

@@ -88,6 +88,7 @@ export interface AgentRuntimeHost {
 	currentHandle(): AgentRunHandle | undefined;
 	currentProjection(): TerminalProjection | undefined;
 	effectiveRuntimeSnapshot(): EffectiveRuntimeSnapshot | undefined;
+	synchronizeRuntimeState(): Promise<EffectiveRuntimeSnapshot>;
 	currentWorkState(): AgentRuntimeWorkState;
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification;
 	exactRunCancellationSignal(handle: AgentRunHandle): AbortSignal;

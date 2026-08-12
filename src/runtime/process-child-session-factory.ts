@@ -236,8 +236,9 @@ export class ProcessChildSessionFactory {
 		record: AgentRecord,
 		resolving: Set<string>,
 	): Promise<ResolvedParentRuntime> {
-		const snapshot = record.host.effectiveRuntimeSnapshot();
-		if (snapshot) {
+		const admittedSnapshot = record.host.effectiveRuntimeSnapshot();
+		if (admittedSnapshot) {
+			const snapshot = await record.host.synchronizeRuntimeState();
 			if (snapshot.sessionId !== record.identity.agentId) {
 				throw new Error(
 					"invariant_violation: Parent Runtime snapshot does not match Agent Identity",

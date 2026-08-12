@@ -37,6 +37,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	readonly #removeEventHandler: () => void;
 	#removeChannelCloseHandler: () => void = () => undefined;
 	#snapshot: EffectiveRuntimeSnapshot | undefined;
+	#snapshotRevision = 0;
 	#toolExecutionModes = new Map<string, "sequential" | "parallel">();
 	#workState: AgentRuntimeWorkState = "settled";
 	#queuedInputCount = 0;
@@ -73,26 +74,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#removeEventHandler = launch.onEvent((event) => this.#handleEvent(event));
 		this.#admitted = launch.ready();
 		this.ready = this.#admitted.then((runtime) => {
-			this.#toolExecutionModes = new Map(
-				runtime.snapshot.toolExecutionModes.map(({ name, executionMode }) => [
-					name,
-					executionMode,
-				]),
-			);
-			this.#snapshot = {
-				cwd: runtime.snapshot.cwd,
-				model: runtime.snapshot.model,
-				thinking: runtime.snapshot.thinking,
-				tools: [...runtime.snapshot.tools],
-				skills: [...runtime.snapshot.skills],
-				skillSources: runtime.snapshot.skillSources.map(({ name, filePath }) => ({
-					name,
-					filePath,
-				})),
-				fileExtensionPaths: [...runtime.snapshot.extensions],
-				projectTrusted: runtime.snapshot.projectTrusted,
-				sessionId: runtime.snapshot.sessionId,
-			};
+			this.#adoptSnapshot(runtime.snapshot);
 			this.#removeChannelCloseHandler = runtime.channel.onClose((cause) => {
 				if (this.#shutdownExpected) return;
 				this.#fail(cause ?? new Error("child_runtime_channel_closed"));
@@ -106,6 +88,16 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			throw new Error("child_runtime_not_admitted: effective snapshot is unavailable");
 		}
 		return this.#snapshot;
+	}
+
+	async synchronizeState(): Promise<void> {
+		if (this.#unavailable) throw this.#unavailable;
+		const runtime = await this.#admitted;
+		const revision = this.#snapshotRevision;
+		const snapshot = await runtime.channel.request("runtime.snapshot", {});
+		// An ordered change event that arrived while this request was in flight is
+		// newer than the response's inspection point; never overwrite it.
+		if (revision === this.#snapshotRevision) this.#adoptSnapshot(snapshot);
 	}
 
 	workState(): AgentRuntimeWorkState {
@@ -182,7 +174,8 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	}
 
 	async clearQueue(): Promise<Readonly<{ steering: string[]; followUp: string[] }>> {
-		const runId = this.#requireLatestRunId();
+		const runId = this.#latestRunId;
+		if (!runId) return { steering: [], followUp: [] };
 		const result = await this.#admitted.then((runtime) =>
 			runtime.channel.request("queue.clear", { runId })
 		);
@@ -191,7 +184,8 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	}
 
 	async abort(): Promise<void> {
-		const runId = this.#requireLatestRunId();
+		const runId = this.#latestRunId;
+		if (!runId) return;
 		await this.#admitted.then((runtime) =>
 			runtime.channel.request("run.interrupt", { runId })
 		);
@@ -216,7 +210,32 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		return this.#disposePromise;
 	}
 
+	#adoptSnapshot(snapshot: PiChildProcessRuntime["snapshot"]): void {
+		// Tool classification and descendant inheritance must observe one coherent
+		// child state, never fields copied from different Runtime generations.
+		this.#toolExecutionModes = new Map(
+			snapshot.toolExecutionModes.map(({ name, executionMode }) => [name, executionMode]),
+		);
+		this.#snapshot = {
+			cwd: snapshot.cwd,
+			model: snapshot.model,
+			thinking: snapshot.thinking,
+			tools: [...snapshot.tools],
+			skills: [...snapshot.skills],
+			skillSources: snapshot.skillSources.map(({ name, filePath }) => ({ name, filePath })),
+			fileExtensionPaths: [...snapshot.extensions],
+			projectTrusted: snapshot.projectTrusted,
+			sessionId: snapshot.sessionId,
+		};
+	}
+
 	#handleEvent(event: PiChildRuntimeEvent): void {
+		if (event.event === "runtime.snapshot.changed") {
+			this.#snapshotRevision += 1;
+			this.#adoptSnapshot(event.payload);
+			this.#emit({ type: "state_changed" });
+			return;
+		}
 		if (event.event === "runtime.fault") {
 			this.#fail(new Error(
 				`child_runtime_fault: ${event.payload.code}: ${event.payload.message}`,
@@ -287,14 +306,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#currentRunId = `hosted-run-${this.#runSequence}`;
 		this.#latestRunId = this.#currentRunId;
 		return this.#currentRunId;
-	}
-
-	#requireLatestRunId(): string {
-		if (this.#unavailable) throw this.#unavailable;
-		if (!this.#latestRunId) {
-			throw new Error("child_runtime_run_unavailable: no Run has been admitted");
-		}
-		return this.#latestRunId;
 	}
 
 	#waitForSettlement(): SettlementWaiter {

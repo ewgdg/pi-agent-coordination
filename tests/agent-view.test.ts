@@ -583,6 +583,53 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
 });
 
+test("a handled Dormant Agent input can return to Owner after prompt preflight", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "handled-prompt-preflight");
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
+	});
+	t.after(() => host.runtime.dispose());
+	host.model.setResponses([
+		fauxAssistantMessage("Persist this response before handled input."),
+	]);
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-handled-preflight-worker",
+		{ request: "Settle before handled input.", label: "Handled Preflight Worker" },
+	);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "live"));
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-handled-preflight-worker",
+		{ operation: "terminate", agentId },
+	);
+	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "dormant"));
+
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
+	for (const character of "Handle this input before the Owner leaves.") {
+		view.handleInput?.(character);
+	}
+	view.handleInput?.("\r");
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "input_preflight_started" && entry.sessionId === agentId,
+	));
+	await releaseProcessAgentViewProbe(probe.releasePath);
+	await returnAgentViewToOwner(host, view, command);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "input_preflight_finished",
+	));
+	assert.equal(host.ui.customSurfaces.length, 0);
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
+});
+
 test("a Dormant Agent keeps commands available and starts one successor on editor submission", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "dormant-command");
 	const host = await createTestOwnerHost(piAgentCoordination, {

@@ -52,6 +52,10 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		return this.#inspectSnapshot();
 	}
 
+	synchronizeState(): Promise<void> {
+		return Promise.resolve();
+	}
+
 	workState(): AgentRuntimeWorkState {
 		return this.#session.isIdle ? "settled" : "active";
 	}

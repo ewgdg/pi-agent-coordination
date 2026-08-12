@@ -116,6 +116,88 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 	}
 });
 
+test("a live parent contributes its current synchronized Runtime state", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-live-parent-runtime-"));
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	await bindTestOwnerHost(host, "tui");
+	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
+	const ownerRecord: AgentRecord = {
+		identity: ownerIdentity,
+		host: AgentRuntimeSupervisor.bindOwner(host.runtime),
+		transcript: transcriptFromSessionManager(host.session.sessionManager),
+		children: ["live-parent"],
+	};
+	const parentSession = SessionManager.inMemory(host.cwd, { id: "live-parent" });
+	parentSession.appendCustomEntry("agent-coordination.identity", { marker: true });
+	const model = host.session.model;
+	assert.ok(model);
+	const synchronizedSnapshot = {
+		cwd: host.cwd,
+		model: { provider: model.provider, modelId: model.id },
+		thinking: host.session.thinkingLevel,
+		tools: ["bash"],
+		skills: [],
+		skillSources: [],
+		fileExtensionPaths: [],
+		projectTrusted: true,
+		sessionId: "live-parent",
+	} as const;
+	let synchronizations = 0;
+	const parentRecord = {
+		identity: {
+			agentId: "live-parent",
+			workflowId: ownerIdentity.workflowId,
+			directSpawnerAgentId: ownerIdentity.agentId,
+			spawnSource: {
+				agentId: ownerIdentity.agentId,
+				entryId: "live-parent-spawn-entry",
+				toolCallId: "live-parent-spawn-call",
+			},
+			metadata: { label: "live-parent" },
+		},
+		creationInput: { request: "Act as the live parent." },
+		host: {
+			effectiveRuntimeSnapshot: () => ({ ...synchronizedSnapshot, tools: ["read"] }),
+			async synchronizeRuntimeState() {
+				synchronizations += 1;
+				return synchronizedSnapshot;
+			},
+		} as unknown as AgentRecord["host"],
+		transcript: transcriptFromSessionManager(parentSession),
+		children: [],
+	} satisfies AgentRecord;
+	const agents = new Map([
+		[ownerIdentity.agentId, ownerRecord],
+		[parentRecord.identity.agentId, parentRecord],
+	]);
+	const factory = new ProcessChildSessionFactory({
+		ownerRuntime: host.runtime,
+		ownerIdentity,
+		entryModulePath: "<inline:pi-agent-coordination>",
+		packageRoot: root,
+		templateRoots: () => [],
+		resolveAgent: (agentId) => agents.get(agentId),
+		ownerRequestHandlers() {
+			throw new Error("Preparation test must not launch a child process");
+		},
+	});
+	try {
+		const prepared = await factory.prepareOrdinaryRun({
+			agentId: "live-descendant",
+			parent: parentRecord,
+			spawnInput: { request: "Inherit current live state." },
+		});
+		assert.equal(synchronizations, 1);
+		assert.equal(prepared.configuration.tools.includes("bash"), true);
+		assert.equal(prepared.configuration.tools.includes("read"), false);
+	} finally {
+		await host.runtime.dispose();
+	}
+});
+
 test("ordinary production spawn runs in a real child process over Owner participant RPC", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",

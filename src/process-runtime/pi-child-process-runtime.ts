@@ -47,6 +47,9 @@ const DEFAULT_SHUTDOWN_GRACE_MILLISECONDS = 3_000;
 const BRIDGE_EXTENSION_PATH = fileURLToPath(
 	new URL("./child-runtime-bridge.ts", import.meta.url),
 );
+const INPUT_EXTENSION_PATH = fileURLToPath(
+	new URL("./child-runtime-input.ts", import.meta.url),
+);
 
 export type PiChildRuntimeSnapshot = Static<typeof RuntimeSnapshotSchema>;
 export type PiChildRuntimeReady = Readonly<{
@@ -75,6 +78,7 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	startupTimeoutMilliseconds?: number;
 	cliPath?: string;
 	bridgeExtensionPath?: string;
+	inputExtensionPath?: string;
 	ownerRequestHandlers?:
 		| OwnerParticipantRequestHandlers<"ordinary">
 		| OwnerParticipantRequestHandlers<"moderator">;
@@ -181,12 +185,14 @@ export class PiChildProcessRuntime {
 				flag: "wx",
 			});
 			const bridgeExtensionPath = options.bridgeExtensionPath ?? BRIDGE_EXTENSION_PATH;
+			const inputExtensionPath = options.inputExtensionPath ?? INPUT_EXTENSION_PATH;
 			const childLaunch = buildPiChildCliLaunch({
 				cliPath: options.cliPath ?? resolveInstalledPiCliPath(),
 				sessionPath: options.sessionPath,
 				configuration: options.configuration,
 				skillPaths: options.skillPaths,
 				bridgeExtensionPath,
+				inputExtensionPath,
 				...(contextArtifactPath === undefined
 					? {}
 					: { contextArtifactPath }),
@@ -208,10 +214,15 @@ export class PiChildProcessRuntime {
 				settleReady = resolve;
 				rejectReady = reject;
 			});
+			// Control can settle either deferred before startup reaches its matching
+			// await. Own both rejections immediately; launch.ready() remains the caller's
+			// authoritative failure and cleanup boundary.
+			void bridgeReady.catch(() => undefined);
 			let rejectStartupFault!: (error: Error) => void;
 			const startupFault = new Promise<never>((_resolve, reject) => {
 				rejectStartupFault = reject;
 			});
+			void startupFault.catch(() => undefined);
 			const admission = admissionBroker.admit(
 				{
 					agentId: bootstrap.agentId,
@@ -278,14 +289,14 @@ export class PiChildProcessRuntime {
 				initialize: async (cancellation) => {
 					try {
 						channel = await raceStartup(
-							admission,
+							Promise.race([admission, startupFault]),
 							exactProjection,
 							timeoutMilliseconds,
 							"control admission",
 							cancellation,
 						);
 						const readyPayload = await raceStartup(
-							bridgeReady,
+							Promise.race([bridgeReady, startupFault]),
 							exactProjection,
 							timeoutMilliseconds,
 							"runtime.ready",

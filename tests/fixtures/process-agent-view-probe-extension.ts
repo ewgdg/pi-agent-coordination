@@ -252,6 +252,18 @@ const processAgentViewProbe: ExtensionFactory = (pi) => {
 			}
 		});
 	}
+	if (activeScenario === "handled-prompt-preflight") {
+		pi.on("input", async (event, ctx) => {
+			if (event.text !== "Handle this input before the Owner leaves.") {
+				return { action: "continue" };
+			}
+			record({ kind: "input_preflight_started", sessionId: ctx.sessionManager.getSessionId() });
+			await waitForRelease();
+			record({ kind: "input_preflight_finished", staleContextError: null });
+			ctx.ui.notify("Handled input completed without an Agent Run.", "info");
+			return { action: "handled" };
+		});
+	}
 
 	pi.on("session_shutdown", (event, ctx) => {
 		record({

@@ -238,7 +238,7 @@ test("admitted process terminal projection maps terminal operations and events w
 	assert.equal(runtime.disposeCount, 1);
 });
 
-test("hosted child launch observes only the synchronous PTY dispatch idle boundary", async () => {
+test("hosted child launch keeps submitted PTY input active until Agent Run admission", async () => {
 	const launch = new FakeLaunch(frameWithText("starting", 8, 3));
 	const projection = createPiChildProcessProjection(launch);
 	assert.equal(projection.ready(), projection.ready());
@@ -248,9 +248,15 @@ test("hosted child launch observes only the synchronous PTY dispatch idle bounda
 		dispatchIdle = projection.whenInputIdle();
 	};
 
-	projection.dispatchInput("byte-exact");
-	assert.equal(projection.isProcessingInput(), false);
+	projection.dispatchInput("byte-exact\r");
+	assert.equal(projection.isProcessingInput(), true);
 	assert.ok(dispatchIdle);
+	launch.notifyEvent({
+		event: "agent.start",
+		payload: { runId: "native-1", queuedInputCount: 0 },
+		sequence: 1,
+	});
+	assert.equal(projection.isProcessingInput(), false);
 	await dispatchIdle;
 	launch.settleReady();
 	await projection.ready();

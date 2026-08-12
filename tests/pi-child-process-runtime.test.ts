@@ -357,6 +357,127 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 	}
 });
 
+test("a pre-ready child fault rejects launch readiness without escaping startup cleanup", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-startup-fault-test-"));
+	const cwd = join(root, "work");
+	const sessionDirectory = join(root, "sessions");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000006";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+	const launch = await PiChildProcessRuntime.launch({
+		workflowId: "process-startup-fault-workflow",
+		agentId: "process-startup-fault-agent",
+		role: "ordinary",
+		expectedSessionId,
+		sessionPath,
+		configuration: {
+			cwd,
+			model: {
+				provider: PROCESS_RUNTIME_TEST_PROVIDER,
+				modelId: PROCESS_RUNTIME_TEST_MODEL,
+			},
+			thinking: "off",
+			tools: [],
+			skills: [],
+			extensions: [CHILD_EXTENSION],
+		},
+		skillPaths: [],
+		agentsFiles: [],
+		projectTrusted: true,
+		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
+		runtimeDirectory: root,
+		ownerRequestHandlers: ordinaryOwnerHandlers({
+			presentationSnapshotError: new Error("Owner presentation snapshot failed"),
+		}),
+	});
+	const pid = launch.pid;
+	const bootstrapPath = launch.bootstrapPath;
+	try {
+		await assert.rejects(
+			launch.ready(),
+			/child_runtime_fault: runtime_startup_failed: request_failed: Owner presentation snapshot failed/,
+		);
+		assert.equal(launch.disposed, true);
+		assert.throws(() => process.kill(pid, 0), hasProcessCode("ESRCH"));
+		await assert.rejects(lstat(bootstrapPath), hasFsCode("ENOENT"));
+	} finally {
+		await launch.dispose();
+	}
+});
+
+test("inherited child input preflights run before coordination consumes transformed input", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-input-order-test-"));
+	const cwd = join(root, "work");
+	const sessionDirectory = join(root, "sessions");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000007";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+	const submittedInputs: string[] = [];
+	let runtime: PiChildProcessRuntime | undefined;
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "process-input-order-workflow",
+			agentId: "process-input-order-agent",
+			role: "ordinary",
+			expectedSessionId,
+			sessionPath,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_MODEL,
+				},
+				thinking: "off",
+				tools: [],
+				skills: [],
+				extensions: [CHILD_EXTENSION],
+			},
+			skillPaths: [],
+			agentsFiles: [],
+			projectTrusted: true,
+			ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
+			runtimeDirectory: root,
+			ownerRequestHandlers: ordinaryOwnerHandlers({
+				selectorSnapshot: processSelectorSnapshot("process-input-order-agent"),
+				humanInputSubmitted: (text) => {
+					submittedInputs.push(text);
+					return true;
+				},
+			}),
+		});
+		runtime.writeInput("PROCESS_RUNTIME_HANDLED_INPUT\r");
+		await waitForFrame(runtime, "PROCESS_RUNTIME_INPUT_HANDLED");
+		assert.deepEqual(submittedInputs, []);
+		runtime.writeInput("PROCESS_RUNTIME_TRANSFORM_INPUT\r");
+		await waitUntil(() => submittedInputs.length === 1);
+		assert.deepEqual(submittedInputs, ["PROCESS_RUNTIME_TRANSFORMED_INPUT"]);
+	} finally {
+		await runtime?.dispose();
+	}
+});
+
 test("startup snapshot binds selected skills and file-backed launch inputs exactly", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
@@ -617,19 +738,26 @@ function ordinaryOwnerHandlers(options: Readonly<{
 	observeReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["observe"]>>;
 	messageReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["message"]>>;
 	selectorSnapshot?: ReturnType<OwnerParticipantRequestHandlers<"ordinary">["presentation"]["snapshot"]>;
+	presentationSnapshotError?: Error;
+	humanInputSubmitted?: (text: string) => boolean | Promise<boolean>;
 	select?: (action: Parameters<OwnerParticipantRequestHandlers<"ordinary">["presentation"]["select"]>[0]) => void;
 }> = {}): OwnerParticipantRequestHandlers<"ordinary"> {
 	return {
 		presentation: {
-			snapshot: () => options.selectorSnapshot ?? ({
-				live: [], dormant: [], selectedAgentId: "process-child",
-				humanAttention: [], operationalAttention: [],
-			}),
+			snapshot: () => {
+				if (options.presentationSnapshotError) throw options.presentationSnapshotError;
+				return options.selectorSnapshot ?? ({
+					live: [], dormant: [], selectedAgentId: "process-child",
+					humanAttention: [], operationalAttention: [],
+				});
+			},
 			async select(action) { options.select?.(action); },
 		},
 		lifecycle: {
 			async executionStarted() { options.executionStarted?.(); },
-			async humanInputSubmitted() { return false; },
+			async humanInputSubmitted(input) {
+				return await options.humanInputSubmitted?.(input.text) ?? false;
+			},
 			async humanInputMode() { return "agent"; },
 			async humanToolResultCommitting() { return undefined; },
 			async toolExecutionStarted() {},

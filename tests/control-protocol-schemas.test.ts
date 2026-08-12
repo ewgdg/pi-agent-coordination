@@ -87,6 +87,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	]);
 	assert.deepEqual(Object.keys(agentControlEvents), [
 		"runtime.ready",
+		"runtime.snapshot.changed",
 		"agent.start",
 		"agent.end",
 		"agent.settled",
@@ -103,6 +104,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, {}), true);
 	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, { extra: true }), false);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.unknown"), false);
+	assert.equal(Check(AgentControlEventSchema, "runtime.snapshot.changed"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.settled"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.unknown"), false);
 	for (const definition of Object.values(agentControlMethods)) {
@@ -142,6 +144,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		projectContext: null,
 	} as const;
 	assert.equal(Check(RuntimeSnapshotSchema, validRuntimeSnapshot), true);
+	assert.equal(Check(agentControlEvents["runtime.snapshot.changed"].payload, validRuntimeSnapshot), true);
 	const { toolExecutionModes: _missingToolModes, ...missingToolModes } = validRuntimeSnapshot;
 	assert.equal(Check(RuntimeSnapshotSchema, missingToolModes), false);
 	assert.equal(Check(agentControlMethods["runtime.humanInput"].request, {

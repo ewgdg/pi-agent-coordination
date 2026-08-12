@@ -17,6 +17,7 @@ import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/rem
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import {
+	PROCESS_RUNTIME_TEST_ALTERNATE_MODEL,
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
 } from "./fixtures/process-runtime-child-extension.ts";
@@ -58,7 +59,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: [],
+			tools: ["read"],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 		},
@@ -94,7 +95,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: [],
+			tools: ["read"],
 			skills: [],
 			skillSources: [],
 			fileExtensionPaths: [CHILD_EXTENSION],
@@ -103,7 +104,27 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 		});
 		assert.equal(host.currentProjection(), runtime.projection);
 		assert.equal(host.currentWorkState(), "settled");
-		assert.equal(host.classifyToolBatch([]), "asynchronous");
+		assert.equal(host.classifyToolBatch(["read"]), "asynchronous");
+		launch.writeInput("/runtime-state\r");
+		await waitUntil(() => launch.frame().lines.some(
+			(line) => line.text.includes("PROCESS_RUNTIME_STATE_CHANGED"),
+		));
+		// Pi's model_select event updates Owner presentation state without waiting
+		// for a later descendant pull; the complete event snapshot also carries tools.
+		assert.equal(
+			host.effectiveRuntimeSnapshot()?.model.modelId,
+			PROCESS_RUNTIME_TEST_ALTERNATE_MODEL,
+		);
+		assert.deepEqual(host.effectiveRuntimeSnapshot()?.tools, []);
+		assert.throws(
+			() => host.classifyToolBatch(["read"]),
+			/invariant_violation: tool definition read is unavailable/,
+		);
+		assert.deepEqual(host.effectiveRuntimeSnapshot()?.tools, []);
+		assert.equal(
+			host.effectiveRuntimeSnapshot()?.model.modelId,
+			PROCESS_RUNTIME_TEST_ALTERNATE_MODEL,
+		);
 		assert.throws(
 			() => host.classifyToolBatch(["missing-tool"]),
 			/invariant_violation: tool definition missing-tool is unavailable/,
@@ -202,6 +223,113 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 	} finally {
 		await launch.dispose();
 	}
+});
+
+test("a hosted child atomically refreshes its effective snapshot and tool modes", async () => {
+	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+	const initialSnapshot = fakeRuntimeSnapshot({
+		modelId: "initial-model",
+		thinking: "off",
+		toolExecutionModes: [{ name: "parallel-tool", executionMode: "parallel" }],
+	});
+	let currentSnapshot = initialSnapshot;
+	let requestSnapshot = async () => currentSnapshot;
+	const admitted = {
+		snapshot: initialSnapshot,
+		channel: {
+			onClose: () => () => undefined,
+			async request(method: string) {
+				if (method === "runtime.snapshot") return await requestSnapshot();
+				throw new Error(`unexpected request: ${method}`);
+			},
+		},
+	} as unknown as PiChildProcessRuntime;
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
+	await runtime.ready;
+	assert.equal(runtime.snapshot().model.modelId, "initial-model");
+	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
+
+	currentSnapshot = fakeRuntimeSnapshot({
+		modelId: "current-model",
+		thinking: "high",
+		toolExecutionModes: [{ name: "sequential-tool", executionMode: "sequential" }],
+	});
+	for (const handler of eventHandlers) {
+		handler(controlEvent("runtime.snapshot.changed", currentSnapshot));
+	}
+	assert.equal(runtime.snapshot().model.modelId, "current-model");
+	assert.equal(runtime.classifyToolBatch(["sequential-tool"]), "blocking");
+	await runtime.synchronizeState();
+	assert.deepEqual(runtime.snapshot(), {
+		cwd: "/runtime",
+		model: { provider: "test", modelId: "current-model" },
+		thinking: "high",
+		tools: ["sequential-tool"],
+		skills: [],
+		skillSources: [],
+		fileExtensionPaths: [],
+		projectTrusted: true,
+		sessionId: "dynamic-runtime",
+	});
+	assert.equal(runtime.classifyToolBatch(["sequential-tool"]), "blocking");
+	assert.throws(
+		() => runtime.classifyToolBatch(["parallel-tool"]),
+		/invariant_violation: tool definition parallel-tool is unavailable/,
+	);
+
+	let releaseStaleSnapshot!: () => void;
+	const staleSnapshotReleased = new Promise<void>((resolve) => {
+		releaseStaleSnapshot = resolve;
+	});
+	let markSnapshotRequested!: () => void;
+	const snapshotRequested = new Promise<void>((resolve) => {
+		markSnapshotRequested = resolve;
+	});
+	requestSnapshot = async () => {
+		markSnapshotRequested();
+		await staleSnapshotReleased;
+		return currentSnapshot;
+	};
+	const synchronization = runtime.synchronizeState();
+	await snapshotRequested;
+	const newerSnapshot = fakeRuntimeSnapshot({
+		modelId: "newer-model",
+		thinking: "off",
+		toolExecutionModes: [{ name: "newer-tool", executionMode: "parallel" }],
+	});
+	for (const handler of eventHandlers) {
+		handler(controlEvent("runtime.snapshot.changed", newerSnapshot));
+	}
+	releaseStaleSnapshot();
+	await synchronization;
+	assert.equal(runtime.snapshot().model.modelId, "newer-model");
+	assert.equal(runtime.classifyToolBatch(["newer-tool"]), "asynchronous");
+	await runtime.dispose();
+});
+
+test("a prepared hosted child has no Run queue or abort intention", async () => {
+	const requestedMethods: string[] = [];
+	const snapshot = fakeRuntimeSnapshot({
+		modelId: "prepared-model",
+		thinking: "off",
+		toolExecutionModes: [],
+	});
+	const admitted = {
+		snapshot,
+		channel: {
+			onClose: () => () => undefined,
+			async request(method: string) {
+				requestedMethods.push(method);
+				throw new Error(`unexpected request: ${method}`);
+			},
+		},
+	} as unknown as PiChildProcessRuntime;
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, new Set()));
+	await runtime.ready;
+	assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
+	await runtime.abort();
+	assert.deepEqual(requestedMethods, []);
+	await runtime.dispose();
 });
 
 test("retry and normal agent-end boundaries do not falsely cancel the exact hosted Run", async () => {
@@ -477,6 +605,56 @@ async function waitUntil(condition: () => boolean | Promise<boolean>): Promise<v
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Timed out waiting for hosted Runtime state");
+}
+
+function fakeRuntimeSnapshot(options: Readonly<{
+	modelId: string;
+	thinking: "off" | "high";
+	toolExecutionModes: readonly Readonly<{
+		name: string;
+		executionMode: "parallel" | "sequential";
+	}>[];
+}>): PiChildProcessRuntime["snapshot"] {
+	return {
+		cwd: "/runtime",
+		model: { provider: "test", modelId: options.modelId },
+		thinking: options.thinking,
+		tools: options.toolExecutionModes.map(({ name }) => name),
+		skills: [],
+		skillSources: [],
+		extensions: [],
+		toolExecutionModes: [...options.toolExecutionModes],
+		projectTrusted: true,
+		sessionId: "dynamic-runtime",
+		sessionPath: "/sessions/dynamic-runtime.jsonl",
+		projectContext: null,
+	};
+}
+
+function fakeLaunch(
+	admitted: PiChildProcessRuntime,
+	eventHandlers: Set<(event: PiChildRuntimeEvent) => void>,
+): PiChildProcessLaunch {
+	return {
+		exited: new Promise<never>(() => undefined),
+		ready: async () => admitted,
+		cancelInitialization: () => undefined,
+		frame: () => ({
+			columns: 80,
+			rows: 24,
+			lines: [],
+			cursor: { row: 0, column: 0, visible: false, style: "block", blink: false },
+		}),
+		writeInput() {},
+		resize() {},
+		addChangeHandler: () => () => undefined,
+		addFailureHandler: () => () => undefined,
+		onEvent(handler: (event: PiChildRuntimeEvent) => void) {
+			eventHandlers.add(handler);
+			return () => eventHandlers.delete(handler);
+		},
+		dispose: async () => undefined,
+	} as unknown as PiChildProcessLaunch;
 }
 
 function controlEvent(

@@ -602,10 +602,23 @@ test("interactive /reload keeps a selected process child alive after inherited e
 		responseOverride: routeCliRepeatResponse,
 		tokensPerSecond: 20_000,
 	});
+	const inputPreflightExtension = join(root, "child-input-preflight.mjs");
+	await writeFile(inputPreflightExtension, [
+		"export default function childInputPreflight(pi) {",
+		"  pi.on('input', (event) => {",
+		"    if (event.text === 'CLI child before reload') {",
+		"      return { action: 'transform', text: 'CLI child transformed before reload' };",
+		"    }",
+		"    if (event.text === 'CLI child after reload') {",
+		"      return { action: 'transform', text: 'CLI child transformed after reload' };",
+		"    }",
+		"  });",
+		"}",
+	].join("\n"));
 	const terminal = launchPiCli({
 		agentDir,
 		sessionDir,
-		additionalExtensionPaths: [broker.extensionPath],
+		additionalExtensionPaths: [broker.extensionPath, inputPreflightExtension],
 		provider: broker.providerId,
 		model: broker.modelId,
 	});
@@ -615,14 +628,32 @@ test("interactive /reload keeps a selected process child alive after inherited e
 		);
 		terminal.write("Create one Agent with agent_spawn. Use label CLI Repeat Worker and request: Remain available for repeated CLI Agent view attachment.\r");
 		await terminal.waitFor("CLI worker is ready for");
-		await attachCliRepeatWorker(terminal, "CLI child before reload", false);
+		await attachCliRepeatWorker(
+			terminal,
+			"CLI child before reload",
+			false,
+			"CLI child transformed before reload",
+		);
 
 		terminal.write("\x15");
 		await appendFile(broker.extensionPath, "\n// Selected-child reload regression generation.\n");
 		terminal.write("/reload\r");
 		await terminal.waitFor("Reloaded keybindings, extensions, skills, prompts, themes, and context files");
 		terminal.write("CLI child after reload\r");
-		await terminal.waitFor("acknowledged: CLI child after reload");
+		const postReloadInput = await terminal.waitForScreen((frame) =>
+			frame.some((line) =>
+				line.includes("acknowledged: CLI child transformed after reload") ||
+				line.includes("acknowledged: CLI child after reload") ||
+				line.includes("Agent input failed") ||
+				line.includes("Human Answer was not submitted")
+			)
+		);
+		assert.equal(
+			postReloadInput.some((line) =>
+				line.includes("acknowledged: CLI child transformed after reload")
+			),
+			true,
+		);
 		await returnPtyAgentViewToOwner(terminal);
 		await terminal.waitForScreen((frame) =>
 			!frame.some((line) => line.includes("Tab views")) &&
@@ -728,6 +759,7 @@ async function attachCliRepeatWorker(
 	terminal: PtyFixture,
 	input: string,
 	expectDormantStartupSpinner: boolean,
+	expectedInput = input,
 ): Promise<void> {
 	const deadline = Date.now() + PTY_WAIT_TIMEOUT_MS;
 	let selector: readonly string[] | undefined;
@@ -775,7 +807,7 @@ async function attachCliRepeatWorker(
 	);
 	terminal.write(`${input}\r`);
 	await terminal.waitForScreen((frame) =>
-		frame.some((line) => line.includes(`acknowledged: ${input}`))
+		frame.some((line) => line.includes(`acknowledged: ${expectedInput}`))
 	);
 }
 

@@ -1,6 +1,8 @@
 import type {
 	ExtensionAPI,
+	ExtensionContext,
 	InputEvent,
+	InputEventResult,
 	MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 
@@ -88,7 +90,13 @@ export function registerParticipantInputLifecycle(
 	pi: ExtensionAPI,
 	handlers: ParticipantLifecycleHandlers,
 ): void {
-	pi.on("input", async (event, ctx) => {
+	pi.on("input", createParticipantInputHandler(handlers));
+}
+
+export function createParticipantInputHandler(
+	handlers: ParticipantLifecycleHandlers,
+): (event: InputEvent, ctx: ExtensionContext) => Promise<InputEventResult> {
+	return async (event, ctx) => {
 		if (event.source !== "interactive") return { action: "continue" };
 		if (event.streamingBehavior === "followUp") return { action: "continue" };
 		try {
@@ -106,5 +114,5 @@ export function registerParticipantInputLifecycle(
 			);
 			return { action: "handled" };
 		}
-	});
+	};
 }

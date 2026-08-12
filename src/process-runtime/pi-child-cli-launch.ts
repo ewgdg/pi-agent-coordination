@@ -14,6 +14,7 @@ export function buildPiChildCliLaunch(options: {
 	configuration: EffectiveAgentRunConfiguration;
 	skillPaths: readonly string[];
 	bridgeExtensionPath: string;
+	inputExtensionPath: string;
 	contextArtifactPath?: string;
 	projectTrusted: boolean;
 }): PiChildCliLaunch {
@@ -23,6 +24,7 @@ export function buildPiChildCliLaunch(options: {
 		configuration,
 		skillPaths,
 		bridgeExtensionPath,
+		inputExtensionPath,
 		contextArtifactPath,
 		projectTrusted,
 	} = options;
@@ -31,6 +33,7 @@ export function buildPiChildCliLaunch(options: {
 		["session", sessionPath],
 		["working directory", configuration.cwd],
 		["bridge extension", bridgeExtensionPath],
+		["input extension", inputExtensionPath],
 		...(contextArtifactPath === undefined
 			? []
 			: [["Project Context", contextArtifactPath]]),
@@ -57,6 +60,14 @@ export function buildPiChildCliLaunch(options: {
 			"invalid_child_launch: bridge extension must not also be an inherited extension",
 		);
 	}
+	if (configuration.extensions.includes(inputExtensionPath)) {
+		throw new Error(
+			"invalid_child_launch: input extension must not also be an inherited extension",
+		);
+	}
+	if (inputExtensionPath === bridgeExtensionPath) {
+		throw new Error("invalid_child_launch: bridge and input extensions must be distinct");
+	}
 	for (const toolName of configuration.tools) {
 		if (toolName.includes(",")) {
 			throw new Error(`invalid_child_launch: tool name cannot contain a comma: ${toolName}`);
@@ -80,6 +91,10 @@ export function buildPiChildCliLaunch(options: {
 		"--extension",
 		bridgeExtensionPath,
 		...configuration.extensions.flatMap((path) => ["--extension", path]),
+		// Pi dispatches input by extension load order. Keep Control first while this
+		// input-only adapter runs after every inherited transform or rejection.
+		"--extension",
+		inputExtensionPath,
 		"--no-skills",
 		...skillPaths.flatMap((path) => ["--skill", path]),
 		"--no-context-files",

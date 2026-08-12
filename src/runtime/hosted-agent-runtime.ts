@@ -21,6 +21,7 @@ export type HostedRuntimeEvent =
 export interface HostedAgentRuntime {
 	readonly projection: HostedAgentProjection | undefined;
 	snapshot(): EffectiveRuntimeSnapshot;
+	synchronizeState(): Promise<void>;
 	workState(): AgentRuntimeWorkState;
 	queuedInputCount(): number;
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification;

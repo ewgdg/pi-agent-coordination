@@ -11,20 +11,32 @@ import { execFileSync } from "node:child_process";
 
 export const PROCESS_RUNTIME_TEST_PROVIDER = "process-runtime-test";
 export const PROCESS_RUNTIME_TEST_MODEL = "offline-child";
+export const PROCESS_RUNTIME_TEST_ALTERNATE_MODEL = "offline-child-alternate";
 export const PROCESS_RUNTIME_TEST_RESPONSE = "PROCESS_RUNTIME_PROMPT_OK";
 
 const faux = createFauxCore({
 	api: PROCESS_RUNTIME_TEST_PROVIDER,
 	provider: PROCESS_RUNTIME_TEST_PROVIDER,
-	models: [{
-		id: PROCESS_RUNTIME_TEST_MODEL,
-		name: "Offline process child",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 16_384,
-		maxTokens: 256,
-	}],
+	models: [
+		{
+			id: PROCESS_RUNTIME_TEST_MODEL,
+			name: "Offline process child",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 16_384,
+			maxTokens: 256,
+		},
+		{
+			id: PROCESS_RUNTIME_TEST_ALTERNATE_MODEL,
+			name: "Alternate offline process child",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 16_384,
+			maxTokens: 256,
+		},
+	],
 });
 const delayedResponse = async () => {
 	const delayMilliseconds = Number(process.env.PROCESS_RUNTIME_RESPONSE_DELAY_MS ?? 0);
@@ -68,8 +80,14 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		pi.on("session_shutdown", () => new Promise<void>(() => undefined));
 	}
 
-	pi.on("input", (event) => {
-		if (event.text === "PROCESS_RUNTIME_HANDLED_INPUT") return { action: "handled" };
+	pi.on("input", (event, ctx) => {
+		if (event.text === "PROCESS_RUNTIME_HANDLED_INPUT") {
+			ctx.ui.setWidget("process-runtime-input", ["PROCESS_RUNTIME_INPUT_HANDLED"]);
+			return { action: "handled" };
+		}
+		if (event.text === "PROCESS_RUNTIME_TRANSFORM_INPUT") {
+			return { action: "transform", text: "PROCESS_RUNTIME_TRANSFORMED_INPUT" };
+		}
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -95,6 +113,28 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		if (delayMilliseconds > 0) {
 			await new Promise((resolve) => setTimeout(resolve, delayMilliseconds));
 		}
+	});
+
+	pi.registerTool({
+		name: "runtime_sequential_probe",
+		label: "Runtime sequential probe",
+		description: "Tests current process Runtime tool classification.",
+		parameters: { type: "object", properties: {}, additionalProperties: false },
+		executionMode: "sequential",
+		async execute() {
+			return {
+				content: [{ type: "text", text: "runtime sequential probe" }],
+				details: {},
+			};
+		},
+	});
+	pi.registerCommand("runtime-state", {
+		description: "Change effective process Runtime state",
+		async handler(_args, ctx) {
+			await pi.setModel(faux.models[1]!);
+			pi.setActiveTools([]);
+			ctx.ui.setWidget("process-runtime-state", ["PROCESS_RUNTIME_STATE_CHANGED"]);
+		},
 	});
 
 	pi.registerCommand("runtime-probe", {

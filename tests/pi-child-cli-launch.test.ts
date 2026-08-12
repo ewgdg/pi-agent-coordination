@@ -18,6 +18,7 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 			},
 			skillPaths: ["/skills/review/SKILL.md", "/skills/testing/SKILL.md"],
 			bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
+			inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
 			contextArtifactPath: "/runtime/child-project-context.md",
 			projectTrusted: true,
 		}),
@@ -36,6 +37,8 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 				"--extension", "/package/src/process-runtime/child-runtime-bridge.ts",
 				"--extension", "/extensions/first.ts",
 				"--extension", "/extensions/second.ts",
+				// Input coordination runs after inherited extension preflights.
+				"--extension", "/package/src/process-runtime/child-runtime-input.ts",
 				"--no-skills",
 				"--skill", "/skills/review/SKILL.md",
 				"--skill", "/skills/testing/SKILL.md",
@@ -61,6 +64,7 @@ test("Pi child CLI launch fails before spawn when resolved resources are ambiguo
 			extensions: ["/extensions/first.ts"],
 		},
 		bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
+		inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
 		projectTrusted: false,
 	};
 
@@ -75,5 +79,13 @@ test("Pi child CLI launch fails before spawn when resolved resources are ambiguo
 			bridgeExtensionPath: "/extensions/first.ts",
 		}),
 		/bridge extension.*inherited extension/i,
+	);
+	assert.throws(
+		() => buildPiChildCliLaunch({
+			...common,
+			skillPaths: ["/skills/review/SKILL.md"],
+			inputExtensionPath: "/extensions/first.ts",
+		}),
+		/input extension.*inherited extension/i,
 	);
 });

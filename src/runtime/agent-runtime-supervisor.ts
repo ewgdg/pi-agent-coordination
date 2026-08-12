@@ -223,6 +223,12 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		return this.#runtime?.admitted ? this.#runtime.runtime.snapshot() : undefined;
 	}
 
+	async synchronizeRuntimeState(): Promise<EffectiveRuntimeSnapshot> {
+		const runtime = this.#requireLiveRuntime();
+		await runtime.synchronizeState();
+		return runtime.snapshot();
+	}
+
 	currentWorkState(): AgentRuntimeWorkState {
 		const run = this.#runtime;
 		if (!run?.admitted) return "unavailable";
@@ -1039,8 +1045,8 @@ function requireRuntimeProjection(
 }
 
 function hasInFlightProjectionInput(run: BoundAgentRuntime): boolean {
-	// Pi remains session-idle during async input and prompt preflight, so only
-	// the active terminal projection can protect the exact Runtime across that interval.
+	// Pi remains session-idle during async input and prompt preflight. The process
+	// projection keeps this true until its child admits the resulting Agent Run.
 	return run.runtime.projection?.isProcessingInput() ?? false;
 }
 
