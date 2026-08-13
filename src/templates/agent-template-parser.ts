@@ -13,7 +13,7 @@ import type {
 
 const TEMPLATE_FIELDS = new Set([
 	"name",
-	"selection-guide",
+	"use-when",
 	"models",
 	"allowed-tools",
 	"skills",
@@ -85,9 +85,9 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 		}
 	}
 	const name = requireTemplateName(mapping.name, sourcePath);
-	const selectionGuide = mapping["selection-guide"] === undefined
+	const useWhen = mapping["use-when"] === undefined
 		? undefined
-		: parseSelectionGuide(mapping["selection-guide"], sourcePath, name);
+		: parseUseWhen(mapping["use-when"], sourcePath, name);
 	const models = mapping.models === undefined
 		? undefined
 		: parseModelCandidates(mapping.models, sourcePath, name);
@@ -106,7 +106,7 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 
 	return {
 		name,
-		...(selectionGuide === undefined ? {} : { selectionGuide }),
+		...(useWhen === undefined ? {} : { useWhen }),
 		...(models === undefined ? {} : { models }),
 		...(allowedTools === undefined ? {} : { allowedTools }),
 		...(skills === undefined ? {} : { skills }),
@@ -158,7 +158,7 @@ function requireTemplateName(value: unknown, sourcePath: string): string {
 	return value;
 }
 
-function parseSelectionGuide(
+function parseUseWhen(
 	value: unknown,
 	sourcePath: string,
 	templateName: string,
@@ -166,7 +166,7 @@ function parseSelectionGuide(
 	if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
 		throw new AgentTemplateParseError(
 			sourcePath,
-			"selection-guide must be a nonblank string",
+			"use-when must be a nonblank string",
 			templateName,
 		);
 	}

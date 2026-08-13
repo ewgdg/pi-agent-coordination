@@ -12,7 +12,7 @@ export type AgentTemplateModelCandidate = Readonly<{
 
 export type AgentTemplate = Readonly<{
 	name: string;
-	selectionGuide?: string;
+	useWhen?: string;
 	models?: readonly AgentTemplateModelCandidate[];
 	allowedTools?: readonly string[];
 	skills?: readonly string[];
@@ -25,7 +25,7 @@ export type AgentTemplate = Readonly<{
 /** Selection metadata safe to expose to a spawning Agent. */
 export type AgentTemplateCatalogueEntry = Readonly<{
 	name: string;
-	selectionGuide?: string;
+	useWhen?: string;
 	models?: readonly AgentTemplateModelCandidate[];
 	allowedTools?: readonly string[];
 	skills?: readonly string[];
@@ -91,9 +91,9 @@ export function createAgentTemplateCatalogue(
 			if (template.models !== undefined && models?.length === 0) return [];
 			return [{
 				name: template.name,
-				...(template.selectionGuide === undefined
+				...(template.useWhen === undefined
 					? {}
-					: { selectionGuide: template.selectionGuide }),
+					: { useWhen: template.useWhen }),
 				...(models === undefined ? {} : { models }),
 				...(template.allowedTools === undefined ? {} : { allowedTools: template.allowedTools }),
 				...(template.skills === undefined ? {} : { skills: template.skills }),

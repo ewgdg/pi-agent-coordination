@@ -51,7 +51,7 @@ A Template is UTF-8 Markdown with required leading YAML frontmatter:
 ```markdown
 ---
 name: integration-researcher
-selection-guide: Use for integration work requiring external documentation or source verification.
+use-when: Use for integration work requiring external documentation or source verification.
 models:
   - id: anthropic/claude-sonnet-4-5
     thinking: high
@@ -66,9 +66,9 @@ project-context: append
 Use primary sources and record exact reproduction evidence.
 ```
 
-`name` is required lowercase kebab-case. Optional `selection-guide` is nonblank text that tells a spawning Agent when to select the Template. Optional `models` is a nonempty ordered sequence of `id` and `thinking` pairs. The first model available in Pi's current model registry supplies both values, and preparation fails when none are available. Without `models`, the parent model and thinking pair is inherited. The other frontmatter fields are `allowed-tools`, `skills`, `extensions`, and `project-context`. The Markdown body is Project Context. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
+`name` is required lowercase kebab-case. Optional `use-when` is nonblank text that tells a spawning Agent when to select the Template. Optional `models` is a nonempty ordered sequence of `id` and `thinking` pairs. The first model available in Pi's current model registry supplies both values, and preparation fails when none are available. Without `models`, the parent model and thinking pair is inherited. The other frontmatter fields are `allowed-tools`, `skills`, `extensions`, and `project-context`. The Markdown body is Project Context. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
 
-Before each model turn, an Agent that can spawn receives its current model/thinking pair and the currently valid Template catalogue. Each entry exposes its name, selection guide, configured frontmatter values, and only model candidates present in Pi's current model registry. A Template whose configured candidates are all unavailable is omitted. This lets the Agent select a Template or deliberately override values through `agent_spawn.config`. Invalid and ambiguous Templates, Template source paths, discovery diagnostics, and Markdown Project Context bodies are not exposed.
+Before each model turn, an Agent that can spawn receives its current model/thinking pair and the currently valid Template catalogue. Each entry exposes its name, `use-when` guidance, configured frontmatter values, and only model candidates present in Pi's current model registry. A Template whose configured candidates are all unavailable is omitted. This lets the Agent select a Template or deliberately override values through `agent_spawn.config`. Invalid and ambiguous Templates, Template source paths, discovery diagnostics, and Markdown Project Context bodies are not exposed.
 
 For every new Runtime, Template discovery is anchored to the current parent Runtime cwd. The per-spawn `config.cwd` resolves against that cwd and determines the prepared Runtime cwd. Pi applies its current project-trust decision there, freshly discovers permitted ordinary `AGENTS.md` context and cwd-scoped resources, then applies Template and spawn Project Context with append/replace behavior. An untrusted project cannot contribute selected resources. Changes to ancestor Templates, resources, trust, or cwd can therefore affect a later descendant Runtime; they never mutate an already retained Runtime.
 

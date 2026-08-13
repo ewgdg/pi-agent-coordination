@@ -21,7 +21,7 @@ export const ControlEndpointSchema = Type.Union([
 
 export const AgentTemplateCatalogueEntrySchema = Type.Object({
 	name: NonEmptyStringSchema,
-	selectionGuide: Type.Optional(NonEmptyStringSchema),
+	useWhen: Type.Optional(NonEmptyStringSchema),
 	models: Type.Optional(Type.Array(Type.Object({
 		model: Type.Object({
 			provider: NonEmptyStringSchema,

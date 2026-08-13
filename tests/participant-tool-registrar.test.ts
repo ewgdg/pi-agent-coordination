@@ -135,7 +135,7 @@ test("Template catalogue shows current Runtime and available Template configurat
 		templates: [
 		{
 			name: "integration-researcher",
-			selectionGuide: "Use for integration research requiring primary sources.",
+			useWhen: "Use for integration research requiring primary sources.",
 			models: [
 				{
 					model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
@@ -177,7 +177,7 @@ test("Template catalogue is injected into the model prompt", async () => {
 			},
 			templates: [{
 				name: "integration-researcher",
-				selectionGuide: "Use for integration research.",
+				useWhen: "Use for integration research.",
 				models: [{
 					model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
 					thinking: "high",

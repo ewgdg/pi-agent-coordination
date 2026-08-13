@@ -38,7 +38,7 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 	const templatePath = join(templateRoot, "parent.md");
 	await writeFile(
 		templatePath,
-		"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowed-tools:\n  - read\n  - bash\n---\n",
+		"---\nname: dynamic-parent\nuse-when: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowed-tools:\n  - read\n  - bash\n---\n",
 	);
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
@@ -107,7 +107,7 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 
 		await writeFile(
 			templatePath,
-			"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowed-tools: read\n---\n",
+			"---\nname: dynamic-parent\nuse-when: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowed-tools: read\n---\n",
 		);
 		const second = await factory.prepareOrdinaryRun({
 			agentId: "descendant",

@@ -22,7 +22,7 @@ test("parses the complete strict Agent Template surface", () => {
 		[
 			"---",
 			"name: research-agent",
-			"selection-guide: Use for primary-source research.",
+			"use-when: Use for primary-source research.",
 			"models:",
 			"  - id: coordination-test/deterministic-child",
 			"    thinking: high",
@@ -39,7 +39,7 @@ test("parses the complete strict Agent Template surface", () => {
 
 	assert.deepEqual(template, {
 		name: "research-agent",
-		selectionGuide: "Use for primary-source research.",
+		useWhen: "Use for primary-source research.",
 		models: [{
 			model: { provider: "coordination-test", modelId: "deterministic-child" },
 			thinking: "high",
@@ -66,14 +66,14 @@ test("rejects the removed exact tools Template field", () => {
 test("rejects extension path arrays outside the Agent Template contract", () => {
 	assert.throws(
 		() => parseAgentTemplate(
-			"---\nname: research-agent\nselection-guide: Use for research.\nextensions:\n  - /extensions/arbitrary.ts\n---\n",
+			"---\nname: research-agent\nuse-when: Use for research.\nextensions:\n  - /extensions/arbitrary.ts\n---\n",
 			"/templates/research-agent.md",
 		),
 		/extensions must be "inherit" or "none"/,
 	);
 });
 
-test("allows an absent selection guide but rejects a blank one", () => {
+test("allows absent use-when guidance but rejects a blank value", () => {
 	assert.deepEqual(
 		parseAgentTemplate(
 			"---\nname: research-agent\n---\n",
@@ -88,10 +88,10 @@ test("allows an absent selection guide but rejects a blank one", () => {
 	);
 	assert.throws(
 		() => parseAgentTemplate(
-			"---\nname: research-agent\nselection-guide: '   '\n---\n",
+			"---\nname: research-agent\nuse-when: '   '\n---\n",
 			"/templates/research-agent.md",
 		),
-		/selection-guide must be a nonblank string/,
+		/use-when must be a nonblank string/,
 	);
 });
 
@@ -153,31 +153,31 @@ test("discovers whole templates by strict precedence while safely following syml
 	await mkdir(projectRoot, { recursive: true });
 	await writeFile(
 		join(packageRoot, "nested", "research.md"),
-		"---\nname: research-agent\nselection-guide: Use for research.\nallowed-tools: read, grep\n---\nPackage context",
+		"---\nname: research-agent\nuse-when: Use for research.\nallowed-tools: read, grep\n---\nPackage context",
 	);
 	await writeFile(
 		join(packageRoot, "blocked.md"),
-		"---\nname: blocked-agent\nselection-guide: Use when blocked.\n---\n",
+		"---\nname: blocked-agent\nuse-when: Use when blocked.\n---\n",
 	);
 	await writeFile(
 		join(packageRoot, "duplicate-name.md"),
-		"---\nname: duplicate-name-agent\nselection-guide: Use for duplicate checks.\n---\n",
+		"---\nname: duplicate-name-agent\nuse-when: Use for duplicate checks.\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "research.md"),
-		"---\nname: research-agent\nselection-guide: Use for research.\nmodels:\n  - id: research/model\n    thinking: high\n---\nProject context",
+		"---\nname: research-agent\nuse-when: Use for research.\nmodels:\n  - id: research/model\n    thinking: high\n---\nProject context",
 	);
 	await writeFile(
 		join(projectRoot, "blocked.md"),
-		"---\nname: blocked-agent\nselection-guide: Use when blocked.\ncwd: elsewhere\n---\n",
+		"---\nname: blocked-agent\nuse-when: Use when blocked.\ncwd: elsewhere\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "duplicate-a.md"),
-		"---\nname: duplicate-agent\nselection-guide: Use for duplicates.\n---\n",
+		"---\nname: duplicate-agent\nuse-when: Use for duplicates.\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "duplicate-b.md"),
-		"---\nname: duplicate-agent\nselection-guide: Use for duplicates.\n---\n",
+		"---\nname: duplicate-agent\nuse-when: Use for duplicates.\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "duplicate-name.md"),
@@ -201,7 +201,7 @@ test("discovers whole templates by strict precedence while safely following syml
 
 	assert.deepEqual(discovery.templates.get("research-agent"), {
 		name: "research-agent",
-		selectionGuide: "Use for research.",
+		useWhen: "Use for research.",
 		models: [{
 			model: { provider: "research", modelId: "model" },
 			thinking: "high",
@@ -236,7 +236,7 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 		},
 		template: {
 			name: "research-agent",
-			selectionGuide: "Use for research.",
+			useWhen: "Use for research.",
 			models: [
 				{ model: { provider: "missing", modelId: "model" }, thinking: "low" },
 				{ model: { provider: "template", modelId: "model" }, thinking: "medium" },
@@ -347,7 +347,7 @@ test("creates a public Template catalogue without Project Context bodies or sour
 	assert.deepEqual(createAgentTemplateCatalogue([
 		{
 			name: "research-agent",
-			selectionGuide: "Use for research.",
+			useWhen: "Use for research.",
 			models: [{
 				model: { provider: "research", modelId: "model" },
 				thinking: "high",
@@ -358,7 +358,7 @@ test("creates a public Template catalogue without Project Context bodies or sour
 		},
 		{
 			name: "moderator",
-			selectionGuide: "Reserved for moderation.",
+			useWhen: "Reserved for moderation.",
 			projectContextMode: "append",
 			projectContext: "Private moderator instructions.",
 			sourcePath: "/private/moderator.md",
@@ -374,7 +374,7 @@ test("creates a public Template catalogue without Project Context bodies or sour
 		projectContextMode: "append",
 	}, {
 		name: "research-agent",
-		selectionGuide: "Use for research.",
+		useWhen: "Use for research.",
 		models: [{
 			model: { provider: "research", modelId: "model" },
 			thinking: "high",
