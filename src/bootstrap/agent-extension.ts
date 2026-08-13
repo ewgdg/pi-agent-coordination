@@ -1,7 +1,6 @@
 import type {
 	AgentSessionRuntime,
 	ExtensionAPI,
-	ExtensionContext,
 	ExtensionFactory,
 	ExtensionHandler,
 	ExtensionUIContext,
@@ -26,9 +25,7 @@ import {
 	registerParticipantLifecycle,
 	type ParticipantLifecycleHandlers,
 } from "../pi-integration/participant-lifecycle.ts";
-
-const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
-	"Return to Owner before replacing or forking the native session.";
+import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
 
 export function createAgentBoundExtension(
 	resolveView: () => OrdinaryAgentCoordinatorView,
@@ -61,7 +58,7 @@ function createParticipantBoundExtension<
 	registerSurfaces: (pi: ExtensionAPI, resolveView: () => View) => void,
 ): ExtensionFactory {
 	return (pi) => {
-		registerChildNativeSessionPolicy(pi);
+		registerParticipantNativeSessionPolicy(pi);
 		registerSurfaces(pi, resolveView);
 		registerParticipantLifecycle(
 			pi,
@@ -92,22 +89,6 @@ export function installResolvedAgentActivityDock(
 			resolveView().addAgentActivityChangeHandler(handler),
 	};
 	installAgentActivityDock(ui, source);
-}
-
-function registerChildNativeSessionPolicy(pi: ExtensionAPI): void {
-	pi.on("session_before_fork", (_event, ctx) =>
-		cancelChildNativeSessionReplacement(ctx)
-	);
-	pi.on("session_before_switch", (_event, ctx) =>
-		cancelChildNativeSessionReplacement(ctx)
-	);
-}
-
-function cancelChildNativeSessionReplacement(
-	ctx: ExtensionContext,
-): { cancel: true } {
-	ctx.ui.notify(CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE, "error");
-	return { cancel: true };
 }
 
 export function bindHiddenOwnerAgentExtension(options: {

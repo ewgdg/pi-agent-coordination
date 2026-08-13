@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+	InteractiveMode,
+	initTheme,
+	type AgentSessionRuntime,
+	type Theme,
+} from "@earendil-works/pi-coding-agent";
 
 import {
 	createAgentBoundExtension,
@@ -32,6 +37,43 @@ const plainTheme = {
 	bg: (_color: string, text: string) => text,
 	bold: (text: string) => text,
 } as unknown as Theme;
+
+test("child session commands reject fork and resume before opening native selectors", async () => {
+	const unavailableView = () => {
+		throw new Error("Child session command gating does not execute coordination behavior");
+	};
+	const extension = createAgentBoundExtension(
+		unavailableView as () => OrdinaryAgentCoordinatorView,
+	);
+	const host = await createTestOwnerHost(extension, { persistent: true });
+	try {
+		type NativeSelectorHarness = { runtimeHost: AgentSessionRuntime };
+		type NativeSelectorPrototype = {
+			showUserMessageSelector(this: NativeSelectorHarness): void;
+			showSessionSelector(this: NativeSelectorHarness): void;
+		};
+		const participantMode = { runtimeHost: host.runtime };
+		const nativeSelectors = InteractiveMode.prototype as unknown as NativeSelectorPrototype;
+
+		// This harness deliberately omits selector UI state. Reaching either native
+		// implementation therefore fails instead of silently accepting a popped menu.
+		nativeSelectors.showUserMessageSelector.call(participantMode);
+		nativeSelectors.showSessionSelector.call(participantMode);
+
+		assert.deepEqual(host.ui.notifications.slice(-2), [
+			{
+				message: "Return to Owner before replacing or forking the native session.",
+				type: "error",
+			},
+			{
+				message: "Return to Owner before replacing or forking the native session.",
+				type: "error",
+			},
+		]);
+	} finally {
+		await host.runtime.dispose();
+	}
+});
 
 test("child session surfaces disable native session replacement", async () => {
 	const unavailableView = () => {

@@ -36,6 +36,7 @@ import {
 	type ParticipantLifecycleHandlers,
 	registerParticipantLifecycle,
 } from "../pi-integration/participant-lifecycle.ts";
+import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
 import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
@@ -53,8 +54,6 @@ import { registerRemoteAgentsCommand } from "./remote-agent-selector.ts";
 
 const ENTRY_MODULE_PATH = import.meta.filename;
 const INPUT_MODULE_PATH = fileURLToPath(new URL("./child-runtime-input.ts", import.meta.url));
-const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
-	"Return to Owner before replacing or forking the native session.";
 
 type ChildChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
 
@@ -118,8 +117,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
 		registerParticipantCoordinationTools(pi, "moderator", participant.coordination);
 	}
-	pi.on("session_before_fork", (_event, ctx) => cancelNativeSessionReplacement(ctx));
-	pi.on("session_before_switch", (_event, ctx) => cancelNativeSessionReplacement(ctx));
+	registerParticipantNativeSessionPolicy(pi);
 	const publishCurrentRuntimeSnapshot = async () => {
 		const binding = state?.currentBinding;
 		if (binding) await binding.publishRuntimeSnapshot();
@@ -735,13 +733,6 @@ function requireModel(model: AgentSessionRuntime["session"]["model"]) {
 
 async function canonicalFilePath(path: string, cwd: string): Promise<string> {
 	return realpath(isAbsolute(path) ? path : resolve(cwd, path));
-}
-
-function cancelNativeSessionReplacement(
-	ctx: ExtensionContext,
-): { cancel: true } {
-	ctx.ui.notify(CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE, "error");
-	return { cancel: true };
 }
 
 async function failCurrentRun(
