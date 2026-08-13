@@ -179,7 +179,7 @@ test("/agents presents the live Agent's native interactive mode while Owner stay
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
 	view.handleInput?.("k");
-	const ownerPattern = new RegExp(`→ owner[\\s\\S]*${ownerRuntimeSession.sessionId}`);
+	const ownerPattern = new RegExp(`→ Owner[\\s\\S]*${ownerRuntimeSession.sessionId}`);
 	await waitForCondition(() =>
 		ownerPattern.test(stripTerminalSequences(view.render(80).join("\n")))
 	);
@@ -1798,7 +1798,7 @@ async function returnAgentViewToOwner(
 		);
 	}
 	const ownerPattern = new RegExp(
-		`→ owner[\\s\\S]*${host.session.sessionId}`,
+		`→ Owner[\\s\\S]*${host.session.sessionId}`,
 	);
 	for (let tab = 0; tab < 2; tab += 1) {
 		const firstFrame = stripTerminalSequences(view.render(80).join("\n"));

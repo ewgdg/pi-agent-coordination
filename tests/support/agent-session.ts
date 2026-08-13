@@ -133,7 +133,7 @@ export async function returnAgentViewToOwner(
 			!stripTerminalSequences(opened.view.render(80).join("\n")).includes("Dormant Agents")
 		);
 	}
-	const ownerPattern = new RegExp(`→ owner[\\s\\S]*${host.session.sessionId}`);
+	const ownerPattern = new RegExp(`→ Owner[\\s\\S]*${host.session.sessionId}`);
 	for (let tab = 0; tab < 2; tab += 1) {
 		const firstFrame = stripTerminalSequences(opened.view.render(80).join("\n"));
 		for (let step = 0; step < MAX_SELECTOR_NAVIGATION_STEPS; step += 1) {

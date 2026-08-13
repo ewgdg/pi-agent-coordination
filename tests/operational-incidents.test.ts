@@ -44,12 +44,13 @@ import {
 const CONDITION_WAIT_TIMEOUT_MS = 5_000;
 const CONDITION_POLL_INTERVAL_MS = 1;
 
-test("a settled answer-obligated Agent creates one atomic Obligation Stall Moderator", async () => {
+test("a settled answer-obligated Agent creates one atomic Obligation Stall Moderator", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
+	t.after(() => host.runtime.dispose());
 	let moderatorTools: string[] = [];
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -126,7 +127,14 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 		"agent_message",
 		"agent_observe",
 		"ask_user_question",
+		"bash",
+		"edit",
+		"find",
+		"grep",
+		"ls",
 		"moderator_control",
+		"read",
+		"write",
 	]);
 
 	const observe = host.session.getToolDefinition("agent_observe");
@@ -191,8 +199,6 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	assert.equal((await observeStatus(host, moderator.id)).run.phase, "dormant");
 	assert.equal(host.runtime.session, ownerSession);
 	await returnAgentViewToOwner(host, dormantView);
-
-	await host.runtime.dispose();
 });
 
 test("deselecting a genuinely live settled obligation creates an Obligation Stall Moderator", async (t) => {
