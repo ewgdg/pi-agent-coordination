@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, mkdtemp, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -594,6 +594,7 @@ test("real Pi CLI can return to Owner and attach the same Agent again", {
 
 test("interactive /reload keeps a selected process child alive after inherited extension changes", {
 	skip: !existsSync(SCRIPT),
+	timeout: 10_000,
 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-child-reload-"));
 	const agentDir = join(root, "agent");
@@ -603,8 +604,17 @@ test("interactive /reload keeps a selected process child alive after inherited e
 		tokensPerSecond: 20_000,
 	});
 	const inputPreflightExtension = join(root, "child-input-preflight.mjs");
+	const childLifecycleEvidence = join(root, "child-lifecycle.jsonl");
 	await writeFile(inputPreflightExtension, [
+		"import { appendFileSync } from 'node:fs';",
+		`const evidencePath = ${JSON.stringify(childLifecycleEvidence)};`,
+		"const isChild = process.env.PI_AGENT_COORDINATION_BOOTSTRAP !== undefined;",
+		"const record = (event) => appendFileSync(evidencePath, `${JSON.stringify({ ...event, pid: process.pid })}\\n`);",
 		"export default function childInputPreflight(pi) {",
+		"  if (isChild) {",
+		"    pi.on('session_start', (event) => record({ kind: 'session_start', reason: event.reason }));",
+		"    pi.on('session_shutdown', (event) => record({ kind: 'session_shutdown', reason: event.reason }));",
+		"  }",
 		"  pi.on('input', (event) => {",
 		"    if (event.text === 'CLI child before reload') {",
 		"      return { action: 'transform', text: 'CLI child transformed before reload' };",
@@ -639,6 +649,12 @@ test("interactive /reload keeps a selected process child alive after inherited e
 		await appendFile(broker.extensionPath, "\n// Selected-child reload regression generation.\n");
 		terminal.write("/reload\r");
 		await terminal.waitFor("Reloaded keybindings, extensions, skills, prompts, themes, and context files");
+		const reloadedChild = await waitForChildLifecycleEvidence(
+			childLifecycleEvidence,
+			(entries) => entries.find((entry) =>
+				entry.kind === "session_start" && entry.reason === "reload"
+			),
+		);
 		terminal.write("CLI child after reload\r");
 		const postReloadInput = await terminal.waitForScreen((frame) =>
 			frame.some((line) =>
@@ -648,17 +664,28 @@ test("interactive /reload keeps a selected process child alive after inherited e
 				line.includes("Human Answer was not submitted")
 			)
 		);
+		// Return as soon as the child response is visible. The retained projection
+		// must already be input-idle after its post-reload submit.
+		const returningToOwner = returnPtyAgentViewToOwner(terminal);
 		assert.equal(
 			postReloadInput.some((line) =>
 				line.includes("acknowledged: CLI child transformed after reload")
 			),
 			true,
 		);
-		await returnPtyAgentViewToOwner(terminal);
+		await returningToOwner;
 		await terminal.waitForScreen((frame) =>
 			!frame.some((line) => line.includes("Tab views")) &&
 			frame.some((line) => line.includes("deterministic-owner"))
 		);
+		await waitForChildLifecycleEvidence(
+			childLifecycleEvidence,
+			(entries) => entries.find((entry) =>
+				entry.kind === "session_shutdown" && entry.reason === "quit" &&
+				entry.pid === reloadedChild.pid
+			),
+		);
+		await waitForProcessExit(reloadedChild.pid);
 		terminal.write("/quit\r");
 		await terminal.closed();
 	} finally {
@@ -973,6 +1000,45 @@ async function waitForFile(path: string): Promise<void> {
 		await new Promise<void>((resolve) => setTimeout(resolve, SCREEN_POLL_INTERVAL_MS));
 	}
 	throw new Error(`Timed out waiting for ${path}`);
+}
+
+type ChildLifecycleEvidence = Readonly<{
+	kind: "session_start" | "session_shutdown";
+	reason: string;
+	pid: number;
+}>;
+
+async function waitForChildLifecycleEvidence(
+	path: string,
+	select: (entries: readonly ChildLifecycleEvidence[]) => ChildLifecycleEvidence | undefined,
+): Promise<ChildLifecycleEvidence> {
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		const entries = await readFile(path, "utf8").then(
+			(contents) => contents.split("\n").filter(Boolean).map(
+				(line) => JSON.parse(line) as ChildLifecycleEvidence,
+			),
+			(error: NodeJS.ErrnoException) => error.code === "ENOENT" ? [] : Promise.reject(error),
+		);
+		const selected = select(entries);
+		if (selected) return selected;
+		await new Promise<void>((resolve) => setTimeout(resolve, SCREEN_POLL_INTERVAL_MS));
+	}
+	throw new Error("Timed out waiting for child lifecycle evidence");
+}
+
+async function waitForProcessExit(pid: number): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		try {
+			process.kill(pid, 0);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+			throw error;
+		}
+		await new Promise<void>((resolve) => setTimeout(resolve, SCREEN_POLL_INTERVAL_MS));
+	}
+	throw new Error(`Timed out waiting for child process ${pid} to exit`);
 }
 
 async function openDormantAgentSelector(

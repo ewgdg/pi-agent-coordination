@@ -40,7 +40,10 @@ import { registerParticipantCoordinationTools } from "../tools/participant-coord
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
 import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
-import { isTerminalInputSubmission } from "./terminal-input-submission-tracker.ts";
+import {
+	TerminalInputSubmissionAcknowledger,
+	type TerminalInputSubmissionAcknowledgmentBinding,
+} from "./terminal-input-submission-acknowledger.ts";
 import {
 	createControlBackedChildParticipantHandlers,
 	createControlBackedChildPresentationHandlers,
@@ -78,14 +81,15 @@ type ChildControlState = {
 	nativeRunSequence: number;
 	queueIntentionTail: Promise<void>;
 	shutdownStarted: boolean;
+	inputSubmissionAcknowledger: TerminalInputSubmissionAcknowledger;
 };
 
 const CHILD_CONTROL_REGISTRY_KEY = "__piAgentCoordinationChildControls";
 const globalChildControlRegistry = globalThis as typeof globalThis & {
 	[CHILD_CONTROL_REGISTRY_KEY]?: WeakMap<AgentSession, ChildControlState>;
 };
-// Pi retains the exact AgentSession across /reload. Preserve only its authenticated
-// Control and continuity state; every extension generation replaces currentBinding.
+// Pi retains the exact AgentSession across /reload. Preserve its authenticated
+// Control and sequence continuity; every extension generation replaces currentBinding.
 const childControls = (
 	globalChildControlRegistry[CHILD_CONTROL_REGISTRY_KEY] ??= new WeakMap()
 );
@@ -155,12 +159,23 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				protocol: agentControlProtocol,
 				transport,
 			});
+			const inputSubmissionAcknowledger = new TerminalInputSubmissionAcknowledger(
+				(sequence) => {
+					// Pi resolves getUserInput() in this same input turn. Delay only to
+					// the check phase so runtime.input.started enters ordered Control first.
+					setImmediate(() => void channel.sendEvent(
+						"runtime.input.submissionAcknowledged",
+						{ sequence },
+					).catch(() => undefined));
+				},
+			);
 			state = {
 				channel,
 				currentRunOutcome: "completed",
 				nativeRunSequence: 0,
 				queueIntentionTail: Promise.resolve(),
 				shutdownStarted: false,
+				inputSubmissionAcknowledger,
 			};
 			childControls.set(capture.runtime.session, state);
 			channel.onRequest((request) => requireCurrentBinding(state as ChildControlState)
@@ -171,12 +186,19 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		}
 		const currentState = state;
 		if (retained) currentState.currentBinding?.dispose();
+		const inputSubmissionAcknowledgment = currentState.inputSubmissionAcknowledger.bind();
+		const removeInputSubmissionListener = ctx.ui.onTerminalInput((data) => {
+			inputSubmissionAcknowledgment.handleInput(data);
+			return undefined;
+		});
 		const binding = createChildRuntimeBinding(
 			currentState,
 			capture.runtime,
 			ctx,
 			capture.reinitializePresentation,
 			bootstrap.agentId,
+			inputSubmissionAcknowledgment,
+			removeInputSubmissionListener,
 		);
 		currentState.currentBinding = binding;
 		currentState.shutdownStarted = false;
@@ -186,18 +208,6 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			ctx.sessionManager,
 			createParticipantInputHandler(participantLifecycle),
 		);
-		let inputSubmissionSequence = 0;
-		ctx.ui.onTerminalInput((data) => {
-			if (!isTerminalInputSubmission(data)) return undefined;
-			const sequence = ++inputSubmissionSequence;
-			// Pi resolves getUserInput() in this same input turn. Delay only to the
-			// check phase so runtime.input.started enters ordered Control first.
-			setImmediate(() => void currentState.channel.sendEvent(
-				"runtime.input.submissionAcknowledged",
-				{ sequence },
-			).catch(() => undefined));
-			return undefined;
-		});
 		const inputLifecycle = {
 			started: () => currentState.channel.sendEvent("runtime.input.started", {}),
 			completed: () => currentState.channel.sendEvent("runtime.input.completed", {}),
@@ -249,6 +259,8 @@ function createChildRuntimeBinding(
 	context: ExtensionContext,
 	reinitializePresentation: () => void,
 	agentId: string,
+	inputSubmissionAcknowledgment: TerminalInputSubmissionAcknowledgmentBinding,
+	removeInputSubmissionListener: () => void,
 ): ChildRuntimeBinding {
 	let binding!: ChildRuntimeBinding;
 	const activity = new RemoteAgentActivitySource(agentId);
@@ -280,7 +292,11 @@ function createChildRuntimeBinding(
 			state.shutdownStarted = true;
 			context.shutdown();
 		},
-		dispose: removeLifecycleSubscription,
+		dispose() {
+			inputSubmissionAcknowledgment.dispose();
+			removeInputSubmissionListener();
+			removeLifecycleSubscription();
+		},
 	};
 	return binding;
 }
