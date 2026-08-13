@@ -259,11 +259,13 @@ class AgentSelectorSurface implements Component {
 		};
 		list.onSelect = ({ value }) => {
 			const selected = this.#items.find((item) => item.value === value);
-			if (!selected || selected.kind === "attention") return;
-			void this.#completeSelection(selected.action ?? {
-				kind: "select_agent",
-				agentId: value,
-			});
+			if (!selected) return;
+			const action = selected.action ?? (selected.status
+				? { kind: "select_agent" as const, agentId: value }
+				: undefined);
+			// Informational rows remain focusable, but Enter must not close the overlay.
+			if (!action) return;
+			void this.#completeSelection(action);
 		};
 		list.onCancel = () => this.#done(undefined);
 		return list;
@@ -370,11 +372,17 @@ class AgentSelectorSurface implements Component {
 		const operational = (this.#options.operationalAttention ?? []).map(
 			(attention, index) => {
 				const requests = operationalIncidentRequestEvidence(attention);
+				const affectedAgentId = attention.affectedAgentIds.length === 1
+					? attention.affectedAgentIds[0]
+					: undefined;
 				return {
 					value: `operational:${index}`,
 					label: `ATTENTION ${index + 1} · ${formatOperationalIncidentHeadline(attention)}`,
 					description: `Requests ${requests.total}`,
 					kind: "attention" as const,
+					action: affectedAgentId
+						? { kind: "select_agent" as const, agentId: affectedAgentId }
+						: undefined,
 					detailLines: [
 						"",
 						`Affected ${attention.affectedAgentIds.join(", ")}`,

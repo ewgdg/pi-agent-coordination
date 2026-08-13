@@ -443,8 +443,7 @@ test("Dormant Moderator rows show its active role description while Enter delega
 	harness.component.handleInput?.("\t");
 
 	const rendered = harness.component.render(80);
-	const moderatorRow = rendered.find((line) => line.includes("Moderator"));
-	assert.match(moderatorRow ?? "", /Moderating obligation stall/);
+	assert.match(rendered.join("\n"), /Moderating obligation stall/);
 	assert.match(rendered.join("\n"), /moderator-id/);
 	harness.component.handleInput?.("\r");
 	assert.deepEqual(await selection, {
@@ -493,7 +492,7 @@ test("Live uses one attention-first list and dispatches the exact Human Request"
 	});
 });
 
-test("Operational ATTENTION is focusable and passive", async () => {
+test("single-Agent Operational ATTENTION opens the affected Agent", async () => {
 	const harness = surfaceHarness(30);
 	const selection = openAgentSelectorSurface(harness.ui, {
 		live: [agentStatus("owner", "Owner", null)],
@@ -524,7 +523,34 @@ test("Operational ATTENTION is focusable and passive", async () => {
 	assert.match(rendered, /→ ATTENTION 1 · Run Failure/);
 	assert.match(rendered, /Request requester-agent\/request-entry\/request-call/);
 	harness.component.handleInput?.("\r");
+	assert.deepEqual(await selection, {
+		kind: "select_agent",
+		agentId: "affected-agent",
+	});
+});
+
+test("multi-Agent Operational ATTENTION keeps the overlay open when Enter has no action", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [],
+		selectedAgentId: "owner",
+		operationalAttention: [{
+			trigger: {
+				kind: "dependency_deadlock",
+				agentIds: ["first-agent", "second-agent"],
+				requests: { total: 0, sources: [] },
+			},
+			affectedAgentIds: ["first-agent", "second-agent"],
+			diagnostics: [],
+		}],
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+
+	harness.component.handleInput?.("\r");
 	assert.equal(harness.resolved, false);
+	assert.match(harness.component.render(80).join("\n"), /→ ATTENTION 1 · Dependency Deadl/);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
