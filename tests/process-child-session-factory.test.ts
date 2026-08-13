@@ -405,6 +405,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		"    ctx.ui.setWidget('moderator-process-widget', [",
 		"      'PROCESS_RUNTIME_CHILD_WIDGET',",
 		"      `PID=${process.pid}`,",
+		"      `AGENT_DIR=${String(process.env.PI_CODING_AGENT_DIR)}`,",
 		"    ]);",
 		"  });",
 		"}",
@@ -541,6 +542,9 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		replacementPid = Number(pidMatch[1]);
 		assert.ok(Number.isSafeInteger(replacementPid) && replacementPid > 1);
 		assert.notEqual(replacementPid, process.pid);
+		const childAgentDirMatch = frame.match(/AGENT_DIR=(.+)/);
+		assert.ok(childAgentDirMatch);
+		assert.equal(childAgentDirMatch[1]!.trim(), host.services.agentDir);
 		assert.equal(
 			(globalThis as Record<PropertyKey, unknown>)[THEME_KEY],
 			ownerTheme,

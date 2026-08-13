@@ -198,13 +198,18 @@ export class PiChildProcessRuntime {
 					: { contextArtifactPath }),
 				projectTrusted: options.projectTrusted,
 			});
+			const ownerEnvironment = options.ownerEnvironment ?? process.env;
+			const resolvedAgentDir = options.agentDir ?? ownerEnvironment.PI_CODING_AGENT_DIR;
+			if (!resolvedAgentDir) {
+				throw new Error(
+					"invalid_child_runtime: parent PI_CODING_AGENT_DIR is required",
+				);
+			}
 			const environment = buildChildProcessEnvironment({
-				ownerEnvironment: options.ownerEnvironment ?? process.env,
+				ownerEnvironment,
 				bootstrapPath,
 			});
-			if (options.agentDir !== undefined) {
-				environment.PI_CODING_AGENT_DIR = options.agentDir;
-			}
+			environment.PI_CODING_AGENT_DIR = resolvedAgentDir;
 			environment.TERM = "xterm-256color";
 			environment.COLORTERM = "truecolor";
 			const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();

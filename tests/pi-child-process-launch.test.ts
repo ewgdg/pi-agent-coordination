@@ -14,6 +14,7 @@ import {
 	type StartPiChildProcessRuntimeOptions,
 } from "../src/process-runtime/pi-child-process-runtime.ts";
 import {
+	PROCESS_RUNTIME_TEST_AGENT_DIR,
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
 } from "./fixtures/process-runtime-child-extension.ts";
@@ -34,10 +35,11 @@ test("launch projects the real startup PTY through runtime admission", {
 		const projection = createPiChildProcessProjection(launch);
 		const readiness = projection.ready();
 		await waitForFrame(launch, "PROCESS_RUNTIME_CHILD_WIDGET");
-		assert.match(
-			projection.presentation.render(80).map(stripTerminalSequences).join("\n"),
-			/PROCESS_RUNTIME_CHILD_WIDGET/,
-		);
+		const startupFrame = projection.presentation.render(80)
+			.map(stripTerminalSequences)
+			.join("\n");
+		assert.match(startupFrame, /PROCESS_RUNTIME_CHILD_WIDGET/);
+		assert.ok(startupFrame.includes(`AGENT_DIR=${PROCESS_RUNTIME_TEST_AGENT_DIR}`));
 		let changes = 0;
 		projection.addChangeHandler(() => changes += 1);
 		projection.resize(100, 30);
