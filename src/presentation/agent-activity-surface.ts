@@ -27,6 +27,7 @@ import { boundedToolPreview } from "../tools/bounded-preview.ts";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const SPINNER_FRAME_INTERVAL_MS = 80;
+const MAX_VISIBLE_ATTENTION_ROWS = 3;
 const MAX_VISIBLE_AGENT_ROWS = 3;
 
 export const AGENT_ACTIVITY_WIDGET_KEY = "agent-coordination-activity";
@@ -152,15 +153,21 @@ export class AgentActivityDock implements Component {
 			})),
 		];
 		if (items.length === 0) return [];
+		const visibleItems = items.slice(0, MAX_VISIBLE_ATTENTION_ROWS);
+		const hiddenItemCount = items.length - visibleItems.length;
+		const visibleRowCount = visibleItems.length + (hiddenItemCount > 0 ? 1 : 0);
 		return [
 			this.#heading("Attention Inbox"),
-			...items.map((item, index) => {
-				const branch = index === items.length - 1 ? "└─" : "├─";
+			...visibleItems.map((item, index) => {
+				const branch = index === visibleRowCount - 1 ? "└─" : "├─";
 				if (item.kind === "human") {
 					return `${branch} ${this.#theme.fg("warning", "DECIDE")} ${this.#theme.bold(item.attention.agentLabel)} · ${boundedToolPreview(item.attention.question)}`;
 				}
 				return `${branch} ${this.#theme.fg("warning", "ATTENTION")} ${formatOperationalIncidentHeadline(item.attention)}`;
 			}),
+			...(hiddenItemCount > 0
+				? [this.#theme.fg("dim", `└─ … ${hiddenItemCount} more`)]
+				: []),
 		];
 	}
 

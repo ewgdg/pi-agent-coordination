@@ -197,6 +197,33 @@ test("Owner activity renders Attention Inbox above direct children in creation o
 	dock.dispose();
 });
 
+test("Attention Inbox shows three items and reports the hidden remainder", () => {
+	const { dock } = createDock({
+		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
+		children: [],
+		answerMode: false,
+		humanAttention: Array.from({ length: 5 }, (_, index) => ({
+			requestId: `request-${index + 1}`,
+			agentId: `agent-${index + 1}`,
+			agentLabel: `Agent ${index + 1}`,
+			question: `Question ${index + 1}?`,
+		})),
+		operationalAttention: [],
+	});
+
+	const rendered = dock.render(120).map((line) =>
+		stripTerminalSequences(line).replace(/<[^>]+>/g, "")
+	);
+	assert.deepEqual(rendered, [
+		"Attention Inbox",
+		"├─ DECIDE Agent 1 · Question 1?",
+		"├─ DECIDE Agent 2 · Question 2?",
+		"├─ DECIDE Agent 3 · Question 3?",
+		"└─ … 2 more",
+	]);
+	dock.dispose();
+});
+
 test("activity roster shows three live children and reports the hidden remainder", () => {
 	const { dock } = createDock({
 		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
