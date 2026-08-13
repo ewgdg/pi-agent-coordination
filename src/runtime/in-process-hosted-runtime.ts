@@ -1,0 +1,233 @@
+import type {
+	AgentSession,
+	AgentSessionServices,
+} from "@earendil-works/pi-coding-agent";
+
+import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
+import type {
+	AgentRuntimeDelivery,
+	AgentRuntimeDeliveryDispatch,
+	AgentRuntimeWorkState,
+	EffectiveRuntimeSnapshot,
+	ToolBatchClassification,
+	TranscriptCommitConfirmation,
+} from "./agent-runtime-host.ts";
+import type {
+	HostedAgentRuntime,
+	HostedRuntimeEvent,
+} from "./hosted-agent-runtime.ts";
+import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
+
+export class InProcessHostedRuntime implements HostedAgentRuntime {
+	readonly #session: AgentSession;
+	readonly projection: HostedAgentProjection | undefined;
+	readonly #inspectSnapshot: () => EffectiveRuntimeSnapshot;
+
+	constructor(options: {
+		session: AgentSession;
+		projection: HostedAgentProjection | undefined;
+		inspectSnapshot(): EffectiveRuntimeSnapshot;
+	}) {
+		this.#session = options.session;
+		this.projection = options.projection;
+		this.#inspectSnapshot = options.inspectSnapshot;
+	}
+
+	static fromSession(options: {
+		session: AgentSession;
+		services: AgentSessionServices;
+		projection: HostedAgentProjection | undefined;
+	}): InProcessHostedRuntime {
+		return new InProcessHostedRuntime({
+			session: options.session,
+			projection: options.projection,
+			inspectSnapshot: () => inspectInProcessRuntime(
+				options.session,
+				options.services,
+			),
+		});
+	}
+
+	snapshot(): EffectiveRuntimeSnapshot {
+		return this.#inspectSnapshot();
+	}
+
+	synchronizeState(): Promise<void> {
+		return Promise.resolve();
+	}
+
+	workState(): AgentRuntimeWorkState {
+		return this.#session.isIdle ? "settled" : "active";
+	}
+
+	queuedInputCount(): number {
+		return this.#session.pendingMessageCount;
+	}
+
+	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification {
+		for (const toolName of toolNames) {
+			const definition = this.#session.getToolDefinition(toolName);
+			if (!definition) {
+				throw new Error(`invariant_violation: tool definition ${toolName} is unavailable`);
+			}
+			if (definition.executionMode === "sequential") return "blocking";
+		}
+		return "asynchronous";
+	}
+
+	cancellationSignal(): AbortSignal {
+		const signal = this.#session.agent.signal;
+		if (!signal) {
+			throw new Error("invariant_violation: current Agent Run has no cancellation signal");
+		}
+		return signal;
+	}
+
+	deliver(
+		delivery: AgentRuntimeDelivery,
+		confirmation?: TranscriptCommitConfirmation,
+	): AgentRuntimeDeliveryDispatch {
+		if (!confirmation) return { completion: this.#dispatch(delivery) };
+		let completion!: Promise<void>;
+		const transcriptCommit = this.#sendAndConfirmTranscriptCommit(
+			delivery,
+			confirmation.inspectCommit,
+			(dispatched) => {
+				completion = dispatched;
+			},
+		);
+		return { completion, transcriptCommit };
+	}
+
+	continueFromCommittedInput(): Promise<void> {
+		return continueFromCommittedInput(this.#session);
+	}
+
+	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void {
+		return this.#session.subscribe((event) => {
+			if (
+				event.type === "agent_start" ||
+				event.type === "queue_update" ||
+				event.type === "thinking_level_changed"
+			) handler({ type: "state_changed" });
+			if (event.type === "agent_end") {
+				const assistant = [...event.messages]
+					.reverse()
+					.find((message) => message.role === "assistant");
+				const outcome = assistant?.role === "assistant" &&
+					(assistant.stopReason === "error" || assistant.stopReason === "aborted")
+					? assistant.stopReason
+					: "completed";
+				handler({ type: "agent_end", outcome, willRetry: event.willRetry });
+			}
+			if (event.type === "agent_settled") handler({ type: "agent_settled" });
+		});
+	}
+
+	async clearQueue(): Promise<Readonly<{ steering: string[]; followUp: string[] }>> {
+		return this.#session.clearQueue();
+	}
+
+	abort(): Promise<void> {
+		return this.#session.abort();
+	}
+
+	waitForIdle(): Promise<void> {
+		return this.#session.waitForIdle();
+	}
+
+	async dispose(): Promise<void> {
+		await this.#session.dispose();
+	}
+
+	#dispatch(delivery: AgentRuntimeDelivery): Promise<void> {
+		return delivery.kind === "custom"
+			? this.#session.sendCustomMessage(delivery.message, {
+				triggerTurn: delivery.triggerTurn,
+				...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
+			})
+			: this.#session.sendUserMessage(
+				typeof delivery.content === "string" ? delivery.content : [...delivery.content],
+				{
+					...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
+				},
+			);
+	}
+
+	#sendAndConfirmTranscriptCommit(
+		delivery: AgentRuntimeDelivery,
+		inspectCommit: () => boolean,
+		onDispatched: (completion: Promise<void>) => void,
+	): Promise<boolean> {
+		let settleCommit!: (committed: boolean) => void;
+		let rejectCommit!: (error: unknown) => void;
+		const commit = new Promise<boolean>((resolve, reject) => {
+			settleCommit = resolve;
+			rejectCommit = reject;
+		});
+		let settled = false;
+		const inspectAfterPersistence = () => queueMicrotask(() => {
+			if (settled) return;
+			try {
+				if (!inspectCommit()) return;
+				settled = true;
+				settleCommit(true);
+			} catch (error) {
+				settled = true;
+				rejectCommit(error);
+			}
+		});
+		const unsubscribe = this.#session.subscribe((event) => {
+			if (
+				event.type === "message_end" &&
+				(
+					(delivery.kind === "custom" && event.message.role === "custom") ||
+					(delivery.kind === "user" && event.message.role === "user")
+				)
+			) inspectAfterPersistence();
+		});
+		const completion = this.#dispatch(delivery);
+		onDispatched(completion);
+		void completion.then(
+			() => {
+				if (settled) return;
+				inspectAfterPersistence();
+				queueMicrotask(() => {
+					if (settled) return;
+					settled = true;
+					settleCommit(false);
+				});
+			},
+			(error) => {
+				if (settled) return;
+				settled = true;
+				rejectCommit(error);
+			},
+		);
+		return commit.finally(unsubscribe);
+	}
+}
+
+function inspectInProcessRuntime(
+	session: AgentSession,
+	services: AgentSessionServices,
+): EffectiveRuntimeSnapshot {
+	const model = session.model;
+	if (!model) throw new Error("Agent Runtime model is unavailable");
+	return {
+		cwd: services.cwd,
+		model: { provider: model.provider, modelId: model.id },
+		thinking: session.thinkingLevel,
+		tools: [...session.getActiveToolNames()],
+		skills: services.resourceLoader.getSkills().skills.map(({ name }) => name),
+		skillSources: services.resourceLoader.getSkills().skills.map(({ name, filePath }) => ({
+			name,
+			filePath,
+		})),
+		fileExtensionPaths: services.resourceLoader
+			.getExtensions()
+			.extensions.map(({ resolvedPath }) => resolvedPath),
+		projectTrusted: services.settingsManager.isProjectTrusted(),
+		sessionId: session.sessionManager.getSessionId(),
+	};
+}

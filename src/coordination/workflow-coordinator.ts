@@ -1,6 +1,5 @@
 import type {
 	AgentSessionRuntime,
-	ExtensionFactory,
 	MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { ImageContent } from "@earendil-works/pi-ai";
@@ -8,7 +7,6 @@ import { dirname, resolve } from "node:path";
 
 import {
 	requireAgentRecord,
-	requireLiveServices,
 	statusOf,
 	type AgentRecord,
 	type AgentStatus,
@@ -31,10 +29,11 @@ import {
 	type ModelReference,
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
-import { InProcessAgentHost } from "../runtime/in-process-agent-host.ts";
+import { AgentRuntimeSupervisor } from "../runtime/agent-runtime-supervisor.ts";
+import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
-	DefaultChildSessionFactory,
-} from "../runtime/default-child-session-factory.ts";
+	ProcessChildSessionFactory,
+} from "../runtime/process-child-session-factory.ts";
 import {
 	HumanRequestCoordinator,
 	type GuardedHumanToolResult,
@@ -75,16 +74,15 @@ import {
 	configureCoordinatedSession,
 	type AutomaticGenerationReconciliationAdapter,
 } from "../pi-integration/automatic-reconciliation.ts";
-import { createAgentActivityExtension } from "../bootstrap/agent-extension.ts";
+import { participantLifecycleHandlers } from "../bootstrap/agent-extension.ts";
 import type {
 	AgentActivitySnapshot,
 	AgentActivityStatus,
 } from "../presentation/agent-activity-surface.ts";
-import type {
-	PiNativeAgentProjection,
-	PiNativeProjectionHost,
-} from "../pi-integration/native-agent-projection.ts";
+import { participantCoordinatorHandlers } from "../tools/owner-surfaces.ts";
+import { createOwnerAgentPresentationHandlers } from "../process-runtime/remote-agent-selector.ts";
 import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
+import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
 
 export type { AgentStatus } from "./agent-record.ts";
@@ -130,7 +128,7 @@ type ActiveDurableAgentView = {
 };
 
 type AgentViewTarget = Readonly<{
-	projection: PiNativeAgentProjection;
+	projection: TerminalProjection;
 	retryIfChanged: boolean;
 }>;
 
@@ -168,9 +166,10 @@ export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 
 export class WorkflowCoordinator {
 	readonly #ownerIdentity: OwnerIdentity;
+	readonly #ownerDiagnostics: AgentSessionRuntime["services"]["diagnostics"];
 	readonly #agents = new Map<string, AgentRecord>();
 	readonly #spawner: DefaultChildSpawner;
-	readonly #sessionFactory: DefaultChildSessionFactory;
+	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #messages: MessageCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
 	readonly #runSupervisor: RunSupervisor;
@@ -193,11 +192,9 @@ export class WorkflowCoordinator {
 			entryModulePath: string;
 			packageRoot?: string;
 			templateRoots?(
-				baselineCwd: string,
+				parentCwd: string,
 				projectTrusted: boolean,
 			): readonly AgentTemplateRoot[];
-			childExtensionFactory(agentId: string): ExtensionFactory;
-			moderatorExtensionFactory(agentId: string): ExtensionFactory;
 			spawnBoundaryHooks?: SpawnBoundaryHooks;
 			messageBoundaryHooks?: MessageBoundaryHooks;
 			incidentBoundaryHooks?: OperationalIncidentBoundaryHooks;
@@ -207,9 +204,9 @@ export class WorkflowCoordinator {
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
-			projectionHost?: PiNativeProjectionHost;
 		},
 	) {
+		this.#ownerDiagnostics = runtime.services.diagnostics;
 		this.#quarantinedAgentIds = options.recoveredWorkflow?.quarantinedAgentIds ?? new Set();
 		this.#agentIdBySpawnSource = new Map(
 			options.recoveredWorkflow?.agentIdBySpawnSource ?? [],
@@ -223,56 +220,65 @@ export class WorkflowCoordinator {
 		);
 		this.#agents.set(identity.agentId, {
 			identity,
-			services: runtime.services,
-			host: InProcessAgentHost.bindOwner(runtime),
+			host: AgentRuntimeSupervisor.bindOwner(runtime),
+			transcript: transcriptFromSessionManager(runtime.session.sessionManager),
 			children: [],
 		});
-		const sessionFactory = new DefaultChildSessionFactory({
+		const sessionFactory = new ProcessChildSessionFactory({
 			ownerRuntime: runtime,
 			ownerIdentity: identity,
 			entryModulePath: options.entryModulePath,
 			packageRoot: options.packageRoot ?? resolve(dirname(options.entryModulePath), ".."),
 			templateRoots: options.templateRoots,
-			childExtensionFactory: options.childExtensionFactory,
-			moderatorExtensionFactory: options.moderatorExtensionFactory,
-			activityExtensionFactory: (agentId) =>
-				createAgentActivityExtension(() => this.#agentView(agentId)),
-			projectionHost: options.projectionHost,
-			automaticGenerationReconciliation:
-				options.automaticGenerationReconciliation,
+			resolveAgent: (agentId) => this.#agents.get(agentId),
+			ownerRequestHandlers: (role, agentId) => {
+				if (role === "ordinary") {
+					const resolveView = () => this.forAgent(agentId);
+					return {
+						coordination: participantCoordinatorHandlers("ordinary", resolveView),
+						lifecycle: participantLifecycleHandlers(resolveView),
+						presentation: createOwnerAgentPresentationHandlers(resolveView, agentId),
+					};
+				}
+				const resolveView = () => this.forModerator(agentId);
+				return {
+					coordination: participantCoordinatorHandlers("moderator", resolveView),
+					lifecycle: participantLifecycleHandlers(resolveView),
+					presentation: createOwnerAgentPresentationHandlers(resolveView, agentId),
+				};
+			},
 		});
 		this.#sessionFactory = sessionFactory;
 		for (const recovered of options.recoveredWorkflow?.agents ?? []) {
 			if (
 				options.recoveredWorkflow?.transcriptPathByAgentId.get(
 					recovered.identity.agentId,
-				) !== recovered.sessionManager.getSessionFile()
+				) !== recovered.sessionPath
 			) {
 				throw new Error(
 					`invariant_violation: recovered Agent ${recovered.identity.agentId} has inconsistent transcript location`,
 				);
 			}
-			const record = recovered.role === "moderator"
-				? sessionFactory.createModeratorRecord({
+			if (recovered.role === "moderator") {
+				this.#agents.set(recovered.identity.agentId, sessionFactory.createModeratorRecord({
 					identity: recovered.identity,
-					sessionManager: recovered.sessionManager,
-				})
-				: sessionFactory.createAgentRecord({
-					identity: recovered.identity,
-					sessionManager: recovered.sessionManager,
-					blueprint: {
-						baseline: recovered.identity.configuration.baseline,
-						spawnInput: recovered.spawnInput,
-					},
-				});
-			this.#agents.set(recovered.identity.agentId, record);
-			if (recovered.role === "moderator") continue;
+					sessionPath: recovered.sessionPath,
+				}));
+				continue;
+			}
 			const parent = this.#agents.get(recovered.identity.directSpawnerAgentId);
 			if (!parent) {
 				throw new Error(
 					`invariant_violation: recovered Agent ${recovered.identity.agentId} has no verified Direct Spawner`,
 				);
 			}
+			const record = sessionFactory.createAgentRecord({
+				identity: recovered.identity,
+				spawnInput: recovered.creationInput,
+				parent,
+				sessionPath: recovered.sessionPath,
+			});
+			this.#agents.set(recovered.identity.agentId, record);
 			parent.children.push(recovered.identity.agentId);
 		}
 		this.#messages = new MessageCoordinator({
@@ -320,7 +326,7 @@ export class WorkflowCoordinator {
 			integrateAgent: (record) => this.#integrateAgent(record),
 			isShuttingDown: () => this.#shuttingDown,
 			reportError: (error) => {
-				runtime.services.diagnostics.push({
+				this.#ownerDiagnostics.push({
 					type: "error",
 					message: error instanceof Error ? error.message : String(error),
 				});
@@ -494,7 +500,8 @@ export class WorkflowCoordinator {
 				live.push(status);
 				continue;
 			}
-			const header = record.host.sessionManager.getHeader();
+			const transcript = record.transcript.inspect();
+			const header = transcript.header;
 			if (!header) {
 				throw new Error(
 					`invariant_violation: Agent ${record.identity.agentId} has no Pi session header`,
@@ -502,7 +509,7 @@ export class WorkflowCoordinator {
 			}
 			dormant.push({
 				status,
-				recency: piSessionRecency(header, record.host.sessionManager.getEntries()),
+				recency: piSessionRecency(header, transcript.entries),
 				order,
 			});
 		}
@@ -517,19 +524,25 @@ export class WorkflowCoordinator {
 
 	#rosterStatus(record: AgentRecord): AgentRosterStatus {
 		const status = statusOf(record);
-		const liveSession = record.host.currentHandle()
-			? record.host.requireLiveSession()
-			: undefined;
-		const transcriptContext = record.host.sessionManager.buildSessionContext();
-		const configured = record.effectiveConfiguration ?? record.identity.configuration.baseline;
-		const model = liveSession?.model
-			? { provider: liveSession.model.provider, modelId: liveSession.model.id }
-			: transcriptContext.model ?? configured.model;
-		const hasRecordedThinking = record.host.sessionManager.getBranch().some(
+		const runtimeSnapshot = status.run.phase === "starting"
+			? undefined
+			: record.host.effectiveRuntimeSnapshot();
+		const transcript = record.transcript.inspect();
+		const transcriptContext = transcript.context;
+		const configured = record.effectiveConfiguration;
+		const ownerSnapshot = this.#agents.get(this.#ownerIdentity.agentId)
+			?.host.effectiveRuntimeSnapshot();
+		const model = runtimeSnapshot?.model ?? transcriptContext.model ?? configured?.model ??
+			ownerSnapshot?.model;
+		if (!model) {
+			throw new Error(`invariant_violation: Agent ${status.agentId} has no resolvable model`);
+		}
+		const hasRecordedThinking = transcript.activeBranch.some(
 			(entry) => entry.type === "thinking_level_change",
 		);
-		const thinking = liveSession?.thinkingLevel ??
-			(hasRecordedThinking ? transcriptContext.thinkingLevel : configured.thinking);
+		const thinking = runtimeSnapshot?.thinking ??
+			(hasRecordedThinking ? transcriptContext.thinkingLevel : undefined) ??
+			configured?.thinking ?? ownerSnapshot?.thinking;
 		if (!isRuntimeThinkingLevel(thinking)) {
 			throw new Error(`invariant_violation: Agent ${status.agentId} has invalid thinking level`);
 		}
@@ -602,11 +615,11 @@ export class WorkflowCoordinator {
 				this.#reportAgentRuntimeReleaseError(error)
 			);
 		});
-		record.host.setRunStartedHandler(async () => {
-			await this.#bindViewedRunInLane(record);
+		record.host.setRunStartedHandler(async (handle) => {
+			await this.#bindViewedRunInLane(record, handle);
 		});
-		record.host.setRunEndingHandler(async (session, _handle, cause) => {
-			await this.#markViewedFailedRunInLane(record, session, cause);
+		record.host.setRunEndingHandler(async (handle, cause) => {
+			await this.#markViewedFailedRunInLane(record, handle, cause);
 		});
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
@@ -631,7 +644,7 @@ export class WorkflowCoordinator {
 			let attachment!: DurableAgentViewAttachment;
 			attachment = new DurableAgentViewAttachment({
 				agentId,
-				label: record.identity.configuration.label,
+				label: record.identity.metadata.label,
 				projection: target.projection,
 				requestClose: () => this.#closeAgentView(attachment),
 				reportFailure: (error) => this.#reportAgentViewError(error),
@@ -661,14 +674,24 @@ export class WorkflowCoordinator {
 		if (phase === "dormant" && !record.host.currentProjection()) {
 			return this.#prepareAgentViewTarget(record);
 		}
-		return record.host.lane.run(() => this.#acquireAgentViewTargetInLane(record));
+		const liveTarget = await record.host.lane.run(() => {
+			// Release may have won the lane after selection observed an ending Runtime.
+			// Re-check at the serialized boundary instead of applying a stale live path
+			// to the now-dormant Agent.
+			if (
+				record.host.observe().phase === "dormant" &&
+				!record.host.currentProjection()
+			) return undefined;
+			return this.#acquireAgentViewTargetInLane(record);
+		});
+		return liveTarget ?? this.#prepareAgentViewTarget(record);
 	}
 
 	async #prepareAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
 		const preparation = record.host.lane.run(() => {
 			if (record.host.currentProjection()) {
 				record.host.addRetentionReason("interactive_selection");
-				return record.host.requirePreparedSession();
+				return;
 			}
 			return record.host.prepareInLane(["interactive_selection"]);
 		});
@@ -725,7 +748,7 @@ export class WorkflowCoordinator {
 				active.failed = false;
 				active.attachment.retarget({
 					agentId: record.identity.agentId,
-					label: record.identity.configuration.label,
+					label: record.identity.metadata.label,
 					projection: target.projection,
 				});
 			});
@@ -804,9 +827,12 @@ export class WorkflowCoordinator {
 		}
 	}
 
-	async #bindViewedRunInLane(record: AgentRecord): Promise<void> {
+	async #bindViewedRunInLane(
+		record: AgentRecord,
+		handle: Readonly<{ sequence: number }>,
+	): Promise<void> {
 		const active = this.#activeAgentView;
-		if (!active || active.record !== record) return;
+		if (!active || active.record !== record || !record.host.isCurrent(handle)) return;
 		const projection = record.host.currentProjection();
 		if (!projection) {
 			throw new Error(
@@ -825,7 +851,7 @@ export class WorkflowCoordinator {
 
 	async #markViewedFailedRunInLane(
 		record: AgentRecord,
-		session: AgentSessionRuntime["session"],
+		handle: Readonly<{ sequence: number }>,
 		cause: "failure" | "termination" | "shutdown",
 	): Promise<void> {
 		const active = this.#activeAgentView;
@@ -833,7 +859,7 @@ export class WorkflowCoordinator {
 			cause !== "failure" ||
 			!active ||
 			active.record !== record ||
-			record.host.requireLiveSession() !== session ||
+			!record.host.isCurrent(handle) ||
 			record.host.currentProjection() !== active.attachment.projection()
 		) return;
 		if (record.host.observe().phase === "starting") {
@@ -847,16 +873,14 @@ export class WorkflowCoordinator {
 	}
 
 	#reportAgentViewError(error: unknown): void {
-		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
-		requireLiveServices(owner).diagnostics.push({
+		this.#ownerDiagnostics.push({
 			type: "error",
 			message: `Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
 		});
 	}
 
 	#reportAgentRuntimeReleaseError(error: unknown): void {
-		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
-		requireLiveServices(owner).diagnostics.push({
+		this.#ownerDiagnostics.push({
 			type: "error",
 			message: `Agent runtime release failed: ${error instanceof Error ? error.message : String(error)}`,
 		});
@@ -903,9 +927,11 @@ export class WorkflowCoordinator {
 		const record = this.#requireAgent(agentId);
 		const run = record.host.observe();
 		if (run.phase !== "live" || run.attention === "input_required") return;
+		const handle = record.host.currentHandle();
+		if (!handle) return;
 		const permit = await this.#executionScheduler.admit(
 			this.#isModerator(agentId) ? "moderator" : "ordinary",
-			record.host.requireLiveSession().agent.signal,
+			record.host.exactRunCancellationSignal(handle),
 		);
 		if (!permit) return;
 		if (this.#shuttingDown) {
@@ -937,11 +963,9 @@ export class WorkflowCoordinator {
 			}
 			return active.record.host.lane.run(async () => {
 				if (this.#activeAgentView !== active) return true;
-				const currentSession = active.record.host.currentHandle()
-					? active.record.host.requireLiveSession()
-					: undefined;
+				const currentHandle = active.record.host.currentHandle();
 				if (
-					currentSession &&
+					currentHandle &&
 					active.attachment.projection() === active.record.host.currentProjection()
 				) {
 					if (active.record.host.currentInterruptionHold()) {
@@ -953,7 +977,7 @@ export class WorkflowCoordinator {
 					}
 					return false;
 				}
-				if (!currentSession) {
+				if (!currentHandle) {
 					await active.record.host.startInLane(["interactive_selection"]);
 				}
 				await this.#runSupervisor.submitFromHumanInLane(active.record, text, images);
@@ -1021,7 +1045,7 @@ export class WorkflowCoordinator {
 
 function waitForInitializingProjection(
 	record: AgentRecord,
-): Promise<PiNativeAgentProjection | undefined> {
+): Promise<TerminalProjection | undefined> {
 	const current = record.host.currentProjection();
 	if (current || record.host.observe().phase !== "starting") {
 		return Promise.resolve(current);
@@ -1039,14 +1063,14 @@ function waitForInitializingProjection(
 function waitForStartupProjection(
 	record: AgentRecord,
 	startup: Promise<unknown>,
-): Promise<PiNativeAgentProjection> {
+): Promise<TerminalProjection> {
 	const current = record.host.currentProjection();
 	if (current) return Promise.resolve(current);
 	return new Promise((resolve, reject) => {
 		let settled = false;
 		let removeHandler: () => void = () => undefined;
 		const settle = (
-			result: { projection: PiNativeAgentProjection } | { error: unknown },
+			result: { projection: TerminalProjection } | { error: unknown },
 		) => {
 			if (settled) return;
 			settled = true;

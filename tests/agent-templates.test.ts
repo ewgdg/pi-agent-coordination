@@ -135,9 +135,9 @@ test("discovers whole templates by strict precedence while safely following syml
 	assert.ok(discovery.diagnostics.some(({ path }) => path === brokenSymlinkPath));
 });
 
-test("resolves baseline, current template, immutable spawn overrides, and fixed role tools in order", () => {
+test("resolves inherited Runtime values, current template, explicit spawn overrides, and fixed role tools in order", () => {
 	const configuration = resolveAgentRunConfiguration({
-		baseline: {
+		inherited: {
 			cwd: "/baseline/project",
 			model: { provider: "base", modelId: "model" },
 			thinking: "low",

@@ -14,7 +14,7 @@ Keep Pi transcripts authoritative and the live coordinator disposable. The commi
 - Resolve the exact committed assistant tool call to a `ToolCallPointer`. Derive the Request identity as unpadded base64url SHA-256 over the canonical NUL-separated message tuple.
 - Validate and normalize metadata and the complete parent-derived runtime baseline before Identity commit. Use the default label `agent`; omit an absent description.
 - Create a durable Pi session in the Workflow session directory. Do not fork, clone, or project the parent transcript or model context.
-- Append one strict child `agent-coordination.identity` entry containing the child session identity, Workflow, Direct Spawner, Spawn source, and configuration baseline. Do not append another outbound Request record.
+- Append one strict child `agent-coordination.identity` entry containing the child session identity, Workflow, Direct Spawner, Spawn source, and display metadata. Keep selected Template and explicit configuration only in the canonical Spawn call. Do not append another outbound Request record.
 - After Identity commit, transfer exclusive transcript writing to the child's serialized live lane. Start and verify the Pi session, then admit one model-visible `agent-coordination.message-delivery` with fixed Deferred scheduling without an intervening Idle-close eligibility point.
 - Preserve exact receipt meanings: `pending`, `created_unscheduled`, `not_created`, and `indeterminate`. No receipt claims Delivery commit, model processing, an Answer, completion, or usefulness.
 - Keep child sessions and Run handles private. Extend role-bound observation with stable direct-child enumeration and bounded child status.

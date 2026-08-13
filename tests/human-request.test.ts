@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 
 import {
 	fauxAssistantMessage,
@@ -11,13 +11,11 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	SessionManager,
-	type AgentSession,
-	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import {
 	createAgentBoundExtension,
-	createModeratorBoundExtension,
 } from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import {
@@ -25,11 +23,20 @@ import {
 	resolveCommittedHumanRequest,
 } from "../src/protocol/human-request.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
 	type TestOwnerHostOptions,
 } from "./support/pi-host.ts";
+
+const pendingCleanups = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+	const cleanups = [...pendingCleanups];
+	pendingCleanups.clear();
+	await Promise.allSettled(cleanups.map((cleanup) => cleanup()));
+});
 
 test("one native text Answer is the sole result and releases the sequential sibling barrier", async () => {
 	const { host, coordinator, view, child } = await createHumanRequestChild();
@@ -46,13 +53,13 @@ test("one native text Answer is the sole result and releases the sequential sibl
 		fauxAssistantMessage("The committed Human Answer is authoritative."),
 	]);
 
-	const run = child.session.prompt("Ask the human for one decision.");
+	await sendChildMessage(host, view, child, "Ask the human for one decision.");
 	await waitForInputRequired(view, child.agentId);
 	const attention = view.humanAttention().find((item) => item.agentId === child.agentId);
 	assert.ok(attention);
 	assert.equal(attention.question, input.question);
 	assert.equal(
-		child.session.sessionManager.getEntries().some(
+		childEntries(child).some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "toolResult" &&
@@ -61,13 +68,14 @@ test("one native text Answer is the sole result and releases the sequential sibl
 		false,
 	);
 
-	await child.session.prompt("Keep the native Pi result.", {
-		streamingBehavior: "steer",
-	});
-	await run;
-	await child.session.waitForIdle();
+	await submitChildInput(view, child, "Keep the native Pi result.");
+	await waitForChildEntry(child, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === "after-answer"
+	);
 
-	const entries = child.session.sessionManager.getEntries();
+	const entries = childEntries(child);
 	const answerResult = entries.find(
 		(entry) =>
 			entry.type === "message" &&
@@ -136,12 +144,16 @@ test("registered Human Request schema rejects blank and malformed questions befo
 		),
 		fauxAssistantMessage("Both unavailable requests were rejected."),
 	]);
-	await child.session.prompt("Attempt invalid Human Requests.");
-	await child.session.waitForIdle();
+	await sendChildMessage(host, view, child, "Attempt invalid Human Requests.");
+	await waitForChildEntry(child, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === toolCallIds[1]
+	);
 
 	assert.notEqual(observedAttention(view, child.agentId), "input_required");
 	assert.deepEqual(view.humanAttention(), []);
-	const results = child.session.sessionManager.getEntries().filter(
+	const results = childEntries(child).filter(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -169,35 +181,32 @@ test("blank and image-bearing submissions do not resolve as Human Answers", asyn
 		),
 		fauxAssistantMessage("The valid Answer was committed."),
 	]);
-	const run = child.session.prompt("Ask for validated input.");
+	await sendChildMessage(host, view, child, "Ask for validated input.");
 	await waitForInputRequired(view, child.agentId);
-	const childUi = child.session.extensionRunner.createContext().ui;
 
-	await child.session.prompt("   ", { streamingBehavior: "steer" });
-	assert.equal(childUi.getEditorText(), "   ");
+	await submitChildInput(view, child, "   ");
 	assert.equal(observedAttention(view, child.agentId), "input_required");
 	const image: ImageContent = {
 		type: "image",
 		data: "aW1hZ2U=",
 		mimeType: "image/png",
 	};
-	await child.session.prompt("Keep this text", {
-		streamingBehavior: "steer",
-		images: [image],
-	});
-	assert.equal(childUi.getEditorText(), "Keep this text");
+	assert.throws(
+		() => coordinator.forAgent(child.agentId).resumeFromHuman("Keep this text", [image]),
+		/Human Answers do not support images/,
+	);
 	assert.equal(observedAttention(view, child.agentId), "input_required");
-	assert.match(
-		childUi.getEditorText(),
-		/Keep this text/,
+
+	await submitChildInput(view, child, "Text-only Answer");
+	await waitForChildEntry(child, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === toolCallId &&
+		!entry.message.isError
 	);
 
-	await child.session.prompt("Text-only Answer", { streamingBehavior: "steer" });
-	await run;
-	await child.session.waitForIdle();
-
 	assert.equal(
-		child.session.sessionManager.getEntries().filter(
+		childEntries(child).filter(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "toolResult" &&
@@ -211,20 +220,21 @@ test("blank and image-bearing submissions do not resolve as Human Answers", asyn
 });
 
 test("Alt+Enter delivery and extension commands retain native behavior", async () => {
-	let commandExecutions = 0;
+	const cwd = await mkdtemp(join(tmpdir(), "human-answer-command-"));
+	const commandMarker = join(cwd, "answer-mode-command-ran");
+	const extensionPath = join(cwd, "answer-mode-command-probe.mjs");
+	await writeFile(extensionPath, `
+import { writeFile } from "node:fs/promises";
+export default function answerModeCommandProbe(pi) {
+  pi.registerCommand("answer-mode-probe", {
+    description: "Verify native command dispatch during Answer mode",
+    async handler() { await writeFile(${JSON.stringify(commandMarker)}, "executed"); },
+  });
+}
+`);
 	const { host, coordinator, view, child } = await createHumanRequestChild({
-		additionalExtensionFactories: [{
-			name: "answer-mode-command-probe",
-			hidden: false,
-			factory(pi) {
-				pi.registerCommand("answer-mode-probe", {
-					description: "Verify native command dispatch during Answer mode",
-					async handler() {
-						commandExecutions += 1;
-					},
-				});
-			},
-		}],
+		cwd,
+		additionalExtensionPaths: [extensionPath],
 	});
 	const toolCallId = "ask-before-follow-up";
 	host.model.setResponses([
@@ -239,22 +249,25 @@ test("Alt+Enter delivery and extension commands retain native behavior", async (
 		fauxAssistantMessage("The Answered turn settled."),
 		fauxAssistantMessage("The queued follow-up ran later."),
 	]);
-	const run = child.session.prompt("Open the request.");
+	await sendChildMessage(host, view, child, "Open the request.");
 	await waitForInputRequired(view, child.agentId);
 	const requestId = view.humanAttention().find(
 		({ agentId }) => agentId === child.agentId,
 	)?.requestId;
 	assert.ok(requestId);
-	await child.session.prompt("/answer-mode-probe", { streamingBehavior: "steer" });
-	assert.equal(commandExecutions, 1);
+	await submitChildInput(view, child, "/answer-mode-probe");
+	await waitForCondition(async () => fileExists(commandMarker));
 	assert.equal(observedAttention(view, child.agentId), "input_required");
 
-	await child.session.prompt("Queue this after the Answered turn.", {
-		streamingBehavior: "followUp",
-	});
+	await submitChildInput(
+		view,
+		child,
+		"Queue this after the Answered turn.",
+		"\x1b\r",
+	);
 	assert.equal(observedAttention(view, child.agentId), "input_required");
 	assert.equal(
-		child.session.sessionManager.getEntries().some(
+		childEntries(child).some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "toolResult" &&
@@ -263,10 +276,13 @@ test("Alt+Enter delivery and extension commands retain native behavior", async (
 		false,
 	);
 
-	await child.session.prompt("Answer now", { streamingBehavior: "steer" });
-	await run;
-	await child.session.waitForIdle();
-	const answer = child.session.sessionManager.getEntries().find(
+	await submitChildInput(view, child, "Answer now");
+	await waitForChildEntry(child, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === toolCallId
+	);
+	const answer = childEntries(child).find(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -291,14 +307,15 @@ test("an unrecognized slash-prefixed string is ordinary Answer text", async () =
 		),
 		fauxAssistantMessage("Slash Answer received."),
 	]);
-	const run = child.session.prompt("Ask for slash text.");
+	await sendChildMessage(host, view, child, "Ask for slash text.");
 	await waitForInputRequired(view, child.agentId);
-	await child.session.prompt("/not-a-command keep this literal", {
-		streamingBehavior: "steer",
-	});
-	await run;
-	await child.session.waitForIdle();
-	const result = child.session.sessionManager.getEntries().find(
+	await submitChildInput(view, child, "/not-a-command keep this literal");
+	await waitForChildEntry(child, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === toolCallId
+	);
+	const result = childEntries(child).find(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -312,7 +329,7 @@ test("an unrecognized slash-prefixed string is ordinary Answer text", async () =
 
 test("primary Enter answers literally while Alt+Enter expands a prompt template", async () => {
 	const cwd = await mkdtemp(join(tmpdir(), "human-answer-prompt-"));
-	const agentDir = join(cwd, ".pi-agent");
+	const agentDir = join(cwd, ".pi");
 	await mkdir(join(agentDir, "prompts"), { recursive: true });
 	await writeFile(
 		join(agentDir, "prompts", "answer-template.md"),
@@ -336,23 +353,27 @@ test("primary Enter answers literally while Alt+Enter expands a prompt template"
 		fauxAssistantMessage("The literal Answer committed."),
 		fauxAssistantMessage("The expanded follow-up ran later."),
 	]);
-	const run = child.session.prompt("Ask for the literal command.");
+	await sendChildMessage(host, view, child, "Ask for the literal command.");
 	try {
 		await waitForInputRequired(view, child.agentId);
 		const requestId = view.humanAttention().find(
 			({ agentId }) => agentId === child.agentId,
 		)?.requestId;
 		assert.ok(requestId);
-		await child.session.prompt("/answer-template later work", {
-			streamingBehavior: "followUp",
-		});
+		await submitChildInput(view, child, "/answer-template later work", "\x1b\r");
 		assert.equal(observedAttention(view, child.agentId), "input_required");
 
-		await child.session.prompt("/answer-template", { streamingBehavior: "steer" });
+		await submitChildInput(view, child, "/answer-template");
 		await waitForCondition(() => observedAttention(view, child.agentId) !== "input_required");
-		await run;
-		await child.session.waitForIdle();
-		const result = child.session.sessionManager.getEntries().find(
+		await waitForChildEntry(child, (entry) =>
+			entry.type === "message" &&
+			entry.message.role === "user" &&
+			(typeof entry.message.content === "string"
+				? entry.message.content
+				: textContent(entry.message.content)
+			).includes("Expanded follow-up: later work")
+		);
+		const result = childEntries(child).find(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "toolResult" &&
@@ -364,7 +385,7 @@ test("primary Enter answers literally while Alt+Enter expands a prompt template"
 			answer: "/answer-template",
 		});
 		assert.equal(
-			child.session.sessionManager.getEntries().some(
+			childEntries(child).some(
 				(entry) =>
 					entry.type === "message" &&
 					entry.message.role === "user" &&
@@ -376,17 +397,14 @@ test("primary Enter answers literally while Alt+Enter expands a prompt template"
 			true,
 		);
 	} finally {
-		if (observedAttention(view, child.agentId) === "input_required") {
-			await child.session.abort();
-			await run.catch(() => undefined);
-		}
 		await coordinator.shutdown(async () => host.runtime.dispose());
 	}
 });
 
-test("different Agents wait and commit Human Answers independently", async () => {
+test("different Agents wait and commit Human Answers independently", async (t) => {
 	const { host, coordinator, view, child: first, spawnChild } =
 		await createHumanRequestChild();
+	t.after(() => coordinator.shutdown(async () => host.runtime.dispose()));
 	const second = await spawnChild();
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -409,9 +427,9 @@ test("different Agents wait and commit Human Answers independently", async () =>
 		fauxAssistantMessage("First Agent received its Human Answer."),
 	]);
 
-	const firstRun = first.session.prompt("Open the first Human Request.");
+	await sendChildMessage(host, view, first, "Open the first Human Request.");
 	await waitForInputRequired(view, first.agentId);
-	const secondRun = second.session.prompt("Open the second Human Request.");
+	await sendChildMessage(host, view, second, "Open the second Human Request.");
 	await waitForInputRequired(view, second.agentId);
 	assert.deepEqual(
 		view.humanAttention().map(({ agentId }) => agentId).sort(),
@@ -421,42 +439,40 @@ test("different Agents wait and commit Human Answers independently", async () =>
 	await waitForCondition(() => host.ui.customSurfaces.length === 1);
 	const selector = host.ui.customSurfaces[0]!;
 	assert.match(selector.render(100).join("\n"), /DECIDE 1.*DECIDE 2/s);
-	selector.handleInput?.("\x1b[B");
-	selector.handleInput?.("\r");
-	await waitForCondition(() => {
-		if (host.ui.customSurfaces.length !== 1) return false;
-		const frame = host.ui.customSurfaces[0]!.render(100).join("\n");
-		return !frame.includes("Tab views") &&
-			frame.includes("Answer the second Agent independently.");
-	});
-	const selectedAgentView = host.ui.customSurfaces[0]!;
-	const selectedFrame = selectedAgentView.render(100).join("\n");
+	selector.handleInput?.("\x1b");
+	await agentsCommand;
+	await selectChildView(view, second);
+	const selectedFrame = stripTerminalSequences(
+		second.projection?.projection().presentation.render(100).join("\n") ?? "",
+	);
 	assert.match(selectedFrame, /\[Ask User\]/);
 	assert.match(selectedFrame, /Answer the second Agent independently\./);
-	assert.match(selectedFrame, /ANSWER.*Enter submits/);
 
-	selectedAgentView.handleInput?.("Second Answer");
-	selectedAgentView.handleInput?.("\r");
-	await secondRun;
+	await submitChildInput(view, second, "Second Answer");
+	await waitForChildEntry(second, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === "second-independent-human-request"
+	);
 	assert.equal(observedAttention(view, first.agentId), "input_required");
 	assert.equal(
 		view.humanAttention().some(({ agentId }) => agentId === first.agentId),
 		true,
 	);
-	await first.session.prompt("First Answer", { streamingBehavior: "steer" });
-	await firstRun;
-	await Promise.all([first.session.waitForIdle(), second.session.waitForIdle()]);
+	await submitChildInput(view, first, "First Answer");
+	await waitForChildEntry(first, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === "first-independent-human-request"
+	);
+	await waitForCondition(() => view.humanAttention().length === 0);
 	assert.deepEqual(view.humanAttention(), []);
 	await view.openAgentView(view.status().agentId);
-	await agentsCommand;
-
-	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
 test("a precommit Run fence rejects and restores the provisional Answer", async () => {
 	let ownerView: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-	let childUi: ExtensionUIContext | undefined;
-	const childSessions = new Map<string, AgentSession>();
+	let selectedChild: HumanRequestChild | undefined;
 	const host = await createUnboundTestOwnerHost(
 		createAgentBoundExtension(() => {
 			if (!ownerView) throw new Error("Owner view unavailable");
@@ -464,30 +480,23 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 		}),
 		{ persistent: true },
 	);
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		humanRequestBoundaryHooks: {
 			beforeResultCommit: ({ failExactRun }) => {
-				childUi?.setEditorText("newer draft");
+				selectedChild?.projection?.projection().dispatchInput("newer draft");
 				failExactRun();
 			},
 		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
-		spawnBoundaryHooks: {
-			afterRunStart({ identity: childIdentity, session }) {
-				childSessions.set(childIdentity.agentId, session);
-			},
-		},
 	});
+	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
 	ownerView = coordinator.forAgent(identity.agentId);
 	await bindTestOwnerHost(host, "tui");
-	const child = await spawnLiveChild(host, ownerView, childSessions);
+	const child = await spawnLiveChild(host, ownerView);
+	selectedChild = child;
 	const toolCallId = "answer-before-fence";
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -496,17 +505,19 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 		),
 		fauxAssistantMessage("This continuation must not run."),
 	]);
-	const run = child.session.prompt("Open the fenced request.");
+	await sendChildMessage(host, ownerView, child, "Open the fenced request.");
 	await waitForInputRequired(ownerView, child.agentId);
-	childUi = child.session.extensionRunner.createContext().ui;
-	await child.session.prompt("Restore this candidate", { streamingBehavior: "steer" });
-	await run;
-	await child.session.waitForIdle();
+	await submitChildInput(ownerView, child, "Restore this candidate");
+	await waitForCondition(() => {
+		const frame = stripTerminalSequences(
+			child.projection?.projection().presentation.render(160).join("\n") ?? "",
+		);
+		return /Restore this candidate[\s\S]*newer draft/.test(frame);
+	});
 	await waitForCondition(() => ownerView.status(child.agentId).run.phase === "dormant");
 
-	assert.equal(childUi.getEditorText(), "Restore this candidate\nnewer draft");
 	assert.equal(ownerView.status(child.agentId).run.phase, "dormant");
-	const result = child.session.sessionManager.getEntries().find(
+	const result = childEntries(child).find(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -534,18 +545,19 @@ test("a committed Answer remains canonical after later Run failure and reopened 
 			errorMessage: "deterministic later failure",
 		}),
 	]);
-	const run = child.session.prompt("Ask before failing.");
+	await sendChildMessage(host, view, child, "Ask before failing.");
 	await waitForInputRequired(view, child.agentId);
-	await child.session.prompt("Canonical Answer", { streamingBehavior: "steer" });
-	await run;
-	await child.session.waitForIdle();
+	await submitChildInput(view, child, "Canonical Answer");
+	await waitForChildEntry(child, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === toolCallId
+	);
 
-	const sessionFile = child.session.sessionManager.getSessionFile();
-	assert.ok(sessionFile);
-	const reopened = SessionManager.open(sessionFile);
+	const reopened = SessionManager.open(child.sessionFile);
 	const request = resolveCommittedHumanRequest({
 		agentId: child.agentId,
-		sessionManager: reopened,
+		transcript: transcriptFromSessionManager(reopened).inspect(),
 		toolCallId,
 		providedInput: input,
 	});
@@ -557,7 +569,10 @@ test("a committed Answer remains canonical after later Run failure and reopened 
 	);
 	assert.ok(resultEntry);
 	assert.deepEqual(
-		inspectCommittedHumanRequestResult({ request, sessionManager: reopened }),
+		inspectCommittedHumanRequestResult({
+			request,
+			transcript: transcriptFromSessionManager(reopened).inspect(),
+		}),
 		{
 			state: "answered",
 			answer: { requestId: request.requestId, answer: "Canonical Answer" },
@@ -576,16 +591,13 @@ test("Human Request fails before input_required when no interactive Agent editor
 			return view;
 		})(pi),
 	);
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});
+	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
 	view = coordinator.forAgent(identity.agentId);
 	await bindTestOwnerHost(host, "tui");
 	const toolCallId = "ask-without-projection";
@@ -616,13 +628,13 @@ test("Human Request fails before input_required when no interactive Agent editor
 async function createHumanRequestChild(options?: Pick<
 	TestOwnerHostOptions,
 	| "additionalExtensionFactories"
+	| "additionalExtensionPaths"
 	| "persistent"
 	| "cwd"
 	| "agentDir"
 	| "noPromptTemplates"
 >) {
 	let ownerView: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-	const childSessions = new Map<string, AgentSession>();
 	const host = await createUnboundTestOwnerHost(
 		createAgentBoundExtension(() => {
 			if (!ownerView) throw new Error("Human Request owner view is unavailable");
@@ -630,44 +642,39 @@ async function createHumanRequestChild(options?: Pick<
 		}),
 		{ persistent: true, ...options },
 	);
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
-		spawnBoundaryHooks: {
-			afterRunStart({ identity: childIdentity, session }) {
-				childSessions.set(childIdentity.agentId, session);
-			},
-		},
 	});
+	pendingCleanups.add(() => coordinator.shutdown(async () => host.runtime.dispose()));
 	const view = coordinator.forAgent(identity.agentId);
 	ownerView = view;
 	await bindTestOwnerHost(host, "tui");
-	const child = await spawnLiveChild(host, view, childSessions);
+	const child = await spawnLiveChild(host, view);
 	return {
 		host,
 		coordinator,
 		view,
 		child,
-		spawnChild: () => spawnLiveChild(host, view, childSessions),
+		spawnChild: () => spawnLiveChild(host, view),
 	};
 }
 
 async function spawnLiveChild(
 	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>,
 	view: ReturnType<WorkflowCoordinator["forAgent"]>,
-	childSessions: ReadonlyMap<string, AgentSession>,
-): Promise<{ agentId: string; session: AgentSession }> {
+): Promise<{
+	agentId: string;
+	sessionFile: string;
+	projection?: Awaited<ReturnType<typeof view.openAgentView>>;
+}> {
 	host.model.setResponses([
 		fauxAssistantMessage("The Creation Request remains available for an Agent Answer."),
 	]);
 	const input = { request: "Open Human Requests when later instructed." };
-	const toolCallId = `spawn-human-request-child-${childSessions.size}`;
+	const toolCallId = `spawn-human-request-child-${view.children().length}`;
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_spawn", input, { id: toolCallId }),
@@ -677,11 +684,112 @@ async function spawnLiveChild(
 	const receipt = await view.spawn(toolCallId, input);
 	const agentId = "agentId" in receipt ? receipt.agentId : undefined;
 	assert.ok(agentId);
-	await waitForCondition(() => childSessions.has(agentId));
-	const session = childSessions.get(agentId);
-	assert.ok(session);
-	await session.waitForIdle();
-	return { agentId, session };
+	const sessionFile = await waitForChildSessionFile(host, agentId);
+	const child = { agentId, sessionFile };
+	await waitForChildEntry(child, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "assistant" &&
+		JSON.stringify(entry.message.content).includes(
+			"The Creation Request remains available for an Agent Answer.",
+		)
+	);
+	await waitForCondition(() => {
+		const run = view.status(agentId).run;
+		return run.phase === "live" && run.work === "settled";
+	});
+	return child;
+}
+
+type HumanRequestChild = Awaited<ReturnType<typeof spawnLiveChild>>;
+const activeChildViews = new WeakMap<object, NonNullable<HumanRequestChild["projection"]>>();
+let childMessageSequence = 0;
+
+async function sendChildMessage(
+	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>,
+	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	child: HumanRequestChild,
+	content: string,
+): Promise<void> {
+	const toolCallId = `human-request-direction-${childMessageSequence++}`;
+	const input = {
+		operation: "send" as const,
+		targetAgentId: child.agentId,
+		content,
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const receipt = await view.message(toolCallId, input);
+	host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(receipt) }],
+		details: receipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+}
+
+async function submitChildInput(
+	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	child: HumanRequestChild,
+	text: string,
+	submitKey = "\r",
+): Promise<void> {
+	await selectChildView(view, child);
+	child.projection?.projection().dispatchInput(`${text}${submitKey}`);
+}
+
+async function selectChildView(
+	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	child: HumanRequestChild,
+): Promise<void> {
+	if (!child.projection || child.projection.agentId !== child.agentId) {
+		const opened = await view.openAgentView(child.agentId);
+		child.projection = opened ?? activeChildViews.get(view);
+		assert.ok(child.projection);
+		activeChildViews.set(view, child.projection);
+	}
+}
+
+function childEntries(child: HumanRequestChild) {
+	return SessionManager.open(child.sessionFile).getEntries();
+}
+
+async function waitForChildEntry(
+	child: HumanRequestChild,
+	predicate: (entry: ReturnType<SessionManager["getEntries"]>[number]) => boolean,
+): Promise<ReturnType<SessionManager["getEntries"]>> {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
+		const entries = childEntries(child);
+		if (entries.some(predicate)) return entries;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Expected child transcript entry did not commit");
+}
+
+async function waitForChildSessionFile(
+	host: Awaited<ReturnType<typeof createUnboundTestOwnerHost>>,
+	agentId: string,
+): Promise<string> {
+	const sessionDirectory = host.session.sessionManager.getSessionDir();
+	if (!sessionDirectory) throw new Error("Persistent Owner session directory unavailable");
+	const workflowDirectory = join(
+		sessionDirectory,
+		"pi-agent-coordination",
+		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
+	);
+	for (let attempt = 0; attempt < 500; attempt += 1) {
+		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
+		const child = sessions.find(({ id }) => id === agentId);
+		if (child) return child.path;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Child Pi session file was not created");
 }
 
 async function waitForInputRequired(
@@ -699,12 +807,23 @@ function observedAttention(
 	return "attention" in run ? run.attention : "dormant";
 }
 
-async function waitForCondition(predicate: () => boolean): Promise<void> {
+async function waitForCondition(
+	predicate: () => boolean | Promise<boolean>,
+): Promise<void> {
 	for (let attempt = 0; attempt < 400; attempt += 1) {
-		if (predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		if (await predicate()) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected Human Request condition was not reached");
+}
+
+async function fileExists(path: string): Promise<boolean> {
+	try {
+		await access(path);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function textContent(content: readonly unknown[]): string {

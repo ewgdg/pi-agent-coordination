@@ -1,14 +1,21 @@
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
-	CustomEditor,
 	InteractiveMode,
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import piAgentCoordination from "../../src/index.ts";
 import { createUnboundTestOwnerHost } from "../support/pi-host.ts";
 
 const OWNER_EDITOR_TEXT = "Owner input survives child UI failure";
+const FAILURE_EXTENSION = fileURLToPath(
+	new URL("./process-agent-view-failure-extension.ts", import.meta.url),
+);
 const failureKind = process.env.PTY_AGENT_VIEW_FAILURE;
 if (
 	failureKind !== "input" &&
@@ -20,52 +27,18 @@ if (
 	throw new Error(`Unsupported PTY Agent-view failure: ${failureKind ?? "missing"}`);
 }
 
-let ownerSessionId = "";
-let childSessionShutdowns = 0;
-class FailingChildEditor extends CustomEditor {
-	#renderFailureArmed = false;
-
-	override handleInput(data: string): void {
-		if (data === "x" && failureKind === "input") {
-			throw new Error("deterministic PTY child input failure");
-		}
-		if (data === "x" && failureKind === "render") {
-			this.#renderFailureArmed = true;
-			return;
-		}
-		super.handleInput(data);
-	}
-
-	override render(width: number): string[] {
-		if (this.#renderFailureArmed) {
-			throw new Error("deterministic PTY child render failure");
-		}
-		return super.render(width);
-	}
-}
-
+const evidencePath = join(tmpdir(), `.pty-agent-view-failure-${process.pid}.jsonl`);
+const initializationReleasePath = join(
+	tmpdir(),
+	`.pty-agent-view-failure-${process.pid}.release`,
+);
+process.env.PTY_AGENT_VIEW_FAILURE_EVIDENCE = evidencePath;
+process.env.PTY_AGENT_VIEW_FAILURE_RELEASE = initializationReleasePath;
 const host = await createUnboundTestOwnerHost(piAgentCoordination, {
 	persistent: true,
-	additionalExtensionFactories: [{
-		name: "pty-child-ui-failure",
-		hidden: true,
-		factory(pi) {
-			let childSession = false;
-			pi.on("session_start", (_event, ctx) => {
-				if (ctx.sessionManager.getSessionId() === ownerSessionId) return;
-				childSession = true;
-				ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-					new FailingChildEditor(tui, theme, keybindings)
-				);
-			});
-			pi.on("session_shutdown", () => {
-				if (childSession) childSessionShutdowns += 1;
-			});
-		},
-	}],
+	additionalExtensionPaths: [FAILURE_EXTENSION],
 });
 const ownerSession = host.session;
-ownerSessionId = ownerSession.sessionId;
 const mode = new InteractiveMode(host.runtime, {
 	verbose: false,
 	tuiMode: "fullscreen",
@@ -86,32 +59,8 @@ const ownerEditorFactory = ownerSession.extensionRunner.createContext().ui.getEd
 ownerSession.extensionRunner.createContext().ui.setEditorText(OWNER_EDITOR_TEXT);
 
 host.model.setResponses([
-	failureKind === "run"
-		? async () => {
-			await new Promise<void>((resolve) => setTimeout(resolve, 1_500));
-			return fauxAssistantMessage("Deterministic PTY terminal Run failure.", {
-				stopReason: "error",
-				errorMessage: "deterministic PTY terminal Run failure",
-			});
-		}
-		: fauxAssistantMessage("Failure PTY child is ready."),
+	fauxAssistantMessage("Failure PTY child is ready."),
 ]);
-let markInitializationPaused!: () => void;
-const initializationPaused = new Promise<void>((resolve) => {
-	markInitializationPaused = resolve;
-});
-const nativeInteractiveInit = InteractiveMode.prototype.init;
-let failNextProjectionInitialization = failureKind === "initialization";
-if (failNextProjectionInitialization) {
-	InteractiveMode.prototype.init = async function (...args) {
-		await nativeInteractiveInit.apply(this, args);
-		if (!failNextProjectionInitialization) return;
-		failNextProjectionInitialization = false;
-		markInitializationPaused();
-		await new Promise<void>((resolve) => setTimeout(resolve, 1_500));
-		throw new Error("deterministic PTY child initialization failure");
-	};
-}
 const spawning = executeCommittedTool(
 	ownerSession,
 	appendToolSource(ownerSession, "agent_spawn", `pty-${failureKind}-failure-child`, {
@@ -119,14 +68,32 @@ const spawning = executeCommittedTool(
 		label: "PTY Failure Worker",
 	}),
 );
-if (failureKind === "initialization") await initializationPaused;
+if (failureKind === "initialization") {
+	await waitForEvidence((entries) => entries.some(({ kind }) => kind === "initialization_paused"));
+}
 const spawn = failureKind === "initialization" ? undefined : await spawning;
 const childAgentId = spawn ? detailString(spawn.details, "agentId") : undefined;
+const childTranscriptPath = childAgentId
+	? await transcriptPathFor(childAgentId)
+	: undefined;
+if (failureKind === "run") {
+	const transcriptPath = childTranscriptPath!;
+	await waitForEvidenceCondition(() =>
+		readFileText(transcriptPath).includes("Failure PTY child is ready.")
+	);
+	host.model.setResponses([
+		fauxAssistantMessage("Deterministic PTY terminal Run failure.", {
+			stopReason: "error",
+			errorMessage: "deterministic PTY terminal Run failure",
+		}),
+	]);
+}
 if (failureKind === "noninteractive") {
 	await host.runtime.dispose();
 	mode.stop();
-	if (childSessionShutdowns !== 1) {
-		throw new Error(`Expected one non-interactive child shutdown, received ${childSessionShutdowns}`);
+	const childShutdowns = (await readEvidence()).filter(({ kind }) => kind === "session_shutdown");
+	if (childShutdowns.length !== 1) {
+		throw new Error(`Expected one non-interactive child shutdown, received ${childShutdowns.length}`);
 	}
 	process.stdout.write("\n__PTY_NONINTERACTIVE_DISPOSAL_COMPLETE__\n");
 } else {
@@ -137,19 +104,35 @@ async function finishInteractiveFailure(): Promise<void> {
 	process.stdout.write(`\n__PTY_AGENT_VIEW_FAILURE_SETUP__${JSON.stringify({
 		failureKind,
 		childAgentId,
+		initializationReleasePath,
 		ownerEditorText: OWNER_EDITOR_TEXT,
 	})}\n`);
 	await openAgents(ownerSession);
+	if (failureKind === "input" || failureKind === "render") {
+		await waitForEvidence((entries) => entries.some(
+			(entry) => entry.kind === "failure_trigger" && entry.failureKind === failureKind,
+		));
+		await waitForDiagnostic((message) =>
+			message.startsWith("Agent view failed: child_runtime_unexpected_exit:")
+		);
+	} else if (failureKind === "run") {
+		await waitForEvidenceCondition(
+			() => readFileText(childTranscriptPath!).includes("trigger selected Run failure"),
+			20_000,
+		);
+		await waitForAgentPhase(childAgentId as string, "dormant");
+		process.stdout.write("\n__PTY_SELECTED_RUN_FAILED__\n");
+		await waitForEvidenceCondition(() =>
+			ownerSession.extensionRunner.createContext().ui.getEditorText()
+				.endsWith("Owner input confirms selected Run closure")
+		);
+		return finishRestoredFailure();
+	}
 	const settledSpawn = spawn ?? await spawning;
 	if (
 		failureKind === "initialization" &&
-		(
-			detailString(settledSpawn.details, "disposition") !== "created_unscheduled" ||
-			detailString(settledSpawn.details, "failedStage") !== "run_start"
-		)
-	) throw new Error("Initialization failure did not settle as created_unscheduled/run_start");
-	InteractiveMode.prototype.init = nativeInteractiveInit;
-
+		detailString(settledSpawn.details, "disposition") !== "pending"
+	) throw new Error(`Process initialization failure was not admitted before the native TUI failed: ${JSON.stringify(settledSpawn.details)}`);
 	if (host.runtime.session !== ownerSession) {
 		throw new Error("Child UI failure changed the Owner runtime session");
 	}
@@ -160,13 +143,26 @@ async function finishInteractiveFailure(): Promise<void> {
 		throw new Error("Child UI failure changed Owner editor implementation");
 	}
 	if (failureKind === "input" || failureKind === "render") {
-		const expectedDiagnostic = `Agent view failed: deterministic PTY child ${failureKind} failure`;
-		if (host.services.diagnostics.filter(({ message }) => message === expectedDiagnostic).length !== 1) {
-			throw new Error(`Expected one bounded Owner diagnostic: ${expectedDiagnostic}`);
+		const exactTriggers = (await readEvidence()).filter(
+			(entry) => entry.kind === "failure_trigger" && entry.failureKind === failureKind,
+		);
+		if (exactTriggers.length !== 1) {
+			throw new Error(`Expected one exact child ${failureKind} trigger, received ${exactTriggers.length}`);
+		}
+		const boundedDiagnostics = host.services.diagnostics.filter(
+			({ message }) => message.startsWith("Agent view failed: child_runtime_unexpected_exit:"),
+		);
+		if (boundedDiagnostics.length !== 1) {
+			throw new Error(`Expected one bounded Owner process-exit diagnostic; received ${JSON.stringify(host.services.diagnostics)}`);
 		}
 	}
+	await finishRestoredFailure();
+}
+
+async function finishRestoredFailure(): Promise<void> {
 	process.stdout.write(`\n__PTY_AGENT_VIEW_FAILURE_RESTORED__${failureKind}\n`);
 	(mode as unknown as { renderer: { renderNow(force?: boolean): void } }).renderer.renderNow(true);
+	await new Promise<void>((resolve) => setImmediate(resolve));
 
 	await host.runtime.dispose();
 	mode.stop();
@@ -176,6 +172,96 @@ async function openAgents(session: AgentSession): Promise<void> {
 	const command = session.extensionRunner.getCommand("agents");
 	if (!command) throw new Error("PTY /agents command is unavailable");
 	await command.handler("", session.extensionRunner.createCommandContext());
+}
+
+async function waitForAgentPhase(agentId: string, phase: string): Promise<void> {
+	const observe = ownerSession.getToolDefinition("agent_observe");
+	if (!observe) throw new Error("PTY agent_observe is unavailable");
+	const deadline = Date.now() + 20_000;
+	while (Date.now() < deadline) {
+		const status = await observe.execute(
+			`observe-phase-${agentId}`,
+			{ operation: "status", agentId },
+			undefined,
+			undefined,
+			ownerSession.extensionRunner.createContext(),
+		);
+		if ((status.details as { run: { phase: string } }).run.phase === phase) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`PTY Agent ${agentId} did not enter ${phase}`);
+}
+
+async function waitForDiagnostic(
+	predicate: (message: string) => boolean,
+): Promise<void> {
+	const deadline = Date.now() + 20_000;
+	while (Date.now() < deadline) {
+		if (host.services.diagnostics.some(({ message }) => predicate(message))) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("PTY Owner diagnostic did not become available");
+}
+
+async function transcriptPathFor(agentId: string): Promise<string> {
+	const observe = ownerSession.getToolDefinition("agent_observe");
+	if (!observe) throw new Error("PTY agent_observe is unavailable");
+	const status = await observe.execute(
+		`observe-${agentId}`,
+		{ operation: "status", agentId },
+		undefined,
+		undefined,
+		ownerSession.extensionRunner.createContext(),
+	);
+	const transcriptPath = (status.details as {
+		primaryEvidence: { transcriptPath: string | null };
+	}).primaryEvidence.transcriptPath;
+	if (!transcriptPath) throw new Error(`PTY Agent ${agentId} has no transcript path`);
+	return transcriptPath;
+}
+
+function readFileText(path: string): string {
+	try {
+		return readFileSync(path, "utf8");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+		throw error;
+	}
+}
+
+async function waitForEvidenceCondition(
+	predicate: () => boolean,
+	timeoutMs = 10_000,
+): Promise<void> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (predicate()) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Child process transcript evidence did not become durable");
+}
+
+async function readEvidence(): Promise<Array<Record<string, unknown>>> {
+	try {
+		return (await readFile(evidencePath, "utf8"))
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as Record<string, unknown>);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	}
+}
+
+async function waitForEvidence(
+	predicate: (entries: readonly Record<string, unknown>[]) => boolean,
+): Promise<void> {
+	const deadline = Date.now() + 10_000;
+	while (Date.now() < deadline) {
+		if (predicate(await readEvidence())) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Child process failure evidence did not become durable");
 }
 
 type ToolSource = Readonly<{

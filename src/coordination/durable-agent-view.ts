@@ -1,4 +1,4 @@
-import type { PiNativeAgentProjection } from "../pi-integration/native-agent-projection.ts";
+import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
 
 export class DurableAgentViewAttachment implements DurableAgentView {
@@ -8,14 +8,13 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 	readonly #reportFailure: (error: unknown) => void;
 	readonly #changeHandlers = new Set<() => void>();
 	readonly #closeHandlers = new Set<() => void>();
-	#projection: PiNativeAgentProjection;
-	#removeProjectionChangeHandler: () => void;
+	#projection: TerminalProjection;
 	#closed = false;
 
 	constructor(options: {
 		agentId: string;
 		label: string;
-		projection: PiNativeAgentProjection;
+		projection: TerminalProjection;
 		requestClose(): Promise<void>;
 		reportFailure(error: unknown): void;
 	}) {
@@ -24,9 +23,6 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 		this.#projection = options.projection;
 		this.#requestClose = options.requestClose;
 		this.#reportFailure = options.reportFailure;
-		this.#removeProjectionChangeHandler = this.#observeProjection(
-			options.projection,
-		);
 	}
 
 	get agentId(): string {
@@ -37,7 +33,7 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 		return this.#label;
 	}
 
-	projection(): PiNativeAgentProjection {
+	projection(): TerminalProjection {
 		return this.#projection;
 	}
 
@@ -68,30 +64,21 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 	retarget(options: {
 		agentId: string;
 		label: string;
-		projection: PiNativeAgentProjection;
+		projection: TerminalProjection;
 	}): void {
 		if (this.#closed) return;
-		this.#removeProjectionChangeHandler();
 		this.#agentId = options.agentId;
 		this.#label = options.label;
 		this.#projection = options.projection;
-		this.#removeProjectionChangeHandler = this.#observeProjection(
-			options.projection,
-		);
 		this.#notifyChanged();
 	}
 
 	settleClosed(): void {
 		if (this.#closed) return;
 		this.#closed = true;
-		this.#removeProjectionChangeHandler();
 		this.#changeHandlers.clear();
 		for (const handler of this.#closeHandlers) handler();
 		this.#closeHandlers.clear();
-	}
-
-	#observeProjection(projection: PiNativeAgentProjection): () => void {
-		return projection.addChangeHandler(() => this.#notifyChanged());
 	}
 
 	#notifyChanged(): void {

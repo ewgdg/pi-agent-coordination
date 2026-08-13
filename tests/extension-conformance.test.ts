@@ -74,7 +74,9 @@ test("role-bound extensions expose strict sequential tools with compact native r
 				: createModeratorBoundExtension(
 					unavailableView as () => ModeratorAgentCoordinatorView,
 				);
-			const host = await createTestOwnerHost(extension);
+			const host = await createTestOwnerHost(extension, {
+				processVisibleModel: false,
+			});
 			const expectedTools = role === "ordinary" ? ordinaryTools : moderatorTools;
 			assert.deepEqual(host.session.getActiveToolNames().sort(), [...expectedTools].sort());
 			for (const toolName of expectedTools) {
@@ -115,7 +117,7 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 			args: { operation: "status", agentId: "child-agent" },
 			details: {
 				agentId: "child-agent",
-				configuration: { label: "Researcher" },
+				metadata: { label: "Researcher" },
 				run: { phase: "live", work: "settled" },
 			},
 			summary: /child-agent/,

@@ -375,10 +375,9 @@ test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async () 
 		{
 			agentId: host.session.sessionId,
 			workflowId: "workflow-owner",
-			configuration: {
+			metadata: {
 				label: "moderator",
 				description: "run failure",
-				baseline: ownerIdentityFor(host).configuration.baseline,
 			},
 		},
 	);
@@ -424,17 +423,7 @@ function ownerIdentityFor(host: TestOwnerHost) {
 		agentId: host.session.sessionId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: null,
-		configuration: {
-			label: "owner",
-			baseline: {
-				cwd: host.cwd,
-				model: { provider: "coordination-test", modelId: "deterministic-owner" },
-				thinking: "off",
-				tools: [],
-				skills: [],
-				extensions: [],
-			},
-		},
+		metadata: { label: "owner" },
 	} as const;
 }
 

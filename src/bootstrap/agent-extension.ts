@@ -22,6 +22,10 @@ import {
 	installAgentActivityDock,
 	type AgentActivitySource,
 } from "../presentation/agent-activity-surface.ts";
+import {
+	registerParticipantLifecycle,
+	type ParticipantLifecycleHandlers,
+} from "../pi-integration/participant-lifecycle.ts";
 
 const CHILD_NATIVE_SESSION_REPLACEMENT_MESSAGE =
 	"Return to Owner before replacing or forking the native session.";
@@ -59,7 +63,10 @@ function createParticipantBoundExtension<
 	return (pi) => {
 		registerChildNativeSessionPolicy(pi);
 		registerSurfaces(pi, resolveView);
-		registerAgentBoundBehavior(pi, resolveView);
+		registerParticipantLifecycle(
+			pi,
+			participantLifecycleHandlers(resolveView),
+		);
 	};
 }
 
@@ -123,7 +130,10 @@ export function bindHiddenOwnerAgentExtension(options: {
 	// Owner, the same extension becomes its hidden identity-bound Owner surface.
 	ownerExtension.hidden = true;
 	registerAgentsCommand(pi, resolveView);
-	registerAgentBoundBehavior(pi, resolveView);
+	registerParticipantLifecycle(
+		pi,
+		participantLifecycleHandlers(resolveView),
+	);
 	pi.on("session_shutdown", (event) => {
 		if (
 			event.reason === "fork" ||
@@ -157,74 +167,40 @@ function requireOwnerAgentExtension(
 	return matchingExtensions[0]!;
 }
 
-function registerAgentBoundBehavior(
-	pi: ExtensionAPI,
+export function participantLifecycleHandlers(
 	resolveView: () => OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView,
-): void {
-	// agent_start is the one awaited Pi boundary shared by native prompts,
-	// custom Delivery turns, queued continuations, and automatic retries.
-	pi.on("agent_start", () => resolveView().beginExecution());
-	pi.on("input", async (event, ctx) => {
-		if (event.source !== "interactive") return { action: "continue" };
-		if (event.streamingBehavior === "followUp") return { action: "continue" };
-		try {
-			const resumed = await resolveView().resumeFromHuman(event.text, event.images);
-			return resumed ? { action: "handled" } : { action: "continue" };
-		} catch (error) {
-			const answeringHumanRequest = resolveView().agentActivity().answerMode;
-			if (answeringHumanRequest) ctx.ui.setEditorText(event.text);
-			ctx.ui.notify(
-				`${answeringHumanRequest ? "Human Answer was not submitted" : "Agent input failed"}: ${error instanceof Error ? error.message : String(error)}`,
-				"error",
-			);
-			return { action: "handled" };
-		}
-	});
-	// message_end is Pi's final awaited hook before it synchronously publishes the
-	// native result. A Run fence can still turn a submitted candidate into the one
-	// interruption result here; attention remains until later transcript proof.
-	pi.on("message_end", (event, ctx) => {
-		const guarded = resolveView().guardHumanToolResult(event.message);
-		if (!guarded) return;
-		if (guarded.rejectedAnswer !== undefined) {
-			const currentDraft = ctx.ui.getEditorText();
-			if (currentDraft !== guarded.rejectedAnswer) {
-				// The editor remains usable during result commitment. Restore the
-				// rejected candidate without discarding text typed after submission.
-				ctx.ui.setEditorText(
-					currentDraft.length === 0
-						? guarded.rejectedAnswer
-						: `${guarded.rejectedAnswer}\n${currentDraft}`,
-				);
-			}
-			ctx.ui.notify(
-				`Human Answer was not committed: ${guarded.reason ?? "the request ended"}`,
-				"error",
-			);
-		}
-		return guarded.message ? { message: guarded.message } : undefined;
-	});
-	// A previous sequential tool result is committed before Pi admits the next
-	// sibling. Reconcile here so input-required attention cannot cross that barrier.
-	pi.on("tool_execution_start", async (event) => {
-		resolveView().reconcileHumanToolResults();
-		resolveView().reconcileCommittedToolResults();
-		await resolveView().ensureExecution();
-		resolveView().beginToolExecution(event.toolCallId, event.toolName);
-	});
-	// Pi awaits turn_end only after the complete issued tool batch and before it
-	// constructs the next model context, making this the Steer freeze boundary.
-	pi.on("turn_end", async () => {
-		resolveView().reconcileHumanToolResults();
-		resolveView().reconcileCommittedToolResults();
-		await resolveView().ensureExecution();
-		await resolveView().reachSafeBoundary();
-	});
-	// Aborted and failed turns may not reach turn_end. agent_end follows all native
-	// message commits, so it safely reconciles their final Human result as well.
-	pi.on("agent_end", () => {
-		resolveView().reconcileCommittedToolResults();
-		resolveView().endExecution();
-		resolveView().reconcileHumanToolResults();
-	});
+): ParticipantLifecycleHandlers {
+	return {
+		executionStarted: () => resolveView().beginExecution(),
+		async humanInputSubmitted(input) {
+			return resolveView().resumeFromHuman(input.text, input.images);
+		},
+		async humanInputMode() {
+			return resolveView().agentActivity().answerMode ? "answer" : "agent";
+		},
+		async humanToolResultCommitting(input) {
+			return resolveView().guardHumanToolResult(input.message);
+		},
+		// A previous sequential tool result is committed before Pi admits the next
+		// sibling. Reconcile here so input-required attention cannot cross that barrier.
+		async toolExecutionStarted(input) {
+			resolveView().reconcileHumanToolResults();
+			resolveView().reconcileCommittedToolResults();
+			await resolveView().ensureExecution();
+			resolveView().beginToolExecution(input.toolCallId, input.toolName);
+		},
+		async safeBoundaryReached() {
+			resolveView().reconcileHumanToolResults();
+			resolveView().reconcileCommittedToolResults();
+			await resolveView().ensureExecution();
+			await resolveView().reachSafeBoundary();
+		},
+		// Aborted and failed turns may not reach turn_end. agent_end follows all native
+		// message commits, so it safely reconciles their final Human result as well.
+		async executionEnded() {
+			resolveView().reconcileCommittedToolResults();
+			resolveView().endExecution();
+			resolveView().reconcileHumanToolResults();
+		},
+	};
 }

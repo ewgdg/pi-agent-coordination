@@ -18,19 +18,17 @@ agent_spawn({
 })
 ```
 
-`request` is required. `template`, `label`, and `description` are optional. `config` may override model, thinking level, working directory, ordinary tools, skills, extensions, and Project Context. Arrays replace inherited selections, including an empty array. `extensions` also accepts `inherit` and `none`.
+`request` is required. `template`, `label`, and `description` are optional. `config` may override model, thinking level, working directory, ordinary tools, skills, and Project Context. Arrays replace inherited tool and skill selections, including an empty array. Child extension selection is `inherit` or `none`; arbitrary per-child extension paths are not accepted.
 
 The label resolves from the explicit label, selected template name, then `agent`. A description comes only from the explicit spawn input. Display metadata is trimmed, preserves Unicode, rejects line breaks and control characters, and is limited to 64 Unicode code points for labels and 240 for descriptions.
 
 The authenticated calling Agent becomes the immutable Direct Spawner. Agent identity, Workflow membership, authority, role-required tools, and Creation Request delivery mode are not caller-supplied fields.
 
-The child receives a fresh durable Pi session. Its immutable baseline captures the caller's effective Run working directory, model, thinking level, ordinary tools, skills, and extensions at creation. It does not inherit the caller's transcript, branch, model context, assembled prompt, editor state, or queued input.
+The child receives a fresh durable Pi session, but no resolved parent or child Runtime configuration is copied into its Identity or transcript. Its durable creation facts are display metadata, Workflow and Direct Spawner relationships, and a pointer to the canonical `agent_spawn` call. That call remains the sole source of the selected Template and explicit `config`. The child does not inherit the caller's transcript, branch, model context, assembled prompt, editor state, or queued input.
 
-Each Agent Runtime preparation resolves the stored baseline, the current complete selected Template, immutable spawn overrides, and fixed ordinary-Agent requirements in that order. Later parent changes do not cascade. Template content is not copied into Agent Identity, so a changed Template affects the next Runtime preparation; a missing, malformed, or ambiguous selected Template prevents preparation without stale fallback. A selected Runtime keeps its resolved configuration across successive exact Runs.
+Immediately before each new Runtime, the host resolves the current parent configuration. A live parent contributes its admitted Runtime; a dormant parent is resolved recursively from the current Owner, current Templates, and canonical ancestor spawn inputs without starting those ancestors. The host then applies the child's current selected Template, explicit spawn configuration, role tools, current resources, trust, and Project Context. The resulting launch specification is volatile and belongs only to that Runtime. The first preparation may be reused for the first process whose session header it created; successor and cold-recovered Runtimes always prepare again. A retained Runtime keeps its resolved configuration across its exact Runs.
 
-File-backed extensions remain durable file references. A named inline extension remains a canonical `<inline:name>` reference and resolves against the current host registry whenever a Runtime is prepared. Pi invokes the resolved factory with that Runtime's extension API, so loaded tools, handlers, commands, providers, and factory-local state are not copied into a later Runtime. `extensions: "none"` excludes both file-backed and named inline inheritance; callers must also deselect tools supplied only by those extensions.
-
-Only named inline factories are durably inheritable. A missing or duplicate name, or an anonymous positional inline reference, prevents initial child Identity commitment. If the same resource is unavailable when an existing or cold-recovered Agent needs a new Runtime, the Agent remains durable and Dormant while that request reports the target as unavailable.
+Only canonical file-backed inherited extensions cross the process boundary. `extensions: "none"` excludes them. Pi-owned built-ins are reconstructed by the fresh Pi CLI. Arbitrary injected, anonymous, and named inline factories are process-local composition details and are not child inheritance inputs.
 
 ## Agent Templates
 
@@ -39,7 +37,7 @@ Templates are discovered recursively from these roots, lowest to highest precede
 1. `<coordination-package>/agents/`
 2. `<Pi-agent-directory>/agents/`
 3. `~/.agents/agents/`
-4. `<baseline-working-directory>/.agents/agents/` when that project is trusted
+4. `<current-parent-runtime-cwd>/.agents/agents/` when that project is trusted
 
 Discovery follows file and directory symlinks with canonical-path cycle prevention. A higher-precedence file replaces the whole lower definition. Same-precedence duplicates make that name unavailable, and a malformed named higher-precedence definition blocks lower fallback.
 
@@ -61,13 +59,13 @@ Use primary sources and record exact reproduction evidence.
 
 `name` is required lowercase kebab-case. The only other frontmatter fields are `model`, `thinking`, `tools`, `skills`, `extensions`, and `project-context`. The Markdown body is Project Context. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
 
-The per-spawn `config.cwd` resolves against the immutable baseline working directory and determines the effective Run cwd. Template discovery remains anchored to the baseline. Pi applies its project-trust decisions to that effective cwd, freshly discovers permitted ordinary `AGENTS.md` context and cwd-scoped resources there, then applies Template and spawn Project Context with append/replace behavior. An untrusted project cannot contribute selected resources.
+For every new Runtime, Template discovery is anchored to the current parent Runtime cwd. The per-spawn `config.cwd` resolves against that cwd and determines the prepared Runtime cwd. Pi applies its current project-trust decision there, freshly discovers permitted ordinary `AGENTS.md` context and cwd-scoped resources, then applies Template and spawn Project Context with append/replace behavior. An untrusted project cannot contribute selected resources. Changes to ancestor Templates, resources, trust, or cwd can therefore affect a later descendant Runtime; they never mutate an already retained Runtime.
 
 ## Commitment and delivery
 
 The committed native `agent_spawn` tool call is the Creation Request source. The child Identity append commits the child and Request together. After that append, startup or scheduling failure never removes either fact.
 
-The child starts an in-process Run and receives the Request through the same fixed Deferred lane used by ordinary [Agent messaging](agent-messaging.md). A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
+The child starts a fresh Pi CLI/TUI process and receives the Request through the same fixed Deferred lane used by ordinary [Agent messaging](agent-messaging.md). A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
 
 Confirmed Delivery admission failure releases the new child Run to dormant while preserving the committed child and Creation Request. Once Delivery commits, the Run remains retained while the child owes the corresponding Answer.
 

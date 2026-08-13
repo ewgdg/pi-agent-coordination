@@ -11,7 +11,7 @@ import {
 	type HumanRequestInput,
 } from "../protocol/human-request.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
-import type { AgentRunHandle } from "../runtime/in-process-agent-host.ts";
+import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
 
 const INTERRUPTED_MESSAGE = "Human request interrupted before an answer was provided.";
@@ -108,7 +108,7 @@ export class HumanRequestCoordinator {
 		const record = this.#requireAgent(callerAgentId);
 		const request = resolveCommittedHumanRequest({
 			agentId: callerAgentId,
-			sessionManager: record.host.sessionManager,
+			transcript: record.transcript.inspect(),
 			toolCallId,
 			providedInput: input,
 		});
@@ -258,7 +258,7 @@ export class HumanRequestCoordinator {
 			if (pending.request.requesterAgentId !== callerAgentId) continue;
 			const inspection = inspectCommittedHumanRequestResult({
 				request: pending.request,
-				sessionManager: pending.record.host.sessionManager,
+				transcript: pending.record.transcript.inspect(),
 			});
 			if (inspection.state === "pending") continue;
 			if (
@@ -289,7 +289,7 @@ export class HumanRequestCoordinator {
 			.map((pending) => ({
 				requestId: pending.request.requestId,
 				agentId: pending.request.requesterAgentId,
-				agentLabel: pending.record.identity.configuration.label,
+				agentLabel: pending.record.identity.metadata.label,
 				question: pending.request.question,
 			}));
 	}

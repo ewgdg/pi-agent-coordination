@@ -40,6 +40,19 @@ const FIXED_OVERLAY_ROWS =
 const SCROLL_INDICATOR_ROWS = 1;
 const SELECT_LIST_UP_INPUT = "\x1b[A";
 const SELECT_LIST_DOWN_INPUT = "\x1b[B";
+const SELECTION_SPINNER_FRAMES = [
+	"⠋",
+	"⠙",
+	"⠹",
+	"⠸",
+	"⠼",
+	"⠴",
+	"⠦",
+	"⠧",
+	"⠇",
+	"⠏",
+] as const;
+const SELECTION_SPINNER_INTERVAL_MILLISECONDS = 80;
 
 export type AgentSelectorAction =
 	| Readonly<{
@@ -58,7 +71,10 @@ export type AgentSelectorOptions = Readonly<{
 	selectedAgentId: string;
 	humanAttention?: readonly HumanAttentionItem[];
 	operationalAttention?: readonly OperationalIncidentAttention[];
-	prepareSelection?(action: AgentSelectorAction): Promise<void> | void;
+	prepareSelection?(
+		action: AgentSelectorAction,
+		tui: TUI,
+	): Promise<void> | void;
 	onSelectionError?(error: unknown): void;
 }>;
 
@@ -101,6 +117,10 @@ class AgentSelectorSurface implements Component {
 	#visibleRows = 1;
 	#list: SelectList;
 	#selectionPending = false;
+	#selectionSpinnerFrame = 0;
+	#selectionSpinnerItem: AgentSelectorItem | undefined;
+	#selectionSpinnerDescription: string | undefined;
+	#selectionSpinnerTimer: ReturnType<typeof setInterval> | undefined;
 
 	constructor(
 		tui: TUI,
@@ -163,6 +183,10 @@ class AgentSelectorSurface implements Component {
 
 	invalidate(): void {
 		this.#list.invalidate();
+	}
+
+	dispose(): void {
+		this.#stopSelectionSpinner();
 	}
 
 	render(width: number): string[] {
@@ -248,15 +272,52 @@ class AgentSelectorSurface implements Component {
 	async #completeSelection(action: AgentSelectorAction): Promise<void> {
 		if (this.#selectionPending) return;
 		this.#selectionPending = true;
+		this.#startSelectionSpinner();
 		try {
-			const preparation = this.#options.prepareSelection?.(action);
+			const preparation = this.#options.prepareSelection?.(action, this.#tui);
 			if (preparation) await preparation;
+			this.#stopSelectionSpinner();
 			this.#done(action);
 		} catch (error) {
 			this.#selectionPending = false;
+			this.#stopSelectionSpinner();
 			this.#options.onSelectionError?.(error);
 			this.#tui.requestRender();
 		}
+	}
+
+	#startSelectionSpinner(): void {
+		this.#selectionSpinnerFrame = 0;
+		this.#selectionSpinnerItem = this.#items[this.#selectedIndex];
+		this.#selectionSpinnerDescription = this.#selectionSpinnerItem?.description;
+		this.#updateSelectionSpinner();
+		this.#selectionSpinnerTimer = setInterval(() => {
+			this.#selectionSpinnerFrame =
+				(this.#selectionSpinnerFrame + 1) % SELECTION_SPINNER_FRAMES.length;
+			this.#updateSelectionSpinner();
+		}, SELECTION_SPINNER_INTERVAL_MILLISECONDS);
+	}
+
+	#updateSelectionSpinner(): void {
+		if (this.#selectionSpinnerItem) {
+			this.#selectionSpinnerItem.description =
+				`${SELECTION_SPINNER_FRAMES[this.#selectionSpinnerFrame]} loading`;
+		}
+		this.#tui.requestRender();
+	}
+
+	#stopSelectionSpinner(): void {
+		if (this.#selectionSpinnerTimer) clearInterval(this.#selectionSpinnerTimer);
+		this.#selectionSpinnerTimer = undefined;
+		if (this.#selectionSpinnerItem) {
+			if (this.#selectionSpinnerDescription === undefined) {
+				delete this.#selectionSpinnerItem.description;
+			} else {
+				this.#selectionSpinnerItem.description = this.#selectionSpinnerDescription;
+			}
+		}
+		this.#selectionSpinnerItem = undefined;
+		this.#selectionSpinnerDescription = undefined;
 	}
 
 	#maximumOverlayRows(): number {
@@ -428,10 +489,10 @@ class AgentSelectorSurface implements Component {
 				rendered.push(heading);
 				renderedSectionRows += 1;
 			}
-			rendered.push(listLines[offset] ?? "");
-			if (startIndex + offset === this.#selectedIndex) {
-				rendered.push(...this.#focusedDetailLines(item, width));
-			}
+			const selected = startIndex + offset === this.#selectedIndex;
+			const itemLine = listLines[offset] ?? "";
+			rendered.push(itemLine);
+			if (selected) rendered.push(...this.#focusedDetailLines(item, width));
 		}
 		return [
 			...rendered,

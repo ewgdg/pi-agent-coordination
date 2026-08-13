@@ -1,6 +1,4 @@
-import type {
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
 	deriveMessageIdentity,
@@ -101,14 +99,14 @@ export type Message =
 export function resolveCommittedMessage(options: {
 	fromAgentId: string;
 	workflowId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	toolCallId: string;
 	providedInput: MessageSendInput | RequestSendInput;
 }): Message {
-	const { fromAgentId, workflowId, sessionManager, toolCallId, providedInput } = options;
+	const { fromAgentId, workflowId, transcript, toolCallId, providedInput } = options;
 	const { source, input } = resolveCommittedToolCall({
 		agentId: fromAgentId,
-		sessionManager,
+		transcript,
 		toolCallId,
 		toolName: "agent_message",
 	});
@@ -144,21 +142,21 @@ export function resolveCommittedMessage(options: {
 
 export function resolveCommittedAnswer(options: {
 	responderAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	toolCallId: string;
 	providedInput: AnswerInput;
 	request: Extract<Message, { kind: "request" }>;
 }): Extract<Message, { kind: "answer" }> {
 	const {
 		responderAgentId,
-		sessionManager,
+		transcript,
 		toolCallId,
 		providedInput,
 		request,
 	} = options;
 	const { source, input } = resolveCommittedToolCall({
 		agentId: responderAgentId,
-		sessionManager,
+		transcript,
 		toolCallId,
 		toolName: "agent_message",
 	});
@@ -184,21 +182,21 @@ export function resolveCommittedAnswer(options: {
 
 export function resolveCommittedCancellation(options: {
 	requesterAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	toolCallId: string;
 	providedInput: CancellationInput;
 	request: Extract<Message, { kind: "request" }>;
 }): Extract<Message, { kind: "request_cancellation" }> {
 	const {
 		requesterAgentId,
-		sessionManager,
+		transcript,
 		toolCallId,
 		providedInput,
 		request,
 	} = options;
 	const { source, input } = resolveCommittedToolCall({
 		agentId: requesterAgentId,
-		sessionManager,
+		transcript,
 		toolCallId,
 		toolName: "agent_message",
 	});
@@ -226,7 +224,7 @@ export function resolveCommittedCancellation(options: {
 
 export function resolveCommittedAgentMessageInput(options: {
 	agentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	toolCallId: string;
 }): AgentMessageInput {
 	const { input } = resolveCommittedToolCall({
@@ -238,17 +236,17 @@ export function resolveCommittedAgentMessageInput(options: {
 
 export function inspectCanonicalMessage(options: {
 	message: Message;
-	authorSessionManager: SessionManager;
+	authorTranscript: TranscriptInspection;
 	deliveryEvidence?: EntryPointer;
 }): CanonicalMessageInspection {
-	const { message, authorSessionManager, deliveryEvidence } = options;
+	const { message, authorTranscript, deliveryEvidence } = options;
 	if (message.kind === "request" && message.origin === "agent_spawn") {
 		return { state: "canonical", message };
 	}
 	return {
 		state: inspectMessageAuthorResult({
 			authorAgentId: message.fromAgentId,
-			sessionManager: authorSessionManager,
+			transcript: authorTranscript,
 			toolCallId: message.source.toolCallId,
 			identity: message,
 			deliveryEvidence,
@@ -259,11 +257,11 @@ export function inspectCanonicalMessage(options: {
 
 export function inspectAgentMessageAuthorResult(options: {
 	authorAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	source: ToolCallPointer;
 	input: Exclude<AgentMessageInput, { operation: "poll" | "retry" }>;
 }): MessageAuthorResultState {
-	const { authorAgentId, sessionManager, source, input } = options;
+	const { authorAgentId, transcript, source, input } = options;
 	if (source.agentId !== authorAgentId) {
 		throw new ProtocolInvariantError("Agent Message source names another author");
 	}
@@ -281,7 +279,7 @@ export function inspectAgentMessageAuthorResult(options: {
 				};
 	return inspectMessageAuthorResult({
 		authorAgentId,
-		sessionManager,
+		transcript,
 		toolCallId: source.toolCallId,
 		identity,
 	});
@@ -289,13 +287,13 @@ export function inspectAgentMessageAuthorResult(options: {
 
 function inspectMessageAuthorResult(options: {
 	authorAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	toolCallId: string;
 	identity: MessageResultIdentity;
 	deliveryEvidence?: EntryPointer;
 }): MessageAuthorResultState {
-	const { authorAgentId, sessionManager, toolCallId, identity, deliveryEvidence } = options;
-	const results = currentCoordinationScope(sessionManager, authorAgentId).filter(
+	const { authorAgentId, transcript, toolCallId, identity, deliveryEvidence } = options;
+	const results = currentCoordinationScope(transcript, authorAgentId).filter(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -430,13 +428,13 @@ function validateMessageAuthorResult(
 
 export function inspectMessageDelivery(options: {
 	recipientAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	message: Message;
 }): DeliveryInspection {
-	const { recipientAgentId, sessionManager, message } = options;
+	const { recipientAgentId, transcript, message } = options;
 	return inspectStandaloneMessageDelivery({
 		recipientAgentId,
-		sessionManager,
+		transcript,
 		source: message.source,
 		expectedProjection: modelVisibleProjection(message),
 		subject: `${messageSubject(message)} ${message.messageId}`,
@@ -445,18 +443,18 @@ export function inspectMessageDelivery(options: {
 
 export function inspectAnswerDelivery(options: {
 	requesterAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	answer: Extract<Message, { kind: "answer" }>;
 }): DeliveryInspection {
-	const { requesterAgentId, sessionManager, answer } = options;
+	const { requesterAgentId, transcript, answer } = options;
 	const customDelivery = inspectMessageDelivery({
 		recipientAgentId: requesterAgentId,
-		sessionManager,
+		transcript,
 		message: answer,
 	});
 	const retrievalEntries = inspectAnswerRetrievals({
 		requesterAgentId,
-		sessionManager,
+		transcript,
 	}).filter((retrieval) => {
 		if (!sameToolCallPointer(retrieval.answerSource, answer.source)) return false;
 		if (
@@ -490,11 +488,11 @@ export function inspectAnswerDelivery(options: {
 
 export function inspectAnswerRetrievals(options: {
 	requesterAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 }): readonly AnswerRetrievalEvidence[] {
-	const { requesterAgentId, sessionManager } = options;
+	const { requesterAgentId, transcript } = options;
 	const retrievals: AnswerRetrievalEvidence[] = [];
-	for (const entry of currentCoordinationScope(sessionManager, requesterAgentId)) {
+	for (const entry of currentCoordinationScope(transcript, requesterAgentId)) {
 		if (
 			entry.type !== "message" ||
 			entry.message.role !== "toolResult" ||

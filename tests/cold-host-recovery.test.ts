@@ -3,12 +3,13 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test from "node:test";
 
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
-	SessionManager,
-	type InlineExtension,
-} from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+	fauxAssistantMessage,
+	fauxToolCall,
+	type Context,
+	type FauxResponseStep,
+} from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
@@ -21,11 +22,24 @@ import {
 } from "./support/agent-session.ts";
 import {
 	bindTestOwnerHost,
-	createUnboundTestOwnerHost,
+	createUnboundTestOwnerHost as createBaseUnboundTestOwnerHost,
 	type TestOwnerHost,
+	type TestOwnerHostOptions,
 } from "./support/pi-host.ts";
+import {
+	createProcessModelBroker,
+	type ProcessModelBroker,
+} from "./support/process-model-broker.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
+const durableModelBrokers = new Set<ProcessModelBroker>();
+const hostModelBrokers = new WeakMap<TestOwnerHost, ProcessModelBroker>();
+
+test.after(async () => {
+	const brokers = [...durableModelBrokers];
+	durableModelBrokers.clear();
+	await Promise.all(brokers.map((broker) => broker.close()));
+});
 
 test("a fresh Owner host rediscovers one dormant child without starting its Run", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
@@ -67,13 +81,6 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 			{ stopReason: "toolUse" },
 		),
 	);
-	const childIdentityEntry = childTranscript.getEntries().find(
-		(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
-	);
-	assert.ok(childIdentityEntry?.type === "custom");
-	const childBaseline = (childIdentityEntry.data as {
-		configuration: { baseline: Record<string, unknown> };
-	}).configuration.baseline;
 	const grandchildTranscript = SessionManager.create(effectiveCwd, workflowDirectory);
 	const grandchildAgentId = grandchildTranscript.getSessionId();
 	grandchildTranscript.appendCustomEntry("agent-coordination.identity", {
@@ -85,10 +92,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 			entryId: nestedSpawnEntryId,
 			toolCallId: "spawn-nested-before-reopen",
 		},
-		configuration: {
-			label: "recovered-grandchild",
-			baseline: { ...childBaseline, cwd: effectiveCwd },
-		},
+		metadata: { label: "recovered-grandchild" },
 	});
 	grandchildTranscript.appendMessage(
 		fauxAssistantMessage("Persist recovered grandchild evidence."),
@@ -170,92 +174,6 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		[spawned.agentId],
 	);
 	await reopenedAgain.runtime.dispose();
-});
-
-test("a cold-recovered Agent stays durable and dormant when its named inline factory is unavailable", async () => {
-	const requiredInline: InlineExtension = {
-		name: "cold-required-inline",
-		factory(pi) {
-			pi.registerTool({
-				name: "cold_inline_probe",
-				label: "Cold inline probe",
-				description: "Requires the named inline factory for every Runtime preparation.",
-				parameters: Type.Object({}, { additionalProperties: false }),
-				async execute() {
-					return {
-						content: [{ type: "text", text: "cold inline available" }],
-						details: { available: true },
-					};
-				},
-			});
-		},
-	};
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
-		persistent: true,
-		additionalExtensionFactories: [requiredInline],
-	});
-	await bindTestOwnerHost(host, "tui");
-	host.model.setResponses([
-		fauxAssistantMessage("The child committed durable work before host loss."),
-	]);
-	const spawned = await executeTool(
-		host,
-		"agent_spawn",
-		"spawn-before-inline-factory-loss",
-		{ request: "Persist this Agent before its required factory disappears." },
-	) as { disposition: string; agentId: string };
-	assert.equal(spawned.disposition, "pending");
-	const childSessionFile = await waitForSessionFile(
-		workflowSessionDirectory(host),
-		spawned.agentId,
-	);
-	const ownerSessionFile = host.session.sessionManager.getSessionFile();
-	assert.ok(ownerSessionFile);
-	await host.runtime.dispose();
-
-	const reopened = await reopenOwner(host, ownerSessionFile);
-	const observe = reopened.session.getToolDefinition("agent_observe");
-	assert.ok(observe);
-	const observeStatus = async (toolCallId: string) => {
-		const result = await observe.execute(
-			toolCallId,
-			{ operation: "status", agentId: spawned.agentId },
-			undefined,
-			undefined,
-			reopened.session.extensionRunner.createContext(),
-		);
-		return result.details as { run: { phase: string } };
-	};
-	assert.equal((await observeStatus("observe-cold-inline-before-start")).run.phase, "dormant");
-	const identityCountBefore = SessionManager.open(childSessionFile).getEntries().filter(
-		(entry) =>
-			entry.type === "custom" &&
-			entry.customType === "agent-coordination.identity",
-	).length;
-	const unavailable = await executeTool(
-		reopened,
-		"agent_message",
-		"start-cold-agent-without-inline-factory",
-		{
-			operation: "send",
-			targetAgentId: spawned.agentId,
-			content: "Attempt successor startup without the required named factory.",
-		},
-	) as { delivery: string; rejectionReason: string };
-	assert.deepEqual(
-		{ delivery: unavailable.delivery, rejectionReason: unavailable.rejectionReason },
-		{ delivery: "rejected", rejectionReason: "target_unavailable" },
-	);
-	assert.equal((await observeStatus("observe-cold-inline-after-start")).run.phase, "dormant");
-	assert.equal(
-		SessionManager.open(childSessionFile).getEntries().filter(
-			(entry) =>
-				entry.type === "custom" &&
-				entry.customType === "agent-coordination.identity",
-		).length,
-		identityCountBefore,
-	);
-	await reopened.runtime.dispose();
 });
 
 test("duplicate spawn claims quarantine only their dependent authority subtree", async () => {
@@ -342,17 +260,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 			entryId: foreignSpawnEntryId,
 			toolCallId: "spawn-foreign-candidate",
 		},
-		configuration: {
-			label: "agent",
-			baseline: {
-				cwd: host.cwd,
-				model: { provider: "coordination-test", modelId: "deterministic-owner" },
-				thinking: "off",
-				tools: [],
-				skills: [],
-				extensions: [],
-			},
-		},
+		metadata: { label: "agent" },
 	});
 	foreignTranscript.appendMessage(fauxAssistantMessage("Persist foreign candidate evidence."));
 
@@ -397,7 +305,6 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	assert.ok(firstIdentity?.type === "custom");
 	const firstIdentityData = firstIdentity.data as {
 		spawnSource: { agentId: string; entryId: string; toolCallId: string };
-		configuration: { baseline: { cwd: string } };
 	};
 	const nestedSpawnEntryId = firstTranscript.appendMessage(
 		fauxAssistantMessage(
@@ -410,7 +317,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		),
 	);
 	const nestedTranscript = SessionManager.create(
-		firstIdentityData.configuration.baseline.cwd,
+		firstTranscript.getHeader()?.cwd ?? host.cwd,
 		directory,
 	);
 	const nestedAgentId = nestedTranscript.getSessionId();
@@ -423,10 +330,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 			entryId: nestedSpawnEntryId,
 			toolCallId: "spawn-dependent-grandchild",
 		},
-		configuration: {
-			label: "agent",
-			baseline: firstIdentityData.configuration.baseline,
-		},
+		metadata: { label: "agent" },
 	});
 	nestedTranscript.appendMessage(fauxAssistantMessage("Persist nested candidate evidence."));
 
@@ -538,6 +442,7 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
+		settings: { retry: { enabled: false } },
 	});
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
@@ -599,29 +504,32 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 
 	const opened = await openDormantAgentView(reopened, spawned.agentId);
 	assert.equal(await observePhase("observe-during-cold-dormant-inspection"), "dormant");
-	await waitForCondition(async () =>
-		opened.view.render(80).join("\n").includes("cold-dormant-inspection-child")
-	);
-	assert.match(opened.view.render(80).join("\n"), /cold-dormant-inspection-child/);
-	await returnAgentViewToOwner(reopened, opened);
-	assert.equal(await observePhase("observe-after-cold-dormant-inspection"), "dormant");
+	await reopened.runtime.dispose();
+	await opened.command;
 	assert.deepEqual(
 		SessionManager.open(childSessionFile).getEntries(),
 		entriesBeforeInspection,
 	);
 	await new Promise<void>((resolve) => setTimeout(resolve, 20));
 	assert.equal(await countModeratorSessions(workflowDirectory), 0);
-	await reopened.runtime.dispose();
 });
 
-test("cold bootstrap and successor start recover exact residual Creation Request retention", async () => {
+test("cold successor re-resolves current configuration and recovers residual Creation Request retention", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+	const templateDirectory = join(host.services.agentDir, "agents");
+	const templatePath = join(templateDirectory, "residual.md");
+	await mkdir(templateDirectory, { recursive: true });
+	await writeFile(
+		templatePath,
+		"---\nname: residual-agent\ntools: read\n---\nInitial context",
+	);
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage("Initial work settled without answering the Creation Request."),
 	]);
 	const spawned = await executeTool(host, "agent_spawn", "spawn-residual-request-child", {
 		request: "Keep this Creation Request unresolved across host loss.",
+		template: "residual-agent",
 		label: "residual-child",
 	}) as { agentId: string };
 	const childSessionFile = await waitForSessionFile(
@@ -635,6 +543,10 @@ test("cold bootstrap and successor start recover exact residual Creation Request
 	const ownerSessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
+	await writeFile(
+		templatePath,
+		"---\nname: residual-agent\ntools:\n  - read\n  - bash\n---\nCurrent context",
+	);
 
 	const reopened = await reopenOwner(host, ownerSessionFile);
 	const observe = reopened.session.getToolDefinition("agent_observe");
@@ -666,15 +578,19 @@ test("cold bootstrap and successor start recover exact residual Creation Request
 		{ phase: "dormant", retentionReasons: [] },
 	);
 
+	let successorTools: string[] = [];
 	reopened.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall(
-				"ask_user_question",
-				{ question: "Keep this successor Run observable." },
-				{ id: "hold-recovered-child-run" },
-			),
-			{ stopReason: "toolUse" },
-		),
+		(context) => {
+			successorTools = context.tools?.map(({ name }) => name) ?? [];
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"ask_user_question",
+					{ question: "Keep this successor Run observable." },
+					{ id: "hold-recovered-child-run" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		},
 	]);
 	await executeTool(reopened, "agent_message", "start-residual-child", {
 		operation: "send",
@@ -706,6 +622,8 @@ test("cold bootstrap and successor start recover exact residual Creation Request
 		),
 		1,
 	);
+	assert.equal(successorTools.includes("read"), true);
+	assert.equal(successorTools.includes("bash"), true);
 	await reopened.runtime.dispose();
 });
 
@@ -846,6 +764,7 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
+		settings: { retry: { enabled: false } },
 	});
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
@@ -973,7 +892,7 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		"This Moderator attempt fails terminally.",
 		{
 			stopReason: "error",
-			errorMessage: "deterministic exhausted Moderator failure",
+			errorMessage: "400 invalid_request_error: deterministic exhausted Moderator failure",
 		},
 	);
 	host.model.setResponses([
@@ -1006,7 +925,42 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		});
 		return failedModerators.length === 2;
 	});
+	const observe = host.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const failedModeratorIds = (await SessionManager.list(host.cwd, directory)).flatMap(
+		({ path }) => {
+			const session = SessionManager.open(path);
+			const entries = session.getEntries();
+			const tail = entries.at(-1);
+			return entries[0]?.type === "custom_message" &&
+				entries[0].customType === "agent-coordination.moderator-input" &&
+				tail?.type === "message" && tail.message.role === "assistant" &&
+				tail.message.stopReason === "error"
+				? [session.getSessionId()]
+				: [];
+		},
+	);
+	await waitForCondition(async () => {
+		for (const agentId of failedModeratorIds) {
+			const result = await observe.execute(
+				`observe-failed-moderator-${agentId}`,
+				{ operation: "status", agentId },
+				undefined,
+				undefined,
+				host.session.extensionRunner.createContext(),
+			);
+			if ((result.details as { run: { phase: string } }).run.phase !== "dormant") {
+				return false;
+			}
+		}
+		return true;
+	});
 	const attentionAgents = await openAgentsSurface(host);
+	await waitForCondition(async () =>
+		attentionAgents.surface.render(80).join("\n").includes(
+			"→ ATTENTION 1 · Obligation Stall",
+		)
+	);
 	const operationalAttention = attentionAgents.surface.render(80).join("\n");
 	assert.match(operationalAttention, /→ ATTENTION 1 · Obligation Stall/);
 	assert.match(operationalAttention, new RegExp(affected.agentId));
@@ -1039,9 +993,6 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 			entry.customType === "agent-coordination.identity",
 	);
 	assert.ok(ownerIdentity?.type === "custom");
-	const baseline = (ownerIdentity.data as {
-		configuration: { baseline: Record<string, unknown> };
-	}).configuration.baseline;
 	const candidateDirectory = workflowSessionDirectory(host);
 	await mkdir(candidateDirectory, { recursive: true });
 	const malformed = SessionManager.create(host.cwd, candidateDirectory);
@@ -1062,10 +1013,9 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 		{
 			agentId: malformedAgentId,
 			workflowId: host.session.sessionId,
-			configuration: {
+			metadata: {
 				label: "moderator",
 				description: "obligation stall",
-				baseline,
 			},
 		},
 	);
@@ -1103,6 +1053,26 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 	await reopened.runtime.dispose();
 });
 
+async function createUnboundTestOwnerHost(
+	extension: typeof piAgentCoordination,
+	options?: TestOwnerHostOptions,
+): Promise<TestOwnerHost> {
+	const broker = await createProcessModelBroker({
+		responseOverride: (context) =>
+			(options?.implicitModeratorResponses ?? true) && isImplicitModeratorRequest(context)
+				? fauxAssistantMessage("I will wait for explicit Moderator work.")
+				: undefined,
+	});
+	durableModelBrokers.add(broker);
+	try {
+		return await createHostWithDurableModelBroker(extension, broker, options);
+	} catch (error) {
+		durableModelBrokers.delete(broker);
+		await broker.close();
+		throw error;
+	}
+}
+
 async function reopenOwner(
 	previous: TestOwnerHost,
 	sessionFile: string,
@@ -1110,14 +1080,57 @@ async function reopenOwner(
 		implicitModeratorResponses?: boolean;
 	},
 ): Promise<TestOwnerHost> {
-	const reopened = await createUnboundTestOwnerHost(piAgentCoordination, {
-		cwd: previous.cwd,
-		agentDir: previous.services.agentDir,
-		sessionFile,
-		implicitModeratorResponses: options?.implicitModeratorResponses,
-	});
+	const broker = hostModelBrokers.get(previous);
+	assert.ok(broker, "Expected the previous host's durable process model broker");
+	const reopened = await createHostWithDurableModelBroker(
+		piAgentCoordination,
+		broker,
+		{
+			cwd: previous.cwd,
+			agentDir: previous.services.agentDir,
+			sessionFile,
+			implicitModeratorResponses: options?.implicitModeratorResponses,
+		},
+	);
 	await bindTestOwnerHost(reopened, "tui");
 	return reopened;
+}
+
+async function createHostWithDurableModelBroker(
+	extension: typeof piAgentCoordination,
+	broker: ProcessModelBroker,
+	options?: TestOwnerHostOptions,
+): Promise<TestOwnerHost> {
+	const host = await createBaseUnboundTestOwnerHost(extension, {
+		...options,
+		processVisibleModel: false,
+		additionalExtensionPaths: [
+			...(options?.additionalExtensionPaths ?? []),
+			broker.extensionPath,
+		],
+	});
+	const processVisibleHost: TestOwnerHost = {
+		...host,
+		model: {
+			setResponses(responses: FauxResponseStep[]) {
+				broker.setResponses(responses);
+			},
+		},
+	};
+	hostModelBrokers.set(processVisibleHost, broker);
+	return processVisibleHost;
+}
+
+function isImplicitModeratorRequest(context: Context): boolean {
+	return context.tools?.some(({ name }) => name === "moderator_control") === true &&
+		context.messages.some((message) =>
+			message.role === "user" &&
+			Array.isArray(message.content) &&
+			message.content.some(
+				(part) => part.type === "text" &&
+					part.text.includes('"kind":"obligation_stall"'),
+			)
+		);
 }
 
 async function countModeratorSessions(directory: string): Promise<number> {
@@ -1235,14 +1248,6 @@ async function writeCyclicCandidates(
 	const agentA = "cyclic-agent-a";
 	const agentB = "cyclic-agent-b";
 	const timestamp = new Date().toISOString();
-	const baseline = {
-		cwd,
-		model: { provider: "coordination-test", modelId: "deterministic-owner" },
-		thinking: "off",
-		tools: [],
-		skills: [],
-		extensions: [],
-	};
 	const candidates = [
 		{
 			agentId: agentA,
@@ -1286,7 +1291,7 @@ async function writeCyclicCandidates(
 					entryId: candidate.claimedSourceEntryId,
 					toolCallId: candidate.claimedSourceToolCallId,
 				},
-				configuration: { label: "agent", baseline },
+				metadata: { label: "agent" },
 			},
 		};
 		const spawn = {

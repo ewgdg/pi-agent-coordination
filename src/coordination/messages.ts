@@ -1,8 +1,5 @@
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
-
 import {
 	requireAgentRecord,
-	requireLiveSession,
 	type AgentRecord,
 } from "./agent-record.ts";
 import {
@@ -45,7 +42,7 @@ import {
 	inspectCreationRequestDelivery,
 } from "../protocol/creation-request.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
-import type { InterruptionHoldHandle } from "../runtime/in-process-agent-host.ts";
+import type { InterruptionHoldHandle } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import type { UnresolvedAgentRequest } from "./dependency-deadlock.ts";
 
@@ -71,7 +68,6 @@ export type MessageBoundaryHooks = Readonly<{
 		recipientAgentId: string;
 		messageId: string;
 		operation: "poll" | "retry";
-		sessionManager: SessionManager;
 	}>): void | "inspection_incomplete";
 	afterDeliveryAdmission?(context: Readonly<{
 		recipientAgentId: string;
@@ -166,11 +162,10 @@ export class MessageCoordinator {
 		input: Extract<AgentMessageInput, { operation: "send" | "request" }>,
 	): Promise<AgentMessageSendReceipt | AgentRequestReceipt> {
 		const sender = this.#requireAgent(callerAgentId);
-		const senderSession = requireLiveSession(sender);
 		const message = resolveCommittedMessage({
 			fromAgentId: callerAgentId,
 			workflowId: sender.identity.workflowId,
-			sessionManager: senderSession.sessionManager,
+			transcript: sender.transcript.inspect(),
 			toolCallId,
 			providedInput: input,
 		});
@@ -242,7 +237,7 @@ export class MessageCoordinator {
 			inspectProof: () =>
 				inspectCreationRequestDelivery({
 					recipientAgentId: recipient.identity.agentId,
-					sessionManager: recipient.host.sessionManager,
+					transcript: recipient.transcript.inspect(),
 					requestId,
 					fromAgentId,
 					question,
@@ -309,7 +304,7 @@ export class MessageCoordinator {
 		const caller = this.#requireAgent(callerAgentId);
 		const committedInput = resolveCommittedAgentMessageInput({
 			agentId: callerAgentId,
-			sessionManager: requireLiveSession(caller).sessionManager,
+			transcript: caller.transcript.inspect(),
 			toolCallId,
 		});
 		if (!sameAgentMessageInput(committedInput, providedInput)) {
@@ -344,12 +339,12 @@ export class MessageCoordinator {
 			const requester = this.#requireAgent(request.fromAgentId);
 			const delivery = inspectMessageDelivery({
 				recipientAgentId: caller.identity.agentId,
-				sessionManager: caller.host.sessionManager,
+				transcript: caller.transcript.inspect(),
 				message: request,
 			});
 			const canonical = inspectCanonicalMessage({
 				message: request,
-				authorSessionManager: requester.host.sessionManager,
+				authorTranscript: requester.transcript.inspect(),
 				deliveryEvidence: delivery.deliveryEvidence,
 			});
 			if (canonical.state !== "canonical" || !delivery.deliveryEvidence) {
@@ -366,7 +361,7 @@ export class MessageCoordinator {
 				cancellation &&
 				inspectMessageDelivery({
 					recipientAgentId: caller.identity.agentId,
-					sessionManager: caller.host.sessionManager,
+					transcript: caller.transcript.inspect(),
 					message: cancellation,
 				}).deliveryEvidence
 			) {
@@ -379,7 +374,7 @@ export class MessageCoordinator {
 			}
 			const answer = resolveCommittedAnswer({
 				responderAgentId: caller.identity.agentId,
-				sessionManager: requireLiveSession(caller).sessionManager,
+				transcript: caller.transcript.inspect(),
 				toolCallId,
 				providedInput: input,
 				request,
@@ -473,7 +468,7 @@ export class MessageCoordinator {
 			if (answer) {
 				const delivery = inspectAnswerDelivery({
 					requesterAgentId: caller.identity.agentId,
-					sessionManager: caller.host.sessionManager,
+					transcript: caller.transcript.inspect(),
 					answer,
 				});
 				if (delivery.deliveryEvidence) {
@@ -486,7 +481,7 @@ export class MessageCoordinator {
 			}
 			const cancellation = resolveCommittedCancellation({
 				requesterAgentId: caller.identity.agentId,
-				sessionManager: requireLiveSession(caller).sessionManager,
+				transcript: caller.transcript.inspect(),
 				toolCallId,
 				providedInput: input,
 				request,
@@ -557,7 +552,7 @@ export class MessageCoordinator {
 		caller: AgentRecord,
 		input: MessageRetryInput,
 	): Promise<AgentMessageRetryReceipt | AgentRequestRetryReceipt> {
-		const authorSessionManager = requireLiveSession(caller).sessionManager;
+		const authorTranscript = caller.transcript.inspect();
 		const message = this.#requestEvidence.requireCallerAuthoredMessage(
 			caller,
 			input.messageId,
@@ -572,7 +567,6 @@ export class MessageCoordinator {
 					recipientAgentId: recipient.identity.agentId,
 					messageId: message.messageId,
 					operation: "retry",
-					sessionManager: recipient.host.sessionManager,
 				}) === "inspection_incomplete"
 			) {
 				return {
@@ -583,12 +577,12 @@ export class MessageCoordinator {
 			}
 			const delivery = inspectMessageDelivery({
 				recipientAgentId: recipient.identity.agentId,
-				sessionManager: recipient.host.sessionManager,
+				transcript: recipient.transcript.inspect(),
 				message,
 			});
 			const canonical = inspectCanonicalMessage({
 				message,
-				authorSessionManager,
+				authorTranscript,
 				deliveryEvidence: delivery.deliveryEvidence,
 			});
 			if (canonical.state === "not_created") {
@@ -658,7 +652,6 @@ export class MessageCoordinator {
 					recipientAgentId: responder.identity.agentId,
 					messageId: request.messageId,
 					operation: "retry",
-					sessionManager: responder.host.sessionManager,
 				}) === "inspection_incomplete"
 			) {
 				return {
@@ -669,12 +662,12 @@ export class MessageCoordinator {
 			}
 			const requestDelivery = inspectMessageDelivery({
 				recipientAgentId: responder.identity.agentId,
-				sessionManager: responder.host.sessionManager,
+				transcript: responder.transcript.inspect(),
 				message: request,
 			});
 			const canonicalRequest = inspectCanonicalMessage({
 				message: request,
-				authorSessionManager: requester.host.sessionManager,
+				authorTranscript: requester.transcript.inspect(),
 				deliveryEvidence: requestDelivery.deliveryEvidence,
 			});
 			if (canonicalRequest.state === "not_created") {
@@ -691,12 +684,12 @@ export class MessageCoordinator {
 			if (answer) {
 				const answerDelivery = inspectAnswerDelivery({
 					requesterAgentId: requester.identity.agentId,
-					sessionManager: requester.host.sessionManager,
+					transcript: requester.transcript.inspect(),
 					answer,
 				});
 				const canonicalAnswer = inspectCanonicalMessage({
 					message: answer,
-					authorSessionManager: responder.host.sessionManager,
+					authorTranscript: responder.transcript.inspect(),
 					deliveryEvidence: answerDelivery.deliveryEvidence,
 				});
 				if (canonicalAnswer.state !== "canonical") {
@@ -772,7 +765,7 @@ export class MessageCoordinator {
 		caller: AgentRecord,
 		input: MessagePollInput,
 	): Promise<AgentMessagePollReceipt> {
-		const authorSessionManager = requireLiveSession(caller).sessionManager;
+		const authorTranscript = caller.transcript.inspect();
 		const message = this.#requestEvidence.requireCallerAuthoredMessage(
 			caller,
 			input.messageId,
@@ -784,7 +777,6 @@ export class MessageCoordinator {
 					recipientAgentId: recipient.identity.agentId,
 					messageId: message.messageId,
 					operation: "poll",
-					sessionManager: recipient.host.sessionManager,
 				}) === "inspection_incomplete"
 			) {
 				return {
@@ -795,12 +787,12 @@ export class MessageCoordinator {
 			}
 			const delivery = inspectMessageDelivery({
 				recipientAgentId: recipient.identity.agentId,
-				sessionManager: recipient.host.sessionManager,
+				transcript: recipient.transcript.inspect(),
 				message,
 			});
 			const canonical = inspectCanonicalMessage({
 				message,
-				authorSessionManager,
+				authorTranscript,
 				deliveryEvidence: delivery.deliveryEvidence,
 			});
 			if (canonical.state === "not_created") {
@@ -838,7 +830,7 @@ export class MessageCoordinator {
 			inspectProof: () =>
 				inspectMessageDelivery({
 					recipientAgentId: recipient.identity.agentId,
-					sessionManager: recipient.host.sessionManager,
+					transcript: recipient.transcript.inspect(),
 					message,
 				}).deliveryEvidence,
 			isSuppressed: message.kind === "request"
@@ -876,7 +868,7 @@ export class MessageCoordinator {
 			if (answer.targetAgentId !== requester.identity.agentId) continue;
 			const delivery = inspectAnswerDelivery({
 				requesterAgentId: requester.identity.agentId,
-				sessionManager: requester.host.sessionManager,
+				transcript: requester.transcript.inspect(),
 				answer,
 			});
 			if (delivery.deliveryEvidence) {
@@ -894,7 +886,7 @@ export class MessageCoordinator {
 		return cancellation !== undefined &&
 			inspectMessageDelivery({
 				recipientAgentId: responder.identity.agentId,
-				sessionManager: responder.host.sessionManager,
+				transcript: responder.transcript.inspect(),
 				message: cancellation,
 			}).deliveryEvidence !== undefined;
 	}

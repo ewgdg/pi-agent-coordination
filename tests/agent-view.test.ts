@@ -1,30 +1,31 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { randomUUID } from "node:crypto";
+import { readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test, { type TestContext } from "node:test";
 
-import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
-	CustomEditor,
+	fauxAssistantMessage,
+	fauxToolCall,
+	type AssistantMessage,
+	type Context,
+} from "@earendil-works/pi-ai";
+import {
 	initTheme,
 	SessionManager,
-	type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import {
-	Text,
 	getKeybindings,
 	stripTerminalSequences,
 	type Component,
 } from "@earendil-works/pi-tui";
 
 import piAgentCoordination from "../src/index.ts";
-import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
-import { createPiNativeProjectionHost } from "../src/pi-integration/native-agent-projection.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
-import { registerAgentsCommand } from "../src/tools/owner-surfaces.ts";
 import {
 	executeAndCommitRegisteredTool,
 	openAgentsSurface,
@@ -38,96 +39,16 @@ import {
 
 const SURFACE_WAIT_TIMEOUT_MS = 5_000;
 const MAX_SELECTOR_NAVIGATION_STEPS = 1_000;
+const PROCESS_AGENT_VIEW_PROBE = fileURLToPath(
+	new URL("./fixtures/process-agent-view-probe-extension.ts", import.meta.url),
+);
 
-class AgentViewProbeEditor extends CustomEditor {
-	readonly #identity: string;
-	#escapeCount = 0;
-
-	constructor(
-		identity: string,
-		...editorArguments: ConstructorParameters<typeof CustomEditor>
-	) {
-		super(...editorArguments);
-		this.#identity = identity;
-	}
-
-	override render(width: number): string[] {
-		return [
-			`Agent editor · ${this.#identity}`,
-			`Custom editor Escape count · ${this.#escapeCount}`,
-			...super.render(width),
-		];
-	}
-
-	override handleInput(data: string): void {
-		if (data === "\x1b") {
-			this.#escapeCount += 1;
-			return;
-		}
-		super.handleInput(data);
-	}
-}
-
-class ThrowingAgentInputEditor extends CustomEditor {
-	override handleInput(data: string): void {
-		if (data === "x") throw new Error("deterministic real child editor failure");
-		super.handleInput(data);
-	}
-}
-
-class ThrowingAgentRenderEditor extends CustomEditor {
-	#renderFailureArmed = false;
-
-	override handleInput(data: string): void {
-		if (data === "x") {
-			this.#renderFailureArmed = true;
-			return;
-		}
-		super.handleInput(data);
-	}
-
-	override render(width: number): string[] {
-		if (this.#renderFailureArmed) {
-			throw new Error("deterministic real child render failure");
-		}
-		return super.render(width);
-	}
-}
-
-test("/agents presents the live Agent's complete interactive mode while Owner stays bound", async (t) => {
+test("/agents presents the live Agent's native interactive mode while Owner stays bound", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "interactive");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "interactive-agent-view-probe",
-			hidden: true,
-			factory: (pi) => {
-				pi.on("session_start", (_event, ctx) => {
-					const identity = ctx.sessionManager.getSessionId();
-					ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-						new AgentViewProbeEditor(identity, tui, theme, keybindings)
-					);
-					ctx.ui.setFooter(() => new Text(`Agent footer · ${identity}`, 0, 0));
-					ctx.ui.setStatus("agent-view-probe", `Agent status · ${identity}`);
-					ctx.ui.setWidget("agent-view-probe", [`Agent widget · ${identity}`]);
-					ctx.ui.notify(`Agent notification · ${identity}`, "info");
-				});
-				pi.registerCommand("agent-view-probe", {
-					description: "Open a child-local presentation probe",
-					async handler(_args, ctx) {
-						await ctx.ui.custom<void>(
-							(_tui, _theme, _keybindings, done) => ({
-								render: () => ["Child-local extension overlay"],
-								invalidate() {},
-								handleInput(data) {
-									if (data === "\x1b") done();
-								},
-							}),
-							{ overlay: true },
-						);
-					},
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	let disposed = false;
 	t.after(async () => {
@@ -147,6 +68,9 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 		},
 	);
 	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "session_start" && entry.sessionId === agentId && entry.pid !== process.pid,
+	));
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, agentId)).includes(
 			"The child is ready for direct interactive input.",
@@ -167,13 +91,18 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 	});
 
 	const { command, view } = await openSelectedAgentView(host, agentId);
+	await waitForCondition(() => {
+		const frame = stripTerminalSequences(view.render(80).join("\n"));
+		return frame.replace(/\s+/g, "").includes(
+			"Thechildisreadyfordirectinteractiveinput",
+		) && frame.includes(`Agent footer · ${agentId}`);
+	});
 	const rendered = stripTerminalSequences(view.render(80).join("\n"));
 	assert.match(rendered, /Viewed Worker/);
 	assert.match(rendered, new RegExp(agentId.slice(-8)));
 	assert.match(rendered, new RegExp(`Agent editor · ${agentId}`));
 	assert.match(rendered, new RegExp(`Agent footer · ${agentId}`));
 	assert.match(rendered, new RegExp(`Agent widget · ${agentId}`));
-	assert.match(rendered, new RegExp(`Agent notification · ${agentId}`));
 	assert.match(
 		rendered.replace(/\s+/g, ""),
 		/Thechildisreadyfordirectinteractiveinput/,
@@ -191,7 +120,7 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 	assert.equal(nativeRebinds, 0);
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), true);
 
-	for (const character of "/agent-view-probe") view.handleInput?.(character);
+	view.handleInput?.("/agent-view-probe");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
@@ -205,18 +134,20 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 		)
 	);
 	view.handleInput?.("\x1b");
-	assert.match(
-		stripTerminalSequences(view.render(80).join("\n")),
-		/Custom editor Escape count · 1/,
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Custom editor Escape count · 1",
+		)
 	);
 	assert.equal(host.ui.customSurfaces.includes(view), true);
 
 	for (const character of "Human direction entered in the Agent editor.") {
 		view.handleInput?.(character);
 	}
-	assert.match(
-		stripTerminalSequences(view.render(80).join("\n")),
-		/Human direction entered in the Agent editor\./,
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Human direction entered in the Agent editor.",
+		)
 	);
 	view.handleInput?.("\r");
 	await waitForCondition(async () =>
@@ -242,16 +173,15 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 	assert.equal(host.ui.statuses.get("owner-peer-status"), "Owner Peer");
 	assert.equal(nativeRebinds, 0);
 
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
 	view.handleInput?.("k");
-	const ownerFocusedFrame = stripTerminalSequences(view.render(80).join("\n"));
-	assert.match(
-		ownerFocusedFrame,
-		new RegExp(`→ owner[\\s\\S]*${ownerRuntimeSession.sessionId}`),
+	const ownerPattern = new RegExp(`→ owner[\\s\\S]*${ownerRuntimeSession.sessionId}`);
+	await waitForCondition(() =>
+		ownerPattern.test(stripTerminalSequences(view.render(80).join("\n")))
 	);
 	view.handleInput?.("\r");
 	await command;
@@ -272,28 +202,17 @@ test("/agents presents the live Agent's complete interactive mode while Owner st
 });
 
 test("a real child editor failure closes the view and reports one Owner diagnostic", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "failure-input");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "throwing-agent-editor-probe",
-			hidden: true,
-			factory: (pi) => {
-				pi.on("session_start", (_event, ctx) => {
-					if (!ctx.sessionManager.getEntries().some((entry) =>
-						entry.type === "custom" &&
-						entry.customType === "agent-coordination.identity"
-					)) return;
-					ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-						new ThrowingAgentInputEditor(tui, theme, keybindings)
-					);
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	t.after(async () => host.runtime.dispose());
-	host.model.setResponses([
-		fauxAssistantMessage("The throwing-editor Agent is ready."),
-	]);
+	host.model.setResponses(creationAnswerResponses(
+		"answer-throwing-editor-creation-request",
+		"The throwing-editor Agent is ready.",
+	));
 	const spawn = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_spawn",
@@ -309,19 +228,26 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 			"The throwing-editor Agent is ready.",
 		)
 	);
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	const ownerSession = host.runtime.session;
 	const ownerEditor = "Owner editor survives child input failure";
 	host.ui.setEditorText(ownerEditor);
-	const { command, view } = await openSelectedAgentView(host, agentId);
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
 
 	assert.doesNotThrow(() => view.handleInput?.("x"));
 	await command;
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.filter(
+		(entry) => entry.kind === "failure_trigger" && entry.failureKind === "input" && entry.pid !== process.pid,
+	).length === 1);
 	assert.equal(host.ui.customSurfaces.length, 0);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
 	assert.equal(
 		host.services.diagnostics.filter(({ message }) =>
-			message.includes("Agent view failed: deterministic real child editor failure")
+			/Agent view failed: child_runtime_(?:unexpected_exit|channel_closed):/.test(message)
 		).length,
 		1,
 	);
@@ -329,29 +255,18 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 	await host.session.waitForIdle();
 });
 
-test("a real child render failure returns a bounded frame and restores Owner input", async (t) => {
+test("a real child render failure closes the view and restores Owner input", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "failure-render");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "throwing-agent-render-probe",
-			hidden: true,
-			factory: (pi) => {
-				pi.on("session_start", (_event, ctx) => {
-					if (!ctx.sessionManager.getEntries().some((entry) =>
-						entry.type === "custom" &&
-						entry.customType === "agent-coordination.identity"
-					)) return;
-					ctx.ui.setEditorComponent((tui, theme, keybindings) =>
-						new ThrowingAgentRenderEditor(tui, theme, keybindings)
-					);
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	t.after(async () => host.runtime.dispose());
-	host.model.setResponses([
-		fauxAssistantMessage("The throwing-render Agent is ready."),
-	]);
+	host.model.setResponses(creationAnswerResponses(
+		"answer-throwing-render-creation-request",
+		"The throwing-render Agent is ready.",
+	));
 	const spawn = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_spawn",
@@ -367,48 +282,37 @@ test("a real child render failure returns a bounded frame and restores Owner inp
 			"The throwing-render Agent is ready.",
 		)
 	);
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	const ownerSession = host.runtime.session;
 	const ownerEditor = "Owner editor survives child render failure";
 	host.ui.setEditorText(ownerEditor);
-	const { command, view } = await openSelectedAgentView(host, agentId);
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
 
-	view.handleInput?.("x");
-	let failedFrame: string[] = [];
-	assert.doesNotThrow(() => {
-		failedFrame = view.render(80);
-	});
-	assert.match(failedFrame.join("\n"), /Agent view failed; returning to Owner/);
+	assert.doesNotThrow(() => view.handleInput?.("x"));
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.filter(
+		(entry) => entry.kind === "failure_trigger" && entry.failureKind === "render" && entry.pid !== process.pid,
+	).length === 1);
 	await command;
 	assert.equal(host.ui.customSurfaces.length, 0);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
 	assert.equal(
 		host.services.diagnostics.filter(({ message }) =>
-			message.includes("Agent view failed: deterministic real child render failure")
+			/Agent view failed: child_runtime_(?:unexpected_exit|channel_closed):/.test(message)
 		).length,
 		1,
 	);
 });
 
 test("a session_start modal is interactive before Agent Run startup settles", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "startup-modal");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "agent-startup-modal-probe",
-			hidden: true,
-			factory: (pi) => {
-				pi.on("session_start", async (_event, ctx) => {
-					if (!ctx.sessionManager.getEntries().some((entry) =>
-						entry.type === "custom" &&
-						entry.customType === "agent-coordination.identity"
-					)) return;
-					await ctx.ui.confirm(
-						"Agent startup gate",
-						"Continue exact Run initialization?",
-					);
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	t.after(async () => host.runtime.dispose());
 	host.model.setResponses([
@@ -454,6 +358,9 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 			"Agent startup gate",
 		)
 	);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "session_start" && entry.sessionId === agentId && entry.pid !== process.pid,
+	));
 	assert.equal(getKeybindings(), ownerKeybindings);
 	assert.equal(
 		(globalThis as Record<PropertyKey, unknown>)[
@@ -473,255 +380,118 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 });
 
 test("a selected Agent whose runtime initialization fails closes the invalid view", async (t) => {
-	let coordinator!: WorkflowCoordinator;
-	let ownerAgentId = "";
-	const host = await createUnboundTestOwnerHost((pi) => {
-		registerAgentsCommand(pi, () => coordinator.forAgent(ownerAgentId));
-	}, { persistent: true });
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	ownerAgentId = identity.agentId;
-	const nativeProjectionHost = createPiNativeProjectionHost({
-		ownerRuntime: host.runtime,
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
 	});
-	let failLiveReadiness!: () => void;
-	const liveReadinessGate = new Promise<void>((resolve) => {
-		failLiveReadiness = resolve;
-	});
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-		projectionHost: {
-			async createProjection(options) {
-				const projection = await nativeProjectionHost.createProjection(options);
-				return {
-					...projection,
-					async ready() {
-						await projection.ready();
-						await liveReadinessGate;
-						throw new Error("deterministic selected projection startup failure");
-					},
-				};
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-	});
-	await bindTestOwnerHost(host, "tui");
-	t.after(async () => coordinator.shutdown(async () => host.runtime.dispose()));
+	t.after(async () => host.runtime.dispose());
 	const spawnInput = {
-		request: "Fail startup only after the Owner selects this Agent.",
+		request: "Remain visible after this process Runtime cannot initialize.",
 		label: "Startup Failure Worker",
+		config: {
+			model: {
+				provider: "missing-process-provider",
+				modelId: "missing-process-model",
+			},
+			extensions: "none" as const,
+		},
 	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", spawnInput, {
-				id: "spawn-selected-startup-failure",
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const spawning = coordinator.forAgent(ownerAgentId).spawn(
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
 		"spawn-selected-startup-failure",
 		spawnInput,
 	);
-
-	let command!: Promise<void>;
-	let selector!: Component;
-	const selectorDeadline = Date.now() + SURFACE_WAIT_TIMEOUT_MS;
-	while (Date.now() < selectorDeadline) {
-		({ command, surface: selector } = await openAgentsSurface(host));
-		if (
-			stripTerminalSequences(selector.render(80).join("\n")).includes(
-				"Startup Failure Worker",
-			)
-		) break;
-		selector.handleInput?.("\x1b");
-		await command;
-		await new Promise<void>((resolve) => setTimeout(resolve, 1));
-	}
-	const agentId = selectAgentByLabel(selector, "Startup Failure Worker");
-	assert.ok(agentId);
-	await waitForCondition(() =>
-		host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
-	);
-	const view = host.ui.customSurfaces[0]!;
-	assert.doesNotMatch(
-		stripTerminalSequences(view.render(80).join("\n")),
-		/Startup Failure Worker.*(?:Live|Dormant)/,
-	);
-	failLiveReadiness();
-	const spawn = await spawning;
 	assert.deepEqual(
 		{
-			disposition: spawn.disposition,
-			failedStage: "failedStage" in spawn ? spawn.failedStage : undefined,
+			disposition: (spawn.details as { disposition: string }).disposition,
+			failedStage: (spawn.details as { failedStage?: string }).failedStage,
 		},
 		{ disposition: "created_unscheduled", failedStage: "run_start" },
 	);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+
+	const { command, surface: selector } = await openAgentsSurface(host);
+	selector.handleInput?.("\t");
+	assert.equal(selectAgentByLabel(selector, "Startup Failure Worker"), agentId);
 	await command;
 	assert.equal(host.ui.customSurfaces.length, 0);
-	assert.equal(coordinator.forAgent(ownerAgentId).status(agentId).run.phase, "dormant");
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
 });
 
-test("passive Runtime readiness failure closes the exact selected view", async (t) => {
-	let coordinator!: WorkflowCoordinator;
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
-	const nativeProjectionHost = createPiNativeProjectionHost({
-		ownerRuntime: host.runtime,
+test("an unexpected child-process exit closes the exact selected view", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "unexpected-exit");
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	let failNextPreparation = false;
-	let releasePassiveFailure!: () => void;
-	const passiveFailureGate = new Promise<void>((resolve) => {
-		releasePassiveFailure = resolve;
-	});
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-		projectionHost: {
-			async createProjection(options) {
-				const projection = await nativeProjectionHost.createProjection(options);
-				if (!failNextPreparation) return projection;
-				return {
-					...projection,
-					async ready() {
-						await projection.ready();
-						await passiveFailureGate;
-						throw new Error("deterministic passive Runtime readiness failure");
-					},
-				};
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-	});
-	await bindTestOwnerHost(host, "tui");
-	const owner = coordinator.forAgent(identity.agentId);
-	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
-	t.after(async () => {
-		releasePassiveFailure();
-		await activeView?.close();
-		await coordinator.shutdown(async () => host.runtime.dispose());
-	});
-	const spawnInput = {
-		request: "Become Dormant before passive Runtime preparation fails.",
-		label: "Passive Failure Worker",
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", spawnInput, { id: "spawn-passive-failure-worker" }),
-			{ stopReason: "toolUse" },
-		),
-	);
+	t.after(async () => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("The initial passive-failure Run settles."),
 	]);
-	const spawn = await owner.spawn("spawn-passive-failure-worker", spawnInput);
-	assert.ok("agentId" in spawn && spawn.agentId);
-	const agentId = spawn.agentId;
-	await waitForCondition(() => {
-		const run = owner.status(agentId).run;
-		return run.phase === "live" && run.work === "settled";
-	});
-	const terminateInput = {
-		operation: "terminate" as const,
-		agentId,
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_control", terminateInput, {
-				id: "terminate-passive-failure-worker",
-			}),
-			{ stopReason: "toolUse" },
-		),
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-passive-failure-worker",
+		{
+			request: "Become Dormant before passive Runtime preparation fails.",
+			label: "Passive Failure Worker",
+		},
 	);
-	await owner.control("terminate-passive-failure-worker", terminateInput);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"The initial passive-failure Run settles.",
+		)
+	);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-passive-failure-worker",
+		{ operation: "terminate", agentId },
+	);
 
-	failNextPreparation = true;
-	activeView = await owner.openAgentView(agentId);
-	assert.ok(activeView);
-	let closed = false;
-	activeView.addCloseHandler(() => {
-		closed = true;
-	});
-	releasePassiveFailure();
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
+	view.handleInput?.("/exit-agent-process");
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes("/exit-agent-process")
+	);
+	view.handleInput?.("\r");
 
-	await waitForCondition(() => closed);
-	assert.equal(owner.status(agentId).run.phase, "dormant");
+	await command;
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "process_exit" && entry.sessionId === agentId &&
+			entry.pid !== process.pid && entry.exitCode === 17,
+	));
+	assert.equal(host.ui.customSurfaces.length, 0);
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	assert.match(
 		JSON.stringify(host.services.diagnostics),
-		/deterministic passive Runtime readiness failure/,
+		/child_runtime_(?:unexpected_exit|channel_closed)/,
 	);
 });
 
 test("a submitted Dormant Agent turn survives returning to the Owner during prompt preflight", async (t) => {
 	const submittedInput = "Continue after the Owner leaves this Agent view.";
-	let markInputPreflightStarted!: () => void;
-	const inputPreflightStarted = new Promise<void>((resolve) => {
-		markInputPreflightStarted = resolve;
-	});
-	let releaseInputPreflight!: () => void;
-	const inputPreflightGate = new Promise<void>((resolve) => {
-		releaseInputPreflight = resolve;
-	});
-	let markInputPreflightFinished!: () => void;
-	const inputPreflightFinished = new Promise<void>((resolve) => {
-		markInputPreflightFinished = resolve;
-	});
-	let staleContextError: unknown;
+	const probe = configureProcessAgentViewProbe(t, "prompt-preflight");
 	let coordinator!: WorkflowCoordinator;
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "delayed-child-prompt-preflight",
-			hidden: true,
-			factory(pi) {
-				pi.on("input", async (event, ctx) => {
-					if (
-						event.text !== submittedInput ||
-						!ctx.sessionManager.getEntries().some((entry) =>
-							entry.type === "custom" &&
-							entry.customType === "agent-coordination.identity"
-						)
-					) return { action: "continue" };
-					markInputPreflightStarted();
-					await inputPreflightGate;
-					try {
-						void ctx.cwd;
-					} catch (error) {
-						staleContextError = error;
-						return { action: "handled" };
-					} finally {
-						markInputPreflightFinished();
-					}
-					return { action: "continue" };
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
 	t.after(async () => {
-		releaseInputPreflight();
+		await releaseProcessAgentViewProbe(probe.releasePath);
 		await coordinator.shutdown(async () => host.runtime.dispose());
 	});
 	const spawnInput = {
@@ -743,71 +513,148 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 		entryId: spawnSourceEntry.id,
 		toolCallId: "spawn-preflight-retention-worker",
 	});
-	host.model.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", {
-				operation: "answer",
-				requestId: creationRequestId,
-				answer: "The initial Agent turn settled.",
-			}, { id: "answer-preflight-retention-creation-request" }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The initial Agent turn settled."),
-		fauxAssistantMessage("The submitted turn completed after returning to the Owner."),
-	]);
+	const routePreflightResponse = (context: Context): AssistantMessage => {
+		const transcript = JSON.stringify(context.messages);
+		if (transcript.includes(submittedInput)) {
+			return fauxAssistantMessage("The submitted turn completed after returning to the Owner.");
+		}
+		if (transcript.includes('"toolCallId":"answer-preflight-retention-creation-request"')) {
+			return fauxAssistantMessage("The initial Agent turn settled.");
+		}
+		if (
+			transcript.includes("Settle before the Owner submits a successor turn.") &&
+			transcript.includes('\\"kind\\":\\"request\\"')
+		) {
+			return fauxAssistantMessage(
+				fauxToolCall("agent_message", {
+					operation: "answer",
+					requestId: creationRequestId,
+					answer: "The initial Agent turn settled.",
+				}, { id: "answer-preflight-retention-creation-request" }),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage("The Owner received the initial Agent Answer.");
+	};
+	host.model.setResponses(Array.from({ length: 4 }, () => routePreflightResponse));
 	const spawn = await owner.spawn("spawn-preflight-retention-worker", spawnInput);
 	assert.ok("agentId" in spawn && spawn.agentId);
 	const agentId = spawn.agentId;
 	await waitForCondition(() => {
 		const transcriptPath = owner.status(agentId).primaryEvidence.transcriptPath;
-		return transcriptPath !== null && JSON.stringify(
-			SessionManager.open(transcriptPath).getEntries(),
-		).includes("The initial Agent turn settled.");
+		return transcriptPath !== null && SessionManager.open(transcriptPath).getEntries().some(
+			(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+				JSON.stringify(entry.message.content).includes("The initial Agent turn settled."),
+		);
 	});
 	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
 
 	const activeView = await owner.openAgentView(agentId);
 	assert.ok(activeView);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
 	for (const character of submittedInput) {
 		activeView.projection().dispatchInput(character);
 	}
-	activeView.projection().dispatchInput("\r");
-	await inputPreflightStarted;
-	await owner.openAgentView(identity.agentId);
-	releaseInputPreflight();
-	await inputPreflightFinished;
-
-	assert.equal(
-		staleContextError,
-		undefined,
-		staleContextError instanceof Error ? staleContextError.message : String(staleContextError),
+	await waitForCondition(() =>
+		stripTerminalSequences(activeView.projection().presentation.render(80).join("\n"))
+			.includes(submittedInput)
 	);
+	activeView.projection().dispatchInput("\r");
+	// Request release in the same Owner turn as Enter, before the child can
+	// acknowledge the PTY submission over Control.
+	const returningToOwner = owner.openAgentView(identity.agentId);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "input_preflight_started" && entry.sessionId === agentId,
+	));
+	await releaseProcessAgentViewProbe(probe.releasePath);
+	await returningToOwner;
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "input_preflight_finished" && entry.staleContextError === null,
+	));
 	await waitForCondition(() => {
 		const transcriptPath = owner.status(agentId).primaryEvidence.transcriptPath;
-		return transcriptPath !== null && JSON.stringify(
-			SessionManager.open(transcriptPath).getEntries(),
-		).includes("The submitted turn completed after returning to the Owner.");
+		return transcriptPath !== null && SessionManager.open(transcriptPath).getEntries().some(
+			(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+				JSON.stringify(entry.message.content).includes(
+					"The submitted turn completed after returning to the Owner.",
+				),
+		);
 	});
 	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
 });
 
-test("a Dormant Agent keeps commands available and starts one successor on editor submission", async (t) => {
+test("a handled Dormant Agent input can return to Owner after prompt preflight", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "handled-prompt-preflight");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "dormant-command-probe",
-			hidden: true,
-			factory(pi) {
-				pi.registerCommand("mark-dormant-view", {
-					description: "Prove the Dormant view accepts normal commands",
-					async handler(_args, ctx) {
-						ctx.ui.setWidget("dormant-command", [
-							"Dormant command executed",
-						]);
-					},
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
+	});
+	t.after(() => host.runtime.dispose());
+	host.model.setResponses([
+		fauxAssistantMessage("Persist this response before handled input."),
+	]);
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-handled-preflight-worker",
+		{ request: "Settle before handled input.", label: "Handled Preflight Worker" },
+	);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "live"));
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-handled-preflight-worker",
+		{ operation: "terminate", agentId },
+	);
+	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "dormant"));
+
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
+	for (const character of "Handle this input before the Owner leaves.") {
+		view.handleInput?.(character);
+	}
+	view.handleInput?.("\r");
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "input_preflight_started" && entry.sessionId === agentId,
+	));
+	await releaseProcessAgentViewProbe(probe.releasePath);
+	await returnAgentViewToOwner(host, view, command);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "input_preflight_finished",
+	));
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionShutdowns(entries, agentId).length === 2
+	);
+	const handledRuntime = childProcessSessionStarts(
+		await readProcessAgentViewEvidence(probe.evidencePath),
+		agentId,
+	).at(-1);
+	assert.ok(handledRuntime);
+	await waitForCondition(() => {
+		try {
+			process.kill(handledRuntime.pid, 0);
+			return false;
+		} catch (error) {
+			return (error as NodeJS.ErrnoException).code === "ESRCH";
+		}
+	});
+	assertProcessExited(handledRuntime.pid);
+	assert.equal(host.ui.customSurfaces.length, 0);
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
+});
+
+test("a Dormant Agent keeps commands available and starts one successor on editor submission", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "dormant-command");
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
@@ -861,19 +708,27 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	assert.equal(successorModelRequests, 0);
 
-	for (const character of "/mark-dormant-view") view.handleInput?.(character);
+	view.handleInput?.("/mark-dormant-view");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
 			"Dormant command executed",
 		)
 	);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "command" && entry.command === "mark-dormant-view" && entry.pid !== process.pid,
+	));
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
 	assert.equal(successorModelRequests, 0);
 
 	for (const character of "Direction submitted from the Dormant Agent editor.") {
 		view.handleInput?.(character);
 	}
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Direction submitted from the Dormant Agent editor.",
+		)
+	);
 	view.handleInput?.("\r");
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, agentId)).includes(
@@ -893,13 +748,14 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 		1,
 	);
 	assert.equal(await currentRunPhase(host, agentId), "live");
-	assert.match(
-		stripTerminalSequences(view.render(80).join("\n")),
-		/The successor received the Dormant editor input/,
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"The successor received the Dormant editor input.",
+		)
 	);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
 
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
@@ -914,27 +770,11 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 
 test("a Dormant command activates the already-attached Agent runtime once", async (t) => {
 	const submittedText = "Start the successor from a Dormant slash command.";
-	let childSessionStarts = 0;
+	const probe = configureProcessAgentViewProbe(t, "dormant-command-message");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "dormant-command-message-probe",
-			hidden: true,
-			factory(pi) {
-				pi.on("session_start", (_event, ctx) => {
-					if (ctx.sessionManager.getEntries().some((entry) =>
-						entry.type === "custom" &&
-						entry.customType === "agent-coordination.identity"
-					)) childSessionStarts += 1;
-				});
-				pi.registerCommand("wake-dormant-agent", {
-					description: "Emit one user message from the Dormant command",
-					async handler() {
-						pi.sendUserMessage(submittedText);
-					},
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
@@ -969,7 +809,9 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 
 	const opened = await openDormantAgentView(host, agentId);
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
-	await waitForCondition(() => childSessionStarts === 2);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, agentId).length === 2
+	);
 	const passiveTermination = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
@@ -980,9 +822,7 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 		(passiveTermination.details as { disposition: string }).disposition,
 		"not_running",
 	);
-	for (const character of "/wake-dormant-agent") {
-		opened.view.handleInput?.(character);
-	}
+	opened.view.handleInput?.("/wake-dormant-agent");
 	opened.view.handleInput?.("\r");
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, agentId)).includes(
@@ -1001,35 +841,19 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 	);
 	assert.equal(successorModelRequests, 1);
 	assert.equal(await currentRunPhase(host, agentId), "live");
-	assert.equal(childSessionStarts, 2);
+	assert.equal(
+		childProcessSessionStarts(await readProcessAgentViewEvidence(probe.evidencePath), agentId).length,
+		2,
+	);
 	await returnAgentViewToOwner(host, opened.view, opened.command);
 });
 
 test("Dormant session_start input activates the same attached Agent runtime", async (t) => {
-	let childSessionStarts = 0;
+	const probe = configureProcessAgentViewProbe(t, "dormant-startup-modal");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "dormant-runtime-startup-modal",
-			hidden: true,
-			factory(pi) {
-				pi.on("session_start", async (_event, ctx) => {
-					if (!ctx.sessionManager.getEntries().some((entry) =>
-						entry.type === "custom" &&
-						entry.customType === "agent-coordination.identity"
-					)) return;
-					childSessionStarts += 1;
-					if (childSessionStarts !== 2) return;
-					pi.sendUserMessage(
-						"Dormant session_start input activates this Agent runtime.",
-					);
-					await ctx.ui.confirm(
-						"Dormant Runtime startup",
-						"Finish opening the Dormant Agent presentation?",
-					);
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	t.after(async () => host.runtime.dispose());
 	host.model.setResponses([
@@ -1065,7 +889,7 @@ test("Dormant session_start input activates the same attached Agent runtime", as
 			"Dormant Runtime startup",
 		)
 	);
-	assert.equal(await currentRunPhase(host, agentId), "dormant");
+	await waitForCondition(async () => await currentRunPhase(host, agentId) === "live");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		!stripTerminalSequences(view.render(80).join("\n")).includes(
@@ -1078,87 +902,30 @@ test("Dormant session_start input activates the same attached Agent runtime", as
 		)
 	);
 	assert.equal(await currentRunPhase(host, agentId), "live");
-	assert.equal(childSessionStarts, 2);
+	assert.equal(
+		childProcessSessionStarts(await readProcessAgentViewEvidence(probe.evidencePath), agentId).length,
+		2,
+	);
 	await returnAgentViewToOwner(host, view, command);
 });
 
 test("closing a Dormant session_start modal cancels view initialization without modal input", async (t) => {
-	let selectedAgentId = "";
-	let childSessionStarts = 0;
-	let childSessionShutdowns = 0;
-	const selectedStartupLifecycle: string[] = [];
-	let releaseSelectedStartupUI: () => void = () => undefined;
-	let releaseCustomFactory!: () => void;
-	const customFactoryGate = new Promise<void>((resolve) => {
-		releaseCustomFactory = resolve;
-	});
-	let customComponentDisposals = 0;
-	let markSelectedStartupModal!: () => void;
-	const selectedStartupModal = new Promise<void>((resolve) => {
-		markSelectedStartupModal = resolve;
-	});
+	const probe = configureProcessAgentViewProbe(t, "selection-startup-close");
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "selection-startup-close-probe",
-			hidden: true,
-			factory(pi) {
-				pi.on("session_start", async (_event, ctx) => {
-					if (ctx.sessionManager.getSessionId() !== selectedAgentId) return;
-					childSessionStarts += 1;
-					if (childSessionStarts !== 2) return;
-					markSelectedStartupModal();
-					await ctx.ui.custom<void>(
-						async (_tui, _theme, _keybindings, done) => {
-							releaseSelectedStartupUI = done;
-							await customFactoryGate;
-							return {
-								render: () => ["Selection startup close gate"],
-								invalidate() {},
-								handleInput() {},
-								dispose() {
-									customComponentDisposals += 1;
-								},
-							};
-						},
-						{ overlay: true },
-					);
-					selectedStartupLifecycle.push("session_start_after_ui");
-					ctx.ui.setWidget("late-startup-state", ["Must be cleared after startup finishes"]);
-				});
-				pi.on("session_shutdown", (_event, ctx) => {
-					if (ctx.sessionManager.getSessionId() !== selectedAgentId) return;
-					childSessionShutdowns += 1;
-					if (childSessionShutdowns === 2) {
-						selectedStartupLifecycle.push("session_shutdown");
-					}
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		spawnBoundaryHooks: {
-			afterIdentityCommit: ({ identity: childIdentity }) => {
-				selectedAgentId = childIdentity.agentId;
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
 	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
 	t.after(async () => {
-		releaseSelectedStartupUI();
-		releaseCustomFactory();
+		await releaseProcessAgentViewProbe(probe.releasePath);
 		await activeView?.close();
 		await coordinator.shutdown(async () => host.runtime.dispose());
 	});
@@ -1178,7 +945,6 @@ test("closing a Dormant session_start modal cancels view initialization without 
 	const spawn = await owner.spawn("spawn-startup-close-worker", spawnInput);
 	assert.ok("agentId" in spawn && spawn.agentId);
 	const agentId = spawn.agentId;
-	selectedAgentId = agentId;
 	await waitForCondition(() => {
 		const run = owner.status(agentId).run;
 		return run.phase === "live" && run.work === "settled";
@@ -1199,14 +965,21 @@ test("closing a Dormant session_start modal cancels view initialization without 
 
 	activeView = await owner.openAgentView(agentId);
 	assert.ok(activeView);
-	await selectedStartupModal;
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "startup_modal" && entry.sessionId === agentId && entry.pid !== process.pid,
+	));
+	const startupModal = (await readProcessAgentViewEvidence(probe.evidencePath)).find(
+		(entry) => entry.kind === "startup_modal" && entry.sessionId === agentId &&
+			entry.pid !== process.pid,
+	);
+	assert.ok(startupModal);
 	const closing = activeView.close();
 	const closeOutcome = await Promise.race([
 		closing.then(() => "closed" as const),
 		new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 500)),
 	]);
 	if (closeOutcome === "blocked") {
-		releaseSelectedStartupUI();
+		await releaseProcessAgentViewProbe(probe.releasePath);
 		await closing;
 	}
 	assert.equal(
@@ -1215,14 +988,32 @@ test("closing a Dormant session_start modal cancels view initialization without 
 		"view closure must not wait for hidden Dormant UI input",
 	);
 	assert.equal(owner.status(agentId).run.phase, "dormant");
-	assert.equal(childSessionStarts, 2);
-	assert.equal(childSessionShutdowns, 2);
-	assert.deepEqual(selectedStartupLifecycle, [
-		"session_start_after_ui",
-		"session_shutdown",
-	]);
-	releaseCustomFactory();
-	await waitForCondition(() => customComponentDisposals === 1);
+	assertProcessExited(startupModal.pid);
+	await releaseProcessAgentViewProbe(probe.releasePath);
+	const lifecycleEvidence = (await readProcessAgentViewEvidence(probe.evidencePath))
+		.filter((entry) => entry.sessionId === agentId && entry.pid !== process.pid);
+	const sessionStarts = childProcessSessionStarts(lifecycleEvidence, agentId);
+	const sessionShutdowns = childProcessSessionShutdowns(lifecycleEvidence, agentId);
+	assert.equal(sessionStarts.length, 2);
+	// Pre-admission cancellation owns the exact process and may use SIGKILL, so
+	// only the earlier admitted Runtime is required to publish session_shutdown;
+	// the cancelled process may publish it if graceful exit wins the kill race.
+	assert.equal(sessionShutdowns[0]?.pid, sessionStarts[0]?.pid);
+	assert.ok(sessionShutdowns.length === 1 || sessionShutdowns.length === 2);
+	assert.equal(new Set(sessionShutdowns.map(({ pid }) => pid)).size, sessionShutdowns.length);
+	assert.equal(
+		sessionShutdowns.every(({ pid }) => sessionStarts.some((start) => start.pid === pid)),
+		true,
+	);
+	assert.equal(
+		lifecycleEvidence.filter((entry) => entry.kind === "session_start_after_ui").length,
+		0,
+	);
+	assert.deepEqual(
+		lifecycleEvidence.filter((entry) => entry.kind === "session_shutdown")
+			.map((entry) => entry.kind),
+		Array.from({ length: sessionShutdowns.length }, () => "session_shutdown"),
+	);
 	assert.equal(
 		owner.status(agentId).run.retentionReasons.some(
 			({ reason }) => reason === "interactive_selection",
@@ -1232,69 +1023,22 @@ test("closing a Dormant session_start modal cancels view initialization without 
 });
 
 test("Workflow shutdown cancels unselected Message-started session_start UI before Agent lanes", async (t) => {
-	let childAgentId = "";
-	let childSessionStarts = 0;
-	let childSessionShutdowns = 0;
-	const startupLifecycle: string[] = [];
-	let releaseStartupUI: () => void = () => undefined;
-	let markStartupUI!: () => void;
-	const startupUI = new Promise<void>((resolve) => {
-		markStartupUI = resolve;
-	});
+	const probe = configureProcessAgentViewProbe(t, "unselected-startup-shutdown");
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "unselected-startup-shutdown-probe",
-			hidden: true,
-			factory(pi) {
-				pi.on("session_start", async (_event, ctx) => {
-					if (ctx.sessionManager.getSessionId() !== childAgentId) return;
-					childSessionStarts += 1;
-					if (childSessionStarts !== 2) return;
-					markStartupUI();
-					await ctx.ui.custom<void>(
-						(_tui, _theme, _keybindings, done) => {
-							releaseStartupUI = done;
-							return {
-								render: () => ["Unselected Message startup gate"],
-								invalidate() {},
-								handleInput() {},
-							};
-						},
-						{ overlay: true },
-					);
-					startupLifecycle.push("session_start_after_ui");
-				});
-				pi.on("session_shutdown", (_event, ctx) => {
-					if (ctx.sessionManager.getSessionId() !== childAgentId) return;
-					childSessionShutdowns += 1;
-					if (childSessionShutdowns === 2) startupLifecycle.push("session_shutdown");
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		spawnBoundaryHooks: {
-			afterIdentityCommit: ({ identity: childIdentity }) => {
-				childAgentId = childIdentity.agentId;
-			},
-		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
 	let shutdown: Promise<void> | undefined;
 	t.after(async () => {
-		releaseStartupUI();
+		await releaseProcessAgentViewProbe(probe.releasePath);
 		await shutdown;
 		if (!shutdown) await coordinator.shutdown(async () => host.runtime.dispose());
 	});
@@ -1340,7 +1084,14 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 	};
 	appendToolSource("agent_message", "message-starts-unselected-ui", messageInput);
 	const messaging = owner.message("message-starts-unselected-ui", messageInput);
-	await startupUI;
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "startup_ui" && entry.sessionId === agentId && entry.pid !== process.pid,
+	));
+	const startupUi = (await readProcessAgentViewEvidence(probe.evidencePath)).find(
+		(entry) => entry.kind === "startup_ui" && entry.sessionId === agentId &&
+			entry.pid !== process.pid,
+	);
+	assert.ok(startupUi);
 
 	shutdown = coordinator.shutdown(async () => host.runtime.dispose());
 	const shutdownOutcome = await Promise.race([
@@ -1348,7 +1099,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 		new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), 500)),
 	]);
 	if (shutdownOutcome === "blocked") {
-		releaseStartupUI();
+		await releaseProcessAgentViewProbe(probe.releasePath);
 		await Promise.allSettled([messaging, shutdown]);
 	}
 	assert.equal(
@@ -1357,42 +1108,36 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 		"Workflow shutdown must cancel startup UI before waiting for an unselected Agent lane",
 	);
 	await messaging;
-	assert.equal(childSessionStarts, 2);
-	assert.equal(childSessionShutdowns, 2);
-	assert.deepEqual(startupLifecycle, ["session_start_after_ui", "session_shutdown"]);
+	assertProcessExited(startupUi.pid);
+	const lifecycleEvidence = (await readProcessAgentViewEvidence(probe.evidencePath))
+		.filter((entry) => entry.sessionId === agentId && entry.pid !== process.pid);
+	const sessionStarts = childProcessSessionStarts(lifecycleEvidence, agentId);
+	const sessionShutdowns = childProcessSessionShutdowns(lifecycleEvidence, agentId);
+	assert.equal(sessionStarts.length, 2);
+	assert.equal(sessionShutdowns[0]?.pid, sessionStarts[0]?.pid);
+	assert.ok(sessionShutdowns.length === 1 || sessionShutdowns.length === 2);
+	assert.equal(new Set(sessionShutdowns.map(({ pid }) => pid)).size, sessionShutdowns.length);
+	assert.equal(
+		sessionShutdowns.every(({ pid }) => sessionStarts.some((start) => start.pid === pid)),
+		true,
+	);
+	assert.equal(
+		lifecycleEvidence.filter((entry) => entry.kind === "session_start_after_ui").length,
+		0,
+	);
+	assert.deepEqual(
+		lifecycleEvidence.filter((entry) => entry.kind === "session_shutdown")
+			.map((entry) => entry.kind),
+		Array.from({ length: sessionShutdowns.length }, () => "session_shutdown"),
+	);
 });
 
 test("/agents switches the mounted durable view between independent child modes", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "independent");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "independent-agent-mode-probe",
-			hidden: true,
-			factory(pi) {
-				pi.on("session_start", (_event, ctx) => {
-					const identity = ctx.sessionManager.getSessionId();
-					ctx.ui.setFooter(() => new Text(`Independent footer · ${identity}`, 0, 0));
-				});
-				pi.registerShortcut("alt+q", {
-					description: "Mark this exact child from its native shortcut path",
-					handler(ctx) {
-						const identity = ctx.sessionManager.getSessionId();
-						ctx.ui.setWidget("independent-shortcut-marker", [
-							`Independent shortcut · ${identity}`,
-						]);
-					},
-				});
-				pi.registerCommand("mark-independent-view", {
-					description: "Mark this exact child mode",
-					async handler(_args, ctx) {
-						const identity = ctx.sessionManager.getSessionId();
-						ctx.ui.setWidget("independent-mode-marker", [
-							`Independent widget · ${identity}`,
-						]);
-					},
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
@@ -1413,6 +1158,10 @@ test("/agents switches the mounted durable view between independent child modes"
 	);
 	const firstAgentId = (firstSpawn.details as { agentId: string }).agentId;
 	const secondAgentId = (secondSpawn.details as { agentId: string }).agentId;
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionStarts(entries, firstAgentId).length === 1 &&
+		childProcessSessionStarts(entries, secondAgentId).length === 1
+	);
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, firstAgentId)).includes("First switch target") &&
 		JSON.stringify(await childEntries(host, secondAgentId)).includes("Second switch target")
@@ -1425,14 +1174,14 @@ test("/agents switches the mounted durable view between independent child modes"
 			`Independent shortcut · ${firstAgentId}`,
 		)
 	);
-	for (const character of "/mark-independent-view") view.handleInput?.(character);
+	view.handleInput?.("/mark-independent-view");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
 			`Independent widget · ${firstAgentId}`,
 		)
 	);
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
@@ -1449,7 +1198,7 @@ test("/agents switches the mounted durable view between independent child modes"
 	assert.match(secondFrame, new RegExp(`Independent footer · ${secondAgentId}`));
 	assert.doesNotMatch(secondFrame, new RegExp(`Independent widget · ${firstAgentId}`));
 	assert.doesNotMatch(secondFrame, new RegExp(`Independent shortcut · ${firstAgentId}`));
-	for (const character of "/mark-independent-view") view.handleInput?.(character);
+	view.handleInput?.("/mark-independent-view");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes(
@@ -1457,7 +1206,7 @@ test("/agents switches the mounted durable view between independent child modes"
 		)
 	);
 
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
@@ -1478,7 +1227,7 @@ test("/agents switches the mounted durable view between independent child modes"
 		new RegExp(`Independent widget · ${secondAgentId}`),
 	);
 
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
@@ -1488,25 +1237,15 @@ test("/agents switches the mounted durable view between independent child modes"
 	await command;
 });
 
-test("later Runtime preparations use reloaded factories without mutating a retained mode", async () => {
-	const createFactory = (generation: "original" | "replacement"): ExtensionFactory =>
-		(pi) => {
-			pi.on("session_start", (_event, ctx) => {
-				ctx.ui.setFooter(() => new Text(
-					`Factory generation · ${generation} · ${ctx.sessionManager.getSessionId()}`,
-					0,
-					0,
-				));
-			});
-		};
-	const descriptor = {
-		name: "retained-resource-reload-probe",
-		factory: createFactory("original"),
-	};
+test("later Runtime preparations load current file-backed child configuration without mutating a retained mode", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "reload-generation");
+	setTestEnvironment(t, "PROCESS_AGENT_VIEW_GENERATION", "original");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [descriptor],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
+	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Original resource Run remains retained."),
 		fauxAssistantMessage("Replacement resource Run is ready."),
@@ -1521,14 +1260,8 @@ test("later Runtime preparations use reloaded factories without mutating a retai
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, firstAgentId)).includes("remains retained")
 	);
-	const firstOpen = await openSelectedAgentView(host, firstAgentId);
-	assert.match(
-		stripTerminalSequences(firstOpen.view.render(80).join("\n")),
-		/Factory generation · original/,
-	);
-	await returnAgentViewToOwner(host, firstOpen.view, firstOpen.command);
 
-	descriptor.factory = createFactory("replacement");
+	process.env.PROCESS_AGENT_VIEW_GENERATION = "replacement";
 	const secondSpawn = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_spawn",
@@ -1539,6 +1272,10 @@ test("later Runtime preparations use reloaded factories without mutating a retai
 	await waitForCondition(async () =>
 		JSON.stringify(await childEntries(host, secondAgentId)).includes("Replacement resource")
 	);
+	await waitForCondition(async () => {
+		const run = await currentRunState(host, secondAgentId);
+		return run.phase === "live" && run.work === "settled";
+	});
 	const secondOpen = await openSelectedAgentView(host, secondAgentId);
 	assert.match(
 		stripTerminalSequences(secondOpen.view.render(80).join("\n")),
@@ -1550,14 +1287,21 @@ test("later Runtime preparations use reloaded factories without mutating a retai
 	const retainedFrame = stripTerminalSequences(reopenedFirst.view.render(80).join("\n"));
 	assert.match(retainedFrame, /Factory generation · original/);
 	assert.doesNotMatch(retainedFrame, /Factory generation · replacement/);
+	const generationEvidence = await readProcessAgentViewEvidence(probe.evidencePath);
+	const firstStarts = childProcessSessionStarts(generationEvidence, firstAgentId);
+	const secondStarts = childProcessSessionStarts(generationEvidence, secondAgentId);
+	assert.equal(firstStarts.length, 1);
+	assert.equal(firstStarts[0]?.generation, "original");
+	assert.equal(secondStarts.length, 1);
+	assert.equal(secondStarts[0]?.generation, "replacement");
+	assert.notEqual(firstStarts[0]?.pid, secondStarts[0]?.pid);
 	await returnAgentViewToOwner(host, reopenedFirst.view, reopenedFirst.command);
-	await host.runtime.dispose();
 });
 
 test("a terminally failed viewed Run stays open on the durable Dormant Agent", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		implicitModeratorResponses: false,
+		processVisibleModel: true,
 		settings: { retry: { enabled: false } },
 	});
 	let markFailureStarted!: () => void;
@@ -1572,18 +1316,29 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		releaseFailure();
 		await host.runtime.dispose();
 	});
-	const routeResponse = async (context: { messages: unknown; tools?: Array<{ name: string }> }) => {
+	const routeResponse = async (context: Context) => {
 		const messages = JSON.stringify(context.messages);
-		if (context.tools?.some(({ name }) => name === "moderator_control")) {
-			return fauxAssistantMessage("The Moderator observed the failed obligation.");
-		}
-		if (messages.includes("Fail terminally while the durable Agent view remains open.")) {
+		if (messages.includes("Trigger the selected Agent Run failure.")) {
 			markFailureStarted();
 			await failureGate;
 			return fauxAssistantMessage("The viewed exact Run failed terminally.", {
 				stopReason: "error",
 				errorMessage: "deterministic viewed Run failure",
 			});
+		}
+		if (messages.includes('"toolCallId":"answer-viewed-failure-creation-request"')) {
+			return fauxAssistantMessage("The viewed Agent is ready for a selected failure trigger.");
+		}
+		const requestId = creationRequestIdFromContext(context);
+		if (requestId) {
+			return fauxAssistantMessage(
+				fauxToolCall("agent_message", {
+					operation: "answer",
+					requestId,
+					answer: "The viewed Agent accepted its Creation Request.",
+				}, { id: "answer-viewed-failure-creation-request" }),
+				{ stopReason: "toolUse" },
+			);
 		}
 		return fauxAssistantMessage("The Owner input loop remains usable after viewed Run failure.");
 	};
@@ -1593,20 +1348,46 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		"agent_spawn",
 		"spawn-failing-agent-view",
 		{
-			request: "Fail terminally while the durable Agent view remains open.",
+			request: "Prepare for a terminal failure while the durable Agent view remains open.",
 			label: "Failing Worker",
 		},
 	);
 	const agentId = (spawn.details as { agentId: string }).agentId;
-	await failureStarted;
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"The viewed Agent is ready for a selected failure trigger.",
+		)
+	);
+	const terminated = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-ready-viewed-failure-worker",
+		{ operation: "terminate", agentId },
+	);
+	assert.equal((terminated.details as { disposition: string }).disposition, "terminated");
 	const ownerSession = host.runtime.session;
-	const { command, view } = await openSelectedAgentView(host, agentId);
-	assert.match(stripTerminalSequences(view.render(80).join("\n")), /Failing Worker.*active/);
+	const { command, view } = await openDormantAgentView(host, agentId);
+	await waitForCondition(() =>
+		/Failing Worker.*dormant/.test(stripTerminalSequences(view.render(80).join("\n")))
+	);
+	for (const character of "Trigger the selected Agent Run failure.") {
+		view.handleInput?.(character);
+	}
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes(
+			"Trigger the selected Agent Run failure.",
+		)
+	);
+	view.handleInput?.("\r");
+	await failureStarted;
+	await waitForCondition(() =>
+		/Failing Worker.*active/.test(stripTerminalSequences(view.render(80).join("\n")))
+	);
 
 	releaseFailure();
 	await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 	await waitForCondition(() =>
-		stripTerminalSequences(view.render(80).join("\n")).includes("failed")
+		/Failing Worker.*failed/.test(stripTerminalSequences(view.render(80).join("\n")))
 	);
 	assert.equal(host.ui.customSurfaces[0], view);
 	assert.equal(host.runtime.session, ownerSession);
@@ -1623,27 +1404,16 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	assert.equal(host.runtime.session, ownerSession);
 });
 
-test("repeated successor Runs reuse one selected Agent runtime and dispose its mode once", async () => {
-	const sessionStarts: string[] = [];
-	const sessionShutdowns: string[] = [];
+test("repeated successor Runs reuse one selected Agent runtime and dispose its mode once", async (t) => {
+	const probe = configureProcessAgentViewProbe(t, "lifecycle");
 	const baselineListeners = processListenerCounts();
 	const baselineResources = processResourceCounts();
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
-		additionalExtensionFactories: [{
-			name: "successor-mode-lifecycle-probe",
-			hidden: true,
-			factory(pi) {
-				pi.on("session_start", (_event, ctx) => {
-					sessionStarts.push(ctx.sessionManager.getSessionId());
-				});
-				pi.on("session_shutdown", (_event, ctx) => {
-					sessionShutdowns.push(ctx.sessionManager.getSessionId());
-				});
-			},
-		}],
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	let releaseInitialFailure!: () => void;
 	const initialFailureGate = new Promise<void>((resolve) => {
@@ -1684,7 +1454,10 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 	);
 
 	for (const input of ["Start exact successor one.", "Start exact successor two."]) {
-		const startsBeforeSuccessor = sessionStarts.length;
+		const startsBeforeSuccessor = childProcessSessionStarts(
+			await readProcessAgentViewEvidence(probe.evidencePath),
+			agentId,
+		).length;
 		for (const character of input) opened.view.handleInput?.(character);
 		opened.view.handleInput?.("\r");
 		await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
@@ -1692,17 +1465,25 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 			const frame = stripTerminalSequences(opened.view.render(80).join("\n"));
 			return frame.includes("failed") && frame.includes(input);
 		});
-		assert.equal(sessionStarts.length, startsBeforeSuccessor);
+		assert.equal(
+			childProcessSessionStarts(
+				await readProcessAgentViewEvidence(probe.evidencePath),
+				agentId,
+			).length,
+			startsBeforeSuccessor,
+		);
 	}
 
 	await returnAgentViewToOwner(host, opened.view, opened.command);
 	await host.runtime.dispose();
-	assert.equal(sessionStarts.length, 2, JSON.stringify(sessionStarts));
-	assert.deepEqual(
-		[...sessionShutdowns].sort(),
-		[...sessionStarts].sort(),
-		JSON.stringify({ sessionStarts, sessionShutdowns }),
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionShutdowns(entries, agentId).length === 1
 	);
+	const childLifecycle = (await readProcessAgentViewEvidence(probe.evidencePath))
+		.filter((entry) => entry.sessionId === agentId && entry.pid !== process.pid);
+	assert.equal(childProcessSessionStarts(childLifecycle, agentId).length, 1);
+	assert.equal(childProcessSessionShutdowns(childLifecycle, agentId).length, 1);
+	assert.equal(new Set(childLifecycle.map((entry) => entry.pid)).size, 1);
 	assert.deepEqual(processListenerCounts(), baselineListeners);
 	await waitForCondition(() => {
 		try {
@@ -1716,21 +1497,11 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 });
 
 test("an ordinary Message activates the already-open Agent runtime before execution", async (t) => {
-	let childSessionStarts = 0;
+	const probe = configureProcessAgentViewProbe(t, "message-runtime");
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
-		additionalExtensionFactories: [{
-			name: "message-runtime-identity-probe",
-			hidden: true,
-			factory(pi) {
-				pi.on("session_start", (_event, ctx) => {
-					if (ctx.sessionManager.getEntries().some((entry) =>
-						entry.type === "custom" &&
-						entry.customType === "agent-coordination.identity"
-					)) childSessionStarts += 1;
-				});
-			},
-		}],
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	let releaseInitialFailure!: () => void;
 	const initialFailureGate = new Promise<void>((resolve) => {
@@ -1755,6 +1526,7 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 		markSuccessorExecutionStarted = resolve;
 	});
 	let attachedBeforeExecution = false;
+	let runAdmittedBeforeExecution = false;
 	let initialFailureProduced = false;
 	const routeSuccessor = async (context: { messages: unknown; tools?: Array<{ name: string }> }) => {
 		const messages = JSON.stringify(context.messages);
@@ -1774,13 +1546,8 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 			});
 		}
 		if (messages.includes("Start the successor through ordinary Message delivery.")) {
-			const rendered = stripTerminalSequences(view.render(80).join("\n"))
-				.replace(/\s+/g, "");
-			attachedBeforeExecution =
-				host.ui.customSurfaces[0] === view &&
-				rendered.includes("SuccessorWorker") &&
-				rendered.includes("active") &&
-				rendered.includes("StartthesuccessorthroughordinaryMessagedelivery.");
+			attachedBeforeExecution = host.ui.customSurfaces[0] === view;
+			runAdmittedBeforeExecution = await currentRunPhase(host, agentId) === "live";
 			markSuccessorExecutionStarted();
 			await successorGate;
 			return fauxAssistantMessage("The Message-started successor completed.");
@@ -1821,11 +1588,20 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	assert.equal((sent.details as { delivery: string }).delivery, "pending");
 	await successorExecutionStarted;
 	assert.equal(attachedBeforeExecution, true);
+	assert.equal(runAdmittedBeforeExecution, true);
+	await waitForCondition(() => {
+		const rendered = stripTerminalSequences(view.render(80).join("\n")).replace(/\s+/g, "");
+		return rendered.includes("SuccessorWorker") && rendered.includes("active") &&
+			rendered.includes("StartthesuccessorthroughordinaryMessagedelivery.");
+	});
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.customSurfaces[0], view);
 	assert.equal(await currentRunPhase(host, agentId), "live");
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), true);
-	assert.equal(childSessionStarts, 1);
+	assert.equal(
+		childProcessSessionStarts(await readProcessAgentViewEvidence(probe.evidencePath), agentId).length,
+		1,
+	);
 
 	releaseSuccessor();
 	await waitForCondition(async () =>
@@ -1892,22 +1668,35 @@ async function returnAgentViewToOwner(
 	view: Component,
 	command: Promise<void>,
 ): Promise<void> {
-	for (const character of "/agents") view.handleInput?.(character);
+	view.handleInput?.("/agents");
+	await waitForCondition(() =>
+		stripTerminalSequences(view.render(80).join("\n")).includes("/agents")
+	);
 	view.handleInput?.("\r");
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
+	if (stripTerminalSequences(view.render(80).join("\n")).includes("Dormant Agents")) {
+		view.handleInput?.("\t");
+		await waitForCondition(() =>
+			!stripTerminalSequences(view.render(80).join("\n")).includes("Dormant Agents")
+		);
+	}
 	const ownerPattern = new RegExp(
 		`→ owner[\\s\\S]*${host.session.sessionId}`,
 	);
 	for (let tab = 0; tab < 2; tab += 1) {
+		const firstFrame = stripTerminalSequences(view.render(80).join("\n"));
 		for (let step = 0; step < MAX_SELECTOR_NAVIGATION_STEPS; step += 1) {
 			if (ownerPattern.test(stripTerminalSequences(view.render(80).join("\n")))) {
 				view.handleInput?.("\r");
 				await command;
 				return;
 			}
+			const previousFrame = view.render(80).join("\n");
 			view.handleInput?.("k");
+			await waitForFrameChange(view, previousFrame);
+			if (stripTerminalSequences(view.render(80).join("\n")) === firstFrame) break;
 		}
 		view.handleInput?.("\t");
 	}
@@ -1997,6 +1786,14 @@ function focusedDetailsShowAgent(surface: Component, targetAgentId: string): boo
 		.some((line) => line.slice(1, -1).trim() === targetAgentId);
 }
 
+async function waitForFrameChange(view: Component, previousFrame: string): Promise<void> {
+	const deadline = Date.now() + 250;
+	while (Date.now() < deadline) {
+		if (view.render(80).join("\n") !== previousFrame) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 1));
+	}
+}
+
 async function hasRetention(
 	host: TestOwnerHost,
 	agentId: string,
@@ -2017,16 +1814,23 @@ async function hasRetention(
 }
 
 async function currentRunPhase(host: TestOwnerHost, agentId: string): Promise<string> {
+	return (await currentRunState(host, agentId)).phase;
+}
+
+async function currentRunState(
+	host: TestOwnerHost,
+	agentId: string,
+): Promise<{ phase: string; work?: string }> {
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const status = await observe.execute(
-		`observe-run-phase-${Date.now()}`,
+		`observe-run-state-${Date.now()}`,
 		{ operation: "status", agentId },
 		undefined,
 		undefined,
 		host.session.extensionRunner.createContext(),
 	);
-	return (status.details as { run: { phase: string } }).run.phase;
+	return (status.details as { run: { phase: string; work?: string } }).run;
 }
 
 async function childEntries(host: TestOwnerHost, agentId: string) {
@@ -2044,6 +1848,62 @@ async function childEntries(host: TestOwnerHost, agentId: string) {
 	}).primaryEvidence.transcriptPath;
 	assert.ok(transcriptPath);
 	return SessionManager.open(transcriptPath).getEntries();
+}
+
+function creationAnswerResponses(
+	toolCallId: string,
+	readyText: string,
+): Array<(context: Context) => AssistantMessage> {
+	const route = (context: Context): AssistantMessage => {
+		const transcript = JSON.stringify(context.messages);
+		if (transcript.includes(`"toolCallId":"${toolCallId}"`)) {
+			return fauxAssistantMessage(readyText);
+		}
+		const requestId = creationRequestIdFromContext(context);
+		if (requestId) {
+			return fauxAssistantMessage(
+				fauxToolCall("agent_message", {
+					operation: "answer",
+					requestId,
+					answer: readyText,
+				}, { id: toolCallId }),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage("The Owner remained usable after child startup.");
+	};
+	return Array.from({ length: 4 }, () => route);
+}
+
+function creationRequestIdFromContext(context: Context): string | undefined {
+	return findCreationRequestId(context.messages);
+}
+
+function findCreationRequestId(value: unknown): string | undefined {
+	if (typeof value === "string") {
+		try {
+			return findCreationRequestId(JSON.parse(value));
+		} catch {
+			return undefined;
+		}
+	}
+	if (Array.isArray(value)) {
+		for (const item of value) {
+			const requestId = findCreationRequestId(item);
+			if (requestId) return requestId;
+		}
+		return undefined;
+	}
+	if (typeof value !== "object" || value === null) return undefined;
+	const record = value as Record<string, unknown>;
+	if (record.kind === "request" && typeof record.requestId === "string") {
+		return record.requestId;
+	}
+	for (const nested of Object.values(record)) {
+		const requestId = findCreationRequestId(nested);
+		if (requestId) return requestId;
+	}
+	return undefined;
 }
 
 function processListenerCounts(): Readonly<Record<string, number>> {
@@ -2072,6 +1932,98 @@ function assertNoProcessResourceGrowth(
 			`${resource} grew from ${baseline[resource] ?? 0} to ${count}`,
 		);
 	}
+}
+
+type ProcessAgentViewEvidence = Readonly<{
+	kind: string;
+	pid: number;
+	sessionId?: string;
+	failureKind?: string;
+	command?: string;
+	staleContextError?: string | null;
+	generation?: string;
+	exitCode?: number;
+}>;
+
+function configureProcessAgentViewProbe(
+	t: TestContext,
+	scenario: string,
+): Readonly<{ evidencePath: string; releasePath: string }> {
+	const nonce = `${process.pid}-${scenario}-${randomUUID()}`;
+	const evidencePath = join(tmpdir(), `.process-agent-view-${nonce}.jsonl`);
+	const releasePath = join(tmpdir(), `.process-agent-view-${nonce}.release`);
+	setTestEnvironment(t, "PROCESS_AGENT_VIEW_SCENARIO", scenario);
+	setTestEnvironment(t, "PROCESS_AGENT_VIEW_EVIDENCE", evidencePath);
+	setTestEnvironment(t, "PROCESS_AGENT_VIEW_RELEASE", releasePath);
+	return { evidencePath, releasePath };
+}
+
+function setTestEnvironment(t: TestContext, name: string, value: string): void {
+	const previous = process.env[name];
+	process.env[name] = value;
+	t.after(() => {
+		if (previous === undefined) delete process.env[name];
+		else process.env[name] = previous;
+	});
+}
+
+async function releaseProcessAgentViewProbe(path: string): Promise<void> {
+	await writeFile(path, "released\n", "utf8");
+}
+
+async function readProcessAgentViewEvidence(path: string): Promise<ProcessAgentViewEvidence[]> {
+	try {
+		return (await readFile(path, "utf8"))
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as ProcessAgentViewEvidence);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw error;
+	}
+}
+
+async function waitForProcessAgentViewEvidence(
+	path: string,
+	predicate: (entries: readonly ProcessAgentViewEvidence[]) => boolean,
+): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (Date.now() < deadline) {
+		if (predicate(await readProcessAgentViewEvidence(path))) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Timed out waiting for child process Agent-view evidence");
+}
+
+function childProcessSessionStarts(
+	entries: readonly ProcessAgentViewEvidence[],
+	agentId: string,
+): ProcessAgentViewEvidence[] {
+	return entries.filter((entry) =>
+		entry.kind === "session_start" &&
+		entry.sessionId === agentId &&
+		entry.pid !== process.pid
+	);
+}
+
+function childProcessSessionShutdowns(
+	entries: readonly ProcessAgentViewEvidence[],
+	agentId: string,
+): ProcessAgentViewEvidence[] {
+	return entries.filter((entry) =>
+		entry.kind === "session_shutdown" &&
+		entry.sessionId === agentId &&
+		entry.pid !== process.pid
+	);
+}
+
+function assertProcessExited(pid: number): void {
+	assert.throws(
+		() => process.kill(pid, 0),
+		(error: unknown) =>
+			typeof error === "object" && error !== null && "code" in error &&
+			(error as NodeJS.ErrnoException).code === "ESRCH",
+	);
 }
 
 async function waitForCondition(predicate: () => boolean | Promise<boolean>): Promise<void> {

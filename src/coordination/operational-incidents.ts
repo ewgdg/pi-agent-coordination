@@ -1,9 +1,8 @@
-import { SessionManager } from "@earendil-works/pi-coding-agent";
-
+import { uuidv7 } from "@earendil-works/pi-ai";
 import {
-	continueFromCommittedInput,
-	persistCommittedInput,
-} from "../pi-integration/committed-input.ts";
+	materializeNewAgentTranscript,
+	transcriptFromSessionFile,
+} from "../pi-integration/session-manager-transcript.ts";
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
 	createModelVisibleModeratorInput,
@@ -15,10 +14,7 @@ import {
 	type ModeratorInput,
 	type ModeratorTrigger,
 } from "../protocol/moderator-input.ts";
-import type {
-	OwnerIdentity,
-	RuntimeConfigurationBaseline,
-} from "../protocol/owner-identity.ts";
+import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type {
 	ModeratorControlInput,
 	ModeratorControlReceipt,
@@ -29,12 +25,13 @@ import {
 } from "../protocol/moderator-control.ts";
 import {
 	currentCoordinationScope,
+	ProtocolInvariantError,
 	resolveCommittedToolCall,
 	toolCallPointerKey,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
-import type { DefaultChildSessionFactory } from "../runtime/default-child-session-factory.ts";
-import type { AgentRunHandle } from "../runtime/in-process-agent-host.ts";
+import type { ProcessChildSessionFactory } from "../runtime/process-child-session-factory.ts";
+import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import { statusOf, type AgentRecord } from "./agent-record.ts";
@@ -115,7 +112,7 @@ export type OperationalIncidentBoundaryHooks = Readonly<{
 export class OperationalIncidentCoordinator {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #ownerIdentity: OwnerIdentity;
-	readonly #sessionFactory: DefaultChildSessionFactory;
+	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #messages: MessageCoordinator;
 	readonly #integrateAgent: (record: AgentRecord) => void;
 	readonly #isShuttingDown: () => boolean;
@@ -130,12 +127,11 @@ export class OperationalIncidentCoordinator {
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
 	readonly #integratedAgentIds = new Set<string>();
 	readonly #reconciliationLane = new SerialLane();
-	#ownerRuntimeBaseline: RuntimeConfigurationBaseline;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		ownerIdentity: OwnerIdentity;
-		sessionFactory: DefaultChildSessionFactory;
+		sessionFactory: ProcessChildSessionFactory;
 		messages: MessageCoordinator;
 		workflowPolicy: WorkflowPolicyStore;
 		integrateAgent(record: AgentRecord): void;
@@ -167,9 +163,9 @@ export class OperationalIncidentCoordinator {
 			},
 			onReviewStateChanged: () => this.#scheduleReconciliation(),
 		});
-		const owner = options.agents.get(options.ownerIdentity.agentId);
-		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
-		this.#ownerRuntimeBaseline = options.sessionFactory.snapshotRuntimeBaseline(owner);
+		if (!options.agents.has(options.ownerIdentity.agentId)) {
+			throw new Error("invariant_violation: Workflow Owner is unavailable");
+		}
 	}
 
 	integrate(record: AgentRecord): void {
@@ -233,26 +229,21 @@ export class OperationalIncidentCoordinator {
 	admitToolExecution(agentId: string, toolCallId: string, toolName: string): void {
 		const record = this.#requireAgent(agentId);
 		this.#operationReviews.reconcileAgent(agentId);
+		const transcript = record.transcript.inspect();
 		const { source } = resolveCommittedToolCall({
 			agentId,
-			sessionManager: record.host.sessionManager,
+			transcript,
 			toolCallId,
 			toolName,
 		});
-		const entry = record.host.sessionManager.getEntry(source.entryId);
+		const entry = transcript.entries.find(({ id }) => id === source.entryId);
 		if (entry?.type !== "message" || entry.message.role !== "assistant") {
 			throw new Error("invariant_violation: root tool call source is unavailable");
 		}
 		const toolCalls = entry.message.content.filter((part) => part.type === "toolCall");
-		const classification = toolCalls.some((part) => {
-			const definition = record.host.requireLiveSession().getToolDefinition(part.name);
-			if (!definition) {
-				throw new Error(`invariant_violation: tool definition ${part.name} is unavailable`);
-			}
-			return definition.executionMode === "sequential";
-		})
-			? "blocking"
-			: "asynchronous";
+		const classification = record.host.classifyToolBatch(
+			toolCalls.map(({ name }) => name),
+		);
 		this.#operationReviews.admit({
 			toolCall: source,
 			classification,
@@ -281,7 +272,7 @@ export class OperationalIncidentCoordinator {
 		if (!moderator) throw new Error(`unknown_identity: ${moderatorAgentId}`);
 		const { input: committedInput } = resolveCommittedToolCall({
 			agentId: moderatorAgentId,
-			sessionManager: moderator.host.sessionManager,
+			transcript: moderator.transcript.inspect(),
 			toolCallId,
 			toolName: "moderator_control",
 		});
@@ -436,18 +427,13 @@ export class OperationalIncidentCoordinator {
 	async #createModerator(
 		handling: OperationalIncidentHandling,
 	): Promise<void> {
-		const owner = this.#agents.get(this.#ownerIdentity.agentId);
-		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
-		const baseline = owner.host.currentHandle()
-			? this.#sessionFactory.snapshotRuntimeBaseline(owner)
-			: this.#ownerRuntimeBaseline;
-		this.#ownerRuntimeBaseline = baseline;
-		const sessionManager = SessionManager.create(
-			baseline.cwd,
-			this.#sessionFactory.workflowSessionDirectory(),
-		);
-		const agentId = sessionManager.getSessionId();
-		const prepared = await this.#sessionFactory.prepareModeratorRun(agentId, baseline);
+		if (!this.#agents.has(this.#ownerIdentity.agentId)) {
+			throw new Error("invariant_violation: Workflow Owner is unavailable");
+		}
+		this.#sessionFactory.admitProcessRuntimePlatform();
+		const agentId = uuidv7();
+		const prepared = await this.#sessionFactory.prepareModeratorRun({ agentId });
+		const sessionManager = this.#sessionFactory.createStagingSession(prepared);
 		if (this.#isShuttingDown()) return;
 		if (!this.#conditionRemains(handling.snapshot)) {
 			this.#handlingByKey.delete(handling.snapshot.key);
@@ -459,7 +445,7 @@ export class OperationalIncidentCoordinator {
 			agentId,
 			workflowId: this.#ownerIdentity.workflowId,
 			directSpawnerAgentId: null,
-			configuration: { ...metadata, baseline },
+			metadata,
 		};
 		const input: ModeratorInput = {
 			trigger: this.#triggerFor(handling.snapshot),
@@ -481,8 +467,24 @@ export class OperationalIncidentCoordinator {
 			modelInput.display,
 			modelInput.details,
 		);
-		persistCommittedInput(sessionManager);
-		validateCommittedModeratorInput({ sessionManager, identity, input });
+		let sessionPath: string;
+		try {
+			sessionPath = await materializeNewAgentTranscript(sessionManager);
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			const candidatePath = sessionManager.getSessionFile();
+			if (!candidatePath || !hasExactDurableModeratorEvidence({
+				sessionPath: candidatePath,
+				identity,
+				input,
+			})) throw error;
+			sessionPath = candidatePath;
+		}
+		validateCommittedModeratorInput({
+			transcript: transcriptFromSessionFile(sessionPath).inspect(),
+			identity,
+			input,
+		});
 		if (handling.snapshot.kind === "operation_review") {
 			this.#operationReviews.markModeratorInputCommitted(
 				handling.snapshot.review.toolCall,
@@ -494,8 +496,8 @@ export class OperationalIncidentCoordinator {
 
 		const moderator = this.#sessionFactory.createModeratorRecord({
 			identity,
-			sessionManager,
-			firstPrepared: prepared,
+			initialPreparation: prepared,
+			sessionPath,
 		});
 		this.#agents.set(agentId, moderator);
 		this.#integrateAgent(moderator);
@@ -509,8 +511,8 @@ export class OperationalIncidentCoordinator {
 		try {
 			await moderator.host.lane.run(async () => {
 				if (this.#isShuttingDown()) return;
-				const session = await moderator.host.startInLane(["moderator_handling"]);
-				moderator.host.trackOperation(continueFromCommittedInput(session));
+				await moderator.host.startInLane(["moderator_handling"]);
+				moderator.host.continueFromCommittedInputInLane();
 			});
 		} catch (error) {
 			this.#reportError(error);
@@ -753,7 +755,7 @@ export class OperationalIncidentCoordinator {
 		const record = this.#agents.get(toolCall.agentId);
 		if (!record) return false;
 		const entries = currentCoordinationScope(
-			record.host.sessionManager,
+			record.transcript.inspect(),
 			toolCall.agentId,
 		);
 		const sourceExists = entries.some(
@@ -777,7 +779,7 @@ export class OperationalIncidentCoordinator {
 	#assertWorkflowToolCallPointer(toolCall: ToolCallPointer): void {
 		const record = this.#requireAgent(toolCall.agentId);
 		const source = currentCoordinationScope(
-			record.host.sessionManager,
+			record.transcript.inspect(),
 			toolCall.agentId,
 		).find((entry) => entry.id === toolCall.entryId);
 		if (
@@ -815,5 +817,23 @@ export class OperationalIncidentCoordinator {
 		this.#agents
 			.get(handling.moderatorAgentId)
 			?.host.removeRetentionReason("moderator_handling");
+	}
+}
+
+function hasExactDurableModeratorEvidence(options: {
+	sessionPath: string;
+	identity: ModeratorIdentity;
+	input: ModeratorInput;
+}): boolean {
+	try {
+		validateCommittedModeratorInput({
+			transcript: transcriptFromSessionFile(options.sessionPath).inspect(),
+			identity: options.identity,
+			input: options.input,
+		});
+		return true;
+	} catch (error) {
+		if (error instanceof ProtocolInvariantError) throw error;
+		return false;
 	}
 }

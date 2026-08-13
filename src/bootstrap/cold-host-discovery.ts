@@ -28,19 +28,23 @@ import {
 	toolCallPointerKey,
 } from "../protocol/identities.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
+import {
+	transcriptFromSessionFile,
+	transcriptFromSessionManager,
+} from "../pi-integration/session-manager-transcript.ts";
 import { workflowSessionDirectory } from "../runtime/workflow-session-directory.ts";
 
 export type RecoveredOrdinaryAgent = Readonly<{
 	role: "ordinary";
 	identity: ChildAgentIdentity;
-	sessionManager: SessionManager;
-	spawnInput: AgentSpawnInput;
+	creationInput: AgentSpawnInput;
+	sessionPath: string;
 }>;
 
 export type RecoveredModeratorAgent = Readonly<{
 	role: "moderator";
 	identity: ModeratorIdentity;
-	sessionManager: SessionManager;
+	sessionPath: string;
 }>;
 
 export type RecoveredAgent = RecoveredOrdinaryAgent | RecoveredModeratorAgent;
@@ -55,7 +59,6 @@ export type ColdWorkflowRecovery = Readonly<{
 
 type CandidateBase = {
 	path: string;
-	sessionManager: SessionManager;
 	invalid: boolean;
 };
 
@@ -151,18 +154,26 @@ export async function discoverColdWorkflow(options: {
 			quarantinedAgentIds.add(candidate.identity.agentId);
 		}
 		if (candidate.role === "moderator") continue;
-		const parent = candidate.identity.directSpawnerAgentId === ownerIdentity.agentId
-			? ownerSessionManager
-			: uniqueByAgentId.get(candidate.identity.directSpawnerAgentId)?.sessionManager;
-		if (!parent) {
+		const parentTranscript = candidate.identity.directSpawnerAgentId === ownerIdentity.agentId
+			? transcriptFromSessionManager(ownerSessionManager)
+			: (() => {
+				const parentCandidate = uniqueByAgentId.get(
+					candidate.identity.directSpawnerAgentId,
+				);
+				return parentCandidate
+					? transcriptFromSessionFile(parentCandidate.path)
+					: undefined;
+			})();
+		if (!parentTranscript) {
 			candidate.invalid = true;
 			quarantinedAgentIds.add(candidate.identity.agentId);
 			continue;
 		}
 		try {
+			const parentInspection = parentTranscript.inspect();
 			const committed = resolveCommittedSpawnSource({
 				agentId: candidate.identity.directSpawnerAgentId,
-				sessionManager: parent,
+				transcript: parentInspection,
 				toolCallId: candidate.identity.spawnSource.toolCallId,
 			});
 			if (!sameToolCallPointer(committed.source, candidate.identity.spawnSource)) {
@@ -175,16 +186,20 @@ export async function discoverColdWorkflow(options: {
 				templateName: input.template,
 			});
 			const identityMetadata = {
-				label: candidate.identity.configuration.label,
-				...(candidate.identity.configuration.description === undefined
+				label: candidate.identity.metadata.label,
+				...(candidate.identity.metadata.description === undefined
 					? {}
-					: { description: candidate.identity.configuration.description }),
+					: { description: candidate.identity.metadata.description }),
 			};
 			if (!isDeepStrictEqual(metadata, identityMetadata)) {
 				throw new Error("child metadata contradicts its spawn source");
 			}
 			candidate.spawnInput = input;
-			candidate.spawnOrder = physicalSpawnOrder(parent, committed.source.entryId, committed.source.toolCallId);
+			candidate.spawnOrder = physicalSpawnOrder(
+				parentInspection.entries,
+				committed.source.entryId,
+				committed.source.toolCallId,
+			);
 		} catch {
 			candidate.invalid = true;
 			quarantinedAgentIds.add(candidate.identity.agentId);
@@ -262,13 +277,13 @@ export async function discoverColdWorkflow(options: {
 			...ordered.map((candidate) => ({
 				role: "ordinary" as const,
 				identity: candidate.identity,
-				sessionManager: candidate.sessionManager,
-				spawnInput: candidate.spawnInput!,
+				creationInput: candidate.spawnInput!,
+				sessionPath: candidate.path,
 			})),
 			...moderators.map((candidate) => ({
 				role: "moderator" as const,
 				identity: candidate.identity,
-				sessionManager: candidate.sessionManager,
+				sessionPath: candidate.path,
 			})),
 		],
 		transcriptPathByAgentId,
@@ -340,7 +355,6 @@ async function readCandidate(path: string): Promise<Candidate> {
 				role: "moderator",
 				identity: validateColdModeratorInput({
 					sessionId: header.id,
-					sessionCwd: header.cwd,
 					entries,
 				}).identity,
 			};
@@ -349,7 +363,6 @@ async function readCandidate(path: string): Promise<Candidate> {
 				role: "ordinary",
 				identity: validateColdChildIdentity({
 					sessionId: header.id,
-					sessionCwd: header.cwd,
 					entries,
 				}),
 			};
@@ -375,7 +388,6 @@ async function readCandidate(path: string): Promise<Candidate> {
 	return {
 		path,
 		...candidateIdentity,
-		sessionManager,
 		invalid: false,
 	};
 }
@@ -429,11 +441,10 @@ function validateNativeEntries(values: readonly unknown[]): void {
 }
 
 function physicalSpawnOrder(
-	parent: SessionManager,
+	entries: readonly SessionEntry[],
 	entryId: string,
 	toolCallId: string,
 ): Readonly<{ entry: number; part: number }> {
-	const entries = parent.getEntries();
 	const entry = entries.findIndex((candidate) => candidate.id === entryId);
 	const source = entries[entry];
 	if (entry < 0 || source?.type !== "message" || source.message.role !== "assistant") {

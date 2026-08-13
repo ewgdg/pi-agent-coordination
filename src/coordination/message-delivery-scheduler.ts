@@ -1,6 +1,5 @@
 import {
 	EvidenceUnavailableError,
-	requireLiveSession,
 	type AgentRecord,
 } from "./agent-record.ts";
 import { ProtocolInvariantError } from "../protocol/identities.ts";
@@ -14,8 +13,7 @@ import type {
 	AgentRunHandle,
 	AgentRunSettlement,
 	InterruptionHoldHandle,
-} from "../runtime/in-process-agent-host.ts";
-import { sendAndAwaitTranscriptCommit } from "../pi-integration/transcript-commit.ts";
+} from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 
 export type ScheduledMessageDelivery = Readonly<{
@@ -317,7 +315,7 @@ export class MessageDeliveryScheduler {
 		if (reservedResume) {
 			if (this.#deferredResumeByAgent.has(record.identity.agentId)) return;
 			if (record.host.isCurrentInterruptionHold(reservedResume.hold)) {
-				if (requireLiveSession(record).isIdle) {
+				if (record.host.currentWorkState() === "settled") {
 					await this.#startResumeInLane(record, reservedResume);
 				}
 				return;
@@ -339,8 +337,7 @@ export class MessageDeliveryScheduler {
 		}
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending || pending.size === 0) return;
-		const session = requireLiveSession(record);
-		if (!session.isIdle) return;
+		if (record.host.currentWorkState() !== "settled") return;
 		if ([...pending.values()].some(({ deliveryMode }) => deliveryMode === "steer")) {
 			this.#freezeSteerInLane(record);
 			return;
@@ -349,39 +346,35 @@ export class MessageDeliveryScheduler {
 		if (!delivery) return;
 		// A settled Run may become active before Pi processes admission. followUp
 		// preserves Deferred ordering, while triggerTurn starts a standalone Idle turn.
-		const completion = session.sendCustomMessage(
-			createMessageDelivery([delivery.deliveryItem]),
-			{ triggerTurn: true, deliverAs: "followUp" },
-		);
+		const { completion } = record.host.deliverInLane({
+			kind: "custom",
+			message: createMessageDelivery([delivery.deliveryItem]),
+			triggerTurn: true,
+			deliverAs: "followUp",
+		});
 		this.#activeDeferredByAgent.set(record.identity.agentId, {
 			delivery,
 			completion,
 			deliveryCommitted: false,
 		});
-		record.host.trackOperation(completion);
 	}
 
 	async #startResumeInLane(record: AgentRecord, reserved: ReservedResume): Promise<void> {
 		if (!record.host.beginIsolatedResumptionInLane(reserved.hold)) return;
-		const session = requireLiveSession(record);
 		try {
-			const committed = await sendAndAwaitTranscriptCommit({
-				session,
-				matchesCandidate: (event) =>
-					event.type === "message_end" && event.message.role === "custom",
-				inspectCommit: () => reserved.delivery.inspectProof() !== undefined,
-				send: () => session.sendCustomMessage(
-					createMessageDelivery([reserved.delivery.deliveryItem]),
-					{ triggerTurn: true },
-				),
-				onDispatched: (completion) => {
-					this.#activeResumeByAgent.set(record.identity.agentId, {
-						...reserved,
-						completion,
-					});
-					record.host.trackOperation(completion);
+			const delivery = record.host.deliverInLane(
+				{
+					kind: "custom",
+					message: createMessageDelivery([reserved.delivery.deliveryItem]),
+					triggerTurn: true,
 				},
+				{ inspectCommit: () => reserved.delivery.inspectProof() !== undefined },
+			);
+			this.#activeResumeByAgent.set(record.identity.agentId, {
+				...reserved,
+				completion: delivery.completion,
 			});
+			const committed = await delivery.transcriptCommit;
 			if (!committed) {
 				throw new Error("Supervisory Resume Delivery did not commit");
 			}
@@ -418,11 +411,12 @@ export class MessageDeliveryScheduler {
 			recipientAgentId: record.identity.agentId,
 			messageIds,
 		});
-		const completion = requireLiveSession(record).sendCustomMessage(
-			createMessageDelivery(steer.map(({ deliveryItem }) => deliveryItem)),
-			{ triggerTurn: true, deliverAs: "steer" },
-		);
-		record.host.trackOperation(completion);
+		record.host.deliverInLane({
+			kind: "custom",
+			message: createMessageDelivery(steer.map(({ deliveryItem }) => deliveryItem)),
+			triggerTurn: true,
+			deliverAs: "steer",
+		});
 	}
 
 	#removeProvenDeliveriesInLane(record: AgentRecord): void {

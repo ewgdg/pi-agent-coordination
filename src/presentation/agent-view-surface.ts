@@ -1,25 +1,84 @@
-import type {
-	ExtensionUIContext,
-} from "@earendil-works/pi-coding-agent";
-import {
-	truncateToWidth,
-	type Component,
-	type OverlayHandle,
-	type TUI,
-} from "@earendil-works/pi-tui";
+import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { Component, OverlayHandle, TUI } from "@earendil-works/pi-tui";
 
+import type { TerminalProjection } from "./terminal-projection.ts";
 import {
-	addPrioritizedTuiInputListener,
-	type PiNativeAgentProjection,
-} from "../pi-integration/native-agent-projection.ts";
+	createProcessPhysicalTerminalPort,
+	PhysicalTerminalAttachment,
+	type PhysicalTerminalPort,
+} from "./physical-terminal-attachment.ts";
 
-const ENABLE_MOUSE_REPORTING = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1004h\x1b[?1006h";
-const DISABLE_MOUSE_REPORTING = "\x1b[?1006l\x1b[?1004l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+type AgentTerminalAttachment = Readonly<{
+	attach(projection: TerminalProjection): Promise<void>;
+	dispatchInput(data: string): void;
+	close(): void;
+}>;
+
+export type PhysicalAgentViewSurface = Readonly<{
+	ready: Promise<void>;
+	closed: Promise<void>;
+	close(): void;
+}>;
+
+export function startPhysicalAgentViewSurface(
+	view: DurableAgentView,
+	options: Readonly<{
+		ownerTui: TUI;
+		requestShutdown(): void;
+		physicalTerminal?: PhysicalTerminalPort;
+	}>,
+): PhysicalAgentViewSurface | undefined {
+	const physicalTerminal = options.physicalTerminal
+		?? createProcessPhysicalTerminalPort(options.ownerTui);
+	if (!physicalTerminal.supportsPhysicalAttachment) return undefined;
+	let closed = false;
+	let settleClosed!: () => void;
+	const closedPromise = new Promise<void>((resolve) => {
+		settleClosed = resolve;
+	});
+	const closeFromHost = () => {
+		if (closed) return;
+		closed = true;
+		attachment.close();
+		settleClosed();
+	};
+	const failFromAttachment = (error: unknown) => {
+		if (closed) return;
+		try {
+			view.fail(error);
+		} finally {
+			closeFromHost();
+		}
+	};
+	const attachment = new PhysicalTerminalAttachment({
+		ownerTui: options.ownerTui,
+		physicalTerminal,
+		fail: failFromAttachment,
+		requestExit() {
+			closeFromHost();
+			options.requestShutdown();
+		},
+	});
+	const attachCurrentProjection = () => {
+		if (closed) return;
+		void attachment.attach(view.projection()).catch(failFromAttachment);
+	};
+	const removeViewChangeHandler = view.addChangeHandler(attachCurrentProjection);
+	const removeViewCloseHandler = view.addCloseHandler(closeFromHost);
+	const ready = attachment.attach(view.projection()).catch(failFromAttachment);
+	const cleanup = closedPromise.then(async () => {
+		removeViewChangeHandler();
+		removeViewCloseHandler();
+		attachment.close();
+		await view.close();
+	});
+	return { ready, closed: cleanup, close: closeFromHost };
+}
 
 export type DurableAgentView = Readonly<{
 	agentId: string;
 	label: string;
-	projection(): PiNativeAgentProjection;
+	projection(): TerminalProjection;
 	addChangeHandler(handler: () => void): () => void;
 	addCloseHandler(handler: () => void): () => void;
 	fail(error: unknown): void;
@@ -29,42 +88,69 @@ export type DurableAgentView = Readonly<{
 export async function openAgentViewSurface(
 	ui: ExtensionUIContext,
 	view: DurableAgentView,
-	options: Readonly<{ requestShutdown(): void }> = {
+	options: Readonly<{
+		requestShutdown(): void;
+		physicalTerminal?: PhysicalTerminalPort;
+	}> = {
 		requestShutdown: () => undefined,
 	},
 ): Promise<void> {
-	let component: AgentViewSurface | undefined;
+	let attachment: AgentTerminalAttachment | undefined;
 	let handle: OverlayHandle | undefined;
 	let closedByHost = false;
 	let settleHostClose!: () => void;
 	const hostClose = new Promise<void>((resolve) => {
 		settleHostClose = resolve;
 	});
+	let removeViewChangeHandler: () => void = () => undefined;
+	let removeViewCloseHandler: () => void = () => undefined;
+
 	const closeFromHost = () => {
 		if (closedByHost) return;
 		closedByHost = true;
+		attachment?.close();
 		handle?.hide();
-		component?.dispose();
 		settleHostClose();
 	};
+	const failFromAttachment = (error: unknown) => {
+		if (closedByHost) return;
+		try {
+			view.fail(error);
+		} finally {
+			closeFromHost();
+		}
+	};
+	const attachCurrentProjection = () => {
+		if (!attachment || closedByHost) return;
+		void attachment.attach(view.projection()).catch(failFromAttachment);
+	};
+
 	try {
 		const interactiveClose = ui.custom<void>(
-			(tui, _theme, _keybindings, _done) => {
-				component = new AgentViewSurface(
-					tui,
+			(tui) => {
+				const physicalTerminal = options.physicalTerminal
+					?? createProcessPhysicalTerminalPort(tui);
+				const requestExit = () => {
+					closeFromHost();
+					options.requestShutdown();
+				};
+				attachment = physicalTerminal.supportsPhysicalAttachment
+					? new PhysicalTerminalAttachment({
+						ownerTui: tui,
+						physicalTerminal,
+						fail: failFromAttachment,
+						requestExit,
+					})
+					: new DetachedDiagnosticAttachment({
+						fail: failFromAttachment,
+						requestExit,
+					});
+				removeViewChangeHandler = view.addChangeHandler(attachCurrentProjection);
+				removeViewCloseHandler = view.addCloseHandler(closeFromHost);
+				return new DetachedAgentDiagnosticSurface(
 					view,
-					() => handle?.isFocused() ?? true,
-					closeFromHost,
-					options.requestShutdown,
-					(error) => {
-						try {
-							view.fail(error);
-						} finally {
-							closeFromHost();
-						}
-					},
+					(data) => attachment?.dispatchInput(data),
 				);
-				return component;
 			},
 			{
 				overlay: true,
@@ -76,163 +162,114 @@ export async function openAgentViewSurface(
 				},
 				onHandle: (overlayHandle) => {
 					handle = overlayHandle;
-					if (closedByHost) overlayHandle.hide();
+					if (closedByHost) {
+						overlayHandle.hide();
+						return;
+					}
+					attachCurrentProjection();
 				},
 			},
 		);
-		// Host-driven disposal must hide this exact overlay rather than Pi's
-		// visual-frontmost overlay, which may belong to the child mode itself.
 		await Promise.race([interactiveClose, hostClose]);
 	} finally {
+		removeViewChangeHandler();
+		removeViewCloseHandler();
+		attachment?.close();
 		await view.close();
 	}
 }
 
-class AgentViewSurface implements Component {
-	readonly #tui: TUI;
-	readonly #view: DurableAgentView;
-	readonly #removeChangeHandler: () => void;
-	readonly #removeCloseHandler: () => void;
-	readonly #removePrioritizedInputListener: () => void;
-	readonly #ownsInput: () => boolean;
-	readonly #ownsMouseReporting: boolean;
-	readonly #failFromSurface: (error: unknown) => void;
-	#observedFailureProjection: PiNativeAgentProjection | undefined;
-	#removeProjectionFailureHandler: () => void = () => undefined;
-	#observedExitProjection: PiNativeAgentProjection | undefined;
-	#removeProjectionExitRequestHandler: () => void = () => undefined;
-	#shutdownRequested = false;
-	#disposed = false;
-	#failed = false;
+class DetachedDiagnosticAttachment implements AgentTerminalAttachment {
+	readonly #fail: (error: unknown) => void;
+	readonly #requestExit: () => void;
+	#projection: TerminalProjection | undefined;
+	#removeFailureHandler: () => void = () => undefined;
+	#removeExitHandler: () => void = () => undefined;
+	#closed = false;
 
-	constructor(
-		tui: TUI,
-		view: DurableAgentView,
-		ownsInput: () => boolean,
-		closeFromHost: () => void,
-		requestShutdown: () => void,
-		failFromSurface: (error: unknown) => void,
-	) {
-		this.#tui = tui;
-		this.#view = view;
-		this.#ownsInput = ownsInput;
-		this.#failFromSurface = failFromSurface;
-		this.#removeChangeHandler = view.addChangeHandler(() => {
-			this.#observeProjectionEvents(requestShutdown);
-			this.#tui.requestRender();
-		});
-		this.#observeProjectionEvents(requestShutdown);
-		this.#removeCloseHandler = view.addCloseHandler(closeFromHost);
-		this.#removePrioritizedInputListener = addPrioritizedTuiInputListener(
-			tui,
-			(data) => {
-				// A newer Owner overlay must keep the focus it acquired above this
-				// fullscreen child instead of having its input stolen by the child.
-				if (!this.#ownsInput()) return undefined;
-				try {
-					this.#view.projection().dispatchInput(data);
-					this.#tui.requestRender();
-				} catch (error) {
-					this.#fail(error);
-				}
-				// Fullscreen Owner viewport listeners otherwise consume wheel, drag,
-				// Page/Home/End, and prompt-navigation input before the focused overlay.
-				return { consume: true };
-			},
-		);
-		// A fullscreen child writes mouse-mode setup only to its detached terminal.
-		// Regular Owner TUI therefore needs this view-owned physical mouse lease.
-		this.#ownsMouseReporting = tui.mode === "regular";
-		if (this.#ownsMouseReporting) {
-			this.#tui.terminal.write(ENABLE_MOUSE_REPORTING);
-		}
+	constructor(options: {
+		fail(error: unknown): void;
+		requestExit(): void;
+	}) {
+		this.#fail = options.fail;
+		this.#requestExit = options.requestExit;
 	}
 
-	handleInput(data: string): void {
-		// The child TUI owns editor keys, extension input listeners, shortcuts,
-		// overlays, and submission. Navigation back to Owner happens through
-		// /agents rather than stealing Escape from custom editors such as pi-vim.
+	async attach(projection: TerminalProjection): Promise<void> {
+		if (this.#closed || this.#projection === projection) return;
+		this.#releaseProjection();
+		if (this.#closed) return;
+		this.#projection = projection;
+		const removeFailureHandler = projection.addFailureHandler((error) => {
+			if (this.#projection !== projection || this.#closed) return;
+			this.#fail(error);
+		});
+		if (this.#closed || this.#projection !== projection) {
+			removeFailureHandler();
+			return;
+		}
+		this.#removeFailureHandler = removeFailureHandler;
+		const removeExitHandler = projection.addExitRequestHandler(() => {
+			if (this.#projection !== projection || this.#closed) return;
+			this.close();
+			this.#requestExit();
+		});
+		if (this.#closed || this.#projection !== projection) {
+			removeExitHandler();
+			return;
+		}
+		this.#removeExitHandler = removeExitHandler;
+	}
+
+	dispatchInput(data: string): void {
+		if (this.#closed || !this.#projection) return;
 		try {
-			this.#view.projection().dispatchInput(data);
-			this.#tui.requestRender();
+			this.#projection.dispatchInput(data);
 		} catch (error) {
 			this.#fail(error);
 		}
+	}
+
+	close(): void {
+		if (this.#closed) return;
+		this.#closed = true;
+		this.#releaseProjection();
+	}
+
+	#releaseProjection(): void {
+		this.#projection = undefined;
+		this.#removeFailureHandler();
+		this.#removeExitHandler();
+		this.#removeFailureHandler = () => undefined;
+		this.#removeExitHandler = () => undefined;
+	}
+}
+
+/**
+ * Non-terminal SDK/test hosts keep xterm as their terminal and use this surface
+ * only for diagnostics. Interactive Pi never uses it as the live child renderer.
+ */
+class DetachedAgentDiagnosticSurface implements Component {
+	readonly #view: DurableAgentView;
+	readonly #dispatchInput: (data: string) => void;
+
+	constructor(
+		view: DurableAgentView,
+		dispatchInput: (data: string) => void,
+	) {
+		this.#view = view;
+		this.#dispatchInput = dispatchInput;
 	}
 
 	render(width: number): string[] {
-		try {
-			return this.#render(width);
-		} catch (error) {
-			this.#fail(error);
-			const safeWidth = Math.max(1, width);
-			const terminalRows = Math.max(1, Math.floor(this.#tui.terminal.rows));
-			return [
-				truncateToWidth("Agent view failed; returning to Owner…", safeWidth, ""),
-				...Array.from({ length: terminalRows - 1 }, () => ""),
-			];
-		}
+		return this.#view.projection().presentation.render(width);
 	}
 
-	#render(width: number): string[] {
-		const safeWidth = Math.max(1, width);
-		const projection = this.#view.projection();
-		const terminalRows = Math.max(1, Math.floor(this.#tui.terminal.rows));
-		projection.resize(safeWidth, terminalRows);
-		const nativeFrame = projection.presentation
-			.render(safeWidth)
-			.map((line) => truncateToWidth(line, safeWidth, ""));
-		const visibleFrame = nativeFrame.slice(-terminalRows);
-		const topPadding = Array.from(
-			{ length: Math.max(0, terminalRows - visibleFrame.length) },
-			() => "",
-		);
-		return [...topPadding, ...visibleFrame];
+	handleInput(data: string): void {
+		this.#dispatchInput(data);
 	}
 
 	invalidate(): void {
-		try {
-			this.#view.projection().presentation.invalidate();
-		} catch (error) {
-			this.#fail(error);
-		}
-	}
-
-	#fail(error: unknown): void {
-		if (this.#failed || this.#disposed) return;
-		this.#failed = true;
-		this.#failFromSurface(error);
-	}
-
-	#observeProjectionEvents(requestShutdown: () => void): void {
-		const projection = this.#view.projection();
-		if (projection !== this.#observedFailureProjection) {
-			this.#removeProjectionFailureHandler();
-			this.#observedFailureProjection = projection;
-			this.#removeProjectionFailureHandler = projection.addFailureHandler((error) => {
-				this.#fail(error);
-			});
-		}
-		if (projection === this.#observedExitProjection) return;
-		this.#removeProjectionExitRequestHandler();
-		this.#observedExitProjection = projection;
-		this.#removeProjectionExitRequestHandler = projection.addExitRequestHandler(() => {
-			if (this.#shutdownRequested || this.#disposed) return;
-			this.#shutdownRequested = true;
-			requestShutdown();
-		});
-	}
-
-	dispose(): void {
-		if (this.#disposed) return;
-		this.#disposed = true;
-		this.#removeChangeHandler();
-		this.#removeCloseHandler();
-		this.#removeProjectionFailureHandler();
-		this.#removeProjectionExitRequestHandler();
-		this.#removePrioritizedInputListener();
-		if (this.#ownsMouseReporting) {
-			this.#tui.terminal.write(DISABLE_MOUSE_REPORTING);
-		}
+		this.#view.projection().presentation.invalidate();
 	}
 }

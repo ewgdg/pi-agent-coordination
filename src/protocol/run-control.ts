@@ -1,4 +1,4 @@
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
 	deriveMessageIdentity,
@@ -81,13 +81,13 @@ export function validateRunControlInput(value: unknown): RunControlInput {
 
 export function resolveCommittedRunControl(options: {
 	callerAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	toolCallId: string;
 	providedInput: RunControlInput;
 }): Readonly<{ source: ToolCallPointer; input: RunControlInput }> {
 	const { source, input } = resolveCommittedToolCall({
 		agentId: options.callerAgentId,
-		sessionManager: options.sessionManager,
+		transcript: options.transcript,
 		toolCallId: options.toolCallId,
 		toolName: "agent_control",
 	});

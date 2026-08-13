@@ -4,7 +4,7 @@ Loading `pi-agent-coordination` in an interactive Pi TUI establishes the current
 
 Before creating the coordination runtime, bootstrap loads and validates the optional user [Workflow Policy](workflow-policy.md). Invalid initial policy prevents runtime creation without appending Owner Identity.
 
-On first activation, the package appends one non-model-visible `agent-coordination.identity` entry. The Pi session identity is both the Agent identity and Workflow identity. Owner metadata is fixed to the label `owner`, and the entry records the immutable runtime baseline used for later coordination.
+On first activation, the package appends one non-model-visible `agent-coordination.identity` entry. The Pi session identity is both the Agent identity and Workflow identity, and Owner metadata is fixed to the label `owner`. Resolved Owner Runtime configuration and resources are not copied into Identity.
 
 On later activation, the package validates the existing current-scope Owner Identity exactly. A session identified as a child Agent or Moderator is not reclassified.
 
@@ -29,7 +29,7 @@ The package registers the Owner tool definitions through Pi's `registerTool()` A
 - `agent_control` interrupts, explicitly resumes, or terminates one authorized exact child Run.
 - `/agents` opens the framed [Agent selector and full-window view](agent-selector.md), with Owner-only Human and Operational attention plus Live and Dormant Agent rosters.
 
-Agent views attach a selected Agent's complete Pi mode and forward input through that mode's native terminal path. A native above-editor dock projects selected identity, semantic work status, scoped direct-child activity, and Owner-only attention without adding an outer view header. The selected Agent retains its transcript, editor, footer, widgets, commands, shortcuts, and extension UI while the Owner's native transcript, editor, history, queued input, services, diagnostics, footer, and extension context stay mounted and continuously bound underneath. `/agents` switches the durable attachment or returns to the exact Owner presentation without native runtime rebinding.
+Agent views suspend Owner rendering and attach the physical terminal directly to a selected Agent's PTY. The child reinitializes its own native Pi TUI, which supplies terminal modes, full redraw, editor, footer, widgets, commands, shortcuts, dialogs, and extension UI without an Owner-side frame reconstruction step. A native above-editor dock projects selected identity, semantic work status, scoped direct-child activity, and Owner-only attention without adding an outer view header. The Owner's native transcript, editor, history, queued input, services, diagnostics, footer, and extension context remain mounted and continuously bound while its TUI is suspended. `/agents` retargets the durable physical attachment or restarts and fully redraws the exact Owner presentation without native runtime rebinding.
 
 Coordination roles are trusted protocol participants, not a security boundary. Role-scoped tools constrain the intended workflow and keep caller identity out of model-supplied arguments; they do not isolate mutually hostile code or users.
 
@@ -37,7 +37,7 @@ See [Human Requests](human-requests.md) for the request and Answer shapes, trans
 
 ## Activation modes
 
-Coordination activates only when Pi reports interactive TUI mode with UI support. Print, JSON, RPC, and rejected interactive sessions retain the registered tool definitions for transcript rendering but keep them inactive; they register no coordination command and create no coordinator. During interactive admission, the Owner tools remain inactive while the immutable runtime baseline is captured, then become active only after the identity-bound coordinator is ready. A factory-time `before_agent_start` gate holds any model turn launched by an earlier extension's `session_start` handler until that admission outcome settles, so the turn sees either the complete Owner coordination surface or inactive Owner tools.
+Coordination activates only when Pi reports interactive TUI mode with UI support. Print, JSON, RPC, and rejected interactive sessions retain the registered tool definitions for transcript rendering but keep them inactive; they register no coordination command and create no coordinator. During interactive admission, the Owner tools remain inactive until the identity-bound coordinator is ready. A factory-time `before_agent_start` gate holds any model turn launched by an earlier extension's `session_start` handler until that admission outcome settles, so the turn sees either the complete Owner coordination surface or inactive Owner tools.
 
 ## Host compatibility
 

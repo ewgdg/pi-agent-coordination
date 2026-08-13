@@ -9,10 +9,6 @@ import {
 	assertRuntimeInstanceShape,
 } from "./host-shape.ts";
 import {
-	createPiNativeProjectionHost,
-	type PiNativeProjectionHost,
-} from "./native-agent-projection.ts";
-import {
 	hasInstalledExtensionBindings,
 	refreshNativeExtensionBindings,
 } from "./extension-bindings.ts";
@@ -26,9 +22,13 @@ type HostModule = {
 	};
 };
 
-type InteractiveCapture = Readonly<{
+export type InteractiveCapture = Readonly<{
 	runtime: AgentSessionRuntime;
-	projectionHost: PiNativeProjectionHost;
+	observeInputLifecycle(observer: Readonly<{
+		started(): Promise<void>;
+		completed(): Promise<void>;
+	}>): void;
+	reinitializePresentation(): void;
 }>;
 
 type RuntimeWaiter = {
@@ -111,12 +111,32 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 				throw error;
 			}
 			const sessionManager = runtime.session.sessionManager;
+			const interactive = this as {
+				observeInputLifecycle?: Readonly<{
+					started(): Promise<void>;
+					completed(): Promise<void>;
+				}>;
+				ui: {
+					stop(options?: { preserveScreen?: boolean }): void;
+					start(): void;
+					requestRender(force?: boolean): void;
+				};
+			};
 			const capture = {
 				runtime,
-				projectionHost: createPiNativeProjectionHost({
-					ownerRuntime: runtime,
-					ownerInteractiveMode: this,
-				}),
+				observeInputLifecycle(observer: Readonly<{
+					started(): Promise<void>;
+					completed(): Promise<void>;
+				}>) {
+					interactive.observeInputLifecycle = observer;
+				},
+				reinitializePresentation() {
+					// Restarting the exact child TUI makes Pi itself replay terminal modes
+					// and a complete frame when physical attachment changes.
+					interactive.ui.stop({ preserveScreen: true });
+					interactive.ui.start();
+					interactive.ui.requestRender(true);
+				},
 			};
 			// TUI binding is Pi's first mode-specific seam. The WeakMap association
 			// cannot retain a failed or disposed Owner session by itself.

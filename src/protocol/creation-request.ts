@@ -1,4 +1,4 @@
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import type { ChildAgentIdentity } from "./child-identity.ts";
 import {
@@ -18,13 +18,13 @@ import {
 export function resolveCreationRequest(options: {
 	requestId: string;
 	workflowId: string;
-	spawnerSessionManager: SessionManager;
+	spawnerTranscript: TranscriptInspection;
 	childIdentity: ChildAgentIdentity;
 }): Extract<Message, { kind: "request" }> {
 	const {
 		requestId,
 		workflowId,
-		spawnerSessionManager,
+		spawnerTranscript,
 		childIdentity,
 	} = options;
 	const source = childIdentity.spawnSource;
@@ -39,7 +39,7 @@ export function resolveCreationRequest(options: {
 	}
 	const { input } = resolveCommittedSpawnSource({
 		agentId: childIdentity.directSpawnerAgentId,
-		sessionManager: spawnerSessionManager,
+		transcript: spawnerTranscript,
 		toolCallId: source.toolCallId,
 	});
 	let spawnInput;
@@ -78,7 +78,7 @@ export function createCreationRequestDeliveryItem(options: {
 
 export function inspectCreationRequestDelivery(options: {
 	recipientAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	requestId: string;
 	fromAgentId: string;
 	question: string;
@@ -86,7 +86,7 @@ export function inspectCreationRequestDelivery(options: {
 }): DeliveryInspection {
 	const {
 		recipientAgentId,
-		sessionManager,
+		transcript,
 		requestId,
 		fromAgentId,
 		question,
@@ -94,7 +94,7 @@ export function inspectCreationRequestDelivery(options: {
 	} = options;
 	return inspectStandaloneMessageDelivery({
 		recipientAgentId,
-		sessionManager,
+		transcript,
 		source,
 		expectedProjection: {
 			kind: "request",

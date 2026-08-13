@@ -1,13 +1,8 @@
-import {
-	SessionManager,
-	type AgentSession,
-} from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { uuidv7 } from "@earendil-works/pi-ai";
 import { isDeepStrictEqual } from "node:util";
 
-import {
-	requireLiveSession,
-	type AgentRecord,
-} from "./agent-record.ts";
+import type { AgentRecord } from "./agent-record.ts";
 import { MessageCoordinator } from "./messages.ts";
 import { resolveOrdinaryAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
@@ -26,15 +21,16 @@ import {
 	toolCallPointerKey,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
-import {
-	InProcessAgentHost,
-	type RunRetentionReason,
-} from "../runtime/in-process-agent-host.ts";
-import {
-	DefaultChildSessionFactory,
-	type PreparedAgentRun,
-} from "../runtime/default-child-session-factory.ts";
+import type {
+	AgentRunHandle,
+	RunRetentionReason,
+} from "../runtime/agent-runtime-host.ts";
+import { ProcessChildSessionFactory } from "../runtime/process-child-session-factory.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
+import {
+	materializeNewAgentTranscript,
+	transcriptFromSessionFile,
+} from "../pi-integration/session-manager-transcript.ts";
 
 export type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 
@@ -68,12 +64,11 @@ export type AgentSpawnReceipt =
 // confirmation; all session, transcript, and Run effects still use the real host.
 export type SpawnBoundaryHooks = Readonly<{
 	afterIdentityCommit?(context: {
-		sessionManager: SessionManager;
 		identity: ChildAgentIdentity;
 	}): void | "confirmation_lost";
 	beforeRunStart?(): void | "confirmed_failure";
 	afterRunStart?(context: {
-		session: AgentSession;
+		handle: AgentRunHandle;
 		identity: ChildAgentIdentity;
 	}): void | "confirmation_lost";
 	beforeDeliveryAdmission?(): void | "confirmed_failure";
@@ -82,7 +77,7 @@ export type SpawnBoundaryHooks = Readonly<{
 
 export class DefaultChildSpawner {
 	readonly #agents: Map<string, AgentRecord>;
-	readonly #sessionFactory: DefaultChildSessionFactory;
+	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #boundaryHooks: SpawnBoundaryHooks;
 	readonly #isShuttingDown: () => boolean;
 	readonly #messages: MessageCoordinator;
@@ -92,7 +87,7 @@ export class DefaultChildSpawner {
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		agentIdBySpawnSource?: Map<string, string>;
-		sessionFactory: DefaultChildSessionFactory;
+		sessionFactory: ProcessChildSessionFactory;
 		messages: MessageCoordinator;
 		integrateAgent(record: AgentRecord): void;
 		boundaryHooks?: SpawnBoundaryHooks;
@@ -116,10 +111,9 @@ export class DefaultChildSpawner {
 			throw new Error("host_shutting_down: Workflow is shutting down");
 		}
 		const parent = this.#requireAgent(callerAgentId);
-		const parentSession = requireLiveSession(parent);
 		const { source, input: committedInput } = resolveCommittedSpawnSource({
 			agentId: callerAgentId,
-			sessionManager: parentSession.sessionManager,
+			transcript: parent.transcript.inspect(),
 			toolCallId,
 		});
 		const input = validateAgentSpawnInput(committedInput);
@@ -128,35 +122,28 @@ export class DefaultChildSpawner {
 		}
 		this.#assertUnclaimedSpawnSource(source);
 
-		let baseline: ReturnType<DefaultChildSessionFactory["snapshotRuntimeBaseline"]>;
 		let metadata: ReturnType<typeof resolveOrdinaryAgentMetadata>;
+		const agentId = uuidv7();
+		const requestId = deriveMessageIdentity(source);
+		let prepared: Awaited<
+			ReturnType<ProcessChildSessionFactory["prepareOrdinaryRun"]>
+		>;
+		let sessionManager: SessionManager;
 		try {
+			this.#sessionFactory.admitProcessRuntimePlatform();
 			metadata = resolveOrdinaryAgentMetadata({
 				explicitLabel: input.label,
 				explicitDescription: input.description,
 				templateName: input.template,
 			});
-			baseline = this.#sessionFactory.snapshotRuntimeBaseline(parent);
-		} catch {
-			return { disposition: "not_created", failedStage: "identity_commit" };
-		}
-
-		let sessionManager: SessionManager;
-		try {
-			sessionManager = SessionManager.create(
-				baseline.cwd,
-				this.#sessionFactory.workflowSessionDirectory(),
-			);
-		} catch {
-			return { disposition: "not_created", failedStage: "identity_commit" };
-		}
-		const agentId = sessionManager.getSessionId();
-		const requestId = deriveMessageIdentity(source);
-		const blueprint = { baseline, spawnInput: input } as const;
-		let prepared: PreparedAgentRun;
-		try {
-			prepared = await this.#sessionFactory.prepareRun(agentId, blueprint);
-		} catch {
+			prepared = await this.#sessionFactory.prepareOrdinaryRun({
+				agentId,
+				parent,
+				spawnInput: input,
+			});
+			sessionManager = this.#sessionFactory.createStagingSession(prepared);
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
 			return { disposition: "not_created", failedStage: "identity_commit" };
 		}
 		if (this.#isShuttingDown()) {
@@ -168,39 +155,50 @@ export class DefaultChildSpawner {
 			workflowId: parent.identity.workflowId,
 			directSpawnerAgentId: callerAgentId,
 			spawnSource: source,
-			configuration: {
-				...metadata,
-				baseline,
-			},
+			metadata,
 		};
 		try {
 			commitChildAgentIdentity(sessionManager, identity);
-		} catch {
-			return {
-				disposition: "indeterminate",
-				agentId,
-				requestId,
-				effectiveConfiguration: prepared.configuration,
-			};
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			return { disposition: "not_created", failedStage: "identity_commit" };
 		}
-		const identityConfirmation = this.#boundaryHooks.afterIdentityCommit?.({
-			sessionManager,
+
+		let sessionPath: string;
+		let materializationUncertain = false;
+		try {
+			sessionPath = await materializeNewAgentTranscript(sessionManager);
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			const candidatePath = sessionManager.getSessionFile();
+			if (!candidatePath || !this.#hasExactDurableEvidence(
+				candidatePath,
+				identity,
+			)) {
+				return { disposition: "not_created", failedStage: "identity_commit" };
+			}
+			sessionPath = candidatePath;
+			materializationUncertain = true;
+		}
+		const identityConfirmation = this.#boundaryHooks.afterIdentityCommit?.({ identity });
+		validateCommittedChildIdentity(
+			transcriptFromSessionFile(sessionPath).inspect(),
 			identity,
-		});
-		validateCommittedChildIdentity(sessionManager, identity);
+		);
 
 		const child = this.#sessionFactory.createAgentRecord({
 			identity,
-			sessionManager,
-			blueprint,
-			firstPrepared: prepared,
+			spawnInput: input,
+			parent,
+			initialPreparation: prepared,
+			sessionPath,
 		});
 		this.#agents.set(agentId, child);
 		this.#agentIdBySpawnSource.set(toolCallPointerKey(source), agentId);
 		parent.children.push(agentId);
 		this.#integrateAgent(child);
 		this.#addRetentionReason(parent, "awaiting_answer", requestId);
-		if (identityConfirmation === "confirmation_lost") {
+		if (materializationUncertain || identityConfirmation === "confirmation_lost") {
 			return {
 				disposition: "indeterminate",
 				agentId,
@@ -229,9 +227,13 @@ export class DefaultChildSpawner {
 				effectiveConfiguration: prepared.configuration,
 			};
 		}
+		const startedHandle = child.host.currentHandle();
+		if (!startedHandle) {
+			throw new Error("invariant_violation: confirmed child Run has no handle");
+		}
 		if (
 			this.#boundaryHooks.afterRunStart?.({
-				session: child.host.requireLiveSession(),
+				handle: startedHandle,
 				identity,
 			}) === "confirmation_lost"
 		) {
@@ -283,6 +285,22 @@ export class DefaultChildSpawner {
 			requestId,
 			effectiveConfiguration: prepared.configuration,
 		};
+	}
+
+	#hasExactDurableEvidence(
+		sessionPath: string,
+		identity: ChildAgentIdentity,
+	): boolean {
+		try {
+			validateCommittedChildIdentity(
+				transcriptFromSessionFile(sessionPath).inspect(),
+				identity,
+			);
+			return true;
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			return false;
+		}
 	}
 
 	#assertUnclaimedSpawnSource(source: ToolCallPointer): void {

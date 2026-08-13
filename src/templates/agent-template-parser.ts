@@ -2,7 +2,7 @@ import { isAlias, isMap, isScalar, parseDocument, visit } from "yaml";
 
 import type {
 	ModelReference,
-	RuntimeConfigurationBaseline,
+	RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import { isRuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import { isAgentTemplateName } from "./agent-template-name.ts";
@@ -177,7 +177,7 @@ function parseThinking(
 	value: unknown,
 	sourcePath: string,
 	templateName: string,
-): RuntimeConfigurationBaseline["thinking"] {
+): RuntimeThinkingLevel {
 	if (!isRuntimeThinkingLevel(value)) {
 		throw new AgentTemplateParseError(sourcePath, "thinking level is invalid", templateName);
 	}

@@ -12,7 +12,6 @@ import {
 	assertExtensionApiShape,
 	assertHostModuleShape,
 	assertInteractiveModeInstanceShape,
-	assertProjectionInteractiveModeInstanceShape,
 	assertPiAiModuleShape,
 	assertRuntimeInstanceShape,
 	assertTuiModuleShape,
@@ -244,8 +243,9 @@ test("module preflight rejects every required TUI, AI, and schema value", () => 
 	}
 });
 
-test("live preflight rejects every required runtime and AgentSession seam", async () => {
+test("live preflight rejects every required runtime and AgentSession seam", async (t) => {
 	const host = await createUnboundTestOwnerHost(() => undefined);
+	t.after(() => host.runtime.dispose());
 	host.runtime.setRebindSession(async () => undefined);
 	host.runtime.setBeforeSessionInvalidate(() => undefined);
 	const requirements = [
@@ -276,10 +276,6 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			`AgentSessionRuntime.services.settingsManager.${member}`,
 		] as const),
 		[["services", "resourceLoader"], "AgentSessionRuntime.services.resourceLoader"],
-		[
-			["services", "resourceLoader", "extensionFactories"],
-			"AgentSessionRuntime.services.resourceLoader.extensionFactories",
-		],
 		...["getExtensions", "getSkills", "reload"].map((member) => [
 			["services", "resourceLoader", member],
 			`AgentSessionRuntime.services.resourceLoader.${member}`,
@@ -332,68 +328,6 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			expected,
 		);
 	}
-	await host.runtime.dispose();
-});
-
-test("live preflight validates Pi's private inline extension factory registry", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined);
-	host.runtime.setRebindSession(async () => undefined);
-	host.runtime.setBeforeSessionInvalidate(() => undefined);
-	const loader = host.services.resourceLoader as unknown as {
-		extensionFactories: unknown;
-	};
-	const original = loader.extensionFactories;
-	const sparse = new Array(1);
-	const malformed = [
-		{
-			value: {},
-			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories",
-		},
-		{
-			value: sparse,
-			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0]",
-		},
-		{
-			value: [null],
-			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0]",
-		},
-		{
-			value: [{ name: "", factory() {} }],
-			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0].name",
-		},
-		{
-			value: [{ name: "named", factory: undefined }],
-			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0].factory",
-		},
-		{
-			value: [{ name: "named", factory() {}, hidden: "yes" }],
-			expected: "AgentSessionRuntime.services.resourceLoader.extensionFactories[0].hidden",
-		},
-	] as const;
-	try {
-		for (const sample of malformed) {
-			loader.extensionFactories = sample.value;
-			assert.throws(
-				() => assertRuntimeInstanceShape(host.runtime),
-				(error: unknown) =>
-					error instanceof IncompatiblePiHostError &&
-					error.memberName === sample.expected,
-				sample.expected,
-			);
-		}
-		for (const accepted of [
-			[() => undefined],
-			[{ name: "named", factory() {} }],
-			[{ name: "hidden", factory() {}, hidden: true }],
-			[{ name: "visible", factory() {}, hidden: false }],
-		]) {
-			loader.extensionFactories = accepted;
-			assert.doesNotThrow(() => assertRuntimeInstanceShape(host.runtime));
-		}
-	} finally {
-		loader.extensionFactories = original;
-		await host.runtime.dispose();
-	}
 });
 
 test("live preflight rejects every required InteractiveMode seam", async () => {
@@ -405,6 +339,8 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 			addInputListener() { return () => undefined; },
 			invalidate() {},
 			requestRender() {},
+			start() {},
+			stop() {},
 		},
 		renderer: {
 			terminal: {
@@ -429,6 +365,8 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 		[["ui", "inputListeners"], "TUI.inputListeners"],
 		[["ui", "invalidate"], "InteractiveMode.ui.invalidate"],
 		[["ui", "requestRender"], "InteractiveMode.ui.requestRender"],
+		[["ui", "start"], "InteractiveMode.ui.start"],
+		[["ui", "stop"], "InteractiveMode.ui.stop"],
 		[["renderer"], "InteractiveMode.renderer"],
 		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
 		[["renderer", "terminal", "columns"], "InteractiveMode.renderer.terminal.columns"],
@@ -443,129 +381,6 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 			(error: unknown) =>
 				error instanceof IncompatiblePiHostError &&
 				error.memberName === expected,
-			expected,
-		);
-	}
-	await host.runtime.dispose();
-});
-
-test("live preflight rejects every projection-owned InteractiveMode seam", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined);
-	const mode = {
-		isInitialized: false,
-		renderer: {
-			compositeOverlays: (lines: string[]) => lines,
-			doRender() {},
-			invalidate() {},
-			render: () => [],
-			renderNow() {},
-			scrollToBottom() {},
-			setFocus() {},
-			previousScreen: [],
-			terminal: {},
-			requestRender() {},
-		},
-		themeController: {
-			async applyFromSettings() {},
-			terminalColorSchemeUnsubscribe: undefined,
-		},
-		footerDataProvider: { setupGitWatcher() {} },
-		defaultEditor: { invalidate() {}, onSubmit() {}, render: () => [], setText() {} },
-		editor: { invalidate() {}, onSubmit() {}, render: () => [], setText() {} },
-		shutdownRequested: false,
-		async getUserInput() { return ""; },
-		async handleFatalRuntimeError() {},
-		async init() {},
-		registerSignalHandlers() {},
-		resetExtensionUI() {},
-		async shutdown() {},
-		showError() {},
-		async showExtensionConfirm() {},
-		async showExtensionCustom() {},
-		async showExtensionEditor() {},
-		async showExtensionInput() {},
-		async showExtensionSelector() {},
-		stop() {},
-		subscribeToAgent() {},
-		unregisterSignalHandlers() {},
-	};
-	const requirements = [
-		[["isInitialized"], "InteractiveMode.isInitialized"],
-		[["renderer"], "InteractiveMode.renderer"],
-		[["renderer", "compositeOverlays"], "InteractiveMode.renderer.compositeOverlays"],
-		[["renderer", "doRender"], "InteractiveMode.renderer.doRender"],
-		[["renderer", "invalidate"], "InteractiveMode.renderer.invalidate"],
-		[["renderer", "render"], "InteractiveMode.renderer.render"],
-		[["renderer", "renderNow"], "InteractiveMode.renderer.renderNow"],
-		[["renderer", "scrollToBottom"], "InteractiveMode.renderer.scrollToBottom"],
-		[["renderer", "setFocus"], "InteractiveMode.renderer.setFocus"],
-		[["renderer", "previousScreen"], "InteractiveMode.renderer.previousScreen"],
-		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
-		[["renderer", "requestRender"], "InteractiveMode.renderer.requestRender"],
-		[["themeController"], "InteractiveMode.themeController"],
-		[["themeController", "applyFromSettings"], "InteractiveMode.themeController.applyFromSettings"],
-		[["themeController", "terminalColorSchemeUnsubscribe"], "InteractiveMode.themeController.terminalColorSchemeUnsubscribe"],
-		[["footerDataProvider"], "InteractiveMode.footerDataProvider"],
-		[["footerDataProvider", "setupGitWatcher"], "InteractiveMode.footerDataProvider.setupGitWatcher"],
-		[["defaultEditor"], "InteractiveMode.defaultEditor"],
-		[["defaultEditor", "invalidate"], "InteractiveMode.defaultEditor.invalidate"],
-		[["defaultEditor", "render"], "InteractiveMode.defaultEditor.render"],
-		[["defaultEditor", "setText"], "InteractiveMode.defaultEditor.setText"],
-		[["defaultEditor", "onSubmit"], "InteractiveMode.defaultEditor.onSubmit"],
-		[["editor"], "InteractiveMode.editor"],
-		[["editor", "invalidate"], "InteractiveMode.editor.invalidate"],
-		[["editor", "render"], "InteractiveMode.editor.render"],
-		[["editor", "setText"], "InteractiveMode.editor.setText"],
-		[["editor", "onSubmit"], "InteractiveMode.editor.onSubmit"],
-		[["shutdownRequested"], "InteractiveMode.shutdownRequested"],
-		[["getUserInput"], "InteractiveMode.getUserInput"],
-		[["handleFatalRuntimeError"], "InteractiveMode.handleFatalRuntimeError"],
-		[["init"], "InteractiveMode.init"],
-		[["registerSignalHandlers"], "InteractiveMode.registerSignalHandlers"],
-		[["resetExtensionUI"], "InteractiveMode.resetExtensionUI"],
-		[["shutdown"], "InteractiveMode.shutdown"],
-		[["showError"], "InteractiveMode.showError"],
-		[["showExtensionConfirm"], "InteractiveMode.showExtensionConfirm"],
-		[["showExtensionCustom"], "InteractiveMode.showExtensionCustom"],
-		[["showExtensionEditor"], "InteractiveMode.showExtensionEditor"],
-		[["showExtensionInput"], "InteractiveMode.showExtensionInput"],
-		[["showExtensionSelector"], "InteractiveMode.showExtensionSelector"],
-		[["stop"], "InteractiveMode.stop"],
-		[["subscribeToAgent"], "InteractiveMode.subscribeToAgent"],
-		[["unregisterSignalHandlers"], "InteractiveMode.unregisterSignalHandlers"],
-	] as const;
-	for (const [path, expected] of requirements) {
-		assert.throws(
-			() => assertProjectionInteractiveModeInstanceShape(withoutMemberAtPath(mode, path)),
-			(error: unknown) =>
-				error instanceof IncompatiblePiHostError && error.memberName === expected,
-			expected,
-		);
-	}
-	for (const [path, expected] of [
-		[["renderer", "doRender"], "InteractiveMode.renderer.doRender"],
-		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
-		[["renderer", "requestRender"], "InteractiveMode.renderer.requestRender"],
-		[["themeController", "applyFromSettings"], "InteractiveMode.themeController.applyFromSettings"],
-		[["themeController", "terminalColorSchemeUnsubscribe"], "InteractiveMode.themeController.terminalColorSchemeUnsubscribe"],
-		[["defaultEditor", "onSubmit"], "InteractiveMode.defaultEditor.onSubmit"],
-		[["editor", "onSubmit"], "InteractiveMode.editor.onSubmit"],
-		[["handleFatalRuntimeError"], "InteractiveMode.handleFatalRuntimeError"],
-		[["registerSignalHandlers"], "InteractiveMode.registerSignalHandlers"],
-		[["showExtensionConfirm"], "InteractiveMode.showExtensionConfirm"],
-		[["showExtensionCustom"], "InteractiveMode.showExtensionCustom"],
-		[["showExtensionEditor"], "InteractiveMode.showExtensionEditor"],
-		[["showExtensionInput"], "InteractiveMode.showExtensionInput"],
-		[["showExtensionSelector"], "InteractiveMode.showExtensionSelector"],
-		[["shutdown"], "InteractiveMode.shutdown"],
-		[["unregisterSignalHandlers"], "InteractiveMode.unregisterSignalHandlers"],
-	] as const) {
-		assert.throws(
-			() => assertProjectionInteractiveModeInstanceShape(
-				readonlyMemberAtPath(mode, path),
-			),
-			(error: unknown) =>
-				error instanceof IncompatiblePiHostError && error.memberName === expected,
 			expected,
 		);
 	}
@@ -737,38 +552,6 @@ test("runtime capture rejects a malformed live AgentSession before bootstrap", a
 		configurable: true,
 		value: originalSendCustomMessage,
 	});
-	await host.runtime.dispose();
-});
-
-test("runtime capture rejects a malformed inline factory registry before Owner bootstrap", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
-	const loader = host.services.resourceLoader as unknown as {
-		extensionFactories: unknown;
-	};
-	const original = loader.extensionFactories;
-	loader.extensionFactories = [{ name: "broken", factory: undefined }];
-	host.runtime.setBeforeSessionInvalidate(() => undefined);
-
-	await assert.rejects(
-		() => bindTestOwnerHost(host, "tui"),
-		(error: unknown) =>
-			error instanceof IncompatiblePiHostError &&
-			error.memberName ===
-				"AgentSessionRuntime.services.resourceLoader.extensionFactories[0].factory",
-	);
-	assert.equal(
-		host.session.sessionManager.getEntries().some(
-			(entry) =>
-				entry.type === "custom" &&
-				entry.customType === "agent-coordination.identity",
-		),
-		false,
-	);
-	assert.equal(
-		typeof host.session.getToolDefinition("agent_spawn")?.renderResult,
-		"function",
-	);
-	loader.extensionFactories = original;
 	await host.runtime.dispose();
 });
 

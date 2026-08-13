@@ -4,15 +4,15 @@ Restarting the interactive host reconstructs the durable ordinary-Agent roster, 
 
 ## Workflow transcript directory
 
-Every ordinary child and Moderator session is stored in one Workflow-specific directory below the active Owner's native Pi session directory. The directory identity derives from the Owner's Agent ID, so all participants share it even when their baseline or effective working directories differ. The resumed Owner continues using its native session file.
+Every ordinary child and Moderator session is stored in one Workflow-specific directory below the active Owner's native Pi session directory. The directory identity derives from the Owner's Agent ID, so all participants share it even when their first or later Runtime working directories differ. The resumed Owner continues using its native session file.
 
 The Owner is validated before discovery. A cold admission enumerates the Workflow directory once and publishes a fresh in-memory projection only after candidate verification finishes. There is no registry file and no filesystem watcher.
 
 ## Candidate admission
 
-A candidate must be one complete, current-version, LF-terminated UTF-8 Pi JSONL transcript. For an ordinary child, its native session header, bootstrap Identity, Agent ID, baseline cwd, Workflow, Direct Spawner, and exact canonical `agent_spawn` pointer must agree. The spawn call must validate under the current input contract, its display metadata must match the committed input, and no other candidate may claim the same Agent ID or spawn source.
+A candidate must be one complete, current-version, LF-terminated UTF-8 Pi JSONL transcript. For an ordinary child, its native session header and bootstrap Identity must agree on Agent ID, Workflow, Direct Spawner, and the exact canonical `agent_spawn` pointer. The spawn call must validate under the current input contract, its display metadata must match the Identity, and no other candidate may claim the same Agent ID or spawn source. The header cwd records the first Runtime's native session origin; it is not recovery configuration.
 
-A Moderator candidate instead requires one strict model-visible Moderator Input as its first transcript entry, no ordinary Identity, fixed trigger-specific metadata, a matching session and Workflow relationship, a valid baseline cwd, bounded Request sources, normalized affected-Agent watermarks, and any valid previous-attempt pointer. It remains standalone and has no Direct Spawner.
+A Moderator candidate instead requires one strict model-visible Moderator Input as its first transcript entry, no ordinary Identity, fixed trigger-specific metadata, a matching session and Workflow relationship, bounded Request sources, normalized affected-Agent watermarks, and any valid previous-attempt pointer. It remains standalone and has no Direct Spawner.
 
 Following Direct Spawner edges must reach the active Owner without a cycle. Direct children use the physical order of their canonical spawn calls, including multiple calls in one assistant entry; timestamps, filenames, scan order, and Agent IDs do not affect structural order.
 
@@ -20,7 +20,7 @@ Malformed, unreadable, incomplete, foreign, cyclic, duplicate, and source-confli
 
 ## Dormant Agents and `/agents`
 
-Recovered ordinary Agents and Moderators begin dormant. Observation and `/agents` do not create Pi services, start a Run, invoke a model, or append transcript evidence. A later ordinary Message starts work through the participant's normal role-bound Run path; native interaction becomes available after that session is live and retained.
+Recovered ordinary Agents and Moderators begin dormant. Observation and `/agents` do not resolve Runtime configuration, create Pi services, start a Run, invoke a model, or append transcript evidence. A later ordinary Message dynamically resolves the current ancestry, Template, explicit spawn configuration, resources, trust, and Project Context before starting work through the participant's normal role-bound Run path. Native interaction becomes available after that session is live and retained.
 
 The [Agent selector](agent-selector.md) presents Live rows in creation hierarchy and Dormant rows by Pi session recency. Dormant recency uses the latest user or assistant activity time, then the native session creation time. Direct-child observation remains in canonical spawn-call order regardless of presentation recency.
 

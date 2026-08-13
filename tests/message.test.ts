@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -10,13 +12,8 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	SessionManager,
-	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 
-import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import type {
 	AgentMessageReceipt,
@@ -33,6 +30,7 @@ import {
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
+import { REVERSE_BOUNDARY_ROOT_VARIABLE } from "./support/reverse-boundary-tools.ts";
 
 test("an authenticated Agent authors and polls one immutable Deferred Message through recipient proof", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
@@ -116,7 +114,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 		(entry) =>
 			entry.type === "custom_message" &&
 			entry.customType === "agent-coordination.message-delivery" &&
-			(entry.details as { messages?: unknown } | undefined)?.messages !== undefined,
+			JSON.stringify(entry.details) === JSON.stringify({ messages: [source] }),
 	);
 	const deliveries = entries.filter(
 		(entry) =>
@@ -453,17 +451,10 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 test("a Message to a dormant child starts a successor Run and releases it after Delivery settles", async () => {
 	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
 		incidentBoundaryHooks: {
@@ -538,9 +529,9 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 			entry.customType === "agent-coordination.message-delivery" &&
 			JSON.stringify(entry.details) === JSON.stringify({ messages: [source] }),
 	);
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		if (view.status(spawn.agentId).run.phase === "dormant") break;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	assert.equal(view.status(spawn.agentId).run.phase, "dormant");
 
@@ -790,37 +781,7 @@ test("poll rejects malformed committed Agent Message source evidence", async () 
 });
 
 test("poll rejects malformed Message Delivery evidence for another source", async () => {
-	let injectedMalformedDelivery = false;
-	const harness = await createDormantChildHarness({
-		beforeRecipientInspection: ({ sessionManager }) => {
-			if (injectedMalformedDelivery) return;
-			injectedMalformedDelivery = true;
-			sessionManager.appendCustomMessageEntry(
-				"agent-coordination.message-delivery",
-				JSON.stringify({
-					messages: [
-						{
-							kind: "message",
-							messageId: "another-message",
-							fromAgentId: "another-agent",
-							content: "Malformed because this field is not canonical.",
-							unexpected: true,
-						},
-					],
-				}),
-				true,
-				{
-					messages: [
-						{
-							agentId: "another-agent",
-							entryId: "another-entry",
-							toolCallId: "another-call",
-						},
-					],
-				},
-			);
-		},
-	});
+	const harness = await createDormantChildHarness({});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid Message committed first."),
 	]);
@@ -830,6 +791,26 @@ test("poll rejects malformed Message Delivery evidence for another source", asyn
 		"Do not let malformed sibling evidence disappear during proof lookup.",
 	);
 	await waitForDelivery(harness, sent.source);
+	SessionManager.open(harness.childSessionFile).appendCustomMessageEntry(
+		"agent-coordination.message-delivery",
+		JSON.stringify({
+			messages: [{
+				kind: "message",
+				messageId: "another-message",
+				fromAgentId: "another-agent",
+				content: "Malformed because this field is not canonical.",
+				unexpected: true,
+			}],
+		}),
+		true,
+		{
+			messages: [{
+				agentId: "another-agent",
+				entryId: "another-entry",
+				toolCallId: "another-call",
+			}],
+		},
+	);
 	const pollToolCallId = "poll-through-malformed-sibling-delivery";
 	const pollInput = {
 		operation: "poll" as const,
@@ -851,14 +832,7 @@ test("poll rejects malformed Message Delivery evidence for another source", asyn
 });
 
 test("poll rejects unknown current-scope coordination evidence", async () => {
-	let injectedUnknownEvidence = false;
-	const harness = await createDormantChildHarness({
-		beforeRecipientInspection: ({ sessionManager }) => {
-			if (injectedUnknownEvidence) return;
-			injectedUnknownEvidence = true;
-			sessionManager.appendCustomEntry("agent-coordination.unknown", {});
-		},
-	});
+	const harness = await createDormantChildHarness({});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid Message committed before unknown evidence."),
 	]);
@@ -868,6 +842,10 @@ test("poll rejects unknown current-scope coordination evidence", async () => {
 		"Do not inspect through unknown coordination evidence.",
 	);
 	await waitForDelivery(harness, sent.source);
+	SessionManager.open(harness.childSessionFile).appendCustomEntry(
+		"agent-coordination.unknown",
+		{},
+	);
 	const pollToolCallId = "poll-through-unknown-coordination-evidence";
 	const pollInput = {
 		operation: "poll" as const,
@@ -889,36 +867,7 @@ test("poll rejects unknown current-scope coordination evidence", async () => {
 });
 
 test("poll rejects a hidden custom message as Delivery evidence", async () => {
-	let injectedHiddenDelivery = false;
-	const harness = await createDormantChildHarness({
-		beforeRecipientInspection: ({ sessionManager }) => {
-			if (injectedHiddenDelivery) return;
-			injectedHiddenDelivery = true;
-			sessionManager.appendCustomMessageEntry(
-				"agent-coordination.message-delivery",
-				JSON.stringify({
-					messages: [
-						{
-							kind: "message",
-							messageId: "hidden-message",
-							fromAgentId: "another-agent",
-							content: "This hidden entry is not model-visible Delivery proof.",
-						},
-					],
-				}),
-				false,
-				{
-					messages: [
-						{
-							agentId: "another-agent",
-							entryId: "another-entry",
-							toolCallId: "hidden-delivery-call",
-						},
-					],
-				},
-			);
-		},
-	});
+	const harness = await createDormantChildHarness({});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid model-visible Message committed."),
 	]);
@@ -928,6 +877,25 @@ test("poll rejects a hidden custom message as Delivery evidence", async () => {
 		"Reject hidden custom messages during Delivery inspection.",
 	);
 	await waitForDelivery(harness, sent.source);
+	SessionManager.open(harness.childSessionFile).appendCustomMessageEntry(
+		"agent-coordination.message-delivery",
+		JSON.stringify({
+			messages: [{
+				kind: "message",
+				messageId: "hidden-message",
+				fromAgentId: "another-agent",
+				content: "This hidden entry is not model-visible Delivery proof.",
+			}],
+		}),
+		false,
+		{
+			messages: [{
+				agentId: "another-agent",
+				entryId: "another-entry",
+				toolCallId: "hidden-delivery-call",
+			}],
+		},
+	);
 	const pollToolCallId = "poll-through-hidden-delivery-evidence";
 	const pollInput = {
 		operation: "poll" as const,
@@ -949,29 +917,16 @@ test("poll rejects a hidden custom message as Delivery evidence", async () => {
 });
 
 test("only the original sender can poll a Message", async () => {
-	const childSessions = new Map<string, AgentSession>();
 	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// This test needs a live unanswered child to exercise poll authorization.
 		// Keep any incidental Moderator attempt dormant so it cannot steal replies.
 		incidentBoundaryHooks: {
 			beforeModeratorRunStart: () => "confirmed_failure",
-		},
-		spawnBoundaryHooks: {
-			afterRunStart({ identity: childIdentity, session }) {
-				childSessions.set(childIdentity.agentId, session);
-			},
 		},
 	});
 	const ownerView = coordinator.forAgent(identity.agentId);
@@ -993,10 +948,16 @@ test("only the original sender can poll a Message", async () => {
 	});
 	assert.ok("agentId" in spawnReceipt && typeof spawnReceipt.agentId === "string");
 	const childId = spawnReceipt.agentId;
-	await waitForCondition(() => childSessions.has(childId));
-	const childSession = childSessions.get(childId);
-	if (!childSession) throw new Error("Authorization child session was not captured");
-	await childSession.waitForIdle();
+	const childSessionFile = await waitForChildSessionFile(host, childId);
+	await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			JSON.stringify(entry.message.content).includes(
+				"I will not impersonate another sender.",
+			),
+	);
 	const sendToolCallId = "send-poll-authorization-message";
 	const sendInput = {
 		operation: "send" as const,
@@ -1044,11 +1005,14 @@ test("only the original sender can poll a Message", async () => {
 		isError: false,
 		timestamp: Date.now(),
 	});
-	await childSession.waitForIdle();
-	await childSession.prompt("Attempt to poll another sender's Message.");
-	await childSession.waitForIdle();
-
-	const unauthorized = childSession.sessionManager.getEntries().find(
+	const childEntries = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "child-polls-owner-message",
+	);
+	const unauthorized = childEntries.find(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -1684,38 +1648,28 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 });
 
 test("Steer waits for an already-issued parallel tool batch even when tools finish in reverse", async (t) => {
-	let releaseSlowTool!: () => void;
-	const slowToolGate = new Promise<void>((resolve) => {
-		releaseSlowTool = resolve;
+	const boundaryRoot = await mkdtemp(join(tmpdir(), "pi-reverse-boundary-tools-"));
+	const previousBoundaryRoot = process.env[REVERSE_BOUNDARY_ROOT_VARIABLE];
+	process.env[REVERSE_BOUNDARY_ROOT_VARIABLE] = boundaryRoot;
+	let harness: Awaited<ReturnType<typeof createDormantChildHarness>> | undefined;
+	t.after(async () => {
+		try {
+			await Promise.all([
+				releaseBoundaryTool(boundaryRoot, "slow"),
+				releaseBoundaryTool(boundaryRoot, "fast"),
+			]);
+			if (harness) {
+				await harness.coordinator.shutdown(async () => harness!.host.runtime.dispose());
+			}
+		} finally {
+			if (previousBoundaryRoot === undefined) {
+				delete process.env[REVERSE_BOUNDARY_ROOT_VARIABLE];
+			} else {
+				process.env[REVERSE_BOUNDARY_ROOT_VARIABLE] = previousBoundaryRoot;
+			}
+		}
 	});
-	let releaseFastTool!: () => void;
-	const fastToolGate = new Promise<void>((resolve) => {
-		releaseFastTool = resolve;
-	});
-	let markSlowToolStarted!: () => void;
-	const slowToolStarted = new Promise<void>((resolve) => {
-		markSlowToolStarted = resolve;
-	});
-	let markFastToolStarted!: () => void;
-	const fastToolStarted = new Promise<void>((resolve) => {
-		markFastToolStarted = resolve;
-	});
-	const toolRegistryKey = Symbol.for("pi-agent-coordination.test.reverse-tools");
-	const testGlobals = globalThis as typeof globalThis & Record<PropertyKey, unknown>;
-	testGlobals[toolRegistryKey] = {
-		async slow() {
-			markSlowToolStarted();
-			await slowToolGate;
-		},
-		async fast() {
-			markFastToolStarted();
-			await fastToolGate;
-		},
-	};
-	t.after(() => {
-		delete testGlobals[toolRegistryKey];
-	});
-	const harness = await createDormantChildHarness({}, {
+	harness = await createDormantChildHarness({}, {
 		additionalExtensionPaths: [
 			fileURLToPath(new URL("./support/reverse-boundary-tools.ts", import.meta.url)),
 		],
@@ -1767,7 +1721,10 @@ test("Steer waits for an already-issued parallel tool batch even when tools fini
 		"start-parallel-tools-before-steer",
 		"Run both boundary tools.",
 	);
-	await Promise.all([slowToolStarted, fastToolStarted]);
+	await Promise.all([
+		waitForBoundaryToolStart(boundaryRoot, "slow"),
+		waitForBoundaryToolStart(boundaryRoot, "fast"),
+	]);
 	const steer = await authorMessage(
 		harness,
 		"steer-during-reverse-tool-completion",
@@ -1775,19 +1732,18 @@ test("Steer waits for an already-issued parallel tool batch even when tools fini
 		{ deliveryMode: "steer" },
 	);
 
-	releaseFastTool();
+	await releaseBoundaryTool(boundaryRoot, "fast");
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
 	assert.equal(
 		hasDelivery(SessionManager.open(childSessionFile).getEntries(), steer.source),
 		false,
 	);
-	releaseSlowTool();
+	await releaseBoundaryTool(boundaryRoot, "slow");
 	await waitForDelivery(harness, steer.source);
 	await continuationObserved;
 	if (continuationError) throw continuationError;
 
-	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
 test("Steer takes the next model turn before an earlier Deferred Message", async () => {
@@ -1887,11 +1843,11 @@ async function waitForChildSessionFile(
 		"pi-agent-coordination",
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
 		const child = sessions.find(({ id }) => id === childId);
 		if (child) return child.path;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Child Pi session file was not created");
 }
@@ -1900,10 +1856,10 @@ async function waitForEntry(
 	sessionFile: string,
 	predicate: (entry: ReturnType<SessionManager["getEntries"]>[number]) => boolean,
 ) {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const entries = SessionManager.open(sessionFile).getEntries();
 		if (entries.some(predicate)) return entries;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected child transcript entry did not commit");
 }
@@ -1920,17 +1876,10 @@ async function createDormantChildHarness(
 		additionalExtensionPaths: options.additionalExtensionPaths,
 	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(
-		host.runtime,
-		"<inline:pi-agent-coordination>",
-	);
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
 		incidentBoundaryHooks: {
@@ -1960,11 +1909,13 @@ async function createDormantChildHarness(
 	const childId = "agentId" in spawn ? spawn.agentId : undefined;
 	if (typeof childId !== "string") throw new Error("Spawn receipt has no child identity");
 	assert.equal(view.status(childId).run.phase, "dormant");
+	const childSessionFile = await waitForChildSessionFile(host, childId);
 	return {
 		host,
 		coordinator,
 		view,
 		childId,
+		childSessionFile,
 	};
 }
 
@@ -2030,12 +1981,46 @@ async function waitForDelivery(
 	);
 }
 
-async function waitForCondition(predicate: () => boolean): Promise<void> {
-	for (let attempt = 0; attempt < 100; attempt += 1) {
-		if (predicate()) return;
-		await new Promise<void>((resolve) => setImmediate(resolve));
+async function waitForCondition(
+	predicate: () => boolean | Promise<boolean>,
+): Promise<void> {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
+		if (await predicate()) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected condition was not reached");
+}
+
+async function waitForBoundaryToolStart(
+	root: string,
+	tool: "slow" | "fast",
+): Promise<void> {
+	const path = join(root, `${tool}-started.json`);
+	let childPid: number | undefined;
+	await waitForCondition(async () => {
+		let evidence: { pid?: unknown };
+		try {
+			evidence = JSON.parse(await readFile(path, "utf8")) as { pid?: unknown };
+		} catch (error) {
+			if (
+				error instanceof SyntaxError ||
+				(typeof error === "object" && error !== null && "code" in error &&
+					error.code === "ENOENT")
+			) return false;
+			throw error;
+		}
+		if (typeof evidence.pid !== "number") return false;
+		childPid = evidence.pid;
+		return true;
+	});
+	assert.notEqual(childPid, process.pid);
+}
+
+async function releaseBoundaryTool(
+	root: string,
+	tool: "slow" | "fast",
+): Promise<void> {
+	await writeFile(join(root, `${tool}-release`), "released\n", { mode: 0o600 });
 }
 
 function hasDelivery(

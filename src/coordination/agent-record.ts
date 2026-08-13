@@ -1,23 +1,22 @@
-import type {
-	AgentSessionServices,
-} from "@earendil-works/pi-coding-agent";
-
+import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import type { ModeratorIdentity } from "../protocol/moderator-input.ts";
-import {
-	type AgentRunState,
-	InProcessAgentHost,
-} from "../runtime/in-process-agent-host.ts";
+import type {
+	AgentRunState,
+	AgentRuntimeHost,
+} from "../runtime/agent-runtime-host.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
+import type { AgentTranscript } from "../transcript/agent-transcript.ts";
 
 export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdentity;
 
 export type AgentRecord = {
 	identity: AgentIdentity;
-	services?: AgentSessionServices;
+	creationInput?: AgentSpawnInput;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
-	host: InProcessAgentHost;
+	host: AgentRuntimeHost;
+	transcript: AgentTranscript;
 	children: string[];
 };
 
@@ -45,9 +44,10 @@ export class EvidenceUnavailableError extends Error {
 }
 
 export function statusOf(record: AgentRecord): AgentStatus {
-	const configuration = record.identity.configuration;
+	const metadata = record.identity.metadata;
 	const run: AgentRunState = record.host.observe();
-	const transcriptTail = record.host.sessionManager.getEntries().at(-1);
+	const transcript = record.transcript.inspect();
+	const transcriptTail = transcript.entries.at(-1);
 	if (!transcriptTail) {
 		throw new Error(
 			`invariant_violation: Agent ${record.identity.agentId} has no transcript evidence`,
@@ -56,13 +56,13 @@ export function statusOf(record: AgentRecord): AgentStatus {
 	return {
 		agentId: record.identity.agentId,
 		workflowId: record.identity.workflowId,
-		label: configuration.label,
-		...(!("description" in configuration) || configuration.description === undefined
+		label: metadata.label,
+		...(!("description" in metadata) || metadata.description === undefined
 			? {}
-			: { description: configuration.description }),
+			: { description: metadata.description }),
 		directSpawnerAgentId: record.identity.directSpawnerAgentId,
 		primaryEvidence: {
-			transcriptPath: record.host.sessionManager.getSessionFile() ?? null,
+			transcriptPath: transcript.transcriptPath,
 			inspectedThrough: {
 				agentId: record.identity.agentId,
 				entryId: transcriptTail.id,
@@ -70,17 +70,6 @@ export function statusOf(record: AgentRecord): AgentStatus {
 		},
 		run,
 	};
-}
-
-export function requireLiveSession(record: AgentRecord) {
-	return record.host.requireLiveSession();
-}
-
-export function requireLiveServices(record: AgentRecord): AgentSessionServices {
-	if (!record.services || !record.host.currentHandle()) {
-		throw new Error(`Agent Run services are unavailable: ${record.identity.agentId}`);
-	}
-	return record.services;
 }
 
 export function requireAgentRecord(

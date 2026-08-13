@@ -15,6 +15,7 @@ import {
 	SettingsManager,
 	createAgentSessionFromServices,
 	createAgentSessionServices,
+	getPackageDir,
 	type CreateAgentSessionRuntimeFactory,
 	type AgentSession,
 	type AgentSessionServices,
@@ -32,12 +33,27 @@ import type {
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
-import { loadPiBuiltInExtensionFactories } from "../../src/pi-integration/named-inline-extension-factories.ts";
+import {
+	createProcessModelBroker,
+	type ProcessModelBroker,
+} from "./process-model-broker.ts";
 
 const PROVIDER_ID = "coordination-test";
 const MODEL_ID = "deterministic-owner";
 const PROVIDER_BASE_URL = "http://coordination-test.invalid";
+
+async function loadPiBuiltInExtensionFactories(): Promise<readonly InlineExtension[]> {
+	const modulePath = join(getPackageDir(), "dist", "extensions", "index.js");
+	const moduleValue = await import(pathToFileURL(modulePath).href) as {
+		builtInExtensions?: unknown;
+	};
+	if (!Array.isArray(moduleValue.builtInExtensions)) {
+		throw new Error("Incompatible Pi test host: built-in extension registry is unavailable");
+	}
+	return moduleValue.builtInExtensions as InlineExtension[];
+}
 
 const EMPTY_USAGE = {
 	input: 0,
@@ -82,6 +98,7 @@ export type TestOwnerHostOptions = {
 	sessionFile?: string;
 	implicitModeratorResponses?: boolean;
 	fauxTokensPerSecond?: number;
+	processVisibleModel?: boolean;
 	settings?: Parameters<typeof SettingsManager.inMemory>[0];
 	noPromptTemplates?: boolean;
 };
@@ -127,19 +144,23 @@ async function createUnboundTestOwnerHostWithRuntime(
 ): Promise<TestOwnerHost> {
 	const cwd = options?.cwd ?? await mkdtemp(join(tmpdir(), "pi-agent-coordination-"));
 	const agentDir = options?.agentDir ?? join(cwd, ".pi-agent");
-	const additionalExtensionPaths = options?.additionalExtensionPaths ?? [];
 	const additionalExtensionFactories = options?.additionalExtensionFactories ?? [];
-	const retainedExtensionPaths = new Set(additionalExtensionPaths);
-	const { modelRuntime, faux } = await createTestModelRuntime({
-		implicitModeratorResponses: options?.implicitModeratorResponses ?? true,
-		allowModelNetwork,
-		fauxTokensPerSecond: options?.fauxTokensPerSecond,
-	});
 	const sessionManager = options?.sessionFile
 		? SessionManager.open(options.sessionFile)
 		: options?.persistent
 			? SessionManager.create(cwd, join(cwd, "sessions"))
 			: SessionManager.inMemory(cwd);
+	const { modelRuntime, faux, processModelBroker } = await createTestModelRuntime({
+		implicitModeratorResponses: options?.implicitModeratorResponses ?? true,
+		allowModelNetwork,
+		fauxTokensPerSecond: options?.fauxTokensPerSecond,
+		processVisibleModel: options?.processVisibleModel ?? true,
+	});
+	const additionalExtensionPaths = [
+		...(options?.additionalExtensionPaths ?? []),
+		...(processModelBroker ? [processModelBroker.extensionPath] : []),
+	];
+	const retainedExtensionPaths = new Set(additionalExtensionPaths);
 	const createRuntime: CreateAgentSessionRuntimeFactory = async (runtimeOptions) => {
 		const services = await createAgentSessionServices({
 			cwd: runtimeOptions.cwd,
@@ -187,12 +208,18 @@ async function createUnboundTestOwnerHostWithRuntime(
 			diagnostics: [...services.diagnostics],
 		};
 	};
-	const initial = await createRuntime({
-		cwd,
-		agentDir,
-		sessionManager,
-		sessionStartEvent: { type: "session_start", reason: "startup" },
-	});
+	let initial: Awaited<ReturnType<CreateAgentSessionRuntimeFactory>>;
+	try {
+		initial = await createRuntime({
+			cwd,
+			agentDir,
+			sessionManager,
+			sessionStartEvent: { type: "session_start", reason: "startup" },
+		});
+	} catch (error) {
+		await processModelBroker?.close();
+		throw error;
+	}
 	const runtime = new AgentSessionRuntime(
 		initial.session,
 		initial.services,
@@ -200,6 +227,7 @@ async function createUnboundTestOwnerHostWithRuntime(
 		initial.diagnostics,
 		initial.modelFallbackMessage,
 	);
+	if (processModelBroker) closeProcessModelBrokerWithRuntime(runtime, processModelBroker);
 	const ui = createTestUi();
 
 	return {
@@ -210,6 +238,21 @@ async function createUnboundTestOwnerHostWithRuntime(
 		ui,
 		model: faux,
 	};
+}
+
+function closeProcessModelBrokerWithRuntime(
+	runtime: AgentSessionRuntime,
+	broker: ProcessModelBroker,
+): void {
+	const disposeRuntime = runtime.dispose.bind(runtime);
+	let disposal: Promise<void> | undefined;
+	runtime.dispose = () => disposal ??= (async () => {
+		try {
+			await disposeRuntime();
+		} finally {
+			await broker.close();
+		}
+	})();
 }
 
 export async function bindTestOwnerHost(
@@ -272,6 +315,8 @@ async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
 			},
 			invalidate() {},
 			requestRender() {},
+			start() {},
+			stop() {},
 		},
 		renderer: {
 			terminal: {
@@ -316,6 +361,8 @@ function createTestUi(): TestUi {
 			return () => { inputListeners.delete(listener); };
 		},
 		requestRender() {},
+		start() {},
+		stop() {},
 	} as unknown as TUI;
 	const testTheme = {
 		fg: (_color: string, text: string) => text,
@@ -453,14 +500,34 @@ async function createTestModelRuntime(options: {
 	implicitModeratorResponses: boolean;
 	allowModelNetwork: boolean;
 	fauxTokensPerSecond?: number;
+	processVisibleModel: boolean;
 }): Promise<{
 	modelRuntime: ModelRuntime;
 	faux: { setResponses(responses: FauxResponseStep[]): void };
+	processModelBroker?: ProcessModelBroker;
 }> {
 	const modelRuntime = await ModelRuntime.create({
 		allowModelNetwork: options.allowModelNetwork,
 		modelsPath: null,
 	});
+	if (options.processVisibleModel) {
+		const processModelBroker = await createProcessModelBroker({
+			providerId: PROVIDER_ID,
+			modelId: MODEL_ID,
+			modelName: "Deterministic Owner",
+			tokensPerSecond: options.fauxTokensPerSecond,
+			responseOverride: (context) =>
+				options.implicitModeratorResponses && isImplicitModeratorRequest(context)
+					? fauxAssistantMessage("I will wait for explicit Moderator work.")
+					: undefined,
+			responses: [fauxAssistantMessage("Owner interaction preserved.")],
+		});
+		return {
+			modelRuntime,
+			faux: processModelBroker,
+			processModelBroker,
+		};
+	}
 	const faux = createFauxCore({
 		api: PROVIDER_ID,
 		provider: PROVIDER_ID,

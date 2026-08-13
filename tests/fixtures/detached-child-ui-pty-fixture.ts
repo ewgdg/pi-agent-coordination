@@ -2,34 +2,27 @@ import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import {
 	InteractiveMode,
 	type AgentSession,
-	type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import piAgentCoordination from "../../src/index.ts";
 import { createUnboundTestOwnerHost } from "../support/pi-host.ts";
 
-// The probe runs in the Owner and in every child (children inherit the Owner's
-// inline factories). Error notifications persist as transcript rows, so a leaked
-// child banner would be caught on the PTY screen while the Owner's own startup
-// banner remains observable for the unchanged-Owner assertion.
-const startedSessionIds: string[] = [];
-
-const probe: ExtensionFactory = (pi) => {
-	pi.on("session_start", (_event, ctx) => {
-		const sessionId = ctx.sessionManager.getSessionId();
-		startedSessionIds.push(sessionId);
-		ctx.ui.notify(`__PTY_DETACHED_BANNER_${sessionId}__`, "error");
-	});
-};
+const PROBE_EXTENSION = fileURLToPath(
+	new URL("./detached-child-ui-probe-extension.ts", import.meta.url),
+);
+const fixtureRoot = await mkdtemp(join(tmpdir(), "pi-detached-child-ui-"));
+const probeEvidencePath = join(fixtureRoot, "session-start.jsonl");
+process.env.PROCESS_DETACHED_UI_PROBE_PATH = probeEvidencePath;
 
 const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+	cwd: fixtureRoot,
 	persistent: true,
 	implicitModeratorResponses: false,
-	additionalExtensionFactories: [{
-		name: "detached-child-ui-pty-probe",
-		hidden: true,
-		factory: probe,
-	}],
+	additionalExtensionPaths: [PROBE_EXTENSION],
 });
 const ownerId = host.session.sessionId;
 const mode = new InteractiveMode(host.runtime, { verbose: false });
@@ -50,7 +43,7 @@ const spawnResult = await executeTool(host.session, "agent_spawn", "pty-detached
 });
 const childId = detailString(spawnResult.details, "agentId");
 
-await waitFor(() => startedSessionIds.includes(childId));
+await waitFor(async () => (await startedSessionIds()).includes(childId));
 process.stdout.write(`\n__PTY_SETUP__${JSON.stringify({ ownerId, childId })}\n`);
 // Hold the PTY open briefly so the test can poll the screen for a leaked banner.
 await new Promise<void>((resolve) => setTimeout(resolve, 600));
@@ -114,8 +107,21 @@ function detailString(details: unknown, key: string): string {
 	return (details as Record<string, string>)[key]!;
 }
 
+async function startedSessionIds(): Promise<string[]> {
+	const evidence = await readFile(probeEvidencePath, "utf8").catch(
+		(error: NodeJS.ErrnoException) => error.code === "ENOENT" ? "" : Promise.reject(error),
+	);
+	return evidence.trim().split("\n").filter(Boolean).map((line) => {
+		const parsed = JSON.parse(line) as { sessionId?: unknown };
+		if (typeof parsed.sessionId !== "string") {
+			throw new Error("Detached child UI probe wrote malformed session evidence");
+		}
+		return parsed.sessionId;
+	});
+}
+
 async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
-	for (let attempt = 0; attempt < 2_000; attempt += 1) {
+	for (let attempt = 0; attempt < 500; attempt += 1) {
 		if (await predicate()) return;
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}

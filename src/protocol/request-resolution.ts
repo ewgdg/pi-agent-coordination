@@ -1,4 +1,4 @@
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
 	currentCoordinationScope,
@@ -39,7 +39,7 @@ export type CanonicalRequestResolution = Readonly<{
 
 export function findAuthoredAgentMessageSource(options: {
 	authorAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	messageId: string;
 }): AuthoredAgentMessageSource | undefined {
 	const matches = findAuthoredAgentMessageSources(options).filter(
@@ -55,7 +55,7 @@ export function findAuthoredAgentMessageSource(options: {
 
 export function findAuthoredRequestSources(options: {
 	authorAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 }): readonly AuthoredRequestSource[] {
 	return findAuthoredAgentMessageSources(options).filter(
 		(source): source is AuthoredRequestSource => source.input.operation === "request",
@@ -64,13 +64,13 @@ export function findAuthoredRequestSources(options: {
 
 export function inspectCanonicalRequestResolution(options: {
 	request: Request;
-	requesterSessionManager: SessionManager;
-	responderSessionManager: SessionManager;
+	requesterTranscript: TranscriptInspection;
+	responderTranscript: TranscriptInspection;
 }): CanonicalRequestResolution {
-	const { request, requesterSessionManager, responderSessionManager } = options;
+	const { request, requesterTranscript, responderTranscript } = options;
 	const answers = findAuthoredAgentMessageSources({
 		authorAgentId: request.targetAgentId,
-		sessionManager: responderSessionManager,
+		transcript: responderTranscript,
 	})
 		.filter((source): source is AuthoredAgentMessageSource & {
 			input: Extract<AgentMessageInput, { operation: "answer" }>;
@@ -80,7 +80,7 @@ export function inspectCanonicalRequestResolution(options: {
 		)
 		.map(({ source, input }) => resolveCommittedAnswer({
 			responderAgentId: request.targetAgentId,
-			sessionManager: responderSessionManager,
+			transcript: responderTranscript,
 			toolCallId: source.toolCallId,
 			providedInput: input,
 			request,
@@ -88,18 +88,18 @@ export function inspectCanonicalRequestResolution(options: {
 		.filter((answer) => {
 			const delivery = inspectAnswerDelivery({
 				requesterAgentId: request.fromAgentId,
-				sessionManager: requesterSessionManager,
+				transcript: requesterTranscript,
 				answer,
 			});
 			return inspectCanonicalMessage({
 				message: answer,
-				authorSessionManager: responderSessionManager,
+				authorTranscript: responderTranscript,
 				deliveryEvidence: delivery.deliveryEvidence,
 			}).state === "canonical";
 		});
 	const cancellations = findAuthoredAgentMessageSources({
 		authorAgentId: request.fromAgentId,
-		sessionManager: requesterSessionManager,
+		transcript: requesterTranscript,
 	})
 		.filter((source): source is AuthoredAgentMessageSource & {
 			input: Extract<AgentMessageInput, { operation: "cancel" }>;
@@ -109,7 +109,7 @@ export function inspectCanonicalRequestResolution(options: {
 		)
 		.map(({ source, input }) => resolveCommittedCancellation({
 			requesterAgentId: request.fromAgentId,
-			sessionManager: requesterSessionManager,
+			transcript: requesterTranscript,
 			toolCallId: source.toolCallId,
 			providedInput: input,
 			request,
@@ -117,12 +117,12 @@ export function inspectCanonicalRequestResolution(options: {
 		.filter((cancellation) => {
 			const delivery = inspectMessageDelivery({
 				recipientAgentId: request.targetAgentId,
-				sessionManager: responderSessionManager,
+				transcript: responderTranscript,
 				message: cancellation,
 			});
 			return inspectCanonicalMessage({
 				message: cancellation,
-				authorSessionManager: requesterSessionManager,
+				authorTranscript: requesterTranscript,
 				deliveryEvidence: delivery.deliveryEvidence,
 			}).state === "canonical";
 		});
@@ -146,11 +146,11 @@ export function inspectCanonicalRequestResolution(options: {
 
 export function findAuthoredAgentMessageSources(options: {
 	authorAgentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 }): AuthoredAgentMessageSource[] {
 	const sources: AuthoredAgentMessageSource[] = [];
 	for (const entry of currentCoordinationScope(
-		options.sessionManager,
+		options.transcript,
 		options.authorAgentId,
 	)) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;

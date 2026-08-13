@@ -10,7 +10,7 @@ Keep the irreversible protocol boundary small: the canonical `agent_spawn` call 
 
 ## Scope & Constraints
 
-- Implement issue #42 and the accepted Agent Configuration/Template decisions in parent issue #34, refined by issues #22, #26, #28, and #32.
+- Implement issue #42 and the accepted Agent Spawn Configuration/Template decisions in parent issue #34, refined by issues #22, #26, #28, and #32.
 - Template roots, low to high: coordination package `agents/`, Pi user `<agentDir>/agents/`, user `~/.agents/agents/`, and trusted `<baseline cwd>/.agents/agents/`.
 - Follow file and directory symlinks, prevent canonical-directory cycles, and deduplicate canonical files within each root without moving their discovery precedence.
 - Parse UTF-8 Markdown with required leading strict YAML frontmatter. Allow only `name`, `model`, `thinking`, `tools`, `skills`, `extensions`, and `project-context`; the Markdown body is Project Context. Reject aliases, anchors, merge keys, custom tags, implicit type coercion, duplicate/unknown fields, and invalid values.

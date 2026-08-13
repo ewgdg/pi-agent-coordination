@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -10,16 +9,9 @@ import {
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { ProjectTrustStore, SessionManager } from "@earendil-works/pi-coding-agent";
-import type {
-	ExtensionFactory,
-	InlineExtension,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import {
-	createAgentBoundExtension,
-	createModeratorBoundExtension,
-} from "../src/bootstrap/agent-extension.ts";
 import {
 	WorkflowCoordinator,
 	type AgentSpawnInput,
@@ -37,16 +29,15 @@ import {
 import {
 	executeAndCommitRegisteredTool as executeRegisteredTool,
 } from "./support/agent-session.ts";
+import { capturedSessionManager } from "./support/captured-session-managers.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
-const FILE_EXTENSION_FIXTURE = fileURLToPath(
-	new URL("./fixtures/inherited-extension-fixture.ts", import.meta.url),
-);
-
-type NamedInlineExtension = Exclude<InlineExtension, ExtensionFactory>;
 
 test("an authenticated ordinary Agent creates a durable isolated child and admits its Creation Request", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -94,10 +85,17 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		(spawnResult.message.details as { disposition: string }).disposition,
 		"pending",
 	);
+	const effectiveConfiguration = (
+		spawnResult.message.details as Extract<
+			AgentSpawnReceipt,
+			{ disposition: "pending" }
+		>
+	).effectiveConfiguration;
+	assert.equal(effectiveConfiguration.extensions.length, 1);
+	assert.match(effectiveConfiguration.extensions[0]!, /process-model-broker-extension\.mjs$/);
+	const processExtensions = effectiveConfiguration.extensions;
 	assert.deepEqual(
-		(spawnResult.message.details as AgentSpawnReceipt & {
-			effectiveConfiguration: unknown;
-		}).effectiveConfiguration,
+		effectiveConfiguration,
 		{
 			cwd: host.cwd,
 			model: { provider: "coordination-test", modelId: "deterministic-owner" },
@@ -110,7 +108,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 				"ask_user_question",
 			],
 			skills: [],
-			extensions: [],
+			extensions: processExtensions,
 		},
 	);
 
@@ -202,17 +200,9 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: host.session.sessionId,
 		spawnSource,
-		configuration: {
+		metadata: {
 			label: "agent",
 			description: "Inspects one coordination boundary",
-			baseline: {
-				cwd: host.cwd,
-				model: { provider: "coordination-test", modelId: "deterministic-owner" },
-				thinking: "off",
-				tools: [],
-				skills: [],
-				extensions: [],
-			},
 		},
 	});
 	const delivery = childEntries.find(
@@ -241,17 +231,21 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	await host.runtime.dispose();
 });
 
-test("a selected Template and immutable overrides resolve against baseline cwd for a real child Run", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+test("a successor Runtime re-resolves its current Template and project resources", async () => {
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const templateRoot = join(host.cwd, "template-root");
 	const effectiveCwd = join(host.cwd, "subproject");
 	await mkdir(templateRoot, { recursive: true });
 	await mkdir(join(effectiveCwd, ".agents", "agents"), { recursive: true });
+	new ProjectTrustStore(host.services.agentDir).set(effectiveCwd, true);
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nthinking: high\ntools: read\n---\nTemplate context",
+		"---\nname: research-agent\nthinking: off\ntools: read\n---\nTemplate context",
 	);
 	await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
 	await writeFile(
@@ -272,15 +266,11 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		packageRoot: host.cwd,
-		templateRoots: (baselineCwd, projectTrusted) => {
-			assert.equal(baselineCwd, host.cwd);
+		templateRoots: (parentCwd, projectTrusted) => {
+			assert.equal(parentCwd, host.cwd);
 			assert.equal(projectTrusted, true);
 			return [{ scope: "trusted-project", path: templateRoot }];
 		},
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 	});
 	const view = coordinator.forAgent(identity.agentId);
 	const spawnInput = {
@@ -301,10 +291,16 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 	);
 	const receipt = await view.spawn("spawn-configured-child", spawnInput);
 	assert.equal(receipt.disposition, "pending");
+	assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
+	assert.match(
+		receipt.effectiveConfiguration.extensions[0]!,
+		/process-model-broker-extension\.mjs$/,
+	);
+	const processExtensions = receipt.effectiveConfiguration.extensions;
 	assert.deepEqual(receipt.effectiveConfiguration, {
 		cwd: effectiveCwd,
 		model: { provider: "coordination-test", modelId: "deterministic-owner" },
-		thinking: "high",
+		thinking: "off",
 		tools: [
 			"read",
 			"agent_message",
@@ -314,7 +310,7 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 			"ask_user_question",
 		],
 		skills: [],
-		extensions: [],
+		extensions: processExtensions,
 		projectContext: {
 			mode: "append",
 			body: "Template context\n\nSpawn context",
@@ -339,28 +335,28 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
 	);
 	const childSessionFile = await waitForChildSessionFile(
-		host.cwd,
+		effectiveCwd,
 		workflowDirectory,
 		receipt.agentId,
 	);
-	const childIdentity = SessionManager.open(childSessionFile)
-		.getEntries()
-		.find((entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity");
+	const configuredChildTranscript = SessionManager.open(childSessionFile);
+	const configuredChildEntries = configuredChildTranscript.getEntries();
+	const childIdentity = configuredChildEntries.find(
+		(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
+	);
 	assert.ok(childIdentity && childIdentity.type === "custom");
 	assert.deepEqual(
-		(childIdentity.data as { configuration: object }).configuration,
+		(childIdentity.data as { metadata: object }).metadata,
 		{
 			label: "research-agent",
 			description: "Research specialist",
-			baseline: {
-				cwd: host.cwd,
-				model: { provider: "coordination-test", modelId: "deterministic-owner" },
-				thinking: "off",
-				tools: [],
-				skills: [],
-				extensions: [],
-			},
 		},
+	);
+	assert.deepEqual(
+		configuredChildEntries.flatMap(
+			(entry) => entry.type === "custom" ? [entry.customType] : [],
+		),
+		["agent-coordination.identity"],
 	);
 
 	const agentId = receipt.agentId;
@@ -368,485 +364,56 @@ test("a selected Template and immutable overrides resolve against baseline cwd f
 		const run = view.status(agentId).run;
 		return run.phase === "live" && run.work === "settled";
 	});
+	const terminationInput = { operation: "terminate" as const, agentId };
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall(
-				"agent_control",
-				{ operation: "terminate", agentId },
-				{ id: "terminate-configured-child-v1" },
-			),
+			fauxToolCall("agent_control", terminationInput, {
+				id: "terminate-configured-child-v1",
+			}),
 			{ stopReason: "toolUse" },
 		),
 	);
-	const firstTermination = await view.control("terminate-configured-child-v1", {
-		operation: "terminate",
-		agentId,
-	});
-	assert.ok("disposition" in firstTermination);
-	assert.equal(firstTermination.disposition, "terminated");
+	const termination = await view.control(
+		"terminate-configured-child-v1",
+		terminationInput,
+	);
+	assert.ok("disposition" in termination);
+	assert.equal(termination.disposition, "terminated");
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nthinking: low\ntools: read\n---\nTemplate context v2",
+		"---\nname: research-agent\nthinking: off\ntools: read\n---\nChanged Template context",
 	);
+	await writeFile(join(effectiveCwd, "AGENTS.md"), "Changed effective-cwd context");
 	let successorSystemPrompt = "";
 	host.model.setResponses([
 		(context) => {
 			successorSystemPrompt = context.systemPrompt ?? "";
-			return fauxAssistantMessage("Successor used the current Template.");
+			return fauxAssistantMessage("Dynamically prepared successor observed.");
 		},
 	]);
-	const successorMessage = {
+	const successorInput = {
 		operation: "send" as const,
 		targetAgentId: agentId,
-		content: "Start a successor Run.",
+		content: "Start a successor from current configuration and resources.",
 	};
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall("agent_message", successorMessage, { id: "start-configured-child-v2" }),
+			fauxToolCall("agent_message", successorInput, { id: "start-configured-child-v2" }),
 			{ stopReason: "toolUse" },
 		),
 	);
-	const successorReceipt = await view.message("start-configured-child-v2", successorMessage);
+	const successorReceipt = await view.message(
+		"start-configured-child-v2",
+		successorInput,
+	);
 	assert.ok("delivery" in successorReceipt);
 	assert.equal(successorReceipt.delivery, "pending");
 	await waitForCondition(() => successorSystemPrompt.length > 0);
-	assert.match(successorSystemPrompt, /Template context v2/);
-	assert.doesNotMatch(successorSystemPrompt, /Template context(?:\n|$)/);
-
-	await waitForCondition(() => {
-		const run = view.status(agentId).run;
-		return run.phase === "dormant" || (run.phase === "live" && run.work === "settled");
-	});
-	if (view.status(agentId).run.phase === "live") {
-		host.session.sessionManager.appendMessage(
-			fauxAssistantMessage(
-				fauxToolCall(
-					"agent_control",
-					{ operation: "terminate", agentId },
-					{ id: "terminate-configured-child-v2" },
-				),
-				{ stopReason: "toolUse" },
-			),
-		);
-		const secondTermination = await view.control("terminate-configured-child-v2", {
-			operation: "terminate",
-			agentId,
-		});
-		assert.ok("disposition" in secondTermination);
-		assert.equal(secondTermination.disposition, "terminated");
-	}
-	await writeFile(
-		join(templateRoot, "research.md"),
-		"---\nname: research-agent\ncwd: invalid-template-field\n---\n",
-	);
-	let staleFallbackInvoked = false;
-	host.model.setResponses([
-		() => {
-			staleFallbackInvoked = true;
-			return fauxAssistantMessage("This stale fallback must not run.");
-		},
-	]);
-	const blockedMessage = {
-		operation: "send" as const,
-		targetAgentId: agentId,
-		content: "Do not start from stale Template content.",
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", blockedMessage, { id: "start-invalid-template" }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const blockedReceipt = await view.message("start-invalid-template", blockedMessage);
-	assert.ok("delivery" in blockedReceipt);
-	assert.equal(blockedReceipt.delivery, "rejected");
-	assert.ok("rejectionReason" in blockedReceipt);
-	assert.equal(blockedReceipt.rejectionReason, "target_unavailable");
-	assert.equal(staleFallbackInvoked, false);
-	assert.equal(view.status(agentId).run.phase, "dormant");
-	host.session.sessionManager.appendMessage({
-		role: "toolResult",
-		toolCallId: "start-invalid-template",
-		toolName: "agent_message",
-		content: [{ type: "text", text: JSON.stringify(blockedReceipt) }],
-		details: blockedReceipt,
-		isError: false,
-		timestamp: Date.now(),
-	});
-
-	await writeFile(
-		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nthinking: low\ntools: read\n---\nRepaired Template context",
-	);
-	let repairedSystemPrompt = "";
-	host.model.setResponses([
-		(context) => {
-			repairedSystemPrompt = context.systemPrompt ?? "";
-			return fauxAssistantMessage("Repaired Template started the Run.");
-		},
-	]);
-	const retryInput = {
-		operation: "retry" as const,
-		messageId: blockedReceipt.messageId,
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", retryInput, { id: "retry-repaired-template" }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const retryReceipt = await view.message("retry-repaired-template", retryInput);
-	assert.ok("disposition" in retryReceipt);
-	assert.equal(retryReceipt.disposition, "pending");
-	await waitForCondition(() => repairedSystemPrompt.length > 0);
-	assert.match(repairedSystemPrompt, /Repaired Template context/);
-
+	assert.match(successorSystemPrompt, /Changed effective-cwd context/);
+	assert.match(successorSystemPrompt, /Changed Template context/);
+	assert.match(successorSystemPrompt, /Spawn context/);
+	assert.doesNotMatch(successorSystemPrompt, /Native effective-cwd context/);
 	await coordinator.shutdown(async () => host.runtime.dispose());
-});
-
-test("agent_spawn resolves <inline:llama.cpp> through its named factory instead of as a file path", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
-		persistent: true,
-		additionalExtensionFactories: [{
-			name: "llama.cpp",
-			hidden: true,
-			factory: () => undefined,
-		}],
-	});
-	host.model.setResponses([
-		fauxAssistantMessage("The child started with the named inline extension."),
-	]);
-
-	const spawn = await executeRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-with-llama-inline-regression",
-		{ request: "Start with the inherited llama.cpp extension." },
-	);
-	const receipt = spawn.details as AgentSpawnReceipt;
-	assert.equal(receipt.disposition, "pending");
-	assert.ok("agentId" in receipt);
-	assert.deepEqual(receipt.effectiveConfiguration.extensions, ["<inline:llama.cpp>"]);
-
-	await host.runtime.dispose();
-});
-
-test("named inline and file-backed extensions are inherited with fresh state through nested Agent Runs", async () => {
-	let nextInstanceId = 0;
-	const startedInstances: number[] = [];
-	const namedExtension: NamedInlineExtension = {
-		name: "stateful-inheritance-probe",
-		factory(pi) {
-			const instanceId = ++nextInstanceId;
-			let sessionStarts = 0;
-			pi.on("session_start", () => {
-				sessionStarts += 1;
-				startedInstances.push(instanceId);
-			});
-			pi.registerTool({
-				name: "inline_extension_probe",
-				label: "Inline extension probe",
-				description: "Reports factory-local state for this Agent Run.",
-				parameters: Type.Object({}, { additionalProperties: false }),
-				async execute() {
-					return {
-						content: [{ type: "text", text: `inline instance ${instanceId}` }],
-						details: { instanceId, sessionStarts },
-					};
-				},
-			});
-		},
-	};
-	const host = await createTestOwnerHost(piAgentCoordination, {
-		persistent: true,
-		additionalExtensionPaths: [FILE_EXTENSION_FIXTURE],
-		additionalExtensionFactories: [namedExtension],
-	});
-	host.model.setResponses([
-		fauxAssistantMessage([
-			fauxToolCall("inline_extension_probe", {}, { id: "probe-inline-child" }),
-			fauxToolCall("file_extension_probe", {}, { id: "probe-file-child" }),
-			fauxToolCall(
-				"agent_spawn",
-				{ request: "Inherit both extension kinds one generation deeper." },
-				{ id: "spawn-inline-grandchild" },
-			),
-		], { stopReason: "toolUse" }),
-		fauxAssistantMessage([
-			fauxToolCall("inline_extension_probe", {}, { id: "probe-inline-grandchild" }),
-			fauxToolCall("file_extension_probe", {}, { id: "probe-file-grandchild" }),
-		], { stopReason: "toolUse" }),
-		fauxAssistantMessage("The child inherited fresh extension state."),
-		fauxAssistantMessage("The grandchild inherited another fresh extension state."),
-	]);
-
-	const ownerProbe = await executeRegisteredTool(
-		host.session,
-		"inline_extension_probe",
-		"probe-inline-owner",
-		{},
-	);
-	assert.deepEqual(ownerProbe.details, { instanceId: 1, sessionStarts: 1 });
-	const ownerInstanceId = (ownerProbe.details as { instanceId: number }).instanceId;
-
-	const child = await executeRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-inline-child",
-		{ request: "Inherit both extension kinds and remain available." },
-	);
-	const childReceipt = child.details as AgentSpawnReceipt;
-	assert.equal(childReceipt.disposition, "pending");
-	assert.ok("agentId" in childReceipt);
-	assert.deepEqual(
-		new Set(childReceipt.effectiveConfiguration.extensions),
-		new Set([FILE_EXTENSION_FIXTURE, "<inline:stateful-inheritance-probe>"]),
-	);
-	const childProbe = await waitForAgentToolResult(
-		host,
-		childReceipt.agentId,
-		"probe-inline-child",
-	);
-	assert.deepEqual(
-		await waitForAgentToolResult(host, childReceipt.agentId, "probe-file-child"),
-		{ loaded: true },
-	);
-	const childProbeDetails = childProbe as {
-		instanceId: number;
-		sessionStarts: number;
-	};
-	assert.equal(childProbeDetails.sessionStarts, 1);
-	assert.notEqual(childProbeDetails.instanceId, ownerInstanceId);
-	const grandchildSpawn = await waitForAgentToolResult(
-		host,
-		childReceipt.agentId,
-		"spawn-inline-grandchild",
-	) as AgentSpawnReceipt;
-	assert.equal(grandchildSpawn.disposition, "pending");
-	assert.ok("agentId" in grandchildSpawn);
-	const grandchildProbe = await waitForAgentToolResult(
-		host,
-		grandchildSpawn.agentId,
-		"probe-inline-grandchild",
-	) as { instanceId: number; sessionStarts: number };
-	assert.deepEqual(
-		await waitForAgentToolResult(
-			host,
-			grandchildSpawn.agentId,
-			"probe-file-grandchild",
-		),
-		{ loaded: true },
-	);
-	assert.equal(grandchildProbe.sessionStarts, 1);
-	assert.notEqual(grandchildProbe.instanceId, ownerInstanceId);
-	assert.notEqual(grandchildProbe.instanceId, childProbeDetails.instanceId);
-	assert.deepEqual(startedInstances.sort((left, right) => left - right), [1, 2, 3]);
-
-	let extensionFreeTools: string[] | undefined;
-	host.model.setResponses([
-		(context) => {
-			extensionFreeTools = context.tools?.map(({ name }) => name) ?? [];
-			return fauxAssistantMessage(
-				"The extension-free child started without inherited extensions.",
-			);
-		},
-	]);
-	const extensionFree = await executeRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-without-extensions",
-		{
-			request: "Start without inherited ordinary extensions.",
-			config: { extensions: "none", tools: [] },
-		},
-	);
-	const extensionFreeReceipt = extensionFree.details as AgentSpawnReceipt;
-	assert.equal(extensionFreeReceipt.disposition, "pending");
-	assert.ok("agentId" in extensionFreeReceipt);
-	assert.deepEqual(extensionFreeReceipt.effectiveConfiguration.extensions, []);
-	await waitForCondition(() => extensionFreeTools !== undefined);
-	assert.equal(extensionFreeTools?.includes("inline_extension_probe"), false);
-	assert.equal(extensionFreeTools?.includes("file_extension_probe"), false);
-
-	await host.runtime.dispose();
-});
-
-test("missing, duplicate, and anonymous inline factories fail before Agent Identity", async (t) => {
-	const namedFactory: ExtensionFactory = () => undefined;
-	const cases: Array<{
-		name: string;
-		factories: InlineExtension[];
-		afterLoad?: () => void;
-	}> = [];
-	const missingDescriptor: NamedInlineExtension = {
-		name: "required-inline",
-		factory: namedFactory,
-	};
-	cases.push({
-		name: "missing current descriptor",
-		factories: [missingDescriptor],
-		afterLoad: () => {
-			missingDescriptor.name = "renamed-after-owner-load";
-		},
-	});
-	cases.push({
-		name: "duplicate named descriptors",
-		factories: [
-			{ name: "duplicate-inline", factory: namedFactory },
-			{ name: "duplicate-inline", factory: namedFactory },
-		],
-	});
-	cases.push({
-		name: "anonymous descriptor",
-		factories: [namedFactory],
-	});
-
-	for (const sample of cases) {
-		await t.test(sample.name, async () => {
-			const host = await createTestOwnerHost(piAgentCoordination, {
-				persistent: true,
-				additionalExtensionFactories: sample.factories,
-			});
-			try {
-				sample.afterLoad?.();
-				const spawn = await executeRegisteredTool(
-					host.session,
-					"agent_spawn",
-					`spawn-${sample.name.replaceAll(" ", "-")}`,
-					{ request: "Do not commit an Agent Identity without inheritable resources." },
-				);
-				assert.deepEqual(spawn.details, {
-					disposition: "not_created",
-					failedStage: "identity_commit",
-				});
-				const children = await executeRegisteredTool(
-					host.session,
-					"agent_observe",
-					`observe-${sample.name.replaceAll(" ", "-")}`,
-					{ operation: "children" },
-				);
-				assert.deepEqual(children.details, { children: [] });
-			} finally {
-				await host.runtime.dispose();
-			}
-		});
-	}
-});
-
-test("successor Runtime preparations re-resolve named inline factories and stay dormant when one disappears", async () => {
-	let originalInvocations = 0;
-	let replacementInvocations = 0;
-	const createProbeFactory = (generation: "original" | "replacement"): ExtensionFactory =>
-		(pi) => {
-			if (generation === "original") originalInvocations += 1;
-			else replacementInvocations += 1;
-			pi.registerTool({
-				name: "successor_inline_probe",
-				label: "Successor inline probe",
-				description: "Reports which current factory created this Run.",
-				parameters: Type.Object({}, { additionalProperties: false }),
-				async execute() {
-					return {
-						content: [{ type: "text", text: generation }],
-						details: { generation },
-					};
-				},
-			});
-		};
-	const descriptor: NamedInlineExtension = {
-		name: "successor-inline-probe",
-		factory: createProbeFactory("original"),
-	};
-	const host = await createTestOwnerHost(piAgentCoordination, {
-		persistent: true,
-		additionalExtensionFactories: [descriptor],
-	});
-	host.model.setResponses([
-		fauxAssistantMessage("The first Run loaded the original factory."),
-		fauxAssistantMessage(
-			fauxToolCall("successor_inline_probe", {}, { id: "probe-replacement-inline-run" }),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("The successor Run loaded the replacement factory."),
-	]);
-
-	const spawn = await executeRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-successor-inline-probe",
-		{ request: "Start with the original inline factory." },
-	);
-	const receipt = spawn.details as AgentSpawnReceipt;
-	assert.equal(receipt.disposition, "pending");
-	assert.ok("agentId" in receipt);
-	await waitForCondition(() => originalInvocations === 2);
-	await waitForAgentTranscriptText(
-		host,
-		receipt.agentId,
-		"The first Run loaded the original factory.",
-	);
-	await executeRegisteredTool(
-		host.session,
-		"agent_control",
-		"terminate-original-inline-run",
-		{ operation: "terminate", agentId: receipt.agentId },
-	);
-
-	descriptor.factory = createProbeFactory("replacement");
-	const successor = await executeRegisteredTool(
-		host.session,
-		"agent_message",
-		"start-replacement-inline-run",
-		{
-			operation: "send",
-			targetAgentId: receipt.agentId,
-			content: "Start a successor with the current inline factory.",
-		},
-	);
-	assert.equal((successor.details as { delivery: string }).delivery, "pending");
-	await waitForCondition(() => replacementInvocations === 1);
-	assert.deepEqual(
-		await waitForAgentToolResult(
-			host,
-			receipt.agentId,
-			"probe-replacement-inline-run",
-		),
-		{ generation: "replacement" },
-	);
-
-	await executeRegisteredTool(
-		host.session,
-		"agent_control",
-		"terminate-replacement-inline-run",
-		{ operation: "terminate", agentId: receipt.agentId },
-	);
-	descriptor.name = "renamed-successor-inline-probe";
-	const unavailable = await executeRegisteredTool(
-		host.session,
-		"agent_message",
-		"start-missing-inline-run",
-		{
-			operation: "send",
-			targetAgentId: receipt.agentId,
-			content: "This successor must remain unavailable.",
-		},
-	);
-	assert.deepEqual(
-		{
-			delivery: (unavailable.details as { delivery: string }).delivery,
-			rejectionReason: (unavailable.details as { rejectionReason: string }).rejectionReason,
-		},
-		{ delivery: "rejected", rejectionReason: "target_unavailable" },
-	);
-	const status = await executeRegisteredTool(
-		host.session,
-		"agent_observe",
-		"observe-missing-inline-successor",
-		{ operation: "status", agentId: receipt.agentId },
-	);
-	assert.equal((status.details as { run: { phase: string } }).run.phase, "dormant");
-
-	await host.runtime.dispose();
 });
 
 test("invalid default-child metadata fails before Agent Identity", async () => {
@@ -964,7 +531,11 @@ test("an untrusted effective cwd cannot contribute selected project resources", 
 
 test("effective cwd honors Pi's default project-trust policy", async () => {
 	const harness = await createCoordinatorHarness({});
-	harness.host.services.settingsManager.setDefaultProjectTrust("always");
+	await mkdir(harness.host.services.agentDir, { recursive: true });
+	await writeFile(
+		join(harness.host.services.agentDir, "settings.json"),
+		`${JSON.stringify({ defaultProjectTrust: "always" }, null, 2)}\n`,
+	);
 	const effectiveCwd = join(harness.host.cwd, "default-trusted-project");
 	const skillDirectory = join(effectiveCwd, ".agents", "skills", "trusted-skill");
 	await mkdir(skillDirectory, { recursive: true });
@@ -989,11 +560,12 @@ test("effective cwd honors Pi's default project-trust policy", async () => {
 
 	assert.equal(receipt.disposition, "pending");
 	assert.deepEqual(receipt.effectiveConfiguration?.skills, ["trusted-skill"]);
+	assert.ok(receipt.agentId);
 
 	await harness.shutdown();
 });
 
-test("unavailable inherited resources fail before Agent Identity", async () => {
+test("unavailable inherited tools remain visible in the startup-failure receipt", async () => {
 	const ownerOnlyTool: ExtensionFactory = (pi) => {
 		pi.registerTool({
 			name: "owner_only_probe",
@@ -1008,98 +580,21 @@ test("unavailable inherited resources fail before Agent Identity", async () => {
 	const harness = await createCoordinatorHarness({}, ownerOnlyTool);
 	const receipt = await harness.spawn("spawn-missing-inherited-resource");
 
-	assert.deepEqual(receipt, {
-		disposition: "not_created",
-		failedStage: "identity_commit",
+	assert.equal(receipt.disposition, "created_unscheduled");
+	assert.ok("agentId" in receipt);
+	assert.equal(receipt.failedStage, "run_start");
+	assert.deepEqual(harness.view.children()[0]?.run, {
+		phase: "dormant",
+		retentionReasons: [],
 	});
-	assert.deepEqual(harness.view.children(), []);
+	assert.ok(receipt.effectiveConfiguration.tools.includes("owner_only_probe"));
+	assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
+	assert.match(
+		receipt.effectiveConfiguration.extensions[0]!,
+		/process-model-broker-extension\.mjs$/,
+	);
 
 	await harness.shutdown();
-});
-
-test("model loss during child preflight fails before Agent Identity", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
-	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
-	const originalGetModel = host.services.modelRuntime.getModel.bind(host.services.modelRuntime);
-	let modelAvailable = true;
-	const modelAvailabilityControlledRuntime = host.services
-		.modelRuntime as typeof host.services.modelRuntime & {
-			getModel: typeof host.services.modelRuntime.getModel;
-		};
-	modelAvailabilityControlledRuntime.getModel = (
-		(provider: string, modelId: string) =>
-			modelAvailable ? originalGetModel(provider, modelId) : undefined
-	) as typeof host.services.modelRuntime.getModel;
-	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) => {
-			modelAvailable = false;
-			return createAgentBoundExtension(() => coordinator.forAgent(agentId));
-		},
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-	});
-	const view = coordinator.forAgent(identity.agentId);
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall(
-				"agent_spawn",
-				{ request: "This request should fail before child Identity." },
-				{ id: "spawn-missing-inherited-model" },
-			),
-			{ stopReason: "toolUse" },
-		),
-	);
-	try {
-		const receipt = await view.spawn("spawn-missing-inherited-model", {
-			request: "This request should fail before child Identity.",
-		});
-
-		assert.deepEqual(receipt, {
-			disposition: "not_created",
-			failedStage: "identity_commit",
-		});
-		assert.deepEqual(view.children(), []);
-	} finally {
-		modelAvailabilityControlledRuntime.getModel = originalGetModel;
-		await coordinator.shutdown(async () => host.runtime.dispose());
-	}
-});
-
-test("shutdown during child preparation prevents a post-snapshot Agent admission", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
-	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
-	let shutdownPromise: Promise<void> | undefined;
-	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) => {
-			shutdownPromise ??= coordinator.shutdown(async () => host.runtime.dispose());
-			return createAgentBoundExtension(() => coordinator.forAgent(agentId));
-		},
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
-	});
-	const view = coordinator.forAgent(identity.agentId);
-	const input = { request: "This Agent must not join a Workflow already shutting down." };
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", input, { id: "spawn-during-shutdown" }),
-			{ stopReason: "toolUse" },
-		),
-	);
-
-	const receipt = await view.spawn("spawn-during-shutdown", input);
-	await shutdownPromise;
-
-	assert.deepEqual(receipt, {
-		disposition: "not_created",
-		failedStage: "identity_commit",
-	});
-	assert.deepEqual(view.children(), []);
 });
 
 test("confirmed post-Identity Run startup failure keeps a visible dormant child", async () => {
@@ -1171,17 +666,23 @@ test("confirmed post-Identity Delivery admission failure keeps the child and Req
 
 test("lost Run-start confirmation stays indeterminate after confirmed Identity", async () => {
 	const harness = await createCoordinatorHarness({
-		afterRunStart: () => "confirmation_lost",
+		afterRunStart: (context) => {
+			assert.deepEqual(Object.keys(context).sort(), ["handle", "identity"]);
+			assert.equal(context.handle.sequence > 0, true);
+			return "confirmation_lost";
+		},
 	});
-	const receipt = await harness.spawn("spawn-run-start-confirmation-lost");
+	try {
+		const receipt = await harness.spawn("spawn-run-start-confirmation-lost");
 
-	assert.equal(receipt.disposition, "indeterminate");
-	assert.equal(receipt.lastConfirmedStage, "identity");
-	assert.equal(typeof receipt.agentId, "string");
-	assert.equal(typeof receipt.requestId, "string");
-	assert.equal(harness.view.children()[0]?.run.phase, "live");
-
-	await harness.shutdown();
+		assert.equal(receipt.disposition, "indeterminate");
+		assert.equal(receipt.lastConfirmedStage, "identity");
+		assert.equal(typeof receipt.agentId, "string");
+		assert.equal(typeof receipt.requestId, "string");
+		assert.equal(harness.view.children()[0]?.run.phase, "live");
+	} finally {
+		await shutdownAfterLostRunStart(harness);
+	}
 });
 
 test("lost Identity confirmation stays indeterminate with a canonical dormant child", async () => {
@@ -1219,26 +720,30 @@ test("lost Delivery confirmation stays indeterminate after confirmed Run start",
 
 test("contradictory child Identity evidence is an invariant violation", async () => {
 	const harness = await createCoordinatorHarness({
-		afterIdentityCommit: ({ sessionManager, identity }) => {
-			sessionManager.appendCustomEntry("agent-coordination.identity", {
+		afterIdentityCommit: ({ identity }) => {
+			openDurableCapturedSession(identity.agentId).appendCustomEntry(
+				"agent-coordination.identity",
+				{
 				...identity,
-				spawnSource: { ...identity.spawnSource, toolCallId: "contradictory-source" },
-			});
+					spawnSource: { ...identity.spawnSource, toolCallId: "contradictory-source" },
+				},
+			);
 		},
 	});
-
-	await assert.rejects(
-		() => harness.spawn("spawn-contradictory-identity"),
-		/invariant_violation: child transcript contains 2 ordinary Identity entries/,
-	);
-
-	await harness.shutdown();
+	try {
+		await assert.rejects(
+			() => harness.spawn("spawn-contradictory-identity"),
+			/invariant_violation: child transcript contains 2 ordinary Identity entries/,
+		);
+	} finally {
+		await harness.shutdown();
+	}
 });
 
 test("forged Creation Request Delivery evidence is an invariant violation", async () => {
 	const harness = await createCoordinatorHarness({
-		afterIdentityCommit: ({ sessionManager, identity }) => {
-			sessionManager.appendCustomMessageEntry(
+		afterIdentityCommit: ({ identity }) => {
+			openDurableCapturedSession(identity.agentId).appendCustomMessageEntry(
 				"agent-coordination.message-delivery",
 				JSON.stringify({
 					messages: [
@@ -1255,13 +760,14 @@ test("forged Creation Request Delivery evidence is an invariant violation", asyn
 			);
 		},
 	});
-
-	await assert.rejects(
-		() => harness.spawn("spawn-with-forged-creation-request-delivery"),
-		/Creation Request .* Delivery differs from its source/,
-	);
-
-	await harness.shutdown();
+	try {
+		await assert.rejects(
+			() => harness.spawn("spawn-with-forged-creation-request-delivery"),
+			/Creation Request .* Delivery differs from its source/,
+		);
+	} finally {
+		await harness.shutdown();
+	}
 });
 
 test("direct children remain in physical Agent Spawn call order", async () => {
@@ -1278,6 +784,12 @@ test("direct children remain in physical Agent Spawn call order", async () => {
 
 	await harness.shutdown();
 });
+
+function openDurableCapturedSession(agentId: string): SessionManager {
+	const sessionFile = capturedSessionManager(agentId).getSessionFile();
+	assert.ok(sessionFile, `SessionManager ${agentId} has no durable session file`);
+	return SessionManager.open(sessionFile);
+}
 
 async function waitForChildSessionFile(
 	cwd: string,
@@ -1382,20 +894,37 @@ function findSpawnReceipt(sessionManager: SessionManager): AgentSpawnReceipt {
 	return result.message.details as AgentSpawnReceipt;
 }
 
+async function shutdownAfterLostRunStart(
+	harness: Awaited<ReturnType<typeof createCoordinatorHarness>>,
+): Promise<void> {
+	try {
+		await harness.shutdown();
+	} catch (error) {
+		assert.ok(error instanceof AggregateError);
+		assert.equal(error.message, "Workflow shutdown failed");
+		assert.deepEqual(
+			error.errors.map((failure) => String(failure)).sort(),
+			[
+				"Error: child_runtime_run_unavailable: no Run has been admitted",
+				"Error: child_runtime_run_unavailable: no Run has been admitted",
+			],
+		);
+	}
+}
+
 async function createCoordinatorHarness(
 	hooks: SpawnBoundaryHooks,
 	ownerExtension: ExtensionFactory = () => undefined,
 ) {
-	const host = await createUnboundTestOwnerHost(ownerExtension, { persistent: true });
+	const host = await createUnboundTestOwnerHost(ownerExtension, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime, "<inline:pi-agent-coordination>");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
 	coordinator = new WorkflowCoordinator(host.runtime, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
-		childExtensionFactory: (agentId) =>
-			createAgentBoundExtension(() => coordinator.forAgent(agentId)),
-		moderatorExtensionFactory: (agentId) =>
-			createModeratorBoundExtension(() => coordinator.forModerator(agentId)),
 		spawnBoundaryHooks: hooks,
 	});
 	const view = coordinator.forAgent(identity.agentId);

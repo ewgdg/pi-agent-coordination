@@ -168,10 +168,23 @@ test("Agent selection keeps the selector focused until view preparation complete
 	await Promise.resolve();
 	assert.ok(harness.component);
 
+	const idleAgentRow =
+		harness.component.render(80).find((line) => line.includes("→ Agent")) ?? "";
+	assert.match(idleAgentRow, /→ Agent/);
 	harness.component.handleInput?.("\r");
 	await Promise.resolve();
 	assert.equal(preparedAgentId, "agent");
 	assert.equal(harness.resolved, false);
+	const pendingAgentRow =
+		harness.component.render(80).find((line) => line.includes("→")) ?? "";
+	assert.match(pendingAgentRow, /→ Agent\s+⠋ loading/);
+	assert.equal(pendingAgentRow.indexOf("Agent"), idleAgentRow.indexOf("Agent"));
+	assert.doesNotMatch(pendingAgentRow, /live\/settled/);
+	await waitFor(() =>
+		!/→ Agent\s+⠋ loading/.test(
+			harness.component?.render(80).find((line) => line.includes("→")) ?? "",
+		)
+	);
 	// Input remains captured by the selector during the asynchronous handoff.
 	harness.component.handleInput?.("escape");
 	assert.equal(harness.resolved, false);
@@ -599,6 +612,14 @@ function selectorAgent<T extends AgentRosterStatus>(
 		thinking,
 		queuedInputCount,
 	};
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+	const deadline = Date.now() + 1_000;
+	while (!predicate()) {
+		if (Date.now() >= deadline) throw new Error("Timed out waiting for selector animation");
+		await new Promise<void>((resolve) => setTimeout(resolve, 5));
+	}
 }
 
 function surfaceHarness(terminalRows: number): {

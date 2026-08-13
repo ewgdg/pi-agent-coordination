@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
 	currentCoordinationScope,
@@ -42,13 +42,13 @@ export type HumanRequestResultInspection =
 
 export function resolveCommittedHumanRequest(options: {
 	agentId: string;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	toolCallId: string;
 	providedInput: HumanRequestInput;
 }): HumanRequest {
 	const committed = resolveCommittedToolCall({
 		agentId: options.agentId,
-		sessionManager: options.sessionManager,
+		transcript: options.transcript,
 		toolCallId: options.toolCallId,
 		toolName: "ask_user_question",
 	});
@@ -96,10 +96,10 @@ export function validateHumanAnswer(
 
 export function inspectCommittedHumanRequestResult(options: {
 	request: HumanRequest;
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 }): HumanRequestResultInspection {
 	const matches = currentCoordinationScope(
-		options.sessionManager,
+		options.transcript,
 		options.request.requesterAgentId,
 	).filter(
 		(entry) =>

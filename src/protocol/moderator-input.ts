@@ -1,18 +1,14 @@
-import type {
-	SessionEntry,
-	SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
 import { resolveModeratorAgentMetadata } from "./agent-metadata.ts";
 import type { ToolCallPointer } from "./identities.ts";
 import { ProtocolInvariantError } from "./identities.ts";
-import type { RuntimeConfigurationBaseline } from "./runtime-configuration.ts";
-import { validateRuntimeConfigurationBaseline } from "./runtime-configuration.ts";
 import {
 	AGENT_IDENTITY_CUSTOM_TYPE,
 	MODERATOR_INPUT_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 export { MODERATOR_INPUT_CUSTOM_TYPE } from "./custom-entry-types.ts";
 
@@ -27,10 +23,9 @@ export type ModeratorIdentity = Readonly<{
 	agentId: string;
 	workflowId: string;
 	directSpawnerAgentId: null;
-	configuration: Readonly<{
+	metadata: Readonly<{
 		label: "moderator";
 		description: string;
-		baseline: RuntimeConfigurationBaseline;
 	}>;
 }>;
 
@@ -86,7 +81,7 @@ export type ModelVisibleModeratorInput = Readonly<{
 	details: Readonly<{
 		agentId: string;
 		workflowId: string;
-		configuration: ModeratorIdentity["configuration"];
+		metadata: ModeratorIdentity["metadata"];
 	}>;
 }>;
 
@@ -101,23 +96,23 @@ export function createModelVisibleModeratorInput(
 		details: {
 			agentId: identity.agentId,
 			workflowId: identity.workflowId,
-			configuration: identity.configuration,
+			metadata: identity.metadata,
 		},
 	};
 }
 
 export function validateCommittedModeratorInput(options: {
-	sessionManager: SessionManager;
+	transcript: TranscriptInspection;
 	identity: ModeratorIdentity;
 	input: ModeratorInput;
 }): void {
-	const { sessionManager, identity, input } = options;
-	if (sessionManager.getSessionId() !== identity.agentId) {
+	const { transcript, identity, input } = options;
+	if (transcript.sessionId !== identity.agentId) {
 		throw new ProtocolInvariantError(
 			"Moderator Input does not match its Pi session identity",
 		);
 	}
-	const entries = sessionManager.getEntries();
+	const entries = transcript.entries;
 	const inputs = entries.filter(
 		(entry) =>
 			entry.type === "custom_message" &&
@@ -152,7 +147,7 @@ export function validateCommittedModeratorInput(options: {
 	const expectedDetails = {
 		agentId: identity.agentId,
 		workflowId: identity.workflowId,
-		configuration: identity.configuration,
+		metadata: identity.metadata,
 	};
 	if (
 		!isDeepStrictEqual(committedInput, input) ||
@@ -166,7 +161,6 @@ export function validateCommittedModeratorInput(options: {
 
 export function validateColdModeratorInput(options: {
 	sessionId: string;
-	sessionCwd: string;
 	entries: readonly SessionEntry[];
 }): Readonly<{
 	identity: ModeratorIdentity;
@@ -209,7 +203,7 @@ export function validateColdModeratorInput(options: {
 	const details = requireExactRecord(entry.details, [
 		"agentId",
 		"workflowId",
-		"configuration",
+		"metadata",
 	]);
 	if (
 		details.agentId !== options.sessionId ||
@@ -218,37 +212,23 @@ export function validateColdModeratorInput(options: {
 	) {
 		throw new ProtocolInvariantError("Moderator Input Workflow relationship is invalid");
 	}
-	const configuration = requireExactRecord(details.configuration, [
+	const committedMetadata = requireExactRecord(details.metadata, [
 		"label",
 		"description",
-		"baseline",
 	]);
 	const metadata = resolveModeratorAgentMetadata(input.trigger.kind);
 	if (
-		configuration.label !== metadata.label ||
-		configuration.description !== metadata.description
+		committedMetadata.label !== metadata.label ||
+		committedMetadata.description !== metadata.description
 	) {
 		throw new ProtocolInvariantError("Moderator Input metadata is invalid");
-	}
-	let baseline: RuntimeConfigurationBaseline;
-	try {
-		baseline = validateRuntimeConfigurationBaseline(configuration.baseline);
-	} catch (error) {
-		throw new ProtocolInvariantError(
-			error instanceof Error ? error.message : "Moderator Input baseline is invalid",
-		);
-	}
-	if (baseline.cwd !== options.sessionCwd) {
-		throw new ProtocolInvariantError(
-			"Moderator baseline cwd does not match its Pi session cwd",
-		);
 	}
 	return {
 		identity: {
 			agentId: options.sessionId,
 			workflowId: details.workflowId,
 			directSpawnerAgentId: null,
-			configuration: { ...metadata, baseline },
+			metadata,
 		},
 		input,
 	};
