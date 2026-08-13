@@ -76,16 +76,17 @@ export function assertHostModuleShape(hostValue: unknown): void {
 			version,
 		);
 	}
-
-	const runtimePrototype = requirePrototype(host.AgentSessionRuntime, "AgentSessionRuntime", version);
-	for (const member of ["setRebindSession", "setBeforeSessionInvalidate", "dispose"] as const) {
-		requireFunction(
-			runtimePrototype,
-			member,
-			`AgentSessionRuntime.prototype.${member}`,
-			version,
-		);
-	}
+	const runtimePrototype = requirePrototype(
+		host.AgentSessionRuntime,
+		"AgentSessionRuntime",
+		version,
+	);
+	requireFunction(
+		runtimePrototype,
+		"dispose",
+		"AgentSessionRuntime.prototype.dispose",
+		version,
+	);
 	requireWritableMember(
 		runtimePrototype,
 		"dispose",
@@ -96,13 +97,9 @@ export function assertHostModuleShape(hostValue: unknown): void {
 	const interactivePrototype = requirePrototype(host.InteractiveMode, "InteractiveMode", version);
 	for (const member of [
 		"bindCurrentSessionExtensions",
-		"rebindCurrentSession",
 		"getUserInput",
 		"queueCompactionMessage",
 		"restoreQueuedMessagesToEditor",
-		"renderInitialMessages",
-		"subscribeToAgent",
-		"stop",
 	] as const) {
 		requireFunction(
 			interactivePrototype,
@@ -133,7 +130,6 @@ export function assertHostModuleShape(hostValue: unknown): void {
 	for (const member of [
 		"appendCustomEntry",
 		"appendCustomMessageEntry",
-		"_rewriteFile",
 		"getEntries",
 		"getEntry",
 		"getHeader",
@@ -232,16 +228,8 @@ export function assertRuntimeInstanceShape(
 	version?: unknown,
 ): asserts runtimeValue is AgentSessionRuntime {
 	const runtime = requireRecord(runtimeValue, "AgentSessionRuntime", version);
-	for (const member of ["_session", "_services", "_diagnostics", "_modelFallbackMessage"] as const) {
-		requireWritableMember(runtime, member, `AgentSessionRuntime.${member}`, version);
-	}
-	for (const member of ["rebindSession", "beforeSessionInvalidate", "dispose"] as const) {
-		requireFunction(runtime, member, `AgentSessionRuntime.${member}`, version);
-	}
+	requireFunction(runtime, "dispose", "AgentSessionRuntime.dispose", version);
 	requireWritableMember(runtime, "dispose", "AgentSessionRuntime.dispose", version);
-	if (!Array.isArray(runtime.diagnostics)) {
-		throw new IncompatiblePiHostError("AgentSessionRuntime.diagnostics", version);
-	}
 	const services = requireRecord(runtime.services, "AgentSessionRuntime.services", version);
 	if (typeof services.cwd !== "string" || services.cwd.length === 0) {
 		throw new IncompatiblePiHostError("AgentSessionRuntime.services.cwd", version);
@@ -290,62 +278,8 @@ export function assertInteractiveModeInstanceShape(value: unknown, version?: unk
 	);
 	requireRecord(runtimeHost.session, "InteractiveMode.runtimeHost.session", version);
 	const ui = requireRecord(interactiveMode.ui, "InteractiveMode.ui", version);
-	assertPrioritizedTuiInputListenerShape(ui, version);
-	for (const member of ["invalidate", "requestRender", "start", "stop"] as const) {
+	for (const member of ["requestRender", "start", "stop"] as const) {
 		requireFunction(ui, member, `InteractiveMode.ui.${member}`, version);
-	}
-	const renderer = requireRecord(
-		interactiveMode.renderer,
-		"InteractiveMode.renderer",
-		version,
-	);
-	const terminal = requireRecord(
-		renderer.terminal,
-		"InteractiveMode.renderer.terminal",
-		version,
-	);
-	for (const dimension of ["columns", "rows"] as const) {
-		if (
-			typeof terminal[dimension] !== "number" ||
-			!Number.isFinite(terminal[dimension]) ||
-			terminal[dimension] <= 0
-		) {
-			throw new IncompatiblePiHostError(
-				`InteractiveMode.renderer.terminal.${dimension}`,
-				version,
-			);
-		}
-	}
-	if (typeof terminal.kittyProtocolActive !== "boolean") {
-		throw new IncompatiblePiHostError(
-			"InteractiveMode.renderer.terminal.kittyProtocolActive",
-			version,
-		);
-	}
-	for (const member of [
-		"bindCurrentSessionExtensions",
-		"rebindCurrentSession",
-		"getUserInput",
-		"setWorkingVisible",
-		"clearStatusIndicator",
-		"showError",
-		"updateEditorBorderColor",
-	] as const) {
-		requireFunction(interactiveMode, member, `InteractiveMode.${member}`, version);
-	}
-}
-
-export function assertPrioritizedTuiInputListenerShape(
-	value: unknown,
-	version?: unknown,
-): asserts value is {
-	addInputListener(listener: unknown): () => void;
-	inputListeners: Set<unknown>;
-} {
-	const tui = requireRecord(value, "TUI", version);
-	requireFunction(tui, "addInputListener", "TUI.addInputListener", version);
-	if (!(tui.inputListeners instanceof Set)) {
-		throw new IncompatiblePiHostError("TUI.inputListeners", version);
 	}
 }
 
@@ -360,7 +294,6 @@ export function assertAgentSessionShape(
 		"sendCustomMessage",
 		"clearQueue",
 		"subscribe",
-		"bindExtensions",
 		"abort",
 		"waitForIdle",
 		"dispose",
@@ -369,44 +302,17 @@ export function assertAgentSessionShape(
 	] as const) {
 		requireFunction(session, member, `AgentSession.${member}`, version);
 	}
-	for (const member of ["bindExtensions", "_runAgentPrompt"] as const) {
-		requireWritableMember(session, member, `AgentSession.${member}`, version);
-	}
 	for (const member of [
 		"model",
 		"thinkingLevel",
 		"isIdle",
 		"sessionId",
-		"_extensionUIContext",
-		"_extensionMode",
-		"_extensionCommandContextActions",
-		"_extensionAbortHandler",
-		"_extensionShutdownHandler",
-		"_extensionErrorListener",
 	] as const) {
 		requireMember(session, member, `AgentSession.${member}`, version);
 	}
-	for (const member of [
-		"_extensionUIContext",
-		"_extensionMode",
-		"_extensionCommandContextActions",
-		"_extensionAbortHandler",
-		"_extensionShutdownHandler",
-		"_extensionErrorListener",
-	] as const) {
-		requireWritableMember(session, member, `AgentSession.${member}`, version);
-	}
-	requireFunction(session, "_applyExtensionBindings", "AgentSession._applyExtensionBindings", version);
 	requireFunction(session, "_runAgentPrompt", "AgentSession._runAgentPrompt", version);
 	requireRecord(session.extensionRunner, "AgentSession.extensionRunner", version);
-	const sessionManager = requireRecord(
-		session.sessionManager,
-		"AgentSession.sessionManager",
-		version,
-	);
-	if (typeof sessionManager.flushed !== "boolean") {
-		throw new IncompatiblePiHostError("AgentSession.sessionManager.flushed", version);
-	}
+	requireRecord(session.sessionManager, "AgentSession.sessionManager", version);
 	assertSettingsManagerShape(
 		session.settingsManager,
 		"AgentSession.settingsManager",

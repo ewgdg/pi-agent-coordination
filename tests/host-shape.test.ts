@@ -141,20 +141,12 @@ test("module preflight rejects every required host export and prototype seam", (
 		["getPackageDir"],
 		["hasTrustRequiringProjectResources"],
 		["CURRENT_SESSION_VERSION"],
-		...[
-			"setRebindSession",
-			"setBeforeSessionInvalidate",
-			"dispose",
-		].map((member) => ["AgentSessionRuntime", "prototype", member]),
+		["AgentSessionRuntime", "prototype", "dispose"],
 		...[
 			"bindCurrentSessionExtensions",
-			"rebindCurrentSession",
 			"getUserInput",
 			"queueCompactionMessage",
 			"restoreQueuedMessagesToEditor",
-			"renderInitialMessages",
-			"subscribeToAgent",
-			"stop",
 		].map((member) => ["InteractiveMode", "prototype", member]),
 		...["create", "open", "continueRecent", "inMemory"].map(
 			(member) => ["SessionManager", member],
@@ -162,7 +154,6 @@ test("module preflight rejects every required host export and prototype seam", (
 		...[
 			"appendCustomEntry",
 			"appendCustomMessageEntry",
-			"_rewriteFile",
 			"getEntries",
 			"getEntry",
 			"getHeader",
@@ -251,14 +242,7 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 	host.runtime.setRebindSession(async () => undefined);
 	host.runtime.setBeforeSessionInvalidate(() => undefined);
 	const requirements = [
-		[["_session"], "AgentSessionRuntime._session"],
-		[["_services"], "AgentSessionRuntime._services"],
-		[["_diagnostics"], "AgentSessionRuntime._diagnostics"],
-		[["_modelFallbackMessage"], "AgentSessionRuntime._modelFallbackMessage"],
-		[["rebindSession"], "AgentSessionRuntime.rebindSession"],
-		[["beforeSessionInvalidate"], "AgentSessionRuntime.beforeSessionInvalidate"],
 		[["dispose"], "AgentSessionRuntime.dispose"],
-		[["diagnostics"], "AgentSessionRuntime.diagnostics"],
 		[["services"], "AgentSessionRuntime.services"],
 		[["services", "cwd"], "AgentSessionRuntime.services.cwd"],
 		[["services", "agentDir"], "AgentSessionRuntime.services.agentDir"],
@@ -286,20 +270,17 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"sendCustomMessage",
 			"clearQueue",
 			"subscribe",
-			"bindExtensions",
 			"abort",
 			"waitForIdle",
 			"dispose",
 			"getActiveToolNames",
 			"getToolDefinition",
 		].map((member) => [["session", member], `AgentSession.${member}`] as const),
-		...["model", "thinkingLevel", "isIdle", "sessionId", "_extensionUIContext", "_extensionMode", "_extensionCommandContextActions", "_extensionAbortHandler", "_extensionShutdownHandler", "_extensionErrorListener"]
+		...["model", "thinkingLevel", "isIdle", "sessionId"]
 			.map((member) => [["session", member], `AgentSession.${member}`] as const),
-		[["session", "_applyExtensionBindings"], "AgentSession._applyExtensionBindings"],
 		[["session", "_runAgentPrompt"], "AgentSession._runAgentPrompt"],
 		[["session", "extensionRunner"], "AgentSession.extensionRunner"],
 		[["session", "sessionManager"], "AgentSession.sessionManager"],
-		[["session", "sessionManager", "flushed"], "AgentSession.sessionManager.flushed"],
 		[["session", "settingsManager"], "AgentSession.settingsManager"],
 		...[
 			"getDefaultProjectTrust",
@@ -328,45 +309,18 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 	const mode = {
 		runtimeHost: host.runtime,
 		ui: {
-			inputListeners: new Set(),
-			addInputListener() { return () => undefined; },
-			invalidate() {},
 			requestRender() {},
 			start() {},
 			stop() {},
 		},
-		renderer: {
-			terminal: {
-				columns: 80,
-				rows: 24,
-				kittyProtocolActive: false,
-			},
-		},
-		bindCurrentSessionExtensions() {},
-		rebindCurrentSession() {},
-		getUserInput() {},
-		setWorkingVisible() {},
-		clearStatusIndicator() {},
-		showError() {},
-		updateEditorBorderColor() {},
 	};
 	const requirements = [
 		[["runtimeHost"], "InteractiveMode.runtimeHost"],
 		[["runtimeHost", "session"], "InteractiveMode.runtimeHost.session"],
 		[["ui"], "InteractiveMode.ui"],
-		[["ui", "addInputListener"], "TUI.addInputListener"],
-		[["ui", "inputListeners"], "TUI.inputListeners"],
-		[["ui", "invalidate"], "InteractiveMode.ui.invalidate"],
 		[["ui", "requestRender"], "InteractiveMode.ui.requestRender"],
 		[["ui", "start"], "InteractiveMode.ui.start"],
 		[["ui", "stop"], "InteractiveMode.ui.stop"],
-		[["renderer"], "InteractiveMode.renderer"],
-		[["renderer", "terminal"], "InteractiveMode.renderer.terminal"],
-		[["renderer", "terminal", "columns"], "InteractiveMode.renderer.terminal.columns"],
-		[["renderer", "terminal", "rows"], "InteractiveMode.renderer.terminal.rows"],
-		[["renderer", "terminal", "kittyProtocolActive"], "InteractiveMode.renderer.terminal.kittyProtocolActive"],
-		...["bindCurrentSessionExtensions", "rebindCurrentSession", "getUserInput", "setWorkingVisible", "clearStatusIndicator", "showError", "updateEditorBorderColor"]
-			.map((member) => [[member], `InteractiveMode.${member}`] as const),
 	] as const;
 	for (const [path, expected] of requirements) {
 		assert.throws(
@@ -380,7 +334,7 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 	await host.runtime.dispose();
 });
 
-test("preflight rejects read-only integration targets that coordination mutates", async () => {
+test("preflight rejects read-only prototype seams that coordination mutates", () => {
 	for (const [path, expected] of [
 		[["AgentSessionRuntime", "prototype", "dispose"], "AgentSessionRuntime.prototype.dispose"],
 		...[
@@ -402,33 +356,6 @@ test("preflight rejects read-only integration targets that coordination mutates"
 		);
 	}
 
-	const host = await createUnboundTestOwnerHost(() => undefined);
-	host.runtime.setRebindSession(async () => undefined);
-	host.runtime.setBeforeSessionInvalidate(() => undefined);
-	for (const [path, expected] of [
-		[["_session"], "AgentSessionRuntime._session"],
-		[["_services"], "AgentSessionRuntime._services"],
-		[["_diagnostics"], "AgentSessionRuntime._diagnostics"],
-		[["_modelFallbackMessage"], "AgentSessionRuntime._modelFallbackMessage"],
-		[["dispose"], "AgentSessionRuntime.dispose"],
-		[["session", "bindExtensions"], "AgentSession.bindExtensions"],
-		[["session", "_runAgentPrompt"], "AgentSession._runAgentPrompt"],
-		[["session", "_extensionUIContext"], "AgentSession._extensionUIContext"],
-		[["session", "_extensionMode"], "AgentSession._extensionMode"],
-		[["session", "_extensionCommandContextActions"], "AgentSession._extensionCommandContextActions"],
-		[["session", "_extensionAbortHandler"], "AgentSession._extensionAbortHandler"],
-		[["session", "_extensionShutdownHandler"], "AgentSession._extensionShutdownHandler"],
-		[["session", "_extensionErrorListener"], "AgentSession._extensionErrorListener"],
-	] as const) {
-		assert.throws(
-			() => assertRuntimeInstanceShape(readonlyMemberAtPath(host.runtime, path)),
-			(error: unknown) =>
-				error instanceof IncompatiblePiHostError &&
-				error.memberName === expected,
-			expected,
-		);
-	}
-	await host.runtime.dispose();
 });
 
 test("extension preflight rejects every required registration seam", () => {

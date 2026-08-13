@@ -8,10 +8,6 @@ import {
 	assertInteractiveModeInstanceShape,
 	assertRuntimeInstanceShape,
 } from "./host-shape.ts";
-import {
-	hasInstalledExtensionBindings,
-	refreshNativeExtensionBindings,
-} from "./extension-bindings.ts";
 
 type HostModule = {
 	VERSION?: unknown;
@@ -151,14 +147,7 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 				state.waiters.splice(state.waiters.indexOf(waiter), 1);
 				waiter.resolve(capture);
 			}
-			if (!hasInstalledExtensionBindings(runtime.session)) {
-				await originalBindCurrentSessionExtensions.call(this);
-				requestFullInteractiveRender(this);
-				return;
-			}
-			await refreshNativeExtensionBindings(runtime.session, () =>
-				originalBindCurrentSessionExtensions.call(this),
-			);
+			await originalBindCurrentSessionExtensions.call(this);
 			requestFullInteractiveRender(this);
 		};
 	interactivePrototype.bindCurrentSessionExtensions =

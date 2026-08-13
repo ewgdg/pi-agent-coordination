@@ -108,7 +108,7 @@ test("an Owner-hosted diagnostic can suspend and resume the exact selected child
 	await prepared.closed;
 });
 
-test("handoff buffers child output and physical input until presentation reinitializes", async () => {
+test("handoff keeps the Owner visible and ignores loading-time input until presentation reinitializes", async () => {
 	const projection = createProjectionHarness("buffered", undefined, true);
 	const view = createViewHarness(projection.projection);
 	const surface = createSurfaceHarness();
@@ -134,7 +134,11 @@ test("handoff buffers child output and physical input until presentation reiniti
 	assert.deepEqual(surface.ownerStops(), [{ preserveScreen: true }]);
 	assert.equal(surface.physicalStarts(), 1);
 	assert.deepEqual(surface.physicalWrites(), ["complete-native-frame"]);
-	assert.deepEqual(projection.inputs(), ["input-after-handoff"]);
+	assert.deepEqual(
+		projection.inputs(),
+		[],
+		"input entered while the loading overlay is active must not reach the child",
+	);
 
 	await view.closeFromHost();
 	await opened;

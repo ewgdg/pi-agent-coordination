@@ -1,6 +1,5 @@
 import type { TUI } from "@earendil-works/pi-tui";
 
-import { addPrioritizedTuiInputListener } from "../pi-integration/prioritized-tui-input.ts";
 import type { TerminalProjection } from "./terminal-projection.ts";
 
 const RESTORE_OWNER_TERMINAL = [
@@ -54,7 +53,6 @@ export class PhysicalTerminalAttachment {
 	readonly #pendingInput: string[] = [];
 	readonly #pendingOutput: string[] = [];
 	readonly #outputFlushWaiters = new Set<() => void>();
-	#removeOwnerInputCapture: () => void = () => undefined;
 	#removeOutputHandler: () => void = () => undefined;
 	#removeFailureHandler: () => void = () => undefined;
 	#removeExitHandler: () => void = () => undefined;
@@ -198,7 +196,6 @@ export class PhysicalTerminalAttachment {
 			this.#physicalTerminal.columns(),
 			this.#physicalTerminal.rows(),
 		);
-		if (!this.#ownerSuspended) this.#captureOwnerInput();
 		await projection.physicalTerminal.reinitializePresentation();
 		if (this.#closed || this.#desiredProjection !== projection) return;
 		if (!this.#ownerSuspended) this.#suspendOwner();
@@ -210,19 +207,7 @@ export class PhysicalTerminalAttachment {
 		for (const data of this.#pendingInput.splice(0)) this.dispatchInput(data);
 	}
 
-	#captureOwnerInput(): void {
-		this.#removeOwnerInputCapture = addPrioritizedTuiInputListener(
-			this.#ownerTui,
-			(data) => {
-				this.dispatchInput(data);
-				return { consume: true };
-			},
-		);
-	}
-
 	#suspendOwner(): void {
-		this.#removeOwnerInputCapture();
-		this.#removeOwnerInputCapture = () => undefined;
 		this.#ownerTui.stop({ preserveScreen: true });
 		this.#ownerSuspended = true;
 		this.#physicalTerminal.start(
@@ -250,8 +235,6 @@ export class PhysicalTerminalAttachment {
 			this.#backpressuredProjection = undefined;
 			this.#outputDraining = false;
 		}
-		this.#removeOwnerInputCapture();
-		this.#removeOwnerInputCapture = () => undefined;
 		this.#removeOutputHandler();
 		this.#removeFailureHandler();
 		this.#removeExitHandler();
