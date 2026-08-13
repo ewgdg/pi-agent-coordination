@@ -76,24 +76,6 @@ export function assertHostModuleShape(hostValue: unknown): void {
 			version,
 		);
 	}
-	const runtimePrototype = requirePrototype(
-		host.AgentSessionRuntime,
-		"AgentSessionRuntime",
-		version,
-	);
-	requireFunction(
-		runtimePrototype,
-		"dispose",
-		"AgentSessionRuntime.prototype.dispose",
-		version,
-	);
-	requireWritableMember(
-		runtimePrototype,
-		"dispose",
-		"AgentSessionRuntime.prototype.dispose",
-		version,
-	);
-
 	const interactivePrototype = requirePrototype(host.InteractiveMode, "InteractiveMode", version);
 	for (const member of [
 		"bindCurrentSessionExtensions",
@@ -228,8 +210,6 @@ export function assertRuntimeInstanceShape(
 	version?: unknown,
 ): asserts runtimeValue is AgentSessionRuntime {
 	const runtime = requireRecord(runtimeValue, "AgentSessionRuntime", version);
-	requireFunction(runtime, "dispose", "AgentSessionRuntime.dispose", version);
-	requireWritableMember(runtime, "dispose", "AgentSessionRuntime.dispose", version);
 	const services = requireRecord(runtime.services, "AgentSessionRuntime.services", version);
 	if (typeof services.cwd !== "string" || services.cwd.length === 0) {
 		throw new IncompatiblePiHostError("AgentSessionRuntime.services.cwd", version);

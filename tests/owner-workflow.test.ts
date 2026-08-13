@@ -127,7 +127,6 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		disposeCalls += 1;
 		originalDispose();
 	};
-	await Promise.all([host.runtime.dispose(), host.runtime.dispose()]);
 	await host.runtime.dispose();
 	assert.equal(disposeCalls, 1);
 });
@@ -263,7 +262,7 @@ test("orderly shutdown disposes retained child and Moderator processes plus Owne
 		return nativeDispose.call(this);
 	};
 	try {
-		await Promise.all([host.runtime.dispose(), host.runtime.dispose()]);
+		await host.runtime.dispose();
 		assert.equal(host.runtime.session.sessionId, host.session.sessionId);
 		assert.deepEqual(
 			Object.fromEntries(disposalCounts),

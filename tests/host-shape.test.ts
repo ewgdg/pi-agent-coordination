@@ -141,7 +141,6 @@ test("module preflight rejects every required host export and prototype seam", (
 		["getPackageDir"],
 		["hasTrustRequiringProjectResources"],
 		["CURRENT_SESSION_VERSION"],
-		["AgentSessionRuntime", "prototype", "dispose"],
 		...[
 			"bindCurrentSessionExtensions",
 			"getUserInput",
@@ -242,7 +241,6 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 	host.runtime.setRebindSession(async () => undefined);
 	host.runtime.setBeforeSessionInvalidate(() => undefined);
 	const requirements = [
-		[["dispose"], "AgentSessionRuntime.dispose"],
 		[["services"], "AgentSessionRuntime.services"],
 		[["services", "cwd"], "AgentSessionRuntime.services.cwd"],
 		[["services", "agentDir"], "AgentSessionRuntime.services.agentDir"],
@@ -336,7 +334,6 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 
 test("preflight rejects read-only prototype seams that coordination mutates", () => {
 	for (const [path, expected] of [
-		[["AgentSessionRuntime", "prototype", "dispose"], "AgentSessionRuntime.prototype.dispose"],
 		...[
 			"bindCurrentSessionExtensions",
 			"getUserInput",

@@ -41,6 +41,16 @@ test("Owner tool renderers are registered before session_start", async () => {
 	await host.runtime.dispose();
 });
 
+test("Owner bootstrap leaves native Runtime disposal under Pi ownership", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	const nativeDispose = host.runtime.dispose;
+
+	await bindTestOwnerHost(host, "tui");
+
+	assert.equal(host.runtime.dispose, nativeDispose);
+	await host.runtime.dispose();
+});
+
 test("a fresh Owner Identity records its role description", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination);
 	await bindTestOwnerHost(host, "tui");

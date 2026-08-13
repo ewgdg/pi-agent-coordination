@@ -30,12 +30,11 @@ test("Owner hosts use the in-memory model unless child processes need the provid
 	assert.equal(textOf(response.content), "In-memory response.");
 });
 
-test("opt-in Owner model calls use the retained file-backed broker until runtime disposal", async (t) => {
+test("opt-in Owner model calls use the retained file-backed broker until runtime disposal", async () => {
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		processVisibleModel: true,
 		fauxTokensPerSecond: 100_000,
 	});
-	t.after(() => host.runtime.dispose());
 	const generatedExtension = host.services.resourceLoader.getExtensions().extensions.find(
 		(extension) => extension.resolvedPath.endsWith("process-model-broker-extension.mjs"),
 	);
@@ -65,7 +64,6 @@ test("opt-in Owner model calls use the retained file-backed broker until runtime
 	assert.equal(textOf(configured.content), "Configured broker response.");
 	assert.equal(configuredCalls, 1);
 
-	await Promise.all([host.runtime.dispose(), host.runtime.dispose()]);
 	await host.runtime.dispose();
 	await assert.rejects(lstat(generatedExtension.resolvedPath), hasCode("ENOENT"));
 });

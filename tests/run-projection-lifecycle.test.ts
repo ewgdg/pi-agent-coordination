@@ -110,13 +110,82 @@ test("failure, termination, and Workflow shutdown each dispose their exact proje
 	}
 });
 
-test("Workflow shutdown disposes native Owner infrastructure after its Run already ended", async () => {
-	const resource = createRunResource();
-	const host = AgentRuntimeSupervisor.createChild({
-		agentId: "ended-owner-runtime-agent",
-		startSession: async () => resource.startedRun,
+test("native-host clean release retains the borrowed Runtime and Owner binding", async () => {
+	const owner = await createTestOwnerHost(() => undefined);
+	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
+	const firstHandle = host.currentHandle();
+	assert.ok(firstHandle);
+
+	assert.equal(
+		await host.lane.run(() => host.releaseIfEligibleInLane(firstHandle)),
+		"retained",
+	);
+	assert.equal(host.currentHandle(), firstHandle);
+	assert.equal(host.hasRetentionReason("owner_host_binding"), true);
+	await owner.runtime.dispose();
+});
+
+test("native-host Run Failure retains the borrowed Runtime for a successor Run", async () => {
+	const owner = await createTestOwnerHost(() => undefined);
+	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
+	const firstHandle = host.currentHandle();
+	assert.ok(firstHandle);
+	const originalDispose = owner.session.dispose.bind(owner.session);
+	let sessionDisposals = 0;
+	owner.session.dispose = () => {
+		sessionDisposals += 1;
+		originalDispose();
+	};
+
+	await host.lane.run(() => host.discardAndEndInLane("failure"));
+
+	assert.equal(sessionDisposals, 0);
+	assert.deepEqual(host.observe(), { phase: "dormant", retentionReasons: [] });
+	assert.equal(host.hasRetentionReason("owner_host_binding"), true);
+	assert.doesNotThrow(() => owner.session.extensionRunner.createContext());
+
+	const successorHandle = await host.lane.run(() => host.startInLane());
+	assert.equal(successorHandle.sequence, firstHandle.sequence + 1);
+	assert.equal(host.hasRetentionReason("owner_host_binding"), true);
+	assert.deepEqual(host.observe().retentionReasons, [
+		{ reason: "owner_host_binding", count: 1 },
+	]);
+
+	await owner.runtime.dispose();
+	assert.equal(sessionDisposals, 1);
+});
+
+test("failed successor admission also preserves the native-host Runtime", async () => {
+	const owner = await createTestOwnerHost(() => undefined);
+	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
+	await host.lane.run(() => host.discardAndEndInLane("failure"));
+	const originalDispose = owner.session.dispose.bind(owner.session);
+	let sessionDisposals = 0;
+	owner.session.dispose = () => {
+		sessionDisposals += 1;
+		originalDispose();
+	};
+	host.setRunStartedHandler(() => {
+		throw new Error("successor admission rejected");
 	});
-	await host.lane.run(() => host.startInLane());
+
+	await assert.rejects(
+		() => host.lane.run(() => host.startInLane()),
+		/successor admission rejected/,
+	);
+
+	assert.equal(sessionDisposals, 0);
+	assert.equal(host.hasRetentionReason("owner_host_binding"), true);
+	assert.doesNotThrow(() => owner.session.extensionRunner.createContext());
+	host.setRunStartedHandler(() => undefined);
+	const recoveredHandle = await host.lane.run(() => host.startInLane());
+	assert.equal(recoveredHandle.sequence, 3);
+	await owner.runtime.dispose();
+});
+
+test("Workflow shutdown leaves native Owner disposal to its host after its Run already ended", async () => {
+	const owner = await createTestOwnerHost(() => undefined);
+	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
 	await host.lane.run(() => host.discardAndEndInLane("failure"));
 
 	let nativeDisposals = 0;
@@ -125,11 +194,8 @@ test("Workflow shutdown disposes native Owner infrastructure after its Run alrea
 	}));
 
 	assert.equal(nativeDisposals, 1);
-	assert.deepEqual(resource.counts(), {
-		projectionDisposals: 1,
-		sessionDisposals: 1,
-		unsubscriptions: 1,
-	});
+	assert.doesNotThrow(() => owner.session.extensionRunner.createContext());
+	await owner.runtime.dispose();
 });
 
 test("failed startup after Run binding rolls back the projection and session once", async () => {

@@ -116,11 +116,7 @@ export function bindHiddenOwnerAgentExtension(options: {
 		participantLifecycleHandlers(resolveView),
 	);
 	pi.on("session_shutdown", (event) => {
-		if (
-			event.reason === "fork" ||
-			event.reason === "new" ||
-			event.reason === "resume"
-		) return prepareOwnerReplacement();
+		if (event.reason !== "reload") return prepareOwnerReplacement();
 	});
 }
 

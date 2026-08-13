@@ -1,6 +1,5 @@
 import type {
 	AgentSession,
-	AgentSessionRuntime,
 	ExtensionAPI,
 	ExtensionContext,
 	ExtensionHandler,
@@ -101,46 +100,26 @@ export async function initializeOwnerWorkflow(options: {
 		workflowPolicy: policy,
 		recoveredWorkflow,
 	});
-	const restoreNativeDispose = bindExactlyOnceShutdown(runtime, coordinator);
 	let ownerReplacementPreparation: Promise<void> | undefined;
 	const prepareOwnerReplacement = () => {
 		if (ownerReplacementPreparation) return ownerReplacementPreparation;
-		// Pi replaces the AgentSession without calling the intercepted runtime
-		// disposer. Restore it before the new Workflow installs its own wrapper.
-		restoreNativeDispose();
+		// Pi owns native Runtime disposal after awaited session shutdown handlers.
 		ownerReplacementPreparation = coordinator.shutdown(async () => undefined);
 		return ownerReplacementPreparation;
 	};
 	const resolveView = () => coordinator.forAgent(identity.agentId);
-	try {
-		installResolvedAgentActivityDock(ctx.ui, resolveView);
-		bindHiddenOwnerAgentExtension({
-			pi,
-			runtime,
-			bootstrapHandler,
-			resolveView,
-			prepareOwnerReplacement,
-		});
-		initializedWorkflows.set(runtime.session, {
-			coordinator,
-			policy,
-			prepareOwnerReplacement,
-		});
-		return resolveView;
-	} catch (error) {
-		restoreNativeDispose();
-		throw error;
-	}
-}
-
-function bindExactlyOnceShutdown(
-	runtime: AgentSessionRuntime,
-	coordinator: WorkflowCoordinator,
-): () => void {
-	const nativeDispose = runtime.dispose.bind(runtime);
-	const coordinatedDispose = () => coordinator.shutdown(nativeDispose);
-	runtime.dispose = coordinatedDispose;
-	return () => {
-		if (runtime.dispose === coordinatedDispose) runtime.dispose = nativeDispose;
-	};
+	installResolvedAgentActivityDock(ctx.ui, resolveView);
+	bindHiddenOwnerAgentExtension({
+		pi,
+		runtime,
+		bootstrapHandler,
+		resolveView,
+		prepareOwnerReplacement,
+	});
+	initializedWorkflows.set(runtime.session, {
+		coordinator,
+		policy,
+		prepareOwnerReplacement,
+	});
+	return resolveView;
 }

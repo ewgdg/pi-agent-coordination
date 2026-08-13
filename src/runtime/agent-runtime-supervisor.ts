@@ -35,6 +35,7 @@ import { InProcessHostedRuntime } from "./in-process-hosted-runtime.ts";
 import { SerialLane } from "./serial-lane.ts";
 
 type RequestRelationshipReason = "awaiting_answer" | "answer_owed";
+type RuntimeOwnership = "supervisor" | "native-host";
 
 export type StartedAgentRuntime = Readonly<{
 	runtime: HostedAgentRuntime;
@@ -77,6 +78,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	readonly lane = new SerialLane();
 	readonly #agentId: string;
 	readonly #startSession: StartSession | undefined;
+	readonly #runtimeOwnership: RuntimeOwnership;
 	readonly #retentionReasons = new Set<AgentRetentionReason>();
 	readonly #requestRelationships = new Map<
 		RequestRelationshipReason,
@@ -112,9 +114,11 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		startSession?: StartSession;
 		initialRuntime?: HostedAgentRuntime;
 		initialRetentionReasons?: readonly AgentRetentionReason[];
+		runtimeOwnership?: RuntimeOwnership;
 	}) {
 		this.#agentId = options.agentId;
 		this.#startSession = options.startSession;
+		this.#runtimeOwnership = options.runtimeOwnership ?? "supervisor";
 		for (const reason of options.initialRetentionReasons ?? []) {
 			this.#retentionReasons.add(reason);
 		}
@@ -132,6 +136,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 				projection: undefined,
 			}),
 			initialRetentionReasons: ["owner_host_binding"],
+			runtimeOwnership: "native-host",
 		});
 	}
 
@@ -714,9 +719,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		) return "retained";
 		// Selection owns Runtime availability, not the exact Run. Release an
 		// otherwise unretained Run without tearing down its attached Pi mode.
-		const retainRuntime = this.#retentionReasons.has("interactive_selection");
+		const retainRuntime = this.#runtimeOwnership === "native-host" ||
+			this.#retentionReasons.has("interactive_selection");
 		const runRetentionReasonCount = this.#retentionReasons.size -
-			(retainRuntime ? 1 : 0);
+			(this.#retentionReasons.has("interactive_selection") ? 1 : 0);
 		if (
 			runRetentionReasonCount > 0 ||
 			this.#requestRelationships.size > 0 ||
@@ -774,6 +780,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		if (
 			this.#starting ||
 			this.#ending ||
+			this.#runtimeOwnership === "native-host" ||
 			this.#retentionReasons.size > 0
 		) {
 			return "retained";
@@ -817,12 +824,16 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			if (disposeRuntime) await disposeRuntime();
 			return;
 		}
-		// A failed selected Run becomes Dormant in place so transcript, commands,
-		// extension state, and projection identity remain available to the human.
-		const retainRuntime = cause === "failure" &&
-			disposeRuntime === undefined &&
-			run.runtime.projection !== undefined &&
-			this.#retentionReasons.has("interactive_selection");
+		// Pi owns the native Owner Runtime across coordination Runs. A selected child
+		// is supervisor-owned but temporarily retained to preserve its attached view.
+		const retainRuntime = disposeRuntime === undefined && (
+			this.#runtimeOwnership === "native-host" ||
+			(
+				cause === "failure" &&
+				run.runtime.projection !== undefined &&
+				this.#retentionReasons.has("interactive_selection")
+			)
+		);
 		const endedHandle = run.handle;
 		const cleanupErrors: unknown[] = [];
 		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
@@ -888,9 +899,15 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	#clearRunScopedState(preserveInteractiveSelection = false): void {
 		const interactiveSelectionRetained = preserveInteractiveSelection &&
 			this.#retentionReasons.has("interactive_selection");
+		const nativeHostBindingRetained = this.#runtimeOwnership === "native-host" &&
+			this.#runtime !== undefined &&
+			this.#retentionReasons.has("owner_host_binding");
 		this.#retentionReasons.clear();
 		if (interactiveSelectionRetained) {
 			this.#retentionReasons.add("interactive_selection");
+		}
+		if (nativeHostBindingRetained) {
+			this.#retentionReasons.add("owner_host_binding");
 		}
 		this.#requestRelationships.clear();
 		this.#startingCancellationRequested = false;
@@ -907,6 +924,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	): Promise<unknown[]> {
 		const failedStart = this.#runtime;
 		if (!failedStart) return [];
+		const retainRuntime = this.#runtimeOwnership === "native-host";
 		const cleanupErrors: unknown[] = [];
 		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
 			try {
@@ -928,11 +946,19 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 					)
 				);
 			}
-			await attemptCleanup(() => failedStart.unsubscribe());
-			await attemptCleanup(() => failedStart.runtime.projection?.dispose());
-			await attemptCleanup(() => failedStart.runtime.dispose());
+			if (!retainRuntime) {
+				await attemptCleanup(() => failedStart.unsubscribe());
+				await attemptCleanup(() => failedStart.runtime.projection?.dispose());
+				await attemptCleanup(() => failedStart.runtime.dispose());
+			}
 		} finally {
-			this.#runtime = undefined;
+			if (retainRuntime) {
+				failedStart.admitted = false;
+				failedStart.failed = false;
+				failedStart.expectedInterruption = false;
+			} else {
+				this.#runtime = undefined;
+			}
 			this.#clearRunScopedState();
 			this.#starting = false;
 			this.#notifyStateChanged();
