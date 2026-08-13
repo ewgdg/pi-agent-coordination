@@ -17,6 +17,8 @@ type AgentTerminalAttachment = Readonly<{
 export type PhysicalAgentViewSurface = Readonly<{
 	ready: Promise<void>;
 	closed: Promise<void>;
+	suspend(): Promise<void>;
+	resume(): Promise<void>;
 	close(): void;
 }>;
 
@@ -72,7 +74,13 @@ export function startPhysicalAgentViewSurface(
 		attachment.close();
 		await view.close();
 	});
-	return { ready, closed: cleanup, close: closeFromHost };
+	return {
+		ready,
+		closed: cleanup,
+		suspend: () => attachment.suspend(),
+		resume: () => attachment.attach(view.projection()),
+		close: closeFromHost,
+	};
 }
 
 export type DurableAgentView = Readonly<{

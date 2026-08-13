@@ -79,6 +79,35 @@ test("a prepared physical surface becomes ready without waiting for its view to 
 	assert.equal(surface.ownerStarts(), 1);
 });
 
+test("an Owner-hosted diagnostic can suspend and resume the exact selected child", async () => {
+	const projection = createProjectionHarness("suspend-resume");
+	const view = createViewHarness(projection.projection);
+	const surface = createSurfaceHarness();
+	const prepared = startPhysicalAgentViewSurface(view.view, {
+		ownerTui: surface.ownerTui,
+		physicalTerminal: surface.physicalTerminal,
+		requestShutdown() {},
+	});
+	assert.ok(prepared);
+	await projection.finishReinitialization();
+	await prepared.ready;
+
+	await prepared.suspend();
+	assert.equal(surface.ownerStarts(), 1);
+	assert.deepEqual(projection.attachedStates(), [true, false]);
+
+	await prepared.resume();
+	await projection.finishReinitialization();
+	assert.deepEqual(surface.ownerStops(), [
+		{ preserveScreen: true },
+		{ preserveScreen: true },
+	]);
+	assert.deepEqual(projection.attachedStates(), [true, false, true]);
+
+	prepared.close();
+	await prepared.closed;
+});
+
 test("handoff buffers child output and physical input until presentation reinitializes", async () => {
 	const projection = createProjectionHarness("buffered", undefined, true);
 	const view = createViewHarness(projection.projection);

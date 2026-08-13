@@ -7,6 +7,7 @@ import {
 	createAgentSelectorSnapshot,
 	createOwnerAgentPresentationHandlers,
 } from "../src/process-runtime/remote-agent-selector.ts";
+import type { PostMortemAgentView } from "../src/presentation/post-mortem-agent-view-surface.ts";
 
 const ownerStatus = {
 	agentId: "owner",
@@ -53,6 +54,7 @@ function presentationView(options: {
 		question: string;
 	}>[];
 	openAgentView?: (agentId: string) => Promise<undefined>;
+	openAgentPresentation?: HumanPresentationCoordinatorView["openAgentPresentation"];
 	focusHumanAnswer?: (agentId: string, requestId: string) => Promise<void>;
 } = {}): HumanPresentationCoordinatorView {
 	return {
@@ -61,7 +63,12 @@ function presentationView(options: {
 		humanAttention: options.humanAttention ?? (() => []),
 		operationalAttention: () => [],
 		openAgentView: options.openAgentView ?? (async () => undefined),
+		openAgentPresentation: options.openAgentPresentation ?? (async (agentId) => ({
+			kind: "selected",
+			view: await (options.openAgentView ?? (async () => undefined))(agentId),
+		})),
 		focusHumanAnswer: options.focusHumanAnswer ?? (async () => undefined),
+		bindPhysicalAgentSurface: () => () => undefined,
 	} as unknown as HumanPresentationCoordinatorView;
 }
 
@@ -132,6 +139,101 @@ test("Human Answer focus failure restores the exact previous selection", async (
 
 	await assert.rejects(session.complete(action), /focus failed/);
 	assert.deepEqual(opened, ["target", "child"]);
+});
+
+test("failed Dormant preparation returns a post-mortem selection without replacing the previous Agent", async () => {
+	const opened: string[] = [];
+	const presented: PostMortemAgentView[] = [];
+	const view = presentationView({
+		openAgentPresentation: async (agentId) => {
+			opened.push(agentId);
+			return {
+				kind: "post_mortem",
+				agentId,
+				label: "Failed Agent",
+				transcript: {
+					sessionId: agentId,
+					transcriptPath: `/sessions/${agentId}.jsonl`,
+					header: null,
+					entries: [],
+					activeBranch: [],
+					context: { messages: [], thinkingLevel: "off" as const, model: null },
+				},
+				preparationError: "Configured model is unavailable",
+			};
+		},
+	});
+	const handlers = createOwnerAgentPresentationHandlers(() => view, "child", {
+		bindPhysicalSurface: () => () => undefined,
+		async present(postMortem) {
+			presented.push(postMortem);
+			return "back";
+		},
+	});
+
+	assert.deepEqual(
+		await handlers.select(
+			{ kind: "select_agent", agentId: "target" },
+			new AbortController().signal,
+		),
+		{
+			kind: "post_mortem",
+			agentId: "target",
+			label: "Failed Agent",
+			preparationError: "Configured model is unavailable",
+			outcome: "back",
+		},
+	);
+	assert.deepEqual(opened, ["target"]);
+	assert.equal(presented.length, 1);
+	assert.equal(presented[0]?.transcript.transcriptPath, "/sessions/target.jsonl");
+});
+
+test("post-mortem agents outcome propagates without transcript contents", async () => {
+	const view = presentationView({
+		openAgentPresentation: async (agentId) => ({
+			kind: "post_mortem",
+			agentId,
+			label: "Failed Agent",
+			transcript: {
+				sessionId: agentId,
+				transcriptPath: `/sessions/${agentId}.jsonl`,
+				header: null,
+				entries: [],
+				activeBranch: [],
+				context: { messages: [], thinkingLevel: "off", model: null },
+			},
+			preparationError: "Unavailable",
+		}),
+	});
+	const handlers = createOwnerAgentPresentationHandlers(() => view, "child", {
+		bindPhysicalSurface: () => () => undefined,
+		async present() { return "agents"; },
+	});
+
+	assert.deepEqual(await handlers.select(
+		{ kind: "select_agent", agentId: "target" },
+		new AbortController().signal,
+	), {
+		kind: "post_mortem",
+		agentId: "target",
+		label: "Failed Agent",
+		preparationError: "Unavailable",
+		outcome: "agents",
+	});
+});
+
+test("a successful Dormant selection acquires its Runtime exactly once", async () => {
+	let acquisitions = 0;
+	const session = createAgentSelectionSession(presentationView({
+		openAgentPresentation: async () => {
+			acquisitions += 1;
+			return { kind: "selected" };
+		},
+	}), "child");
+
+	await session.prepare({ kind: "select_agent", agentId: "target" });
+	assert.equal(acquisitions, 1);
 });
 
 test("Owner selection handler is awaited and does not resurrect the previous child after Control cancellation", async () => {

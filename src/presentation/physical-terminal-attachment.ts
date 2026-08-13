@@ -95,6 +95,26 @@ export class PhysicalTerminalAttachment {
 		return operation;
 	}
 
+	suspend(): Promise<void> {
+		if (this.#closed) return Promise.resolve();
+		this.#desiredProjection = undefined;
+		this.#pendingInput.length = 0;
+		this.#pendingOutput.length = 0;
+		const operation = this.#operationTail.then(() => {
+			const errors: unknown[] = [];
+			try {
+				this.#releaseProjection();
+			} catch (error) {
+				errors.push(error);
+			}
+			this.#restoreOwner(errors);
+			const combined = combinedError(errors);
+			if (combined) throw combined;
+		});
+		this.#operationTail = operation.catch(() => undefined);
+		return operation;
+	}
+
 	dispatchInput(data: string): void {
 		if (this.#closed || !this.#desiredProjection) return;
 		const projection = this.#projection;
@@ -131,7 +151,12 @@ export class PhysicalTerminalAttachment {
 		} catch (error) {
 			errors.push(error);
 		}
-		if (!this.#ownerSuspended) return combinedError(errors);
+		this.#restoreOwner(errors);
+		return combinedError(errors);
+	}
+
+	#restoreOwner(errors: unknown[]): void {
+		if (!this.#ownerSuspended) return;
 		for (const restore of [
 			() => this.#physicalTerminal.stop(),
 			() => { this.#physicalTerminal.write(RESTORE_OWNER_TERMINAL); },
@@ -145,7 +170,6 @@ export class PhysicalTerminalAttachment {
 			}
 		}
 		this.#ownerSuspended = false;
-		return combinedError(errors);
 	}
 
 	async #attach(projection: TerminalProjection): Promise<void> {

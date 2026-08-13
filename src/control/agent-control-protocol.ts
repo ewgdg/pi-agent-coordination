@@ -22,6 +22,7 @@ const closed = <const P extends Parameters<typeof Type.Object>[0]>(properties: P
 	Type.Object(properties, { additionalProperties: false });
 const EmptySchema = closed({});
 const NonEmptyStringSchema = Type.String({ minLength: 1 });
+const PreparationErrorSchema = Type.String({ minLength: 1, maxLength: 2_000 });
 const StringListSchema = Type.Array(NonEmptyStringSchema, { uniqueItems: true });
 const StringQueueSchema = Type.Array(Type.String());
 const AcknowledgementSchema = closed({ accepted: Type.Boolean() });
@@ -464,6 +465,17 @@ type DeepReadonly<T> = T extends readonly []
 		: T;
 export type RemoteAgentSelectorAction = DeepReadonly<Static<typeof AgentSelectorActionSchema>>;
 export type RemoteAgentSelectorSnapshot = DeepReadonly<Static<typeof AgentSelectorSnapshotSchema>>;
+const AgentSelectionResultSchema = Type.Union([
+	closed({ kind: Type.Literal("selected") }),
+	closed({
+		kind: Type.Literal("post_mortem"),
+		agentId: NonEmptyStringSchema,
+		label: NonEmptyStringSchema,
+		preparationError: PreparationErrorSchema,
+		outcome: Type.Union([Type.Literal("agents"), Type.Literal("back")]),
+	}),
+]);
+export type RemoteAgentSelectionResult = DeepReadonly<Static<typeof AgentSelectionResultSchema>>;
 const RemoteAgentSelectorSnapshotSchema = Type.Unsafe<RemoteAgentSelectorSnapshot>(
 	AgentSelectorSnapshotSchema,
 );
@@ -545,7 +557,7 @@ export const agentControlMethods = {
 	},
 	"presentation.agents.select": {
 		request: AgentSelectorActionSchema,
-		response: EmptyResponseSchema,
+		response: AgentSelectionResultSchema,
 	},
 	"presentation.reinitialize": {
 		request: EmptySchema,

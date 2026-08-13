@@ -81,7 +81,14 @@ import type {
 } from "../presentation/agent-activity-surface.ts";
 import { participantCoordinatorHandlers } from "../tools/owner-surfaces.ts";
 import { createOwnerAgentPresentationHandlers } from "../process-runtime/remote-agent-selector.ts";
-import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
+import type {
+	DurableAgentView,
+	PhysicalAgentViewSurface,
+} from "../presentation/agent-view-surface.ts";
+import type {
+	PostMortemAgentPresenter,
+	PostMortemAgentView,
+} from "../presentation/post-mortem-agent-view-surface.ts";
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import { DurableAgentViewAttachment } from "./durable-agent-view.ts";
 
@@ -116,10 +123,16 @@ export type HumanPresentationCoordinatorView = Readonly<{
 		dormant: readonly AgentRosterStatus[];
 	}>;
 	openAgentView(agentId: string): Promise<DurableAgentView | undefined>;
+	openAgentPresentation(agentId: string): Promise<AgentPresentationSelection>;
+	bindPhysicalAgentSurface(surface: PhysicalAgentViewSurface): () => void;
 	focusHumanAnswer(agentId: string, requestId: string): Promise<void>;
 	humanAttention(): readonly HumanAttentionItem[];
 	operationalAttention(): readonly OperationalIncidentAttention[];
 }>;
+
+export type AgentPresentationSelection =
+	| Readonly<{ kind: "selected"; view?: DurableAgentView }>
+	| PostMortemAgentView;
 
 type ActiveDurableAgentView = {
 	record: AgentRecord;
@@ -177,6 +190,7 @@ export class WorkflowCoordinator {
 	readonly #operationalIncidents: OperationalIncidentCoordinator;
 	readonly #agentActivityChangeHandlers = new Set<() => void>();
 	readonly #agentViewLane = new SerialLane();
+	readonly #postMortemAgentPresenter: PostMortemAgentPresenter | undefined;
 	#activeAgentView: ActiveDurableAgentView | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
 	readonly #executionScheduler: WorkflowExecutionScheduler;
@@ -200,6 +214,7 @@ export class WorkflowCoordinator {
 			messageBoundaryHooks?: MessageBoundaryHooks;
 			incidentBoundaryHooks?: OperationalIncidentBoundaryHooks;
 			operationalIncidentPresentation?: OperationalIncidentPresentation;
+			postMortemAgentPresenter?: PostMortemAgentPresenter;
 			operationReviewClock?: OperationReviewClock;
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
@@ -207,6 +222,7 @@ export class WorkflowCoordinator {
 		},
 	) {
 		this.#ownerDiagnostics = runtime.services.diagnostics;
+		this.#postMortemAgentPresenter = options.postMortemAgentPresenter;
 		this.#quarantinedAgentIds = options.recoveredWorkflow?.quarantinedAgentIds ?? new Set();
 		this.#agentIdBySpawnSource = new Map(
 			options.recoveredWorkflow?.agentIdBySpawnSource ?? [],
@@ -233,14 +249,22 @@ export class WorkflowCoordinator {
 					return {
 						coordination: participantCoordinatorHandlers("ordinary", resolveView),
 						lifecycle: participantLifecycleHandlers(resolveView),
-						presentation: createOwnerAgentPresentationHandlers(resolveView, agentId),
+						presentation: createOwnerAgentPresentationHandlers(
+							resolveView,
+							agentId,
+							options.postMortemAgentPresenter,
+						),
 					};
 				}
 				const resolveView = () => this.forModerator(agentId);
 				return {
 					coordination: participantCoordinatorHandlers("moderator", resolveView),
 					lifecycle: participantLifecycleHandlers(resolveView),
-					presentation: createOwnerAgentPresentationHandlers(resolveView, agentId),
+					presentation: createOwnerAgentPresentationHandlers(
+						resolveView,
+						agentId,
+						options.postMortemAgentPresenter,
+					),
 				};
 			},
 		});
@@ -390,10 +414,16 @@ export class WorkflowCoordinator {
 				return this.#handleHumanInput(agentId, text, images);
 			},
 			selectionRoster: () => this.#selectionRoster(),
+			openAgentPresentation: (targetAgentId) => {
+				this.#assertAdmissionOpen();
+				return this.#openAgentPresentation(targetAgentId);
+			},
 			openAgentView: (targetAgentId) => {
 				this.#assertAdmissionOpen();
 				return this.#openAgentView(targetAgentId);
 			},
+			bindPhysicalAgentSurface: (surface) =>
+				this.#postMortemAgentPresenter?.bindPhysicalSurface(surface) ?? (() => undefined),
 			focusHumanAnswer: (targetAgentId, requestId) => {
 				this.#assertAdmissionOpen();
 				return this.#focusHumanAnswer(targetAgentId, requestId);
@@ -625,21 +655,38 @@ export class WorkflowCoordinator {
 		this.#notifyAgentActivityChanged();
 	}
 
-	#openAgentView(agentId: string): Promise<DurableAgentView | undefined> {
+	#openAgentPresentation(agentId: string): Promise<AgentPresentationSelection> {
 		return this.#agentViewLane.run(async () => {
 			if (agentId === this.#ownerIdentity.agentId) {
 				const active = this.#activeAgentView;
 				if (active) await this.#closeActiveAgentViewInLane(active);
-				return undefined;
+				return { kind: "selected" };
 			}
 			const active = this.#activeAgentView;
-			if (active?.record.identity.agentId === agentId) return undefined;
+			if (active?.record.identity.agentId === agentId) return { kind: "selected" };
 			const record = this.#requireAgent(agentId);
-			if (active) {
-				await this.#switchActiveAgentViewInLane(active, record);
-				return undefined;
+			let target: AgentViewTarget;
+			try {
+				target = await this.#acquireAgentViewTarget(record);
+			} catch (error) {
+				if (
+					record.host.observe().phase !== "dormant" ||
+					record.host.currentProjection()
+				) throw error;
+				const transcript = record.transcript.inspect();
+				if (!transcript.transcriptPath) throw error;
+				return {
+					kind: "post_mortem",
+					agentId,
+					label: record.identity.metadata.label,
+					transcript,
+					preparationError: boundedPreparationError(error),
+				};
 			}
-			const target = await this.#acquireAgentViewTarget(record);
+			if (active) {
+				await this.#switchActiveAgentViewToTargetInLane(active, record, target);
+				return { kind: "selected" };
+			}
 			let attachment!: DurableAgentViewAttachment;
 			attachment = new DurableAgentViewAttachment({
 				agentId,
@@ -654,8 +701,16 @@ export class WorkflowCoordinator {
 				failed: false,
 			};
 			this.#notifyAgentActivityChanged();
-			return attachment;
+			return { kind: "selected", view: attachment };
 		});
+	}
+
+	async #openAgentView(agentId: string): Promise<DurableAgentView | undefined> {
+		const selection = await this.#openAgentPresentation(agentId);
+		if (selection.kind === "post_mortem") {
+			throw new Error(selection.preparationError);
+		}
+		return selection.view;
 	}
 
 	async #acquireAgentViewTarget(record: AgentRecord): Promise<AgentViewTarget> {
@@ -725,12 +780,13 @@ export class WorkflowCoordinator {
 		);
 	}
 
-	async #switchActiveAgentViewInLane(
+	async #switchActiveAgentViewToTargetInLane(
 		active: ActiveDurableAgentView,
 		record: AgentRecord,
+		initialTarget: AgentViewTarget,
 	): Promise<void> {
+		let target = initialTarget;
 		while (true) {
-			const target = await this.#acquireAgentViewTarget(record);
 			const previousRecord = active.record;
 			let requestPreviousRunRelease = false;
 			let targetChanged = false;
@@ -758,6 +814,7 @@ export class WorkflowCoordinator {
 						`stale_run: selected Agent ${record.identity.agentId} changed during view preparation`,
 					);
 				}
+				target = await this.#acquireAgentViewTarget(record);
 				continue;
 			}
 			if (requestPreviousRunRelease) {
@@ -1098,6 +1155,22 @@ function waitForStartupProjection(
 			(error) => settle({ error }),
 		);
 	});
+}
+
+const MAX_PREPARATION_ERROR_BYTES = 2_000;
+
+function boundedPreparationError(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	const nonEmpty = message.length > 0 ? message : "Runtime preparation failed";
+	if (Buffer.byteLength(nonEmpty, "utf8") <= MAX_PREPARATION_ERROR_BYTES) return nonEmpty;
+	const ellipsis = "…";
+	const maximumContentBytes = MAX_PREPARATION_ERROR_BYTES - Buffer.byteLength(ellipsis, "utf8");
+	let bounded = "";
+	for (const character of nonEmpty) {
+		if (Buffer.byteLength(bounded + character, "utf8") > maximumContentBytes) break;
+		bounded += character;
+	}
+	return `${bounded}${ellipsis}`;
 }
 
 async function collectCleanupFailure(

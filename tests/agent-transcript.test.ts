@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -205,6 +205,28 @@ test("file-backed transcript inspections reopen durable evidence written by anot
 	assert.equal(afterRemoteWrite.transcriptPath, sessionFile);
 	assert.equal(afterRemoteWrite.entries.length, 2);
 	assert.equal(afterRemoteWrite.entries.at(-1)?.type, "custom");
+});
+
+test("file-backed transcript inspection preserves legacy and empty files byte-for-byte", async () => {
+	const root = await mkdtemp(join(tmpdir(), "agent-transcript-read-only-"));
+	for (const [name, body] of [
+		["empty", ""],
+		["legacy", `${JSON.stringify({
+			type: "session",
+			version: 1,
+			id: "legacy-agent",
+			timestamp: "2020-01-01T00:00:00.000Z",
+			cwd: root,
+		})}\n`],
+	] as const) {
+		const sessionFile = join(root, `${name}.jsonl`);
+		await writeFile(sessionFile, body);
+		const before = await readFile(sessionFile);
+
+		transcriptFromSessionFile(sessionFile).inspect();
+
+		assert.deepEqual(await readFile(sessionFile), before, name);
+	}
 });
 
 function inspection(sessionId: string, entryId: string): TranscriptInspection {

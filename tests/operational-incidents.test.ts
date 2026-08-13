@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	SessionManager,
+	initTheme,
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
@@ -2235,6 +2236,80 @@ test("a terminal Moderator Run failure creates one linked replacement", async ()
 	assert.equal(failedTail.message.stopReason, "error");
 	assert.equal(previousAttempt.entryId, failedTail.id);
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("an unopenable failed Dormant Moderator falls back to a read-only post-mortem view", async (t) => {
+	initTheme("dark", false);
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		implicitModeratorResponses: false,
+		settings: { retry: { enabled: false } },
+	});
+	t.after(async () => host.runtime.dispose());
+	const routeFailure = (context: Context) => {
+		if (!context.tools?.some(({ name }) => name === "moderator_control")) {
+			return fauxAssistantMessage("I settled without answering the Creation Request.");
+		}
+		const input = context.messages.find((message) =>
+			message.role === "user" && JSON.stringify(message).includes('"trigger"')
+		);
+		if (JSON.stringify(input).includes('"previousAttempt"')) {
+			return fauxAssistantMessage("I am the replacement Moderator.");
+		}
+		return fauxAssistantMessage("The first Moderator Run fails terminally.", {
+			stopReason: "error",
+			errorMessage: "deterministic Moderator Run failure",
+		});
+	};
+	host.model.setResponses(Array.from({ length: 12 }, () => routeFailure));
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-failed-moderator-post-mortem-agent",
+		{ request: "Settle with an Answer obligation." },
+	);
+	await waitForCondition(async () => (await findModerators(host)).length === 2);
+	const moderators = await findModerators(host);
+	const replacement = moderators.find(({ path }) => moderatorPreviousAttempt(path));
+	assert.ok(replacement);
+	const failedModeratorId = moderatorPreviousAttempt(replacement.path)?.agentId;
+	assert.ok(failedModeratorId);
+
+	const templateDirectory = join(host.services.agentDir, "agents");
+	await mkdir(templateDirectory, { recursive: true });
+	await writeFile(join(templateDirectory, "moderator.md"), [
+		"---",
+		"name: moderator",
+		"models:",
+		"  - id: missing-process-provider/missing-process-model",
+		"    thinking: low",
+		"---",
+		"Moderator context",
+	].join("\n"));
+
+	const ownerSession = host.runtime.session;
+	const opened = await openDormantAgentView(host, failedModeratorId);
+	const rendered = stripTerminalSequences(opened.view.render(80).join("\n"));
+	assert.match(rendered, /Post-mortem · read-only/);
+	assert.match(rendered, /Moderator/);
+	assert.match(rendered, /Error:/);
+	assert.match(rendered, /No configured Agent Template model is available/);
+	assert.equal((await observeStatus(host, failedModeratorId)).run.phase, "dormant");
+	assert.equal(host.runtime.session, ownerSession);
+
+	opened.view.handleInput?.("a");
+	await waitForCondition(() =>
+		host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== opened.view
+	);
+	assert.match(
+		stripTerminalSequences(host.ui.customSurfaces[0]!.render(80).join("\n")),
+		/Tab views/,
+	);
+	host.ui.customSurfaces[0]!.handleInput?.("\x1b");
+	await opened.command;
+	assert.equal(host.ui.customSurfaces.length, 0);
+	assert.equal(host.runtime.session, ownerSession);
 });
 
 test("two committed Moderator failures publish bounded Owner Attention until clearance", async () => {

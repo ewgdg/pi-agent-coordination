@@ -6,6 +6,7 @@ import {
 	agentControlMethods,
 	agentControlProtocol,
 	type AgentControlMethod,
+	type RemoteAgentSelectionResult,
 	type RemoteAgentSelectorAction,
 	type RemoteAgentSelectorSnapshot,
 } from "../control/agent-control-protocol.ts";
@@ -38,13 +39,19 @@ export type OwnerParticipantRequestHandlers<Role extends RemoteParticipantRole> 
 
 export type OwnerParticipantPresentationHandlers = Readonly<{
 	snapshot(): RemoteAgentSelectorSnapshot;
-	select(action: RemoteAgentSelectorAction, signal: AbortSignal): Promise<void>;
+	select(
+		action: RemoteAgentSelectorAction,
+		signal: AbortSignal,
+	): Promise<RemoteAgentSelectionResult>;
 	addChangeHandler?(handler: (snapshot: RemoteAgentSelectorSnapshot) => void): () => void;
 }>;
 
 export type ControlBackedChildPresentationHandlers = Readonly<{
 	snapshot(): Promise<RemoteAgentSelectorSnapshot>;
-	select(action: RemoteAgentSelectorAction, signal?: AbortSignal): Promise<void>;
+	select(
+		action: RemoteAgentSelectorAction,
+		signal?: AbortSignal,
+	): Promise<RemoteAgentSelectionResult>;
 }>;
 
 export type ControlBackedChildParticipantHandlers<Role extends RemoteParticipantRole> = Readonly<{
@@ -62,9 +69,7 @@ export function createControlBackedChildPresentationHandlers(
 ): ControlBackedChildPresentationHandlers {
 	return {
 		snapshot: () => request("presentation.agents.snapshot", {}),
-		async select(action, signal) {
-			await request("presentation.agents.select", action, signal);
-		},
+		select: (action, signal) => request("presentation.agents.select", action, signal),
 	};
 }
 
@@ -228,8 +233,7 @@ export async function dispatchParticipantRequestToOwner(
 			response = handlers.presentation.snapshot();
 			break;
 		case "presentation.agents.select":
-			await handlers.presentation.select(request.payload, request.signal);
-			response = {};
+			response = await handlers.presentation.select(request.payload, request.signal);
 			break;
 		default:
 			throw new Error(`child_runtime_owner_request_unavailable: ${request.method}`);

@@ -133,12 +133,18 @@ test("Control-backed child presentation requests preserve exact selector snapsho
 	const cancellation = new AbortController();
 	const request = (async (method: string, payload: unknown, signal?: AbortSignal) => {
 		calls.push([method, payload, signal]);
-		return method === "presentation.agents.snapshot" ? snapshot : {};
+		return method === "presentation.agents.snapshot" ? snapshot : { kind: "selected" };
 	}) as ChildParticipantControlRequester;
 	const presentation = createControlBackedChildPresentationHandlers(request);
 
 	assert.equal(await presentation.snapshot(), snapshot);
-	await presentation.select({ kind: "select_agent", agentId: "owner" }, cancellation.signal);
+	assert.deepEqual(
+		await presentation.select(
+			{ kind: "select_agent", agentId: "owner" },
+			cancellation.signal,
+		),
+		{ kind: "selected" },
+	);
 	assert.deepEqual(calls, [
 		["presentation.agents.snapshot", {}, undefined],
 		["presentation.agents.select", { kind: "select_agent", agentId: "owner" }, cancellation.signal],
@@ -155,7 +161,10 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 					humanAttention: [], operationalAttention: [],
 				};
 			},
-			async select(action, signal) { calls.push(["select", action, signal]); },
+			async select(action, signal) {
+				calls.push(["select", action, signal]);
+				return { kind: "selected" };
+			},
 		},
 		lifecycle: {
 			async executionStarted() { calls.push(["begin"]); },

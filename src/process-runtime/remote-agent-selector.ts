@@ -10,6 +10,8 @@ import {
 	type AgentSelectorAction,
 } from "../presentation/agent-selector-surface.ts";
 import type { DurableAgentView } from "../presentation/agent-view-surface.ts";
+import type { PostMortemAgentView } from "../presentation/post-mortem-agent-view-surface.ts";
+import type { PostMortemAgentPresenter } from "../presentation/post-mortem-agent-view-surface.ts";
 import type {
 	ControlBackedChildPresentationHandlers,
 	OwnerParticipantPresentationHandlers,
@@ -19,6 +21,7 @@ export type AgentSelectionSession = Readonly<{
 	prepare(action: AgentSelectorAction, signal?: AbortSignal): Promise<void>;
 	complete(action: AgentSelectorAction, signal?: AbortSignal): Promise<void>;
 	preparedView(): DurableAgentView | undefined;
+	postMortemView(): PostMortemAgentView | undefined;
 }>;
 
 /** Capture every selector input at one scoped Owner presentation boundary. */
@@ -45,14 +48,16 @@ export function createAgentSelectionSession(
 	selectedAgentId: string,
 ): AgentSelectionSession {
 	let preparedAgentView: DurableAgentView | undefined;
+	let postMortemAgentView: PostMortemAgentView | undefined;
 	const isPendingDecision = (decision: Extract<AgentSelectorAction, { kind: "decide" }>) =>
 		view.humanAttention().some(
 			(item) => item.requestId === decision.requestId && item.agentId === decision.agentId,
 		);
 	const restorePreviousSelection = async (restoreIdentity: boolean) => {
 		if (preparedAgentView) await preparedAgentView.close();
-		else if (restoreIdentity) await view.openAgentView(selectedAgentId);
+		else if (restoreIdentity) await view.openAgentPresentation(selectedAgentId);
 		preparedAgentView = undefined;
+		postMortemAgentView = undefined;
 	};
 	return {
 		async prepare(action, signal) {
@@ -60,7 +65,9 @@ export function createAgentSelectionSession(
 			if (action.kind === "decide" && !isPendingDecision(action)) {
 				throw new Error("stale_request: Human Request is no longer pending");
 			}
-			preparedAgentView = await view.openAgentView(action.agentId);
+			const selection = await view.openAgentPresentation(action.agentId);
+			if (selection.kind === "post_mortem") postMortemAgentView = selection;
+			else preparedAgentView = selection.view;
 			if (signal?.aborted || (action.kind === "decide" && !isPendingDecision(action))) {
 				// A cancelled child Control request means its view was already closed or
 				// retargeted. Reopening that identity would resurrect the Runtime being
@@ -88,6 +95,7 @@ export function createAgentSelectionSession(
 			}
 		},
 		preparedView: () => preparedAgentView,
+		postMortemView: () => postMortemAgentView,
 	};
 }
 
@@ -95,6 +103,7 @@ export function createAgentSelectionSession(
 export function createOwnerAgentPresentationHandlers(
 	resolveView: () => HumanPresentationCoordinatorView,
 	selectedAgentId: string,
+	postMortemPresenter?: PostMortemAgentPresenter,
 ): OwnerParticipantPresentationHandlers {
 	return {
 		snapshot: () => createAgentSelectorSnapshot(resolveView(), selectedAgentId),
@@ -107,6 +116,23 @@ export function createOwnerAgentPresentationHandlers(
 			const selection = createAgentSelectionSession(resolveView(), selectedAgentId);
 			await selection.prepare(action as AgentSelectorAction, signal);
 			await selection.complete(action as AgentSelectorAction, signal);
+			const postMortem = selection.postMortemView();
+			let outcome: "agents" | "back" | undefined;
+			if (postMortem) {
+				if (!postMortemPresenter) {
+					throw new Error("post_mortem_presentation_unavailable");
+				}
+				outcome = await postMortemPresenter.present(postMortem);
+			}
+			return postMortem
+				? {
+					kind: "post_mortem",
+					agentId: postMortem.agentId,
+					label: postMortem.label,
+					preparationError: postMortem.preparationError,
+					outcome: outcome!,
+				}
+				: { kind: "selected" };
 		},
 	};
 }
@@ -119,18 +145,29 @@ export function registerRemoteAgentsCommand(
 	pi.registerCommand("agents", {
 		description: "Show Agents in the current Workflow",
 		handler: async (_args, ctx) => {
-			const snapshot = await presentation.snapshot();
-			await openAgentSelectorSurface(ctx.ui, {
-				...snapshot,
-				prepareSelection: (action) =>
-					presentation.select(action as RemoteAgentSelectorAction),
-				onSelectionError(error) {
-					ctx.ui.notify(
-						`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
-						"error",
-					);
-				},
-			});
+			let reopenSelector = true;
+			while (reopenSelector) {
+				reopenSelector = false;
+				const snapshot = await presentation.snapshot();
+				let postMortemResult: Awaited<ReturnType<typeof presentation.select>> | undefined;
+				await openAgentSelectorSurface(ctx.ui, {
+					...snapshot,
+					async prepareSelection(action) {
+						postMortemResult = await presentation.select(
+							action as RemoteAgentSelectorAction,
+						);
+					},
+					onSelectionError(error) {
+						ctx.ui.notify(
+							`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
+					},
+				});
+				if (postMortemResult?.kind === "post_mortem") {
+					reopenSelector = postMortemResult.outcome === "agents";
+				}
+			}
 		},
 	});
 }

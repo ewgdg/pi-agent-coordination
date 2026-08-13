@@ -1,4 +1,13 @@
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+	SessionManager,
+	buildSessionContext,
+	migrateSessionEntries,
+	parseSessionEntries,
+	type FileEntry,
+	type SessionEntry,
+	type SessionHeader,
+} from "@earendil-works/pi-coding-agent";
+import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
@@ -38,8 +47,51 @@ class SessionFileTranscriptReader implements TranscriptReader {
 	}
 
 	read(): TranscriptInspection {
-		return inspectSessionManager(SessionManager.open(this.#sessionFile));
+		return inspectSessionFile(this.#sessionFile);
 	}
+}
+
+function inspectSessionFile(sessionFile: string): TranscriptInspection {
+	// Pi's SessionManager.open() may rewrite legacy sessions or materialize an
+	// empty file. Parse and migrate only this in-memory clone so inspection is
+	// byte-for-byte read-only at the durable evidence seam.
+	const fileEntries = structuredClone(
+		parseSessionEntries(readFileSync(sessionFile, "utf8")),
+	) as FileEntry[];
+	migrateSessionEntries(fileEntries);
+	const header = fileEntries.find((entry): entry is SessionHeader => entry.type === "session")
+		?? null;
+	const entries = fileEntries.filter((entry): entry is SessionEntry => entry.type !== "session");
+	const leafId = entries.at(-1)?.id ?? null;
+	const byId = new Map(entries.map((entry) => [entry.id, entry]));
+	return {
+		sessionId: header?.id ?? "",
+		transcriptPath: sessionFile,
+		header,
+		entries,
+		activeBranch: activeBranch(entries, leafId, byId),
+		context: buildSessionContext(entries, leafId, byId),
+	};
+}
+
+function activeBranch(
+	entries: readonly SessionEntry[],
+	leafId: string | null,
+	byId: ReadonlyMap<string, SessionEntry>,
+): SessionEntry[] {
+	const branch: SessionEntry[] = [];
+	let currentId = leafId;
+	const visited = new Set<string>();
+	while (currentId) {
+		if (visited.has(currentId)) break;
+		visited.add(currentId);
+		const entry = byId.get(currentId);
+		if (!entry) break;
+		branch.push(entry);
+		currentId = entry.parentId;
+	}
+	branch.reverse();
+	return branch;
 }
 
 export function transcriptFromSessionManager(

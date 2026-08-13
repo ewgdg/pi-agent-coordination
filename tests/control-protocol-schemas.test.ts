@@ -261,6 +261,30 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		agentId: "child",
 		unixPath: "/tmp/control.sock",
 	}), false);
+	assert.equal(Check(agentControlMethods["presentation.agents.select"].response, {
+		kind: "selected",
+	}), true);
+	assert.equal(Check(agentControlMethods["presentation.agents.select"].response, {
+		kind: "post_mortem",
+		agentId: "child",
+		label: "Failed Agent",
+		preparationError: "Configured model is unavailable",
+		outcome: "back",
+	}), true);
+	assert.equal(Check(agentControlMethods["presentation.agents.select"].response, {
+		kind: "post_mortem",
+		agentId: "child",
+		label: "Failed Agent",
+		preparationError: "",
+		outcome: "back",
+	}), false);
+	assert.equal(Check(agentControlMethods["presentation.agents.select"].response, {
+		kind: "post_mortem",
+		agentId: "child",
+		label: "Failed Agent",
+		preparationError: "x".repeat(2_001),
+		outcome: "back",
+	}), false);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
 		runId: "run-1",
 		delivery: {

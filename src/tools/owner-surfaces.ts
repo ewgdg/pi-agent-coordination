@@ -11,6 +11,7 @@ import {
 	startPhysicalAgentViewSurface,
 	type PhysicalAgentViewSurface,
 } from "../presentation/agent-view-surface.ts";
+import { openPostMortemAgentViewSurface } from "../presentation/post-mortem-agent-view-surface.ts";
 import {
 	createAgentSelectionSession,
 	createAgentSelectorSnapshot,
@@ -55,50 +56,63 @@ export function registerAgentsCommand(
 		handler: async (_args, ctx) => {
 			const view = resolveView();
 			const selectedAgentId = view.status().agentId;
-			const selection = createAgentSelectionSession(view, selectedAgentId);
-			let physicalSurface: PhysicalAgentViewSurface | undefined;
-			const action = await openAgentSelectorSurface(ctx.ui, {
-				...createAgentSelectorSnapshot(view, selectedAgentId),
-				async prepareSelection(action, ownerTui) {
-					await selection.prepare(action);
-					const preparedAgentView = selection.preparedView();
-					if (!preparedAgentView) return;
-					physicalSurface = startPhysicalAgentViewSurface(preparedAgentView, {
-						ownerTui,
-						requestShutdown: () => ctx.shutdown(),
-					});
-					await physicalSurface?.ready;
-				},
-				onSelectionError(error) {
-					ctx.ui.notify(
-						`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
-						"error",
-					);
-				},
-			});
-			if (action?.kind === "decide") {
-				try {
-					await selection.complete(action);
-				} catch (error) {
-					physicalSurface?.close();
-					ctx.ui.notify(
-						`Human Request selection failed: ${error instanceof Error ? error.message : String(error)}`,
-						"error",
-					);
-					return;
+			let reopenSelector = true;
+			while (reopenSelector) {
+				reopenSelector = false;
+				const selection = createAgentSelectionSession(view, selectedAgentId);
+				let physicalSurface: PhysicalAgentViewSurface | undefined;
+				const action = await openAgentSelectorSurface(ctx.ui, {
+					...createAgentSelectorSnapshot(view, selectedAgentId),
+					async prepareSelection(action, ownerTui) {
+						await selection.prepare(action);
+						const preparedAgentView = selection.preparedView();
+						if (!preparedAgentView) return;
+						physicalSurface = startPhysicalAgentViewSurface(preparedAgentView, {
+							ownerTui,
+							requestShutdown: () => ctx.shutdown(),
+						});
+						if (physicalSurface) {
+							const unbind = view.bindPhysicalAgentSurface(physicalSurface);
+							void physicalSurface.closed.finally(unbind);
+						}
+						await physicalSurface?.ready;
+					},
+					onSelectionError(error) {
+						ctx.ui.notify(
+							`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
+					},
+				});
+				if (action?.kind === "decide") {
+					try {
+						await selection.complete(action);
+					} catch (error) {
+						physicalSurface?.close();
+						ctx.ui.notify(
+							`Human Request selection failed: ${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						);
+						return;
+					}
 				}
-			}
-			if (action) {
-				const preparedAgentView = selection.preparedView();
-				if (preparedAgentView && !physicalSurface) {
-					await openAgentViewSurface(ctx.ui, preparedAgentView, {
-						requestShutdown: () => ctx.shutdown(),
-					});
-				} else {
-					void physicalSurface?.closed.catch((error) => ctx.ui.notify(
-						`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
-						"error",
-					));
+				const postMortem = selection.postMortemView();
+				if (postMortem) {
+					reopenSelector = await openPostMortemAgentViewSurface(ctx.ui, postMortem) === "agents";
+					continue;
+				}
+				if (action) {
+					const preparedAgentView = selection.preparedView();
+					if (preparedAgentView && !physicalSurface) {
+						await openAgentViewSurface(ctx.ui, preparedAgentView, {
+							requestShutdown: () => ctx.shutdown(),
+						});
+					} else {
+						void physicalSurface?.closed.catch((error) => ctx.ui.notify(
+							`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
+							"error",
+						));
+					}
 				}
 			}
 		},

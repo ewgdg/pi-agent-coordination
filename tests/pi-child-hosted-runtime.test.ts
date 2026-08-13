@@ -515,7 +515,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 				live: [status], dormant: [], selectedAgentId: agentId,
 				humanAttention: [], operationalAttention: [],
 			}),
-			async select() {},
+			async select() { return { kind: "selected" }; },
 		},
 		lifecycle: {
 			async executionStarted() {},

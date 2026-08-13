@@ -877,7 +877,10 @@ function ordinaryOwnerHandlers(options: Readonly<{
 					humanAttention: [], operationalAttention: [],
 				});
 			},
-			async select(action) { options.select?.(action); },
+			async select(action) {
+				options.select?.(action);
+				return { kind: "selected" };
+			},
 		},
 		lifecycle: {
 			async executionStarted() { options.executionStarted?.(); },

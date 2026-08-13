@@ -14,6 +14,7 @@ import {
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { adoptOrValidateOwnerIdentity } from "../protocol/owner-identity.ts";
 import { OperationalIncidentSurface } from "../presentation/operational-incident-surface.ts";
+import { OwnerPostMortemAgentPresenter } from "../presentation/post-mortem-agent-view-surface.ts";
 import {
 	WorkflowPolicyStore,
 	readWorkflowPolicy,
@@ -96,6 +97,7 @@ export async function initializeOwnerWorkflow(options: {
 	const coordinator = new WorkflowCoordinator(runtime, identity, {
 		entryModulePath,
 		operationalIncidentPresentation: new OperationalIncidentSurface(),
+		postMortemAgentPresenter: new OwnerPostMortemAgentPresenter(ctx.ui),
 		workflowPolicy: policy,
 		recoveredWorkflow,
 	});
