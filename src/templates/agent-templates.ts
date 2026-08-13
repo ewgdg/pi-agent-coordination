@@ -5,11 +5,15 @@ import type {
 
 export type ProjectContextMode = "append" | "replace";
 
+export type AgentTemplateModelCandidate = Readonly<{
+	model: ModelReference;
+	thinking: RuntimeThinkingLevel;
+}>;
+
 export type AgentTemplate = Readonly<{
 	name: string;
 	selectionGuide?: string;
-	model?: ModelReference;
-	thinking?: RuntimeThinkingLevel;
+	models?: readonly AgentTemplateModelCandidate[];
 	tools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
@@ -22,12 +26,19 @@ export type AgentTemplate = Readonly<{
 export type AgentTemplateCatalogueEntry = Readonly<{
 	name: string;
 	selectionGuide?: string;
-	model?: ModelReference;
-	thinking?: RuntimeThinkingLevel;
+	models?: readonly AgentTemplateModelCandidate[];
 	tools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
 	projectContextMode: ProjectContextMode;
+}>;
+
+export type AgentTemplatePromptContext = Readonly<{
+	currentRuntime: Readonly<{
+		model: ModelReference;
+		thinking: RuntimeThinkingLevel;
+	}>;
+	templates: readonly AgentTemplateCatalogueEntry[];
 }>;
 
 export type AgentTemplateRoot = Readonly<{
@@ -70,20 +81,24 @@ export function selectAgentTemplateForRun(
 
 export function createAgentTemplateCatalogue(
 	templates: Iterable<AgentTemplate>,
+	isModelAvailable: (model: ModelReference) => boolean = () => true,
 ): AgentTemplateCatalogueEntry[] {
 	return [...templates]
 		.filter(({ name }) => name !== "moderator")
 		.sort((left, right) => left.name.localeCompare(right.name))
-		.map((template) => ({
-			name: template.name,
-			...(template.selectionGuide === undefined
-				? {}
-				: { selectionGuide: template.selectionGuide }),
-			...(template.model === undefined ? {} : { model: template.model }),
-			...(template.thinking === undefined ? {} : { thinking: template.thinking }),
-			...(template.tools === undefined ? {} : { tools: template.tools }),
-			...(template.skills === undefined ? {} : { skills: template.skills }),
-			...(template.extensions === undefined ? {} : { extensions: template.extensions }),
-			projectContextMode: template.projectContextMode,
-		}));
+		.flatMap((template) => {
+			const models = template.models?.filter(({ model }) => isModelAvailable(model));
+			if (template.models !== undefined && models?.length === 0) return [];
+			return [{
+				name: template.name,
+				...(template.selectionGuide === undefined
+					? {}
+					: { selectionGuide: template.selectionGuide }),
+				...(models === undefined ? {} : { models }),
+				...(template.tools === undefined ? {} : { tools: template.tools }),
+				...(template.skills === undefined ? {} : { skills: template.skills }),
+				...(template.extensions === undefined ? {} : { extensions: template.extensions }),
+				projectContextMode: template.projectContextMode,
+			}];
+		});
 }

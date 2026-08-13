@@ -78,7 +78,10 @@ test("resolves one process-safe ordinary child creation preparation without eval
 		template: {
 			name: "research-agent",
 			selectionGuide: "Use for research.",
-			model: { provider: "template", modelId: "template-model" },
+			models: [{
+				model: { provider: "template", modelId: "template-model" },
+				thinking: "medium",
+			}],
 			tools: ["grep"],
 			skills: ["review", "project-audit"],
 			extensions: "inherit",
@@ -88,7 +91,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 		},
 		overrides: {
 			cwd: "subproject",
-			thinking: "high",
+			model: { id: "template/template-model", thinking: "high" },
 			tools: ["read", "extension_tool"],
 			extensions: "inherit",
 			projectContext: "Spawn instructions",

@@ -521,7 +521,15 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 			async executionEnded() {},
 		},
 		coordination: {
-			async availableTemplates() { return []; },
+			async availableTemplates() {
+				return {
+					currentRuntime: {
+						model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
+						thinking: "off" as const,
+					},
+					templates: [],
+				};
+			},
 			async observe() { return { children: [] }; },
 			async message() { return { messageId: "unused-message", delivery: "pending" }; },
 			async control(_toolCallId, input) {

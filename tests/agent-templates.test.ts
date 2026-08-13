@@ -23,8 +23,9 @@ test("parses the complete strict Agent Template surface", () => {
 			"---",
 			"name: research-agent",
 			"selection-guide: Use for primary-source research.",
-			"model: coordination-test/deterministic-child",
-			"thinking: high",
+			"models:",
+			"  - id: coordination-test/deterministic-child",
+			"    thinking: high",
 			"tools: read, grep",
 			"skills:",
 			"  - research",
@@ -39,11 +40,10 @@ test("parses the complete strict Agent Template surface", () => {
 	assert.deepEqual(template, {
 		name: "research-agent",
 		selectionGuide: "Use for primary-source research.",
-		model: {
-			provider: "coordination-test",
-			modelId: "deterministic-child",
-		},
-		thinking: "high",
+		models: [{
+			model: { provider: "coordination-test", modelId: "deterministic-child" },
+			thinking: "high",
+		}],
 		tools: ["read", "grep"],
 		skills: ["research"],
 		extensions: "none",
@@ -85,6 +85,39 @@ test("allows an absent selection guide but rejects a blank one", () => {
 	);
 });
 
+test("parses ordered model and thinking fallback candidates", () => {
+	const template = parseAgentTemplate(
+		[
+			"---",
+			"name: cheap-delegate",
+			"models:",
+			"  - id: codex-lb/gpt-5.6-luna",
+			"    thinking: max",
+			"  - id: deepseek/deepseek-v4-flash",
+			"    thinking: high",
+			"---",
+		].join("\n"),
+		"/templates/cheap-delegate.md",
+	);
+
+	assert.deepEqual(template.models, [
+		{ model: { provider: "codex-lb", modelId: "gpt-5.6-luna" }, thinking: "max" },
+		{ model: { provider: "deepseek", modelId: "deepseek-v4-flash" }, thinking: "high" },
+	]);
+});
+
+test("rejects top-level Template model and thinking fields", () => {
+	for (const field of ["model: provider/model", "thinking: high"]) {
+		assert.throws(
+			() => parseAgentTemplate(
+				`---\nname: invalid-agent\n${field}\n---\n`,
+				"/templates/invalid-agent.md",
+			),
+			/unknown frontmatter field/,
+		);
+	}
+});
+
 test("rejects YAML capabilities, coercion, and fields outside the Agent Template contract", () => {
 	const invalidTemplates = [
 		"---\nname: research-agent\ndescription: forbidden\n---\n",
@@ -114,15 +147,15 @@ test("discovers whole templates by strict precedence while safely following syml
 	);
 	await writeFile(
 		join(packageRoot, "blocked.md"),
-		"---\nname: blocked-agent\nselection-guide: Use when blocked.\nthinking: low\n---\n",
+		"---\nname: blocked-agent\nselection-guide: Use when blocked.\n---\n",
 	);
 	await writeFile(
 		join(packageRoot, "duplicate-name.md"),
-		"---\nname: duplicate-name-agent\nselection-guide: Use for duplicate checks.\nthinking: low\n---\n",
+		"---\nname: duplicate-name-agent\nselection-guide: Use for duplicate checks.\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "research.md"),
-		"---\nname: research-agent\nselection-guide: Use for research.\nthinking: high\n---\nProject context",
+		"---\nname: research-agent\nselection-guide: Use for research.\nmodels:\n  - id: research/model\n    thinking: high\n---\nProject context",
 	);
 	await writeFile(
 		join(projectRoot, "blocked.md"),
@@ -159,7 +192,10 @@ test("discovers whole templates by strict precedence while safely following syml
 	assert.deepEqual(discovery.templates.get("research-agent"), {
 		name: "research-agent",
 		selectionGuide: "Use for research.",
-		thinking: "high",
+		models: [{
+			model: { provider: "research", modelId: "model" },
+			thinking: "high",
+		}],
 		projectContextMode: "append",
 		projectContext: "Project context",
 		sourcePath: join(projectRoot, "research.md"),
@@ -191,14 +227,16 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 		template: {
 			name: "research-agent",
 			selectionGuide: "Use for research.",
-			model: { provider: "template", modelId: "model" },
+			models: [
+				{ model: { provider: "missing", modelId: "model" }, thinking: "low" },
+				{ model: { provider: "template", modelId: "model" }, thinking: "medium" },
+			],
 			tools: ["read"],
 			projectContextMode: "replace",
 			projectContext: "Template context",
 			sourcePath: "/templates/research.md",
 		},
 		overrides: {
-			thinking: "high",
 			cwd: "subproject",
 			tools: [],
 			extensions: "inherit",
@@ -206,12 +244,13 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 			projectContextMode: "append",
 		},
 		fixedTools: ["agent_message", "agent_spawn"],
+		isModelAvailable: ({ provider }) => provider === "template",
 	});
 
 	assert.deepEqual(configuration, {
 		cwd: "/baseline/project/subproject",
 		model: { provider: "template", modelId: "model" },
-		thinking: "high",
+		thinking: "medium",
 		tools: ["agent_message", "agent_spawn"],
 		skills: ["base-skill"],
 		extensions: ["/extensions/base.ts"],
@@ -222,12 +261,87 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 	});
 });
 
+test("fails when no configured Template model is available", () => {
+	assert.throws(
+		() => resolveAgentRunConfiguration({
+			inherited: {
+				cwd: "/project",
+				model: { provider: "base", modelId: "model" },
+				thinking: "low",
+				tools: [],
+				skills: [],
+				extensions: [],
+			},
+			template: {
+				name: "fallback-agent",
+				models: [
+					{ model: { provider: "missing-a", modelId: "model" }, thinking: "low" },
+					{ model: { provider: "missing-b", modelId: "model" }, thinking: "high" },
+				],
+				projectContextMode: "append",
+				projectContext: "",
+				sourcePath: "/templates/fallback-agent.md",
+			},
+			fixedTools: [],
+			isModelAvailable: () => false,
+		}),
+		/No configured Agent Template model is available: missing-a\/model, missing-b\/model/,
+	);
+});
+
+test("paired spawn model override bypasses unavailable Template candidates", () => {
+	const inherited = {
+		cwd: "/project",
+		model: { provider: "parent", modelId: "model" },
+		thinking: "low" as const,
+		tools: [],
+		skills: [],
+		extensions: [],
+	};
+	const template = {
+		name: "fallback-agent",
+		models: [{
+			model: { provider: "missing", modelId: "model" },
+			thinking: "high" as const,
+		}],
+		projectContextMode: "append" as const,
+		projectContext: "",
+		sourcePath: "/templates/fallback-agent.md",
+	};
+	const base = { inherited, template, fixedTools: [], isModelAvailable: () => false };
+
+	assert.deepEqual(resolveAgentRunConfiguration({
+		...base,
+		overrides: {
+			model: {
+				id: "explicit/model",
+				thinking: "inherit",
+			},
+		},
+	}), {
+		...inherited,
+		model: { provider: "explicit", modelId: "model" },
+		projectContext: { mode: "append", body: "" },
+	});
+	assert.deepEqual(resolveAgentRunConfiguration({
+		...base,
+		overrides: { model: { id: "inherit", thinking: "max" } },
+	}), {
+		...inherited,
+		thinking: "max",
+		projectContext: { mode: "append", body: "" },
+	});
+});
+
 test("creates a public Template catalogue without Project Context bodies or source paths", () => {
 	assert.deepEqual(createAgentTemplateCatalogue([
 		{
 			name: "research-agent",
 			selectionGuide: "Use for research.",
-			thinking: "high",
+			models: [{
+				model: { provider: "research", modelId: "model" },
+				thinking: "high",
+			}],
 			projectContextMode: "replace",
 			projectContext: "Private child instructions.",
 			sourcePath: "/private/research-agent.md",
@@ -251,8 +365,44 @@ test("creates a public Template catalogue without Project Context bodies or sour
 	}, {
 		name: "research-agent",
 		selectionGuide: "Use for research.",
-		thinking: "high",
+		models: [{
+			model: { provider: "research", modelId: "model" },
+			thinking: "high",
+		}],
 		projectContextMode: "replace",
+	}]);
+});
+
+test("catalogue hides unavailable candidates and Templates without one available candidate", () => {
+	const catalogue = createAgentTemplateCatalogue([
+		{
+			name: "partly-available",
+			models: [
+				{ model: { provider: "missing", modelId: "model" }, thinking: "low" },
+				{ model: { provider: "available", modelId: "model" }, thinking: "high" },
+			],
+			projectContextMode: "append",
+			projectContext: "",
+			sourcePath: "/templates/partly-available.md",
+		},
+		{
+			name: "unavailable",
+			models: [
+				{ model: { provider: "missing", modelId: "other" }, thinking: "max" },
+			],
+			projectContextMode: "append",
+			projectContext: "",
+			sourcePath: "/templates/unavailable.md",
+		},
+	], ({ provider }) => provider === "available");
+
+	assert.deepEqual(catalogue, [{
+		name: "partly-available",
+		models: [{
+			model: { provider: "available", modelId: "model" },
+			thinking: "high",
+		}],
+		projectContextMode: "append",
 	}]);
 });
 

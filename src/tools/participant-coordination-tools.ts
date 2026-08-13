@@ -15,7 +15,7 @@ import type {
 	ModeratorControlReceipt,
 } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
-import type { AgentTemplateCatalogueEntry } from "../templates/agent-templates.ts";
+import type { AgentTemplatePromptContext } from "../templates/agent-templates.ts";
 import {
 	renderAgentControlCall,
 	renderAgentControlResult,
@@ -60,7 +60,7 @@ type CommonParticipantCoordinationToolHandlers = Readonly<{
 
 type SpawnParticipantCoordinationToolHandler = Readonly<{
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
-	availableTemplates(): Promise<readonly AgentTemplateCatalogueEntry[]>;
+	availableTemplates(): Promise<AgentTemplatePromptContext>;
 }>;
 
 type HumanParticipantCoordinationToolHandler = Readonly<{
@@ -163,22 +163,23 @@ const agentSpawnParameters = Type.Object(
 					model: Type.Optional(
 						Type.Object(
 							{
-								provider: Type.String({ minLength: 1 }),
-								modelId: Type.String({ minLength: 1 }),
+								id: Type.Union([
+									Type.String({ pattern: "^[^/]+/.+$" }),
+									Type.Literal("inherit"),
+								]),
+								thinking: Type.Union([
+									Type.Literal("off"),
+									Type.Literal("minimal"),
+									Type.Literal("low"),
+									Type.Literal("medium"),
+									Type.Literal("high"),
+									Type.Literal("xhigh"),
+									Type.Literal("max"),
+									Type.Literal("inherit"),
+								]),
 							},
 							{ additionalProperties: false },
 						),
-					),
-					thinking: Type.Optional(
-						Type.Union([
-							Type.Literal("off"),
-							Type.Literal("minimal"),
-							Type.Literal("low"),
-							Type.Literal("medium"),
-							Type.Literal("high"),
-							Type.Literal("xhigh"),
-							Type.Literal("max"),
-						]),
 					),
 					cwd: Type.Optional(Type.String({ minLength: 1 })),
 					tools: Type.Optional(

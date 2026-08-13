@@ -31,6 +31,7 @@ import {
 	selectAgentTemplateForRun,
 	type AgentTemplate,
 	type AgentTemplateCatalogueEntry,
+	type AgentTemplatePromptContext,
 	type AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
 import { AgentRuntimeSupervisor } from "./agent-runtime-supervisor.ts";
@@ -125,6 +126,7 @@ export class ProcessChildSessionFactory {
 			role: "moderator",
 			agentDir: this.#ownerRuntime.services.agentDir,
 			parentRuntime,
+			isModelAvailable: (model) => this.#isModelAvailable(model),
 			...(template === undefined ? {} : { template }),
 		});
 	}
@@ -211,16 +213,28 @@ export class ProcessChildSessionFactory {
 		);
 	}
 
-	async availableTemplatesFor(record: AgentRecord): Promise<readonly AgentTemplateCatalogueEntry[]> {
+	async availableTemplatesFor(record: AgentRecord): Promise<AgentTemplatePromptContext> {
 		const admittedRuntime = record.host.effectiveRuntimeSnapshot();
 		if (admittedRuntime) {
-			return this.#discoverTemplateCatalogueForRuntime(
-				admittedRuntime.cwd,
-				admittedRuntime.projectTrusted,
-			);
+			return {
+				currentRuntime: {
+					model: admittedRuntime.model,
+					thinking: admittedRuntime.thinking,
+				},
+				templates: await this.#discoverTemplateCatalogueForRuntime(
+					admittedRuntime.cwd,
+					admittedRuntime.projectTrusted,
+				),
+			};
 		}
 		const parentRuntime = await this.#resolveCurrentRuntime(record, new Set());
-		return this.#discoverTemplateCatalogue(parentRuntime);
+		return {
+			currentRuntime: {
+				model: parentRuntime.configuration.model,
+				thinking: parentRuntime.configuration.thinking,
+			},
+			templates: await this.#discoverTemplateCatalogue(parentRuntime),
+		};
 	}
 
 	async #discoverTemplateCatalogue(
@@ -237,7 +251,10 @@ export class ProcessChildSessionFactory {
 		projectTrusted: boolean,
 	): Promise<readonly AgentTemplateCatalogueEntry[]> {
 		const discovery = await discoverAgentTemplates(this.#resolveTemplateRoots(cwd, projectTrusted));
-		return createAgentTemplateCatalogue(discovery.templates.values());
+		return createAgentTemplateCatalogue(
+			discovery.templates.values(),
+			(model) => this.#isModelAvailable(model),
+		);
 	}
 
 	async #prepareOrdinaryRun(
@@ -258,6 +275,7 @@ export class ProcessChildSessionFactory {
 			role: "ordinary",
 			agentDir: this.#ownerRuntime.services.agentDir,
 			parentRuntime,
+			isModelAvailable: (model) => this.#isModelAvailable(model),
 			...(template === undefined ? {} : { template }),
 			...(options.spawnInput.config === undefined
 				? {}
@@ -411,6 +429,10 @@ export class ProcessChildSessionFactory {
 				parentCwd,
 				projectTrusted,
 			});
+	}
+
+	#isModelAvailable(model: Readonly<{ provider: string; modelId: string }>): boolean {
+		return this.#ownerRuntime.services.modelRuntime.getModel(model.provider, model.modelId) !== undefined;
 	}
 
 	#isCoordinationExtension(path: string): boolean {

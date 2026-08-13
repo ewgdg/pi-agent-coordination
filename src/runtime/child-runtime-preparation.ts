@@ -9,6 +9,7 @@ import { isAbsolute } from "node:path";
 
 import type {
 	InheritableRuntimeConfiguration,
+	ModelReference,
 } from "../protocol/runtime-configuration.ts";
 import {
 	resolveAgentRunConfiguration,
@@ -61,6 +62,7 @@ export async function prepareChildRuntime(options: {
 	parentRuntime: ResolvedParentRuntime;
 	template?: AgentTemplate;
 	overrides?: AgentSpawnConfigurationInput;
+	isModelAvailable?(model: ModelReference): boolean;
 }): Promise<PreparedChildRuntime> {
 	validateParentSkillSources(options.parentRuntime);
 	const inheritedExtensions = inheritsParentExtensions(
@@ -77,6 +79,7 @@ export async function prepareChildRuntime(options: {
 		template: options.template,
 		overrides: options.overrides,
 		fixedTools: [],
+		isModelAvailable: options.isModelAvailable ?? (() => true),
 	});
 	const configuration = {
 		...resolvedConfiguration,

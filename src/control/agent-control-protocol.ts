@@ -11,7 +11,7 @@ import { RUN_FAILURE_RECOVERY_CUSTOM_TYPE } from "../protocol/custom-entry-types
 import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import type { ModeratorControlInput, ModeratorControlReceipt } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
-import { AgentTemplateCatalogueEntrySchema } from "./control-protocol-schemas.ts";
+import { AgentTemplatePromptContextSchema } from "./control-protocol-schemas.ts";
 import {
 	participantCoordinationToolSchemas,
 	type AgentObserveInput,
@@ -534,7 +534,7 @@ export const agentControlMethods = {
 	},
 	"coordination.templates": {
 		request: EmptySchema,
-		response: Type.Array(AgentTemplateCatalogueEntrySchema),
+		response: AgentTemplatePromptContextSchema,
 	},
 	"coordination.askHuman": {
 		request: ToolIntention(HumanRequestInputSchema),

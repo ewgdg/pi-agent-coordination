@@ -52,7 +52,6 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	}
 	requireExactKeys(value, [
 		...(value.model === undefined ? [] : ["model"]),
-		...(value.thinking === undefined ? [] : ["thinking"]),
 		...(value.cwd === undefined ? [] : ["cwd"]),
 		...(value.tools === undefined ? [] : ["tools"]),
 		...(value.skills === undefined ? [] : ["skills"]),
@@ -61,9 +60,6 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 		...(value.projectContextMode === undefined ? [] : ["projectContextMode"]),
 	]);
 	const model = value.model === undefined ? undefined : validateModel(value.model);
-	const thinking = value.thinking === undefined
-		? undefined
-		: validateThinking(value.thinking);
 	const cwd = value.cwd === undefined ? undefined : requireNonEmptyString(value.cwd, "cwd");
 	const tools = value.tools === undefined ? undefined : validateStringList(value.tools, "tools");
 	const skills = value.skills === undefined ? undefined : validateStringList(value.skills, "skills");
@@ -91,7 +87,6 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	}
 	return {
 		...(model === undefined ? {} : { model }),
-		...(thinking === undefined ? {} : { thinking }),
 		...(cwd === undefined ? {} : { cwd }),
 		...(tools === undefined ? {} : { tools }),
 		...(skills === undefined ? {} : { skills }),
@@ -101,15 +96,30 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	};
 }
 
-function validateModel(value: unknown): Readonly<{ provider: string; modelId: string }> {
+function validateModel(value: unknown): NonNullable<AgentSpawnConfigurationInput["model"]> {
 	if (!isRecord(value)) {
 		throw new Error("invalid_input: Agent Spawn config.model must be an object");
 	}
-	requireExactKeys(value, ["provider", "modelId"]);
+	requireExactKeys(value, ["id", "thinking"]);
+	const id = value.id === "inherit"
+		? "inherit"
+		: validateModelId(value.id);
+	const thinking = value.thinking === "inherit"
+		? "inherit"
+		: validateThinking(value.thinking);
 	return {
-		provider: requireNonEmptyString(value.provider, "model.provider"),
-		modelId: requireNonEmptyString(value.modelId, "model.modelId"),
+		id,
+		thinking,
 	};
+}
+
+function validateModelId(value: unknown): string {
+	const id = requireNonEmptyString(value, "model.id");
+	const separator = id.indexOf("/");
+	if (separator <= 0 || separator === id.length - 1) {
+		throw new Error('invalid_input: Agent Spawn config.model.id must be provider/model or "inherit"');
+	}
+	return id;
 }
 
 function validateThinking(value: unknown): RuntimeThinkingLevel {

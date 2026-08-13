@@ -14,8 +14,7 @@ import type {
 const TEMPLATE_FIELDS = new Set([
 	"name",
 	"selection-guide",
-	"model",
-	"thinking",
+	"models",
 	"tools",
 	"skills",
 	"extensions",
@@ -89,12 +88,9 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 	const selectionGuide = mapping["selection-guide"] === undefined
 		? undefined
 		: parseSelectionGuide(mapping["selection-guide"], sourcePath, name);
-	const model = mapping.model === undefined
+	const models = mapping.models === undefined
 		? undefined
-		: parseModelReference(mapping.model, sourcePath, name);
-	const thinking = mapping.thinking === undefined
-		? undefined
-		: parseThinking(mapping.thinking, sourcePath, name);
+		: parseModelCandidates(mapping.models, sourcePath, name);
 	const tools = mapping.tools === undefined
 		? undefined
 		: parseStringSelection(mapping.tools, "tools", sourcePath, name);
@@ -111,8 +107,7 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 	return {
 		name,
 		...(selectionGuide === undefined ? {} : { selectionGuide }),
-		...(model === undefined ? {} : { model }),
-		...(thinking === undefined ? {} : { thinking }),
+		...(models === undefined ? {} : { models }),
 		...(tools === undefined ? {} : { tools }),
 		...(skills === undefined ? {} : { skills }),
 		...(extensions === undefined ? {} : { extensions }),
@@ -178,8 +173,47 @@ function parseSelectionGuide(
 	return value.trim();
 }
 
-function parseModelReference(
+function parseModelCandidates(
 	value: unknown,
+	sourcePath: string,
+	templateName: string,
+): AgentTemplate["models"] {
+	if (!Array.isArray(value) || value.length === 0) {
+		throw new AgentTemplateParseError(
+			sourcePath,
+			"models must be a nonempty sequence of id/thinking mappings",
+			templateName,
+		);
+	}
+	const models = value.map((candidate) => {
+		if (
+			typeof candidate !== "object" || candidate === null || Array.isArray(candidate) ||
+			Object.keys(candidate).some((key) => key !== "id" && key !== "thinking") ||
+			!("id" in candidate) || !("thinking" in candidate)
+		) {
+			throw new AgentTemplateParseError(
+				sourcePath,
+				"each models entry must contain only id and thinking",
+				templateName,
+			);
+		}
+		if (typeof candidate.id !== "string") {
+			throw new AgentTemplateParseError(sourcePath, "model id must be provider/model", templateName);
+		}
+		return {
+			model: parseModelReference(candidate.id, sourcePath, templateName),
+			thinking: parseThinking(candidate.thinking, sourcePath, templateName),
+		};
+	});
+	const identities = models.map(({ model }) => `${model.provider}\0${model.modelId}`);
+	if (new Set(identities).size !== identities.length) {
+		throw new AgentTemplateParseError(sourcePath, "models contains a duplicate id", templateName);
+	}
+	return models;
+}
+
+function parseModelReference(
+	value: string,
 	sourcePath: string,
 	templateName: string,
 ): ModelReference {

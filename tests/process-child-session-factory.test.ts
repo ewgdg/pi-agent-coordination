@@ -38,7 +38,7 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 	const templatePath = join(templateRoot, "parent.md");
 	await writeFile(
 		templatePath,
-		"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\ntools:\n  - read\n  - bash\n---\n",
+		"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\ntools:\n  - read\n  - bash\n---\n",
 	);
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
@@ -99,10 +99,15 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 		});
 		assert.equal(first.configuration.tools.includes("read"), true);
 		assert.equal(first.configuration.tools.includes("bash"), true);
+		assert.deepEqual(first.configuration.model, {
+			provider: "coordination-test",
+			modelId: "deterministic-owner",
+		});
+		assert.equal(first.configuration.thinking, "high");
 
 		await writeFile(
 			templatePath,
-			"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\ntools: read\n---\n",
+			"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\ntools: read\n---\n",
 		);
 		const second = await factory.prepareOrdinaryRun({
 			agentId: "descendant",
@@ -249,7 +254,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 			request: "Prove the process Runtime and inspect your coordinated status.",
 			config: {
 				cwd: effectiveCwd,
-				model: { provider: broker.providerId, modelId: broker.modelId },
+				model: { id: `${broker.providerId}/${broker.modelId}`, thinking: "inherit" as const },
 				tools: ["bash"],
 			},
 		};
@@ -355,7 +360,7 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 		const input = {
 			request: "Materialize me before deterministic process startup failure.",
 			config: {
-				model: { provider: "missing-process-provider", modelId: "missing-process-model" },
+				model: { id: "missing-process-provider/missing-process-model", thinking: "inherit" as const },
 				extensions: "none" as const,
 			},
 		};
@@ -456,7 +461,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		const input = {
 			request: "Fail this answer-obligated process Run so Moderator retry is required.",
 			config: {
-				model: { provider: broker.providerId, modelId: broker.modelId },
+				model: { id: `${broker.providerId}/${broker.modelId}`, thinking: "inherit" as const },
 			},
 		};
 		host.session.sessionManager.appendMessage(

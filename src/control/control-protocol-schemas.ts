@@ -22,11 +22,12 @@ export const ControlEndpointSchema = Type.Union([
 export const AgentTemplateCatalogueEntrySchema = Type.Object({
 	name: NonEmptyStringSchema,
 	selectionGuide: Type.Optional(NonEmptyStringSchema),
-	model: Type.Optional(Type.Object({
-		provider: NonEmptyStringSchema,
-		modelId: NonEmptyStringSchema,
-	}, { additionalProperties: false })),
-	thinking: Type.Optional(Type.Union([
+	models: Type.Optional(Type.Array(Type.Object({
+		model: Type.Object({
+			provider: NonEmptyStringSchema,
+			modelId: NonEmptyStringSchema,
+		}, { additionalProperties: false }),
+		thinking: Type.Union([
 		Type.Literal("off"),
 		Type.Literal("minimal"),
 		Type.Literal("low"),
@@ -34,11 +35,27 @@ export const AgentTemplateCatalogueEntrySchema = Type.Object({
 		Type.Literal("high"),
 		Type.Literal("xhigh"),
 		Type.Literal("max"),
-	])),
+		]),
+	}, { additionalProperties: false }), { minItems: 1, uniqueItems: true })),
 	tools: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	skills: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	extensions: Type.Optional(Type.Union([Type.Literal("inherit"), Type.Literal("none")])),
 	projectContextMode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
+}, { additionalProperties: false });
+
+export const AgentTemplatePromptContextSchema = Type.Object({
+	currentRuntime: Type.Object({
+		model: Type.Object({
+			provider: NonEmptyStringSchema,
+			modelId: NonEmptyStringSchema,
+		}, { additionalProperties: false }),
+		thinking: Type.Union([
+			Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"),
+			Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"),
+			Type.Literal("max"),
+		]),
+	}, { additionalProperties: false }),
+	templates: Type.Array(AgentTemplateCatalogueEntrySchema),
 }, { additionalProperties: false });
 
 export type ControlEndpoint = Static<typeof ControlEndpointSchema>;

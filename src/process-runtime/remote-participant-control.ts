@@ -204,9 +204,10 @@ export async function dispatchParticipantRequestToOwner(
 			);
 			break;
 		case "coordination.templates":
-			response = "availableTemplates" in handlers.coordination
-				? await handlers.coordination.availableTemplates()
-				: [];
+			if (!("availableTemplates" in handlers.coordination)) {
+				throw unavailableForRole(request.method);
+			}
+			response = await handlers.coordination.availableTemplates();
 			break;
 		case "coordination.askHuman":
 			if (!("askUserQuestion" in handlers.coordination)) throw unavailableForRole(request.method);

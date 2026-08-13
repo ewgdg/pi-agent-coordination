@@ -69,7 +69,13 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 		return { disposition: "not_created", failedStage: "identity_commit" };
 	},
 	async availableTemplates() {
-		return [];
+		return {
+			currentRuntime: {
+				model: { provider: "test", modelId: "model" },
+				thinking: "off",
+			},
+			templates: [],
+		};
 	},
 	async observe() {
 		return agentStatus;
@@ -120,13 +126,26 @@ test("Agent Spawn schema rejects extension path arrays", () => {
 	}), false);
 });
 
-test("Template catalogue shows guides and frontmatter defaults without Project Context bodies", () => {
-	const catalogue = renderAgentTemplateCatalogue([
+test("Template catalogue shows current Runtime and available Template configuration", () => {
+	const catalogue = renderAgentTemplateCatalogue({
+		currentRuntime: {
+			model: { provider: "current", modelId: "model" },
+			thinking: "low",
+		},
+		templates: [
 		{
 			name: "integration-researcher",
 			selectionGuide: "Use for integration research requiring primary sources.",
-			model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
-			thinking: "high",
+			models: [
+				{
+					model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
+					thinking: "high",
+				},
+				{
+					model: { provider: "deepseek", modelId: "deepseek-v4-flash" },
+					thinking: "medium",
+				},
+			],
 			tools: ["read", "bash"],
 			skills: ["research"],
 			extensions: "none",
@@ -136,24 +155,36 @@ test("Template catalogue shows guides and frontmatter defaults without Project C
 			name: "plain-agent",
 			projectContextMode: "append",
 		},
-	]);
+		],
+	});
 
 	assert.match(catalogue ?? "", /integration-researcher/);
 	assert.match(catalogue ?? "", /Use for integration research requiring primary sources\./);
 	assert.match(catalogue ?? "", /anthropic\/claude-sonnet-4-5/);
 	assert.match(catalogue ?? "", /project-context: replace/);
 	assert.match(catalogue ?? "", /- name: plain-agent\n  project-context: append/);
+	assert.match(catalogue, /## Current Agent Runtime/);
+	assert.match(catalogue, /id: current\/model/);
 });
 
 test("Template catalogue is injected into the model prompt", async () => {
 	let observedSystemPrompt = "";
 	const host = await createTestOwnerHost((pi) => {
-		registerAgentTemplateCataloguePrompt(pi, async () => [{
-			name: "integration-researcher",
-			selectionGuide: "Use for integration research.",
-			thinking: "high",
-			projectContextMode: "append",
-		}]);
+		registerAgentTemplateCataloguePrompt(pi, async () => ({
+			currentRuntime: {
+				model: { provider: "current", modelId: "model" },
+				thinking: "low",
+			},
+			templates: [{
+				name: "integration-researcher",
+				selectionGuide: "Use for integration research.",
+				models: [{
+					model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
+					thinking: "high",
+				}],
+				projectContextMode: "append",
+			}],
+		}));
 	});
 	host.model.setResponses([(context) => {
 		observedSystemPrompt = context.systemPrompt ?? "";
@@ -260,7 +291,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 			return spawnReceipt;
 		},
 		async availableTemplates() {
-			return [];
+			return handlers.availableTemplates();
 		},
 		async observe(input) {
 			calls.push(["observe", input]);

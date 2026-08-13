@@ -12,3 +12,45 @@ test("Agent Spawn rejects extension path arrays at input validation", () => {
 		/Agent Spawn config\.extensions must be "inherit" or "none"/,
 	);
 });
+
+test("Agent Spawn validates paired model overrides with explicit inheritance", () => {
+	assert.deepEqual(validateAgentSpawnInput({
+		request: "Use an explicit model with inherited thinking.",
+		config: {
+			model: { id: "provider/model", thinking: "inherit" },
+		},
+	}), {
+		request: "Use an explicit model with inherited thinking.",
+		config: {
+			model: {
+				id: "provider/model",
+				thinking: "inherit",
+			},
+		},
+	});
+	assert.deepEqual(validateAgentSpawnInput({
+		request: "Use an inherited model with explicit thinking.",
+		config: {
+			model: { id: "inherit", thinking: "max" },
+		},
+	}).config?.model, { id: "inherit", thinking: "max" });
+	for (const model of [
+		{ id: "provider/model" },
+	]) {
+		assert.throws(
+			() => validateAgentSpawnInput({ request: "Invalid pair.", config: { model } }),
+			/invalid shape/,
+		);
+	}
+	assert.deepEqual(validateAgentSpawnInput({
+		request: "Explicitly inherit both values.",
+		config: { model: { id: "inherit", thinking: "inherit" } },
+	}).config?.model, { id: "inherit", thinking: "inherit" });
+	assert.throws(
+		() => validateAgentSpawnInput({
+			request: "Standalone thinking is obsolete.",
+			config: { thinking: "high" },
+		}),
+		/invalid shape/,
+	);
+});

@@ -52,6 +52,7 @@ import type {
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type {
 	AgentTemplateCatalogueEntry,
+	AgentTemplatePromptContext,
 	AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
 import { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
@@ -154,7 +155,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 
 export type OrdinaryAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
-	availableTemplates(): Promise<readonly AgentTemplateCatalogueEntry[]>;
+	availableTemplates(): Promise<AgentTemplatePromptContext>;
 }>;
 
 export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{

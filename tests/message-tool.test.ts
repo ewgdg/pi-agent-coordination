@@ -144,7 +144,10 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 		template: "research-agent",
 		label: "Researcher",
 		description: "Primary-source investigation",
-		config: { cwd: "subproject", thinking: "high" as const },
+		config: {
+			cwd: "subproject",
+			model: { id: "inherit", thinking: "high" as const },
+		},
 	};
 	const renderContext = {
 		args,

@@ -11,8 +11,10 @@ import type {
 } from "./agent-templates.ts";
 
 export type AgentSpawnConfigurationInput = Readonly<{
-	model?: ModelReference;
-	thinking?: RuntimeThinkingLevel;
+	model?: Readonly<{
+		id: string | "inherit";
+		thinking: RuntimeThinkingLevel | "inherit";
+	}>;
 	cwd?: string;
 	tools?: readonly string[];
 	skills?: readonly string[];
@@ -39,6 +41,7 @@ export function resolveAgentRunConfiguration(options: {
 	template?: AgentTemplate;
 	overrides?: AgentSpawnConfigurationInput;
 	fixedTools: readonly string[];
+	isModelAvailable(model: ModelReference): boolean;
 }): EffectiveAgentRunConfiguration {
 	const { inherited, template, overrides } = options;
 	const configuredTools = overrides?.tools ?? template?.tools ?? inherited.tools;
@@ -50,18 +53,48 @@ export function resolveAgentRunConfiguration(options: {
 		inherited.extensions,
 	);
 	const projectContext = resolveProjectContext(template, overrides);
+	const modelConfiguration = overrides?.model
+		? {
+			model: overrides.model.id === "inherit"
+				? inherited.model
+				: parseModelId(overrides.model.id),
+			thinking: overrides.model.thinking === "inherit"
+				? inherited.thinking
+				: overrides.model.thinking,
+		}
+		: resolveTemplateModelConfiguration(
+			inherited,
+			template?.models,
+			options.isModelAvailable,
+		);
 
 	return {
 		cwd: resolve(inherited.cwd, overrides?.cwd ?? inherited.cwd),
-		model: {
-			...(overrides?.model ?? template?.model ?? inherited.model),
-		},
-		thinking: overrides?.thinking ?? template?.thinking ?? inherited.thinking,
+		model: { ...modelConfiguration.model },
+		thinking: modelConfiguration.thinking,
 		tools: unique([...configuredTools, ...options.fixedTools]),
 		skills: [...configuredSkills],
 		extensions: [...configuredExtensions],
 		...(projectContext === undefined ? {} : { projectContext }),
 	};
+}
+
+function parseModelId(id: string): ModelReference {
+	const separator = id.indexOf("/");
+	return { provider: id.slice(0, separator), modelId: id.slice(separator + 1) };
+}
+
+function resolveTemplateModelConfiguration(
+	inherited: Readonly<{ model: ModelReference; thinking: RuntimeThinkingLevel }>,
+	templateModels: AgentTemplate["models"],
+	isModelAvailable: (model: ModelReference) => boolean,
+): Readonly<{ model: ModelReference; thinking: RuntimeThinkingLevel }> {
+	if (!templateModels) return { model: inherited.model, thinking: inherited.thinking };
+	const selected = templateModels.find(({ model }) => isModelAvailable(model));
+	if (selected) return selected;
+	throw new Error(
+		`No configured Agent Template model is available: ${templateModels.map(({ model }) => `${model.provider}/${model.modelId}`).join(", ")}`,
+	);
 }
 
 function resolveExtensions(
