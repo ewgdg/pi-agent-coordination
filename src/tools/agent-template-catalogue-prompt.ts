@@ -37,7 +37,9 @@ export function renderAgentTemplateCatalogue(
 						],
 					),
 				]),
-			...(template.tools === undefined ? [] : [`  tools: ${JSON.stringify(template.tools)}`]),
+			...(template.allowedTools === undefined
+				? []
+				: [`  allowed-tools: ${JSON.stringify(template.allowedTools)}`]),
 			...(template.skills === undefined ? [] : [`  skills: ${JSON.stringify(template.skills)}`]),
 			...(template.extensions === undefined
 				? []

@@ -146,7 +146,7 @@ test("Template catalogue shows current Runtime and available Template configurat
 					thinking: "medium",
 				},
 			],
-			tools: ["read", "bash"],
+			allowedTools: ["read", "bash"],
 			skills: ["research"],
 			extensions: "none",
 			projectContextMode: "replace",

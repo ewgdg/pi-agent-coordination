@@ -3,6 +3,23 @@ import test from "node:test";
 
 import { validateAgentSpawnInput } from "../src/protocol/agent-spawn-input.ts";
 
+test("Agent Spawn accepts allowed_tools as the tool capability ceiling", () => {
+	assert.deepEqual(validateAgentSpawnInput({
+		request: "Inspect the child Runtime.",
+		config: { allowed_tools: ["read", "extension_tool"] },
+	}), {
+		request: "Inspect the child Runtime.",
+		config: { allowed_tools: ["read", "extension_tool"] },
+	});
+	assert.throws(
+		() => validateAgentSpawnInput({
+			request: "Do not retain the obsolete exact-tool field.",
+			config: { tools: ["read"] },
+		}),
+		/invalid shape/,
+	);
+});
+
 test("Agent Spawn rejects extension path arrays at input validation", () => {
 	assert.throws(
 		() => validateAgentSpawnInput({

@@ -249,7 +249,7 @@ function createFakeRuntime(options: Readonly<{
 		dispose: async () => undefined,
 	} as unknown as PiChildProcessLaunch;
 	return {
-		runtime: new PiChildHostedRuntime(launch),
+		runtime: new PiChildHostedRuntime(launch, []),
 		requestedMethods,
 		queueClearStarted,
 		rejectQueueClear,

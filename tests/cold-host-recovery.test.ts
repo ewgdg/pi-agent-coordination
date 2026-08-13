@@ -521,7 +521,7 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 	await mkdir(templateDirectory, { recursive: true });
 	await writeFile(
 		templatePath,
-		"---\nname: residual-agent\nselection-guide: Use for residual work.\ntools: read\n---\nInitial context",
+		"---\nname: residual-agent\nselection-guide: Use for residual work.\nallowed-tools: read\n---\nInitial context",
 	);
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
@@ -545,7 +545,7 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 	await host.runtime.dispose();
 	await writeFile(
 		templatePath,
-		"---\nname: residual-agent\nselection-guide: Use for residual work.\ntools:\n  - read\n  - bash\n---\nCurrent context",
+		"---\nname: residual-agent\nselection-guide: Use for residual work.\nallowed-tools:\n  - read\n  - bash\n---\nCurrent context",
 	);
 
 	const reopened = await reopenOwner(host, ownerSessionFile);
@@ -877,7 +877,14 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 		"agent_message",
 		"agent_observe",
 		"ask_user_question",
+		"bash",
+		"edit",
+		"find",
+		"grep",
+		"ls",
 		"moderator_control",
+		"read",
+		"write",
 	]);
 	await reopened.runtime.dispose();
 });

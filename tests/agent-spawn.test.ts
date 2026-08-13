@@ -100,7 +100,14 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			cwd: host.cwd,
 			model: { provider: "coordination-test", modelId: "deterministic-owner" },
 			thinking: "off",
-			tools: [
+			allowedTools: [
+				"read",
+				"bash",
+				"edit",
+				"write",
+				"grep",
+				"find",
+				"ls",
 				"agent_message",
 				"agent_control",
 				"agent_observe",
@@ -245,7 +252,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 	new ProjectTrustStore(host.services.agentDir).set(effectiveCwd, true);
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nselection-guide: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\ntools: read\n---\nTemplate context",
+		"---\nname: research-agent\nselection-guide: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowed-tools: read\n---\nTemplate context",
 	);
 	await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
 	await writeFile(
@@ -301,7 +308,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 		cwd: effectiveCwd,
 		model: { provider: "coordination-test", modelId: "deterministic-owner" },
 		thinking: "off",
-		tools: [
+		allowedTools: [
 			"read",
 			"agent_message",
 			"agent_control",
@@ -325,7 +332,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 	assert.match(observedSystemPrompt, /Template context/);
 	assert.match(observedSystemPrompt, /Spawn context/);
 	assert.doesNotMatch(observedSystemPrompt, /Wrong discovery root/);
-	for (const toolName of receipt.effectiveConfiguration.tools) {
+	for (const toolName of receipt.effectiveConfiguration.allowedTools) {
 		assert.ok(observedTools.includes(toolName), `missing model-visible tool ${toolName}`);
 	}
 
@@ -381,7 +388,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 	assert.equal(termination.disposition, "terminated");
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nselection-guide: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\ntools: read\n---\nChanged Template context",
+		"---\nname: research-agent\nselection-guide: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowed-tools: read\n---\nChanged Template context",
 	);
 	await writeFile(join(effectiveCwd, "AGENTS.md"), "Changed effective-cwd context");
 	let successorSystemPrompt = "";
@@ -565,7 +572,7 @@ test("effective cwd honors Pi's default project-trust policy", async () => {
 	await harness.shutdown();
 });
 
-test("unavailable inherited tools remain visible in the startup-failure receipt", async () => {
+test("allowed tools need not be registered or active in the child Runtime", async () => {
 	const ownerOnlyTool: ExtensionFactory = (pi) => {
 		pi.registerTool({
 			name: "owner_only_probe",
@@ -580,14 +587,10 @@ test("unavailable inherited tools remain visible in the startup-failure receipt"
 	const harness = await createCoordinatorHarness({}, ownerOnlyTool);
 	const receipt = await harness.spawn("spawn-missing-inherited-resource");
 
-	assert.equal(receipt.disposition, "created_unscheduled");
+	assert.equal(receipt.disposition, "pending");
 	assert.ok("agentId" in receipt);
-	assert.equal(receipt.failedStage, "run_start");
-	assert.deepEqual(harness.view.children()[0]?.run, {
-		phase: "dormant",
-		retentionReasons: [],
-	});
-	assert.ok(receipt.effectiveConfiguration.tools.includes("owner_only_probe"));
+	assert.equal(harness.view.children()[0]?.run.phase, "live");
+	assert.ok(receipt.effectiveConfiguration.allowedTools.includes("owner_only_probe"));
 	assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
 	assert.match(
 		receipt.effectiveConfiguration.extensions[0]!,

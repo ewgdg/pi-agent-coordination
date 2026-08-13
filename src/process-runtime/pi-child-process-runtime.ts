@@ -633,12 +633,12 @@ async function assertRuntimeSnapshot(
 	sessionPath: string,
 	contextArtifactPath: string | undefined,
 ): Promise<void> {
-	assertToolExecutionModes(actual, expected.tools);
+	assertAllowedTools(actual, expected.allowedTools);
 	const expectedSnapshot: PiChildRuntimeSnapshot = {
 		cwd: expected.cwd,
 		model: expected.model,
 		thinking: expected.thinking,
-		tools: [...expected.tools],
+		tools: [...actual.tools],
 		skills: [...expected.skills],
 		skillSources: await Promise.all(expected.skills.map(async (name, index) => ({
 			name,
@@ -663,14 +663,21 @@ async function assertRuntimeSnapshot(
 	}
 }
 
-function assertToolExecutionModes(
+function assertAllowedTools(
 	actual: PiChildRuntimeSnapshot,
-	expectedTools: readonly string[],
+	allowedTools: readonly string[],
 ): void {
+	const allowedToolNames = new Set(allowedTools);
 	const modeNames = actual.toolExecutionModes.map(({ name }) => name);
-	if (JSON.stringify(modeNames) !== JSON.stringify(expectedTools)) {
+	if (JSON.stringify(modeNames) !== JSON.stringify(actual.tools)) {
 		throw new Error(
-			`child_runtime_tool_modes_mismatch: expected ${JSON.stringify(expectedTools)}, received ${JSON.stringify(modeNames)}`,
+			`child_runtime_tool_modes_mismatch: tools ${JSON.stringify(actual.tools)}, modes ${JSON.stringify(modeNames)}`,
+		);
+	}
+	const disallowedTools = actual.tools.filter((name) => !allowedToolNames.has(name));
+	if (disallowedTools.length > 0) {
+		throw new Error(
+			`child_runtime_disallowed_tools: ${JSON.stringify(disallowedTools)} exceed ${JSON.stringify(allowedTools)}`,
 		);
 	}
 }

@@ -68,7 +68,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 				cwd: parentCwd,
 				model: { provider: "parent", modelId: "parent-model" },
 				thinking: "low",
-				tools: ["bash"],
+				allowedTools: ["bash"],
 				skills: ["review"],
 				extensions: ["<inline:parent-factory>", extensionAliasPath, extensionPath],
 			},
@@ -82,7 +82,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 				model: { provider: "template", modelId: "template-model" },
 				thinking: "medium",
 			}],
-			tools: ["grep"],
+			allowedTools: ["grep"],
 			skills: ["review", "project-audit"],
 			extensions: "inherit",
 			projectContextMode: "append",
@@ -92,7 +92,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 		overrides: {
 			cwd: "subproject",
 			model: { id: "template/template-model", thinking: "high" },
-			tools: ["read", "extension_tool"],
+			allowed_tools: ["read", "extension_tool"],
 			extensions: "inherit",
 			projectContext: "Spawn instructions",
 			projectContextMode: "append",
@@ -106,7 +106,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			cwd: effectiveCwd,
 			model: { provider: "template", modelId: "template-model" },
 			thinking: "high",
-			tools: [
+			allowedTools: [
 				"read",
 				"extension_tool",
 				"agent_message",
@@ -159,7 +159,7 @@ test("extensions none does not inspect or carry inherited extension paths", asyn
 				cwd,
 				model: { provider: "test", modelId: "model" },
 				thinking: "off",
-				tools: [],
+				allowedTools: [],
 				skills: [],
 				extensions: [join(fixture, "missing-parent-extension.ts")],
 			},
@@ -200,7 +200,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 			cwd: parentCwd,
 			model: { provider: "parent", modelId: "model" },
 			thinking: "minimal" as const,
-			tools: ["read"],
+			allowedTools: ["read"],
 			skills: [],
 			extensions: [],
 		},
@@ -227,7 +227,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		cwd: parentCwd,
 		model: { provider: "parent", modelId: "model" },
 		thinking: "minimal",
-		tools: [
+		allowedTools: [
 			"read",
 			"agent_message",
 			"agent_control",
@@ -280,7 +280,7 @@ test("replaces inherited or configured coordination tools with the exact child r
 				cwd,
 				model: { provider: "test", modelId: "model" },
 				thinking: "off",
-				tools: ["bash", "agent_spawn", "moderator_control"],
+				allowedTools: ["bash", "agent_spawn", "moderator_control"],
 				skills: [],
 				extensions: [],
 			},
@@ -288,11 +288,11 @@ test("replaces inherited or configured coordination tools with the exact child r
 			skillSources: [],
 		},
 		overrides: {
-			tools: ["read", "moderator_control", "agent_message"],
+			allowed_tools: ["read", "moderator_control", "agent_message"],
 		},
 	});
 
-	assert.deepEqual(preparation.configuration.tools, [
+	assert.deepEqual(preparation.configuration.allowedTools, [
 		"read",
 		"agent_message",
 		"agent_control",

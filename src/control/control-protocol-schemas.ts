@@ -37,7 +37,7 @@ export const AgentTemplateCatalogueEntrySchema = Type.Object({
 		Type.Literal("max"),
 		]),
 	}, { additionalProperties: false }), { minItems: 1, uniqueItems: true })),
-	tools: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
+	allowedTools: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	skills: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	extensions: Type.Optional(Type.Union([Type.Literal("inherit"), Type.Literal("none")])),
 	projectContextMode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),

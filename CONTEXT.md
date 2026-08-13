@@ -58,7 +58,7 @@ A user-authored named partial Agent Runtime configuration selected by name durin
 _Avoid_: Agent profile, Agent role
 
 **Agent Spawn Configuration**:
-The optional caller-authored `config` object in the canonical Agent Spawn tool call. It is the only durable child Runtime configuration input and may override model, thinking, working directory, ordinary tools, skills, extension inheritance, and Project Context. It is never expanded into durable effective configuration.
+The optional caller-authored `config` object in the canonical Agent Spawn tool call. It is the only durable child Runtime configuration input and may override model, thinking, working directory, the ordinary-tool allowlist, skills, extension inheritance, and Project Context. The allowlist is a capability ceiling; Pi and extensions own the active subset and its order. It is never expanded into durable effective configuration.
 _Avoid_: Agent settings, runtime state, inheritance snapshot
 
 **Runtime Preparation**:

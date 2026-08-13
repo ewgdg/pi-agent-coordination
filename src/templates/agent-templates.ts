@@ -14,7 +14,7 @@ export type AgentTemplate = Readonly<{
 	name: string;
 	selectionGuide?: string;
 	models?: readonly AgentTemplateModelCandidate[];
-	tools?: readonly string[];
+	allowedTools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
 	projectContextMode: ProjectContextMode;
@@ -27,7 +27,7 @@ export type AgentTemplateCatalogueEntry = Readonly<{
 	name: string;
 	selectionGuide?: string;
 	models?: readonly AgentTemplateModelCandidate[];
-	tools?: readonly string[];
+	allowedTools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
 	projectContextMode: ProjectContextMode;
@@ -95,7 +95,7 @@ export function createAgentTemplateCatalogue(
 					? {}
 					: { selectionGuide: template.selectionGuide }),
 				...(models === undefined ? {} : { models }),
-				...(template.tools === undefined ? {} : { tools: template.tools }),
+				...(template.allowedTools === undefined ? {} : { allowedTools: template.allowedTools }),
 				...(template.skills === undefined ? {} : { skills: template.skills }),
 				...(template.extensions === undefined ? {} : { extensions: template.extensions }),
 				projectContextMode: template.projectContextMode,

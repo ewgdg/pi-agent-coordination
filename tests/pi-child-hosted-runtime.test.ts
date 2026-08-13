@@ -46,6 +46,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 		cwd,
 	})}\n`, { mode: 0o600 });
 
+	const launchAllowedTools = ["read"] as const;
 	const launch = await PiChildProcessRuntime.launch({
 		workflowId: "hosted-runtime-test-workflow",
 		agentId: "hosted-runtime-test-agent",
@@ -59,7 +60,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: ["read"],
+			allowedTools: launchAllowedTools,
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 		},
@@ -78,7 +79,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 	});
 	const pid = launch.pid;
 	const bootstrapPath = launch.bootstrapPath;
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime(launch, launchAllowedTools);
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId: expectedSessionId,
 		startSession: async () => ({ runtime, ready: runtime.ready }),
@@ -95,6 +96,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
+			allowedTools: ["read"],
 			tools: ["read"],
 			skills: [],
 			skillSources: [],
@@ -244,7 +246,7 @@ test("a hosted child atomically refreshes its effective snapshot and tool modes"
 			},
 		},
 	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers));
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), ["sequential-tool"]);
 	await runtime.ready;
 	assert.equal(runtime.snapshot().model.modelId, "initial-model");
 	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
@@ -264,6 +266,7 @@ test("a hosted child atomically refreshes its effective snapshot and tool modes"
 		cwd: "/runtime",
 		model: { provider: "test", modelId: "current-model" },
 		thinking: "high",
+		allowedTools: ["sequential-tool"],
 		tools: ["sequential-tool"],
 		skills: [],
 		skillSources: [],
@@ -324,7 +327,7 @@ test("a prepared hosted child has no Run queue or abort intention", async () => 
 			},
 		},
 	} as unknown as PiChildProcessRuntime;
-	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, new Set()));
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, new Set()), []);
 	await runtime.ready;
 	assert.deepEqual(await runtime.clearQueue(), { steering: [], followUp: [] });
 	await runtime.abort();
@@ -384,7 +387,10 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 		},
 		dispose: async () => undefined,
 	} as unknown as PiChildProcessLaunch;
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime(
+		launch,
+		["parallel-tool", "sequential-tool"],
+	);
 	await runtime.ready;
 	assert.equal(runtime.classifyToolBatch(["parallel-tool"]), "asynchronous");
 	assert.equal(
@@ -576,7 +582,7 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: [],
+			allowedTools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 		},
@@ -596,7 +602,7 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 		rows: 24,
 		ownerRequestHandlers: ordinaryOwnerHandlers(`hosted-${name}-agent`),
 	});
-	const runtime = new PiChildHostedRuntime(launch);
+	const runtime = new PiChildHostedRuntime(launch, []);
 	const host = AgentRuntimeSupervisor.createChild({
 		agentId: expectedSessionId,
 		startSession: async () => ({ runtime, ready: runtime.ready }),

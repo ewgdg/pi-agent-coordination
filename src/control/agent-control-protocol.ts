@@ -210,7 +210,7 @@ const EffectiveConfigurationSchema = closed({
 		Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"),
 		Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
 	]),
-	tools: StringListSchema,
+	allowedTools: StringListSchema,
 	skills: StringListSchema,
 	extensions: StringListSchema,
 	projectContext: Type.Optional(closed({

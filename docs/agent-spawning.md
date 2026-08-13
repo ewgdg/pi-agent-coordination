@@ -14,22 +14,24 @@ agent_spawn({
       id: "inherit",
       thinking: "high",
     },
-    tools: ["read", "grep"],
+    allowed_tools: ["read", "grep"],
     projectContext: "Reproduce the failure before proposing changes.",
     projectContextMode: "append",
   },
 })
 ```
 
-`request` is required. `template`, `label`, and `description` are optional. `config` may override the model/thinking pair, working directory, ordinary tools, skills, and Project Context. A `config.model` object requires both `id` and `thinking`; either may be `inherit` to use that value from the current parent Runtime. `id: inherit` with `thinking: inherit` is valid. Providing `config.model` bypasses Template model candidates entirely. Arrays replace inherited tool and skill selections, including an empty array. Child extension selection is `inherit` or `none`; arbitrary per-child extension paths are not accepted.
+`request` is required. `template`, `label`, and `description` are optional. `config` may override the model/thinking pair, working directory, tool allowlist, skills, and Project Context. A `config.model` object requires both `id` and `thinking`; either may be `inherit` to use that value from the current parent Runtime. `id: inherit` with `thinking: inherit` is valid. Providing `config.model` bypasses Template model candidates entirely. `allowed_tools` and `skills` replace their inherited selections, including with an empty array. Child extension selection is `inherit` or `none`; arbitrary per-child extension paths are not accepted.
+
+`allowed_tools` is a capability ceiling, not an exact active-tool list. Pi and the selected extensions decide which allowed tools are registered and active, and may change their order during the Runtime. An allowed tool may therefore be unavailable or inactive. Role-required coordination tools are always added to the allowlist. Runtime startup rejects only an active tool outside the resolved allowlist.
 
 The label resolves from the explicit label, selected template name, then `agent`. A description comes only from the explicit spawn input. Display metadata is trimmed, preserves Unicode, rejects line breaks and control characters, and is limited to 64 Unicode code points for labels and 240 for descriptions.
 
-The authenticated calling Agent becomes the immutable Direct Spawner. Agent identity, Workflow membership, authority, role-required tools, and Creation Request delivery mode are not caller-supplied fields.
+The authenticated calling Agent becomes the immutable Direct Spawner. Agent identity, Workflow membership, authority, role-required tool capabilities, and Creation Request delivery mode are not caller-supplied fields.
 
 The child receives a fresh durable Pi session, but no resolved parent or child Runtime configuration is copied into its Identity or transcript. Its durable creation facts are display metadata, Workflow and Direct Spawner relationships, and a pointer to the canonical `agent_spawn` call. That call remains the sole source of the selected Template and explicit `config`. The child does not inherit the caller's transcript, branch, model context, assembled prompt, editor state, or queued input.
 
-Immediately before each new Runtime, the host resolves the current parent configuration. A live parent contributes its admitted Runtime; a dormant parent is resolved recursively from the current Owner, current Templates, and canonical ancestor spawn inputs without starting those ancestors. The host then applies the child's current selected Template, explicit spawn configuration, role tools, current resources, trust, and Project Context. The resulting launch specification is volatile and belongs only to that Runtime. The first preparation may be reused for the first process whose session header it created; successor and cold-recovered Runtimes always prepare again. A retained Runtime keeps its resolved configuration across its exact Runs.
+Immediately before each new Runtime, the host resolves the current parent configuration. A live parent contributes its configured tool allowlist and current remaining Runtime state; a dormant parent is resolved recursively from the current Owner, current Templates, and canonical ancestor spawn inputs without starting those ancestors. The host then applies the child's current selected Template, explicit spawn configuration, role-required tool capabilities, current resources, trust, and Project Context. The resulting launch specification is volatile and belongs only to that Runtime. The first preparation may be reused for the first process whose session header it created; successor and cold-recovered Runtimes always prepare again. A retained Runtime keeps its resolved configuration across its exact Runs.
 
 Only canonical file-backed inherited extensions cross the process boundary. `extensions: "none"` excludes them. Pi-owned built-ins are reconstructed by the fresh Pi CLI. Arbitrary injected, anonymous, and named inline factories are process-local composition details and are not child inheritance inputs.
 
@@ -55,7 +57,7 @@ models:
     thinking: high
   - id: deepseek/deepseek-v4-flash
     thinking: medium
-tools: read, grep
+allowed-tools: read, grep
 skills:
   - research
 extensions: inherit
@@ -64,7 +66,7 @@ project-context: append
 Use primary sources and record exact reproduction evidence.
 ```
 
-`name` is required lowercase kebab-case. Optional `selection-guide` is nonblank text that tells a spawning Agent when to select the Template. Optional `models` is a nonempty ordered sequence of `id` and `thinking` pairs. The first model available in Pi's current model registry supplies both values, and preparation fails when none are available. Without `models`, the parent model and thinking pair is inherited. The other frontmatter fields are `tools`, `skills`, `extensions`, and `project-context`. The Markdown body is Project Context. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
+`name` is required lowercase kebab-case. Optional `selection-guide` is nonblank text that tells a spawning Agent when to select the Template. Optional `models` is a nonempty ordered sequence of `id` and `thinking` pairs. The first model available in Pi's current model registry supplies both values, and preparation fails when none are available. Without `models`, the parent model and thinking pair is inherited. The other frontmatter fields are `allowed-tools`, `skills`, `extensions`, and `project-context`. The Markdown body is Project Context. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
 
 Before each model turn, an Agent that can spawn receives its current model/thinking pair and the currently valid Template catalogue. Each entry exposes its name, selection guide, configured frontmatter values, and only model candidates present in Pi's current model registry. A Template whose configured candidates are all unavailable is omitted. This lets the Agent select a Template or deliberately override values through `agent_spawn.config`. Invalid and ambiguous Templates, Template source paths, discovery diagnostics, and Markdown Project Context bodies are not exposed.
 

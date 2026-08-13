@@ -300,7 +300,7 @@ export class ProcessChildSessionFactory {
 					cwd: snapshot.cwd,
 					model: snapshot.model,
 					thinking: snapshot.thinking,
-					tools: [...snapshot.tools],
+					allowedTools: [...snapshot.allowedTools],
 					skills: [...snapshot.skills],
 					extensions: snapshot.fileExtensionPaths.filter(
 						(path) => !this.#isCoordinationExtension(path),
@@ -359,7 +359,7 @@ export class ProcessChildSessionFactory {
 				cwd: this.#ownerRuntime.services.cwd,
 				model: { provider: model.provider, modelId: model.id },
 				thinking: session.thinkingLevel,
-				tools: session.getActiveToolNames(),
+				allowedTools: session.getAllTools().map(({ name }) => name),
 				skills: skills.map(({ name }) => name),
 				extensions: this.#ownerRuntime.services.resourceLoader
 					.getExtensions()
@@ -399,7 +399,10 @@ export class ProcessChildSessionFactory {
 				identity.agentId,
 			) as StartPiChildProcessRuntimeOptions["ownerRequestHandlers"],
 		});
-		const runtime = new PiChildHostedRuntime(launch);
+		const runtime = new PiChildHostedRuntime(
+			launch,
+			prepared.configuration.allowedTools,
+		);
 		return { runtime, ready: runtime.ready };
 	}
 

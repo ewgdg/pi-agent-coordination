@@ -16,7 +16,7 @@ export type InheritableRuntimeConfiguration = Readonly<{
 	cwd: string;
 	model: ModelReference;
 	thinking: RuntimeThinkingLevel;
-	tools: readonly string[];
+	allowedTools: readonly string[];
 	skills: readonly string[];
 	extensions: readonly string[];
 }>;

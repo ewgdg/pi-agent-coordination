@@ -38,7 +38,7 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 	const templatePath = join(templateRoot, "parent.md");
 	await writeFile(
 		templatePath,
-		"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\ntools:\n  - read\n  - bash\n---\n",
+		"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowed-tools:\n  - read\n  - bash\n---\n",
 	);
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
@@ -97,8 +97,8 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 			parent: parentRecord,
 			spawnInput: { request: "Inherit the current parent configuration." },
 		});
-		assert.equal(first.configuration.tools.includes("read"), true);
-		assert.equal(first.configuration.tools.includes("bash"), true);
+		assert.equal(first.configuration.allowedTools.includes("read"), true);
+		assert.equal(first.configuration.allowedTools.includes("bash"), true);
 		assert.deepEqual(first.configuration.model, {
 			provider: "coordination-test",
 			modelId: "deterministic-owner",
@@ -107,15 +107,15 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 
 		await writeFile(
 			templatePath,
-			"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\ntools: read\n---\n",
+			"---\nname: dynamic-parent\nselection-guide: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowed-tools: read\n---\n",
 		);
 		const second = await factory.prepareOrdinaryRun({
 			agentId: "descendant",
 			parent: parentRecord,
 			spawnInput: { request: "Inherit the current parent configuration." },
 		});
-		assert.equal(second.configuration.tools.includes("read"), true);
-		assert.equal(second.configuration.tools.includes("bash"), false);
+		assert.equal(second.configuration.allowedTools.includes("read"), true);
+		assert.equal(second.configuration.allowedTools.includes("bash"), false);
 	} finally {
 		await host.runtime.dispose();
 	}
@@ -143,6 +143,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 		cwd: host.cwd,
 		model: { provider: model.provider, modelId: model.id },
 		thinking: host.session.thinkingLevel,
+		allowedTools: ["bash"],
 		tools: ["bash"],
 		skills: [],
 		skillSources: [],
@@ -196,8 +197,8 @@ test("a live parent contributes its current synchronized Runtime state", async (
 			spawnInput: { request: "Inherit current live state." },
 		});
 		assert.equal(synchronizations, 1);
-		assert.equal(prepared.configuration.tools.includes("bash"), true);
-		assert.equal(prepared.configuration.tools.includes("read"), false);
+		assert.equal(prepared.configuration.allowedTools.includes("bash"), true);
+		assert.equal(prepared.configuration.allowedTools.includes("read"), false);
 	} finally {
 		await host.runtime.dispose();
 	}
@@ -255,7 +256,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 			config: {
 				cwd: effectiveCwd,
 				model: { id: `${broker.providerId}/${broker.modelId}`, thinking: "inherit" as const },
-				tools: ["bash"],
+				allowed_tools: ["bash"],
 			},
 		};
 		const spawnEntryId = host.session.sessionManager.appendMessage(

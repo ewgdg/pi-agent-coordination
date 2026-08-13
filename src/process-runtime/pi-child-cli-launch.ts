@@ -68,7 +68,7 @@ export function buildPiChildCliLaunch(options: {
 	if (inputExtensionPath === bridgeExtensionPath) {
 		throw new Error("invalid_child_launch: bridge and input extensions must be distinct");
 	}
-	for (const toolName of configuration.tools) {
+	for (const toolName of configuration.allowedTools) {
 		if (toolName.includes(",")) {
 			throw new Error(`invalid_child_launch: tool name cannot contain a comma: ${toolName}`);
 		}
@@ -82,9 +82,9 @@ export function buildPiChildCliLaunch(options: {
 		`${configuration.model.provider}/${configuration.model.modelId}`,
 		"--thinking",
 		configuration.thinking,
-		...(configuration.tools.length === 0
+		...(configuration.allowedTools.length === 0
 			? ["--no-tools"]
-			: ["--tools", configuration.tools.join(",")]),
+			: ["--tools", configuration.allowedTools.join(",")]),
 		"--no-extensions",
 		// Control must be connected before inherited session_start handlers run: an
 		// inherited extension may synchronously open UI or initiate Agent work.

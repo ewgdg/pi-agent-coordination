@@ -208,7 +208,7 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 		cwd: "/work/subproject",
 		model: { provider: "provider", modelId: "model" },
 		thinking: "high" as const,
-		tools: ["read", "agent_message"],
+		allowedTools: ["read", "agent_message"],
 		skills: ["research"],
 		extensions: ["/extensions/research.ts"],
 		projectContext: { mode: "append" as const, body: "Configured context" },

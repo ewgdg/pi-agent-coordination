@@ -64,7 +64,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				allowedTools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 			},
@@ -357,6 +357,78 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 	}
 });
 
+test("startup admits extension-controlled active tool order within the configured allowlist", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-allowed-tools-test-"));
+	const cwd = join(root, "work");
+	const sessionDirectory = join(root, "sessions");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000010";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+	const allowedTools = [
+		"runtime_sequential_probe",
+		"read",
+		"agent_message",
+		"agent_control",
+		"agent_observe",
+		"agent_spawn",
+		"ask_user_question",
+	] as const;
+	let runtime: PiChildProcessRuntime | undefined;
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "process-allowed-tools-workflow",
+			agentId: "process-allowed-tools-agent",
+			role: "ordinary",
+			expectedSessionId,
+			sessionPath,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_MODEL,
+				},
+				thinking: "off",
+				allowedTools,
+				skills: [],
+				extensions: [CHILD_EXTENSION],
+			},
+			skillPaths: [],
+			agentsFiles: [],
+			projectTrusted: true,
+			ownerEnvironment: {
+				...process.env,
+				PI_SKIP_VERSION_CHECK: "1",
+				PROCESS_RUNTIME_REORDER_TOOLS: "1",
+			},
+			runtimeDirectory: root,
+			ownerRequestHandlers: ordinaryOwnerHandlers({
+				selectorSnapshot: processSelectorSnapshot(expectedSessionId),
+			}),
+		});
+		assert.deepEqual(runtime.snapshot.tools, [
+			"agent_message",
+			"read",
+			"agent_control",
+			"agent_observe",
+			"agent_spawn",
+			"ask_user_question",
+		]);
+	} finally {
+		await runtime?.dispose();
+	}
+});
+
 test("a pre-ready child fault rejects launch readiness without escaping startup cleanup", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
@@ -388,7 +460,7 @@ test("a pre-ready child fault rejects launch readiness without escaping startup 
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: [],
+			allowedTools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 		},
@@ -450,7 +522,7 @@ test("inherited child input preflights run before coordination consumes transfor
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				allowedTools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 			},
@@ -537,7 +609,7 @@ test("startup snapshot binds selected skills and file-backed launch inputs exact
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				allowedTools: [],
 				skills: ["review"],
 				extensions: [CHILD_EXTENSION],
 			},
@@ -617,7 +689,7 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: ["agent_observe", "agent_message"],
+				allowedTools: ["agent_observe", "agent_message"],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 			},
@@ -704,7 +776,7 @@ test("process Runtime Host force-kills a child whose session shutdown never comp
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				allowedTools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 			},
@@ -765,7 +837,7 @@ test("process Runtime shutdown grace bounds an unresponsive Control request", {
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				tools: [],
+				allowedTools: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
 			},

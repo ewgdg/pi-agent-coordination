@@ -78,13 +78,13 @@ export async function prepareChildRuntime(options: {
 		},
 		template: options.template,
 		overrides: options.overrides,
-		fixedTools: [],
+		fixedAllowedTools: [],
 		isModelAvailable: options.isModelAvailable ?? (() => true),
 	});
 	const configuration = {
 		...resolvedConfiguration,
-		tools: [
-			...resolvedConfiguration.tools.filter(
+		allowedTools: [
+			...resolvedConfiguration.allowedTools.filter(
 				(name) => !COORDINATION_TOOL_NAMES.has(name),
 			),
 			...COORDINATION_TOOLS_BY_ROLE[options.role],

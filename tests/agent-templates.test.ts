@@ -26,7 +26,7 @@ test("parses the complete strict Agent Template surface", () => {
 			"models:",
 			"  - id: coordination-test/deterministic-child",
 			"    thinking: high",
-			"tools: read, grep",
+			"allowed-tools: read, grep",
 			"skills:",
 			"  - research",
 			"extensions: none",
@@ -44,13 +44,23 @@ test("parses the complete strict Agent Template surface", () => {
 			model: { provider: "coordination-test", modelId: "deterministic-child" },
 			thinking: "high",
 		}],
-		tools: ["read", "grep"],
+		allowedTools: ["read", "grep"],
 		skills: ["research"],
 		extensions: "none",
 		projectContextMode: "replace",
 		projectContext: "Use primary sources.",
 		sourcePath: "/templates/research-agent.md",
 	});
+});
+
+test("rejects the removed exact tools Template field", () => {
+	assert.throws(
+		() => parseAgentTemplate(
+			"---\nname: research-agent\ntools: read\n---\n",
+			"/templates/research-agent.md",
+		),
+		/unknown frontmatter field/,
+	);
 });
 
 test("rejects extension path arrays outside the Agent Template contract", () => {
@@ -143,7 +153,7 @@ test("discovers whole templates by strict precedence while safely following syml
 	await mkdir(projectRoot, { recursive: true });
 	await writeFile(
 		join(packageRoot, "nested", "research.md"),
-		"---\nname: research-agent\nselection-guide: Use for research.\ntools: read, grep\n---\nPackage context",
+		"---\nname: research-agent\nselection-guide: Use for research.\nallowed-tools: read, grep\n---\nPackage context",
 	);
 	await writeFile(
 		join(packageRoot, "blocked.md"),
@@ -220,7 +230,7 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 			cwd: "/baseline/project",
 			model: { provider: "base", modelId: "model" },
 			thinking: "low",
-			tools: ["bash"],
+			allowedTools: ["bash"],
 			skills: ["base-skill"],
 			extensions: ["/extensions/base.ts"],
 		},
@@ -231,19 +241,19 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 				{ model: { provider: "missing", modelId: "model" }, thinking: "low" },
 				{ model: { provider: "template", modelId: "model" }, thinking: "medium" },
 			],
-			tools: ["read"],
+			allowedTools: ["read"],
 			projectContextMode: "replace",
 			projectContext: "Template context",
 			sourcePath: "/templates/research.md",
 		},
 		overrides: {
 			cwd: "subproject",
-			tools: [],
+			allowed_tools: [],
 			extensions: "inherit",
 			projectContext: "Spawn context",
 			projectContextMode: "append",
 		},
-		fixedTools: ["agent_message", "agent_spawn"],
+		fixedAllowedTools: ["agent_message", "agent_spawn"],
 		isModelAvailable: ({ provider }) => provider === "template",
 	});
 
@@ -251,7 +261,7 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 		cwd: "/baseline/project/subproject",
 		model: { provider: "template", modelId: "model" },
 		thinking: "medium",
-		tools: ["agent_message", "agent_spawn"],
+		allowedTools: ["agent_message", "agent_spawn"],
 		skills: ["base-skill"],
 		extensions: ["/extensions/base.ts"],
 		projectContext: {
@@ -268,7 +278,7 @@ test("fails when no configured Template model is available", () => {
 				cwd: "/project",
 				model: { provider: "base", modelId: "model" },
 				thinking: "low",
-				tools: [],
+				allowedTools: [],
 				skills: [],
 				extensions: [],
 			},
@@ -282,7 +292,7 @@ test("fails when no configured Template model is available", () => {
 				projectContext: "",
 				sourcePath: "/templates/fallback-agent.md",
 			},
-			fixedTools: [],
+			fixedAllowedTools: [],
 			isModelAvailable: () => false,
 		}),
 		/No configured Agent Template model is available: missing-a\/model, missing-b\/model/,
@@ -294,7 +304,7 @@ test("paired spawn model override bypasses unavailable Template candidates", () 
 		cwd: "/project",
 		model: { provider: "parent", modelId: "model" },
 		thinking: "low" as const,
-		tools: [],
+		allowedTools: [],
 		skills: [],
 		extensions: [],
 	};
@@ -308,7 +318,7 @@ test("paired spawn model override bypasses unavailable Template candidates", () 
 		projectContext: "",
 		sourcePath: "/templates/fallback-agent.md",
 	};
-	const base = { inherited, template, fixedTools: [], isModelAvailable: () => false };
+	const base = { inherited, template, fixedAllowedTools: [], isModelAvailable: () => false };
 
 	assert.deepEqual(resolveAgentRunConfiguration({
 		...base,

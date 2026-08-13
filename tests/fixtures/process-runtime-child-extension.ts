@@ -126,6 +126,16 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		if (delayMilliseconds > 0) {
 			await new Promise((resolve) => setTimeout(resolve, delayMilliseconds));
 		}
+		if (process.env.PROCESS_RUNTIME_REORDER_TOOLS === "1") {
+			pi.setActiveTools([
+				"agent_message",
+				"read",
+				"agent_control",
+				"agent_observe",
+				"agent_spawn",
+				"ask_user_question",
+			]);
+		}
 	});
 
 	pi.registerTool({

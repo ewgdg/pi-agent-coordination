@@ -52,7 +52,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	#shutdownExpected = false;
 	#disposePromise: Promise<void> | undefined;
 
-	constructor(launch: PiChildProcessLaunch) {
+	constructor(launch: PiChildProcessLaunch, allowedTools: readonly string[]) {
 		this.#launch = launch;
 		// Fence volatile Run state before presentation reports the same process exit.
 		// Otherwise Owner restoration can race cleanup intentions over dead Control.
@@ -76,7 +76,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#removeEventHandler = launch.onEvent((event) => this.#handleEvent(event));
 		this.#admitted = launch.ready();
 		this.ready = this.#admitted.then((runtime) => {
-			this.#adoptSnapshot(runtime.snapshot);
+			this.#adoptSnapshot(runtime.snapshot, allowedTools);
 			this.#removeChannelCloseHandler = runtime.channel.onClose((cause) => {
 				if (this.#shutdownExpected) return;
 				this.#fail(cause ?? new Error("child_runtime_channel_closed"));
@@ -216,7 +216,10 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		return this.#disposePromise;
 	}
 
-	#adoptSnapshot(snapshot: PiChildProcessRuntime["snapshot"]): void {
+	#adoptSnapshot(
+		snapshot: PiChildProcessRuntime["snapshot"],
+		allowedTools: readonly string[] = this.#snapshot?.allowedTools ?? [],
+	): void {
 		// Tool classification and descendant inheritance must observe one coherent
 		// child state, never fields copied from different Runtime generations.
 		this.#toolExecutionModes = new Map(
@@ -226,6 +229,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			cwd: snapshot.cwd,
 			model: snapshot.model,
 			thinking: snapshot.thinking,
+			allowedTools: [...allowedTools],
 			tools: [...snapshot.tools],
 			skills: [...snapshot.skills],
 			skillSources: snapshot.skillSources.map(({ name, filePath }) => ({ name, filePath })),

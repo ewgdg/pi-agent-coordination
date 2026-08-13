@@ -145,7 +145,7 @@ async function createLaunchOptions(
 				modelId: PROCESS_RUNTIME_TEST_MODEL,
 			},
 			thinking: "off",
-			tools: [],
+			allowedTools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 		},
