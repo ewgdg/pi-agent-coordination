@@ -6,7 +6,10 @@ import test from "node:test";
 
 import { discoverAgentTemplates } from "../src/templates/agent-template-discovery.ts";
 import { parseAgentTemplate } from "../src/templates/agent-template-parser.ts";
-import { selectAgentTemplateForRun } from "../src/templates/agent-templates.ts";
+import {
+	createAgentTemplateCatalogue,
+	selectAgentTemplateForRun,
+} from "../src/templates/agent-templates.ts";
 import { resolveAgentRunConfiguration } from "../src/templates/agent-configuration.ts";
 import {
 	resolveModeratorAgentMetadata,
@@ -19,6 +22,7 @@ test("parses the complete strict Agent Template surface", () => {
 		[
 			"---",
 			"name: research-agent",
+			"selection-guide: Use for primary-source research.",
 			"model: coordination-test/deterministic-child",
 			"thinking: high",
 			"tools: read, grep",
@@ -34,6 +38,7 @@ test("parses the complete strict Agent Template surface", () => {
 
 	assert.deepEqual(template, {
 		name: "research-agent",
+		selectionGuide: "Use for primary-source research.",
 		model: {
 			provider: "coordination-test",
 			modelId: "deterministic-child",
@@ -51,10 +56,32 @@ test("parses the complete strict Agent Template surface", () => {
 test("rejects extension path arrays outside the Agent Template contract", () => {
 	assert.throws(
 		() => parseAgentTemplate(
-			"---\nname: research-agent\nextensions:\n  - /extensions/arbitrary.ts\n---\n",
+			"---\nname: research-agent\nselection-guide: Use for research.\nextensions:\n  - /extensions/arbitrary.ts\n---\n",
 			"/templates/research-agent.md",
 		),
 		/extensions must be "inherit" or "none"/,
+	);
+});
+
+test("allows an absent selection guide but rejects a blank one", () => {
+	assert.deepEqual(
+		parseAgentTemplate(
+			"---\nname: research-agent\n---\n",
+			"/templates/research-agent.md",
+		),
+		{
+			name: "research-agent",
+			projectContextMode: "append",
+			projectContext: "",
+			sourcePath: "/templates/research-agent.md",
+		},
+	);
+	assert.throws(
+		() => parseAgentTemplate(
+			"---\nname: research-agent\nselection-guide: '   '\n---\n",
+			"/templates/research-agent.md",
+		),
+		/selection-guide must be a nonblank string/,
 	);
 });
 
@@ -83,31 +110,31 @@ test("discovers whole templates by strict precedence while safely following syml
 	await mkdir(projectRoot, { recursive: true });
 	await writeFile(
 		join(packageRoot, "nested", "research.md"),
-		"---\nname: research-agent\ntools: read, grep\n---\nPackage context",
+		"---\nname: research-agent\nselection-guide: Use for research.\ntools: read, grep\n---\nPackage context",
 	);
 	await writeFile(
 		join(packageRoot, "blocked.md"),
-		"---\nname: blocked-agent\nthinking: low\n---\n",
+		"---\nname: blocked-agent\nselection-guide: Use when blocked.\nthinking: low\n---\n",
 	);
 	await writeFile(
 		join(packageRoot, "duplicate-name.md"),
-		"---\nname: duplicate-name-agent\nthinking: low\n---\n",
+		"---\nname: duplicate-name-agent\nselection-guide: Use for duplicate checks.\nthinking: low\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "research.md"),
-		"---\nname: research-agent\nthinking: high\n---\nProject context",
+		"---\nname: research-agent\nselection-guide: Use for research.\nthinking: high\n---\nProject context",
 	);
 	await writeFile(
 		join(projectRoot, "blocked.md"),
-		"---\nname: blocked-agent\ncwd: elsewhere\n---\n",
+		"---\nname: blocked-agent\nselection-guide: Use when blocked.\ncwd: elsewhere\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "duplicate-a.md"),
-		"---\nname: duplicate-agent\n---\n",
+		"---\nname: duplicate-agent\nselection-guide: Use for duplicates.\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "duplicate-b.md"),
-		"---\nname: duplicate-agent\n---\n",
+		"---\nname: duplicate-agent\nselection-guide: Use for duplicates.\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "duplicate-name.md"),
@@ -131,6 +158,7 @@ test("discovers whole templates by strict precedence while safely following syml
 
 	assert.deepEqual(discovery.templates.get("research-agent"), {
 		name: "research-agent",
+		selectionGuide: "Use for research.",
 		thinking: "high",
 		projectContextMode: "append",
 		projectContext: "Project context",
@@ -144,6 +172,10 @@ test("discovers whole templates by strict precedence while safely following syml
 	assert.equal(discovery.unavailable.get("duplicate-name-agent")?.reason, "invalid");
 	assert.ok(discovery.diagnostics.some(({ path }) => path === invalidUtf8Path));
 	assert.ok(discovery.diagnostics.some(({ path }) => path === brokenSymlinkPath));
+	assert.deepEqual(
+		createAgentTemplateCatalogue(discovery.templates.values()).map(({ name }) => name),
+		["research-agent"],
+	);
 });
 
 test("resolves inherited Runtime values, current template, explicit spawn overrides, and fixed role tools in order", () => {
@@ -158,6 +190,7 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 		},
 		template: {
 			name: "research-agent",
+			selectionGuide: "Use for research.",
 			model: { provider: "template", modelId: "model" },
 			tools: ["read"],
 			projectContextMode: "replace",
@@ -187,6 +220,40 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 			body: "Template context\n\nSpawn context",
 		},
 	});
+});
+
+test("creates a public Template catalogue without Project Context bodies or source paths", () => {
+	assert.deepEqual(createAgentTemplateCatalogue([
+		{
+			name: "research-agent",
+			selectionGuide: "Use for research.",
+			thinking: "high",
+			projectContextMode: "replace",
+			projectContext: "Private child instructions.",
+			sourcePath: "/private/research-agent.md",
+		},
+		{
+			name: "moderator",
+			selectionGuide: "Reserved for moderation.",
+			projectContextMode: "append",
+			projectContext: "Private moderator instructions.",
+			sourcePath: "/private/moderator.md",
+		},
+		{
+			name: "plain-agent",
+			projectContextMode: "append",
+			projectContext: "Private plain instructions.",
+			sourcePath: "/private/plain-agent.md",
+		},
+	]), [{
+		name: "plain-agent",
+		projectContextMode: "append",
+	}, {
+		name: "research-agent",
+		selectionGuide: "Use for research.",
+		thinking: "high",
+		projectContextMode: "replace",
+	}]);
 });
 
 test("resolves normalized ordinary Agent metadata without inheriting or weakening explicit values", () => {

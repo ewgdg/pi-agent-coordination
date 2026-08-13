@@ -2,8 +2,7 @@ import {
 	type AgentSessionRuntime,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import type { AgentRecord } from "../coordination/agent-record.ts";
 import { admitControlTransportPlatform } from "../control/control-platform.ts";
@@ -23,10 +22,15 @@ import {
 	type StartPiChildProcessRuntimeOptions,
 } from "../process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../process-runtime/remote-participant-control.ts";
-import { discoverAgentTemplates } from "../templates/agent-template-discovery.ts";
 import {
+	defaultAgentTemplateRoots,
+	discoverAgentTemplates,
+} from "../templates/agent-template-discovery.ts";
+import {
+	createAgentTemplateCatalogue,
 	selectAgentTemplateForRun,
 	type AgentTemplate,
+	type AgentTemplateCatalogueEntry,
 	type AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
 import { AgentRuntimeSupervisor } from "./agent-runtime-supervisor.ts";
@@ -207,6 +211,35 @@ export class ProcessChildSessionFactory {
 		);
 	}
 
+	async availableTemplatesFor(record: AgentRecord): Promise<readonly AgentTemplateCatalogueEntry[]> {
+		const admittedRuntime = record.host.effectiveRuntimeSnapshot();
+		if (admittedRuntime) {
+			return this.#discoverTemplateCatalogueForRuntime(
+				admittedRuntime.cwd,
+				admittedRuntime.projectTrusted,
+			);
+		}
+		const parentRuntime = await this.#resolveCurrentRuntime(record, new Set());
+		return this.#discoverTemplateCatalogue(parentRuntime);
+	}
+
+	async #discoverTemplateCatalogue(
+		parentRuntime: ResolvedParentRuntime,
+	): Promise<readonly AgentTemplateCatalogueEntry[]> {
+		return this.#discoverTemplateCatalogueForRuntime(
+			parentRuntime.configuration.cwd,
+			parentRuntime.projectTrusted,
+		);
+	}
+
+	async #discoverTemplateCatalogueForRuntime(
+		cwd: string,
+		projectTrusted: boolean,
+	): Promise<readonly AgentTemplateCatalogueEntry[]> {
+		const discovery = await discoverAgentTemplates(this.#resolveTemplateRoots(cwd, projectTrusted));
+		return createAgentTemplateCatalogue(discovery.templates.values());
+	}
+
 	async #prepareOrdinaryRun(
 		options: {
 			agentId: string;
@@ -357,28 +390,27 @@ export class ProcessChildSessionFactory {
 		selectedName: string | undefined,
 	): Promise<AgentTemplate | undefined> {
 		if (selectedName === undefined) return undefined;
-		const parentCwd = parentRuntime.configuration.cwd;
-		const roots = this.#templateRoots
-			? this.#templateRoots(parentCwd, parentRuntime.projectTrusted)
-			: this.#defaultTemplateRoots(parentCwd, parentRuntime.projectTrusted);
 		return selectAgentTemplateForRun(
-			await discoverAgentTemplates(roots),
+			await discoverAgentTemplates(this.#resolveTemplateRoots(
+				parentRuntime.configuration.cwd,
+				parentRuntime.projectTrusted,
+			)),
 			selectedName,
 		);
 	}
 
-	#defaultTemplateRoots(
+	#resolveTemplateRoots(
 		parentCwd: string,
 		projectTrusted: boolean,
 	): readonly AgentTemplateRoot[] {
-		return [
-			{ scope: "package", path: join(this.#packageRoot, "agents") },
-			{ scope: "pi-user", path: join(this.#ownerRuntime.services.agentDir, "agents") },
-			{ scope: "user-agent-resource", path: join(homedir(), ".agents", "agents") },
-			...(projectTrusted
-				? [{ scope: "trusted-project", path: join(parentCwd, ".agents", "agents") }]
-				: []),
-		];
+		return this.#templateRoots
+			? this.#templateRoots(parentCwd, projectTrusted)
+			: defaultAgentTemplateRoots({
+				packageRoot: this.#packageRoot,
+				agentDir: this.#ownerRuntime.services.agentDir,
+				parentCwd,
+				projectTrusted,
+			});
 	}
 
 	#isCoordinationExtension(path: string): boolean {

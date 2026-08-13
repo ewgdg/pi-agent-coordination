@@ -38,6 +38,7 @@ import {
 } from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
 import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
+import { registerAgentTemplateCataloguePrompt } from "../tools/agent-template-catalogue-prompt.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
 import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
@@ -111,6 +112,10 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
 		registerParticipantCoordinationTools(pi, "ordinary", participant.coordination);
+		registerAgentTemplateCataloguePrompt(
+			pi,
+			() => participant.coordination.availableTemplates(),
+		);
 	} else {
 		const participant = createControlBackedChildParticipantHandlers("moderator", participantRequest);
 		participantLifecycle = participant.lifecycle;
@@ -468,6 +473,7 @@ async function handleOwnerRequest(
 		case "coordination.message":
 		case "coordination.control":
 		case "coordination.spawn":
+		case "coordination.templates":
 		case "coordination.askHuman":
 		case "coordination.moderatorControl":
 		case "presentation.agents.snapshot":

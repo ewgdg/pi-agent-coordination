@@ -15,6 +15,7 @@ import type {
 	ModeratorControlReceipt,
 } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
+import type { AgentTemplateCatalogueEntry } from "../templates/agent-templates.ts";
 import {
 	renderAgentControlCall,
 	renderAgentControlResult,
@@ -59,6 +60,7 @@ type CommonParticipantCoordinationToolHandlers = Readonly<{
 
 type SpawnParticipantCoordinationToolHandler = Readonly<{
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
+	availableTemplates(): Promise<readonly AgentTemplateCatalogueEntry[]>;
 }>;
 
 type HumanParticipantCoordinationToolHandler = Readonly<{

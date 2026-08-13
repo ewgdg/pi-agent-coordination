@@ -117,6 +117,7 @@ export function createControlBackedChildParticipantHandlers(
 	if (role === "ordinary") {
 		const coordination: ParticipantCoordinationToolHandlers<"ordinary"> = {
 			...common,
+			availableTemplates: () => request("coordination.templates", {}),
 			spawn: (toolCallId, input) =>
 				request("coordination.spawn", { toolCallId, input }),
 			askUserQuestion: (toolCallId, input, signal) =>
@@ -201,6 +202,11 @@ export async function dispatchParticipantRequestToOwner(
 				request.payload.toolCallId,
 				request.payload.input,
 			);
+			break;
+		case "coordination.templates":
+			response = "availableTemplates" in handlers.coordination
+				? await handlers.coordination.availableTemplates()
+				: [];
 			break;
 		case "coordination.askHuman":
 			if (!("askUserQuestion" in handlers.coordination)) throw unavailableForRole(request.method);

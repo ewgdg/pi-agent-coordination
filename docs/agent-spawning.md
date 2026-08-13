@@ -46,6 +46,7 @@ A Template is UTF-8 Markdown with required leading YAML frontmatter:
 ```markdown
 ---
 name: integration-researcher
+selection-guide: Use for integration work requiring external documentation or source verification.
 model: anthropic/claude-sonnet-4-5
 thinking: high
 tools: read, grep
@@ -57,7 +58,9 @@ project-context: append
 Use primary sources and record exact reproduction evidence.
 ```
 
-`name` is required lowercase kebab-case. The only other frontmatter fields are `model`, `thinking`, `tools`, `skills`, `extensions`, and `project-context`. The Markdown body is Project Context. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
+`name` is required lowercase kebab-case. Optional `selection-guide` is nonblank text that tells a spawning Agent when to select the Template. The only other frontmatter fields are `model`, `thinking`, `tools`, `skills`, `extensions`, and `project-context`. The Markdown body is Project Context. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
+
+Before each model turn, an Agent that can spawn receives the currently valid Template catalogue. Each entry exposes its name, selection guide, and configured frontmatter values so the Agent can select it or deliberately override those values through `agent_spawn.config`. Invalid and ambiguous Templates are omitted. Template source paths, discovery diagnostics, and Markdown Project Context bodies are not exposed.
 
 For every new Runtime, Template discovery is anchored to the current parent Runtime cwd. The per-spawn `config.cwd` resolves against that cwd and determines the prepared Runtime cwd. Pi applies its current project-trust decision there, freshly discovers permitted ordinary `AGENTS.md` context and cwd-scoped resources, then applies Template and spawn Project Context with append/replace behavior. An untrusted project cannot contribute selected resources. Changes to ancestor Templates, resources, trust, or cwd can therefore affect a later descendant Runtime; they never mutate an already retained Runtime.
 

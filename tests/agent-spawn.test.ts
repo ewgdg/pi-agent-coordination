@@ -245,12 +245,12 @@ test("a successor Runtime re-resolves its current Template and project resources
 	new ProjectTrustStore(host.services.agentDir).set(effectiveCwd, true);
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nthinking: off\ntools: read\n---\nTemplate context",
+		"---\nname: research-agent\nselection-guide: Use for research.\nthinking: off\ntools: read\n---\nTemplate context",
 	);
 	await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
 	await writeFile(
 		join(effectiveCwd, ".agents", "agents", "research.md"),
-		"---\nname: research-agent\nthinking: low\n---\nWrong discovery root",
+		"---\nname: research-agent\nselection-guide: Use for research.\nthinking: low\n---\nWrong discovery root",
 	);
 
 	let observedSystemPrompt = "";
@@ -381,7 +381,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 	assert.equal(termination.disposition, "terminated");
 	await writeFile(
 		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nthinking: off\ntools: read\n---\nChanged Template context",
+		"---\nname: research-agent\nselection-guide: Use for research.\nthinking: off\ntools: read\n---\nChanged Template context",
 	);
 	await writeFile(join(effectiveCwd, "AGENTS.md"), "Changed effective-cwd context");
 	let successorSystemPrompt = "";

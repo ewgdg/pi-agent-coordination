@@ -77,6 +77,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 		},
 		template: {
 			name: "research-agent",
+			selectionGuide: "Use for research.",
 			model: { provider: "template", modelId: "template-model" },
 			tools: ["grep"],
 			skills: ["review", "project-audit"],
@@ -211,6 +212,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		parentRuntime,
 		template: {
 			name: "moderator",
+			selectionGuide: "Use for moderation.",
 			extensions: "none",
 			projectContextMode: "replace",
 			projectContext: "Moderator-only context",

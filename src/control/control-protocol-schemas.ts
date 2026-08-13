@@ -19,6 +19,28 @@ export const ControlEndpointSchema = Type.Union([
 	UnixControlEndpointSchema,
 ]);
 
+export const AgentTemplateCatalogueEntrySchema = Type.Object({
+	name: NonEmptyStringSchema,
+	selectionGuide: Type.Optional(NonEmptyStringSchema),
+	model: Type.Optional(Type.Object({
+		provider: NonEmptyStringSchema,
+		modelId: NonEmptyStringSchema,
+	}, { additionalProperties: false })),
+	thinking: Type.Optional(Type.Union([
+		Type.Literal("off"),
+		Type.Literal("minimal"),
+		Type.Literal("low"),
+		Type.Literal("medium"),
+		Type.Literal("high"),
+		Type.Literal("xhigh"),
+		Type.Literal("max"),
+	])),
+	tools: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
+	skills: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
+	extensions: Type.Optional(Type.Union([Type.Literal("inherit"), Type.Literal("none")])),
+	projectContextMode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
+}, { additionalProperties: false });
+
 export type ControlEndpoint = Static<typeof ControlEndpointSchema>;
 export type UnixControlEndpoint = Static<typeof UnixControlEndpointSchema>;
 

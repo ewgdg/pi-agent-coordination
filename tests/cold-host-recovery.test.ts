@@ -521,7 +521,7 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 	await mkdir(templateDirectory, { recursive: true });
 	await writeFile(
 		templatePath,
-		"---\nname: residual-agent\ntools: read\n---\nInitial context",
+		"---\nname: residual-agent\nselection-guide: Use for residual work.\ntools: read\n---\nInitial context",
 	);
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
@@ -545,7 +545,7 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 	await host.runtime.dispose();
 	await writeFile(
 		templatePath,
-		"---\nname: residual-agent\ntools:\n  - read\n  - bash\n---\nCurrent context",
+		"---\nname: residual-agent\nselection-guide: Use for residual work.\ntools:\n  - read\n  - bash\n---\nCurrent context",
 	);
 
 	const reopened = await reopenOwner(host, ownerSessionFile);

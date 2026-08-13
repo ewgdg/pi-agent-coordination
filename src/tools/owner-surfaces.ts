@@ -20,6 +20,7 @@ import {
 	type ParticipantCoordinationRole,
 	type ParticipantCoordinationToolHandlers,
 } from "./participant-coordination-tools.ts";
+import { registerAgentTemplateCataloguePrompt } from "./agent-template-catalogue-prompt.ts";
 
 type AgentCoordinatorView =
 	| OrdinaryAgentCoordinatorView
@@ -113,6 +114,7 @@ export function registerOrdinaryAgentSurfaces(
 		"ordinary",
 		participantCoordinatorHandlers("ordinary", resolveView),
 	);
+	registerAgentTemplateCataloguePrompt(pi, () => resolveView().availableTemplates());
 	registerAgentsCommand(pi, resolveView);
 }
 
@@ -125,6 +127,7 @@ export function registerOwnerAgentTools(
 		"owner",
 		participantCoordinatorHandlers("owner", resolveView),
 	);
+	registerAgentTemplateCataloguePrompt(pi, () => resolveView().availableTemplates());
 }
 
 export function registerModeratorAgentSurfaces(
@@ -180,12 +183,14 @@ export function participantCoordinatorHandlers(
 	const ordinaryView = resolveView as () => OrdinaryAgentCoordinatorView;
 	const spawn = (toolCallId: string, input: Parameters<OrdinaryAgentCoordinatorView["spawn"]>[1]) =>
 		ordinaryView().spawn(toolCallId, input);
+	const availableTemplates = () => ordinaryView().availableTemplates();
 	return role === "ordinary"
 		? {
 			...common,
 			spawn,
+			availableTemplates,
 			askUserQuestion: (toolCallId, input, signal) =>
 				ordinaryView().askHuman(toolCallId, input, signal),
 		}
-		: { ...common, spawn };
+		: { ...common, spawn, availableTemplates };
 }

@@ -1,4 +1,5 @@
 import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { extname, join } from "node:path";
 
 import {
@@ -12,6 +13,22 @@ import type {
 	AgentTemplateRoot,
 	UnavailableAgentTemplate,
 } from "./agent-templates.ts";
+
+export function defaultAgentTemplateRoots(options: Readonly<{
+	packageRoot: string;
+	agentDir: string;
+	parentCwd: string;
+	projectTrusted: boolean;
+}>): readonly AgentTemplateRoot[] {
+	return [
+		{ scope: "package", path: join(options.packageRoot, "agents") },
+		{ scope: "pi-user", path: join(options.agentDir, "agents") },
+		{ scope: "user-agent-resource", path: join(homedir(), ".agents", "agents") },
+		...(options.projectTrusted
+			? [{ scope: "trusted-project", path: join(options.parentCwd, ".agents", "agents") }]
+			: []),
+	];
+}
 
 export async function discoverAgentTemplates(
 	roots: readonly AgentTemplateRoot[],

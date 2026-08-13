@@ -13,6 +13,7 @@ import type {
 
 const TEMPLATE_FIELDS = new Set([
 	"name",
+	"selection-guide",
 	"model",
 	"thinking",
 	"tools",
@@ -85,6 +86,9 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 		}
 	}
 	const name = requireTemplateName(mapping.name, sourcePath);
+	const selectionGuide = mapping["selection-guide"] === undefined
+		? undefined
+		: parseSelectionGuide(mapping["selection-guide"], sourcePath, name);
 	const model = mapping.model === undefined
 		? undefined
 		: parseModelReference(mapping.model, sourcePath, name);
@@ -106,6 +110,7 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 
 	return {
 		name,
+		...(selectionGuide === undefined ? {} : { selectionGuide }),
 		...(model === undefined ? {} : { model }),
 		...(thinking === undefined ? {} : { thinking }),
 		...(tools === undefined ? {} : { tools }),
@@ -156,6 +161,21 @@ function requireTemplateName(value: unknown, sourcePath: string): string {
 		);
 	}
 	return value;
+}
+
+function parseSelectionGuide(
+	value: unknown,
+	sourcePath: string,
+	templateName: string,
+): string {
+	if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
+		throw new AgentTemplateParseError(
+			sourcePath,
+			"selection-guide must be a nonblank string",
+			templateName,
+		);
+	}
+	return value.trim();
 }
 
 function parseModelReference(

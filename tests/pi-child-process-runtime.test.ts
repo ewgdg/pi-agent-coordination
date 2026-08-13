@@ -819,6 +819,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 			async executionEnded() {},
 		},
 		coordination: {
+			async availableTemplates() { return []; },
 			async observe(input) {
 				options.observe?.(input);
 				return options.observeReceipt ?? {

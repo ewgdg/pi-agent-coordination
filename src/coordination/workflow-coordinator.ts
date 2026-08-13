@@ -50,7 +50,10 @@ import type {
 	RunControlReceipt,
 } from "../protocol/run-control.ts";
 import { SerialLane } from "../runtime/serial-lane.ts";
-import type { AgentTemplateRoot } from "../templates/agent-templates.ts";
+import type {
+	AgentTemplateCatalogueEntry,
+	AgentTemplateRoot,
+} from "../templates/agent-templates.ts";
 import { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import {
 	WorkflowExecutionScheduler,
@@ -151,6 +154,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 
 export type OrdinaryAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
+	availableTemplates(): Promise<readonly AgentTemplateCatalogueEntry[]>;
 }>;
 
 export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
@@ -344,6 +348,9 @@ export class WorkflowCoordinator {
 		return Object.freeze({
 			...this.#agentView(agentId),
 			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
+			availableTemplates: () => this.#sessionFactory.availableTemplatesFor(
+				this.#requireAgent(agentId),
+			),
 		});
 	}
 

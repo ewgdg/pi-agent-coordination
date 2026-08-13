@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 
@@ -14,6 +15,10 @@ import {
 	type ParticipantCoordinationToolHandlers,
 } from "../src/tools/participant-coordination-tools.ts";
 import type { OrdinaryAgentCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
+import {
+	registerAgentTemplateCataloguePrompt,
+	renderAgentTemplateCatalogue,
+} from "../src/tools/agent-template-catalogue-prompt.ts";
 import {
 	createTestOwnerHost,
 	type TestOwnerHost,
@@ -63,6 +68,9 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	async spawn() {
 		return { disposition: "not_created", failedStage: "identity_commit" };
 	},
+	async availableTemplates() {
+		return [];
+	},
 	async observe() {
 		return agentStatus;
 	},
@@ -110,6 +118,53 @@ test("Agent Spawn schema rejects extension path arrays", () => {
 		request: "Inspect the child Runtime.",
 		config: { extensions: ["/extensions/arbitrary.ts"] },
 	}), false);
+});
+
+test("Template catalogue shows guides and frontmatter defaults without Project Context bodies", () => {
+	const catalogue = renderAgentTemplateCatalogue([
+		{
+			name: "integration-researcher",
+			selectionGuide: "Use for integration research requiring primary sources.",
+			model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
+			thinking: "high",
+			tools: ["read", "bash"],
+			skills: ["research"],
+			extensions: "none",
+			projectContextMode: "replace",
+		},
+		{
+			name: "plain-agent",
+			projectContextMode: "append",
+		},
+	]);
+
+	assert.match(catalogue ?? "", /integration-researcher/);
+	assert.match(catalogue ?? "", /Use for integration research requiring primary sources\./);
+	assert.match(catalogue ?? "", /anthropic\/claude-sonnet-4-5/);
+	assert.match(catalogue ?? "", /project-context: replace/);
+	assert.match(catalogue ?? "", /- name: plain-agent\n  project-context: append/);
+});
+
+test("Template catalogue is injected into the model prompt", async () => {
+	let observedSystemPrompt = "";
+	const host = await createTestOwnerHost((pi) => {
+		registerAgentTemplateCataloguePrompt(pi, async () => [{
+			name: "integration-researcher",
+			selectionGuide: "Use for integration research.",
+			thinking: "high",
+			projectContextMode: "append",
+		}]);
+	});
+	host.model.setResponses([(context) => {
+		observedSystemPrompt = context.systemPrompt ?? "";
+		return fauxAssistantMessage("Done.");
+	}]);
+
+	await host.session.prompt("Choose an Agent Template if appropriate.");
+	assert.match(observedSystemPrompt, /## Available Agent Templates/);
+	assert.match(observedSystemPrompt, /integration-researcher/);
+	assert.match(observedSystemPrompt, /thinking: high/);
+	await host.runtime.dispose();
 });
 
 test("participant registrar preserves role-specific tool presentation metadata", async () => {
@@ -203,6 +258,9 @@ test("participant registrar routes intents and returns exact handler receipts", 
 		async spawn(toolCallId, input) {
 			calls.push(["spawn", toolCallId, input]);
 			return spawnReceipt;
+		},
+		async availableTemplates() {
+			return [];
 		},
 		async observe(input) {
 			calls.push(["observe", input]);
