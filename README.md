@@ -43,7 +43,7 @@ Maintainers can run the focused compatibility gate with:
 npm run test:conformance
 ```
 
-`npm test` remains the complete regression suite.
+`npm test` remains the complete regression suite. During development, `npm run test:fast` runs in-memory tests with bounded parallelism, while `npm run test:process` runs real process, PTY, socket, and process-visible-model tests serially.
 
 ## Trust and persistence
 

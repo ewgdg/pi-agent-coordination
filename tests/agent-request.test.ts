@@ -1465,6 +1465,7 @@ async function createDormantChildHarness(
 ) {
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);

@@ -34,7 +34,10 @@ import {
 import { REVERSE_BOUNDARY_ROOT_VARIABLE } from "./support/reverse-boundary-tools.ts";
 
 test("an authenticated Agent authors and polls one immutable Deferred Message through recipient proof", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -182,7 +185,10 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 });
 
 test("poll reports an all-branch watermark for canonical absence and indeterminate for an unresolved source", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -323,7 +329,10 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 	const recipientGate = new Promise<void>((resolve) => {
 		releaseRecipient = resolve;
 	});
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	const routeRecipientResponse = async (context: { messages: Array<{ role: string }> }) => {
 		if (context.messages.at(-1)?.role === "custom") {
 			await recipientGate;
@@ -450,7 +459,10 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 });
 
 test("a Message to a dormant child starts a successor Run and releases it after Delivery settles", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
@@ -960,7 +972,10 @@ test("poll rejects a hidden custom message as Delivery evidence", async () => {
 });
 
 test("only the original sender can poll a Message", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, { persistent: true });
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
@@ -1921,6 +1936,7 @@ async function createDormantChildHarness(
 ) {
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionPaths: options.additionalExtensionPaths,
 	});
 	await bindTestOwnerHost(host, "tui");

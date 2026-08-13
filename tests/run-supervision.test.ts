@@ -938,7 +938,10 @@ test("a resume bound to an earlier Hold becomes ordinary direction and cannot cl
 });
 
 test("the registered agent_control tool authenticates structural committed input", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage("The tool-controlled child remains available."),
 	]);
@@ -990,7 +993,10 @@ test("the registered agent_control tool authenticates structural committed input
 });
 
 test("/agents retains only the viewed exact Run and keeps Owner bound through close", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage("The viewed child remains available."),
 	]);
@@ -1113,6 +1119,7 @@ async function createRunSupervisionHarness(options?: {
 	let promptSequence = 0;
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_RUNTIME_FIXTURE],
 	});
 	await bindTestOwnerHost(host, "tui");

@@ -27,7 +27,9 @@
     ]
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1 --test-reporter=dot tests/*.test.ts",
+    "test": "npm run test:fast && npm run test:process",
+    "test:fast": "node tests/support/run-test-suite.ts fast",
+    "test:process": "node tests/support/run-test-suite.ts process",
     "test:conformance": "node --test --test-concurrency=1 --test-reporter=spec tests/host-shape.test.ts tests/host-module-world.test.ts tests/pi-host-behavior-conformance.test.ts tests/interactive-host-conformance.test.ts tests/extension-conformance.test.ts tests/agent-selector-surface.test.ts tests/human-request.test.ts tests/human-request-pty.test.ts tests/owner-workflow.test.ts tests/coordinated-workflow-pty.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

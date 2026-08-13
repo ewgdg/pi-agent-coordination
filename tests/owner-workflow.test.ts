@@ -133,7 +133,10 @@ test("interactive Pi boots one observable Owner while preserving native interact
 });
 
 test("native Owner replacement closes every retained source Workflow process", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained until the Owner replaces its native session."),
 	]);
@@ -175,7 +178,10 @@ test("native Owner replacement closes every retained source Workflow process", a
 });
 
 test("shutdown with an open Agent view closes it without rebinding stopped interactive UI", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained while shutdown begins from this selection."),
 	]);
@@ -216,6 +222,7 @@ test("orderly shutdown disposes retained child and Moderator processes plus Owne
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
+		processVisibleModel: true,
 	});
 	host.model.setResponses([
 		fauxAssistantMessage("I settled while still owing the Creation Answer."),
@@ -273,7 +280,10 @@ test("orderly shutdown disposes retained child and Moderator processes plus Owne
 });
 
 test("child AgentSession patches cannot affect process shutdown or Owner disposal", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained for exhaustive shutdown cleanup."),
 	]);

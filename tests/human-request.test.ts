@@ -478,7 +478,7 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 			if (!ownerView) throw new Error("Owner view unavailable");
 			return ownerView;
 		}),
-		{ persistent: true },
+		{ persistent: true, processVisibleModel: true },
 	);
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
@@ -640,7 +640,7 @@ async function createHumanRequestChild(options?: Pick<
 			if (!ownerView) throw new Error("Human Request owner view is unavailable");
 			return ownerView;
 		}),
-		{ persistent: true, ...options },
+		{ persistent: true, processVisibleModel: true, ...options },
 	);
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;

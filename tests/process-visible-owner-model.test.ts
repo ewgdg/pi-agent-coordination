@@ -13,6 +13,23 @@ import { createUnboundTestOwnerHost } from "./support/pi-host.ts";
 const PROVIDER_ID = "coordination-test";
 const MODEL_ID = "deterministic-owner";
 
+test("Owner hosts use the in-memory model unless child processes need the provider", async (t) => {
+	const host = await createUnboundTestOwnerHost(() => undefined);
+	t.after(() => host.runtime.dispose());
+	assert.equal(
+		host.services.resourceLoader.getExtensions().extensions.some(
+			(extension) => extension.resolvedPath.endsWith("process-model-broker-extension.mjs"),
+		),
+		false,
+	);
+
+	const model = host.services.modelRuntime.getModel(PROVIDER_ID, MODEL_ID);
+	assert.ok(model);
+	host.model.setResponses([fauxAssistantMessage("In-memory response.")]);
+	const response = await host.services.modelRuntime.completeSimple(model, { messages: [] });
+	assert.equal(textOf(response.content), "In-memory response.");
+});
+
 test("opt-in Owner model calls use the retained file-backed broker until runtime disposal", async (t) => {
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		processVisibleModel: true,

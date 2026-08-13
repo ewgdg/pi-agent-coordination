@@ -313,7 +313,10 @@ test("an ambiguous public Owner extension fails before Identity commitment", asy
 });
 
 test("Owner reload publishes one prospective policy or preserves the prior snapshot", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	const policyDirectory = join(host.services.agentDir, "config");
 	const policyPath = join(policyDirectory, "pi-agent-coordination.json");
 	await mkdir(policyDirectory, { recursive: true });

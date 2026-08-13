@@ -35,6 +35,7 @@ test("child session_start UI side effects stay detached before, during, and afte
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
@@ -78,6 +79,7 @@ test("repeated Agent view attachment does not replay either session startup life
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
@@ -107,6 +109,7 @@ test("repeated Agent view attachment does not replay either session startup life
 test("an open Agent view rejects exact-Run termination and closing permits ordinary termination", async (t) => {
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
 	});
 	t.after(() => host.runtime.dispose());
@@ -148,6 +151,7 @@ test("a third-party child-view command remains unique and does not interfere wit
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
@@ -188,6 +192,7 @@ test("the named llama.cpp extension remains usable through child startup and shu
 	hostPi.initTheme();
 	const host = await createPiCliTestOwnerHost(piAgentCoordination, {
 		persistent: true,
+		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
 	});
 	try {

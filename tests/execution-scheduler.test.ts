@@ -156,6 +156,7 @@ test("real ordinary child Runs share fair execution capacity before generation a
 
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -222,6 +223,7 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 	});
 	const host = await createUnboundTestOwnerHost(() => undefined, {
 		persistent: true,
+		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
