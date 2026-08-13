@@ -15,6 +15,13 @@ import {
 	type ModeratorTrigger,
 } from "../protocol/moderator-input.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
+import {
+	createModelVisibleRunFailureRecovery,
+	runFailureRecoveryDeliveryId,
+	inspectRunFailureRecovery,
+	RUN_FAILURE_RECOVERY_DIRECTIVE,
+	type RunFailureRecovery,
+} from "../protocol/run-failure-recovery.ts";
 import type {
 	ModeratorControlInput,
 	ModeratorControlReceipt,
@@ -384,6 +391,7 @@ export class OperationalIncidentCoordinator {
 		const snapshots: OperationalConditionSnapshot[] = [];
 		for (const [key, snapshot] of this.#runFailureByKey) {
 			if (!this.#conditionRemains(snapshot)) {
+				await this.#notifyRunFailureRecovery(snapshot);
 				this.#runFailureByKey.delete(key);
 				continue;
 			}
@@ -790,6 +798,48 @@ export class OperationalIncidentCoordinator {
 			)
 		) {
 			throw new Error("unknown_evidence: Moderator renewal tool-call pointer is invalid");
+		}
+	}
+
+	async #notifyRunFailureRecovery(snapshot: RunFailureSnapshot): Promise<void> {
+		const handling = this.#handlingByKey.get(snapshot.key);
+		if (!handling?.moderatorAgentId) return;
+		const affected = this.#agents.get(snapshot.agentId);
+		if (
+			!affected ||
+			affected.host.latestStartedRunSequence() <= snapshot.run.sequence
+		) return;
+		const moderator = this.#agents.get(handling.moderatorAgentId);
+		if (!moderator) return;
+		const recovery: RunFailureRecovery = {
+			trigger: {
+				kind: "run_failure",
+				agentId: snapshot.agentId,
+				failedRunSequence: snapshot.run.sequence,
+			},
+			recovery: {
+				kind: "successor_run_started",
+				successorRunSequence: affected.host.latestStartedRunSequence(),
+			},
+			originalObligationsRemain: this.#messages.hasUnsettledAnswerObligation(
+				affected,
+				snapshot.requestIds,
+			),
+			requiredAction: "resolve",
+			guidance: RUN_FAILURE_RECOVERY_DIRECTIVE,
+		};
+		const admission = await this.#messages.admitCustomDelivery(moderator, {
+			messageId: runFailureRecoveryDeliveryId(recovery),
+			deliveryMode: "deferred",
+			customMessage: createModelVisibleRunFailureRecovery(recovery),
+			inspectProof: () => inspectRunFailureRecovery({
+				moderatorAgentId: moderator.identity.agentId,
+				transcript: moderator.transcript.inspect(),
+				recovery,
+			}),
+		});
+		if (admission !== "pending") {
+			throw new Error(`Run Failure Recovery delivery rejected: ${admission}`);
 		}
 	}
 

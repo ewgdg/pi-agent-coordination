@@ -683,7 +683,10 @@ function matchesDeliveryEntry(
 			entry.customType === delivery.message.customType &&
 			isDeepStrictEqual(entry.content, delivery.message.content) &&
 			entry.display === delivery.message.display &&
-			isDeepStrictEqual(entry.details, delivery.message.details);
+			isDeepStrictEqual(
+				entry.details,
+				"details" in delivery.message ? delivery.message.details : undefined,
+			);
 	}
 	return entry.type === "message" && matchesDeliveryMessage(delivery, entry.message);
 }
@@ -698,7 +701,10 @@ function matchesDeliveryMessage(
 			"customType" in message && message.customType === delivery.message.customType &&
 			"content" in message && isDeepStrictEqual(message.content, delivery.message.content) &&
 			"display" in message && message.display === delivery.message.display &&
-			"details" in message && isDeepStrictEqual(message.details, delivery.message.details);
+			isDeepStrictEqual(
+				"details" in message ? message.details : undefined,
+				"details" in delivery.message ? delivery.message.details : undefined,
+			);
 	}
 	if (message.role !== "user" || !("content" in message)) return false;
 	const content = typeof delivery.content === "string"

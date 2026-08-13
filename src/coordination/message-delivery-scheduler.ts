@@ -12,18 +12,29 @@ import type { MessageDeliveryMode } from "../protocol/message.ts";
 import type {
 	AgentRunHandle,
 	AgentRunSettlement,
+	AgentRuntimeDelivery,
 	InterruptionHoldHandle,
 } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 
-export type ScheduledMessageDelivery = Readonly<{
+type ScheduledDeliveryBase = Readonly<{
 	messageId: string;
 	deliveryMode: MessageDeliveryMode;
-	deliveryItem: MessageDeliveryItem;
 	inspectProof(): EntryPointer | undefined;
 	isSuppressed?(): boolean;
 	afterCommit?(): void;
 }>;
+
+export type ScheduledMessageDelivery = ScheduledDeliveryBase & Readonly<{
+	deliveryItem: MessageDeliveryItem;
+}>;
+
+export type ScheduledCustomDelivery = ScheduledDeliveryBase & Readonly<{
+	deliveryMode: "deferred";
+	customMessage: Extract<AgentRuntimeDelivery, { kind: "custom" }>["message"];
+}>;
+
+type ScheduledDelivery = ScheduledMessageDelivery | ScheduledCustomDelivery;
 
 export type ScheduleReleaseEvaluation = (
 	context: Readonly<{ agentId: string; runSequence: number }>,
@@ -51,7 +62,7 @@ export type MessageDeliveryAdmission =
 	| "capacity_exhausted";
 
 type ActiveDeferredDelivery = {
-	delivery: ScheduledMessageDelivery;
+	delivery: ScheduledDelivery;
 	completion: Promise<void>;
 	deliveryCommitted: boolean;
 };
@@ -70,7 +81,7 @@ type ActiveResume = ReservedResume & {
 };
 
 export class MessageDeliveryScheduler {
-	readonly #pendingByAgent = new Map<string, Map<string, ScheduledMessageDelivery>>();
+	readonly #pendingByAgent = new Map<string, Map<string, ScheduledDelivery>>();
 	readonly #activeDeferredByAgent = new Map<string, ActiveDeferredDelivery>();
 	readonly #frozenSteerByAgent = new Map<string, FrozenSteerBatch>();
 	readonly #reservedResumeByAgent = new Map<string, ReservedResume>();
@@ -105,9 +116,23 @@ export class MessageDeliveryScheduler {
 		return record.host.lane.run(() => this.admitInLane(record, delivery));
 	}
 
-	async admitInLane(
+	admitCustom(
+		record: AgentRecord,
+		delivery: ScheduledCustomDelivery,
+	): Promise<MessageDeliveryAdmission> {
+		return record.host.lane.run(() => this.#admitInLane(record, delivery));
+	}
+
+	admitInLane(
 		record: AgentRecord,
 		delivery: ScheduledMessageDelivery,
+	): Promise<MessageDeliveryAdmission> {
+		return this.#admitInLane(record, delivery);
+	}
+
+	async #admitInLane(
+		record: AgentRecord,
+		delivery: ScheduledDelivery,
 	): Promise<MessageDeliveryAdmission> {
 		this.#ensureSettlementHandler(record);
 		let pending = this.#pendingByAgent.get(record.identity.agentId);
@@ -118,6 +143,7 @@ export class MessageDeliveryScheduler {
 		if (pending.has(delivery.messageId)) return "pending";
 		const policy = this.#workflowPolicy.current();
 		if (
+			"deliveryItem" in delivery &&
 			this.#countPendingIdentities(pending) >=
 			policy.maxPendingDeliveriesPerAgent
 		) {
@@ -208,11 +234,15 @@ export class MessageDeliveryScheduler {
 	}
 
 	#countPendingIdentities(
-		pending: ReadonlyMap<string, ScheduledMessageDelivery>,
+		pending: ReadonlyMap<string, ScheduledDelivery>,
 	): number {
 		let count = 0;
 		for (const delivery of pending.values()) {
-			if (!delivery.inspectProof() && !delivery.isSuppressed?.()) count += 1;
+			if (
+				"deliveryItem" in delivery &&
+				!delivery.inspectProof() &&
+				!delivery.isSuppressed?.()
+			) count += 1;
 		}
 		return count;
 	}
@@ -342,13 +372,15 @@ export class MessageDeliveryScheduler {
 			this.#freezeSteerInLane(record);
 			return;
 		}
-		const delivery = pending.values().next().value as ScheduledMessageDelivery | undefined;
+		const delivery = pending.values().next().value;
 		if (!delivery) return;
 		// A settled Run may become active before Pi processes admission. followUp
 		// preserves Deferred ordering, while triggerTurn starts a standalone Idle turn.
 		const { completion } = record.host.deliverInLane({
 			kind: "custom",
-			message: createMessageDelivery([delivery.deliveryItem]),
+			message: "customMessage" in delivery
+				? delivery.customMessage
+				: createMessageDelivery([delivery.deliveryItem]),
 			triggerTurn: true,
 			deliverAs: "followUp",
 		});
@@ -402,7 +434,8 @@ export class MessageDeliveryScheduler {
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending) return;
 		const steer = [...pending.values()].filter(
-			({ deliveryMode }) => deliveryMode === "steer",
+			(delivery): delivery is ScheduledMessageDelivery =>
+				delivery.deliveryMode === "steer" && "deliveryItem" in delivery,
 		);
 		if (steer.length === 0) return;
 		const messageIds = steer.map(({ messageId }) => messageId);

@@ -7,6 +7,8 @@ import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
 import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
+import { RUN_FAILURE_RECOVERY_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
+import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import type { ModeratorControlInput, ModeratorControlReceipt } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import {
@@ -376,14 +378,21 @@ const ModeratorControlInputSchema = Type.Unsafe<ModeratorControlInput>(
 const AgentRuntimeDeliverySchema = Type.Union([
 	closed({
 		kind: Type.Literal("custom"),
-		message: closed({
-			customType: Type.Literal("agent-coordination.message-delivery"),
-			content: Type.String(),
-			display: Type.Literal(true),
-			details: closed({
-				messages: Type.Array(ToolCallPointerSchema, { minItems: 1, uniqueItems: true }),
+		message: Type.Union([
+			closed({
+				customType: Type.Literal(MESSAGE_DELIVERY_CUSTOM_TYPE),
+				content: Type.String(),
+				display: Type.Literal(true),
+				details: closed({
+					messages: Type.Array(ToolCallPointerSchema, { minItems: 1, uniqueItems: true }),
+				}),
 			}),
-		}),
+			closed({
+				customType: Type.Literal(RUN_FAILURE_RECOVERY_CUSTOM_TYPE),
+				content: Type.String(),
+				display: Type.Literal(true),
+			}),
+		]),
 		triggerTurn: Type.Literal(true),
 		deliverAs: Type.Optional(DeliveryModeSchema),
 	}),

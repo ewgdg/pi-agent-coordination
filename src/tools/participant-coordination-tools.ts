@@ -411,9 +411,9 @@ export function registerParticipantCoordinationTools<
 			name: "moderator_control",
 			label: "Control Moderation",
 			description:
-				"Renew an exact Operation Review interval or resolve handling after every mechanically checkable predicate clears.",
+				"Renew an exact Operation Review interval or resolve handling after every mechanically checkable predicate clears. A Run Failure clears as soon as a successor Run starts; any remaining Answer Obligation is ordinary Workflow work.",
 			promptSnippet:
-				"Renew an exact reviewed call deliberately, or record a Resolution and revalidate the original condition.",
+				"Renew an exact reviewed call deliberately, or resolve immediately when the original condition clears.",
 			executionMode: "sequential",
 			parameters: moderatorControlParameters,
 			renderCall: renderModeratorControlCall,

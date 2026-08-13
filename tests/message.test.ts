@@ -831,6 +831,48 @@ test("poll rejects malformed Message Delivery evidence for another source", asyn
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
+test("poll ignores host-authored Run Failure Recovery evidence", async () => {
+	const harness = await createDormantChildHarness({});
+	harness.host.model.setResponses([
+		fauxAssistantMessage("The valid Message committed before recovery evidence."),
+	]);
+	const sent = await authorMessage(
+		harness,
+		"message-before-run-failure-recovery-evidence",
+		"Inspect through host-authored recovery evidence.",
+	);
+	await waitForDelivery(harness, sent.source);
+	SessionManager.open(harness.childSessionFile).appendCustomMessageEntry(
+		"agent-coordination.run-failure-recovery",
+		JSON.stringify({
+			trigger: { kind: "run_failure", agentId: "affected", failedRunSequence: 1 },
+			recovery: { kind: "successor_run_started", successorRunSequence: 2 },
+			originalObligationsRemain: true,
+			requiredAction: "resolve",
+			guidance:
+				"Call moderator_control.resolve now. The remaining Answer Obligation is ordinary Workflow work.",
+		}),
+		true,
+	);
+	const pollToolCallId = "poll-through-run-failure-recovery-evidence";
+	const pollInput = {
+		operation: "poll" as const,
+		messageId: sent.receipt.messageId,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", pollInput, { id: pollToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+
+	const result = await harness.view.message(pollToolCallId, pollInput);
+	assert.ok("disposition" in result);
+	assert.equal(result.disposition, "delivered");
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
 test("poll rejects unknown current-scope coordination evidence", async () => {
 	const harness = await createDormantChildHarness({});
 	harness.host.model.setResponses([

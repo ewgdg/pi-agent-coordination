@@ -4,6 +4,7 @@ import {
 } from "./agent-record.ts";
 import {
 	MessageDeliveryScheduler,
+	type ScheduledCustomDelivery,
 	type ScheduledMessageDelivery,
 	type ResumeReservationHandler,
 	type ScheduleReleaseEvaluation,
@@ -257,6 +258,13 @@ export class MessageCoordinator {
 		return (await this.#deliveryScheduler.admit(recipient, delivery)) === "pending"
 			? "pending"
 			: "rejected";
+	}
+
+	admitCustomDelivery(
+		recipient: AgentRecord,
+		delivery: ScheduledCustomDelivery,
+	): Promise<"pending" | "target_unavailable" | "capacity_exhausted"> {
+		return this.#deliveryScheduler.admitCustom(recipient, delivery);
 	}
 
 	requestRelease(record: AgentRecord): Promise<"released" | "retained" | "stale"> {

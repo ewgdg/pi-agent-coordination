@@ -374,12 +374,14 @@ function serializeDelivery(delivery: AgentRuntimeDelivery) {
 	}
 	return {
 		kind: delivery.kind,
-		message: {
-			...delivery.message,
-			details: {
-				messages: delivery.message.details.messages.map((pointer) => ({ ...pointer })),
-			},
-		},
+		message: "details" in delivery.message
+			? {
+				...delivery.message,
+				details: {
+					messages: delivery.message.details.messages.map((pointer) => ({ ...pointer })),
+				},
+			}
+			: { ...delivery.message },
 		triggerTurn: delivery.triggerTurn,
 		...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
 	};

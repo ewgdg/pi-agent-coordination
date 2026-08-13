@@ -1,6 +1,7 @@
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
+import type { ModelVisibleRunFailureRecovery } from "../protocol/run-failure-recovery.ts";
 import type { ModelVisibleMessageDelivery } from "../protocol/message-delivery.ts";
 import type {
 	ModelReference,
@@ -64,7 +65,7 @@ export type ToolBatchClassification = "blocking" | "asynchronous";
 export type AgentRuntimeDelivery =
 	| Readonly<{
 		kind: "custom";
-		message: ModelVisibleMessageDelivery;
+		message: ModelVisibleMessageDelivery | ModelVisibleRunFailureRecovery;
 		triggerTurn: true;
 		deliverAs?: "steer" | "followUp";
 	}>

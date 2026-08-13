@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
+import { RUN_FAILURE_RECOVERY_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import {
 	currentCoordinationScope,
 	deriveMessageIdentity,
@@ -168,6 +169,8 @@ function readMessageDeliveries(options: {
 	for (const entry of currentCoordinationScope(transcript, recipientAgentId)) {
 		if (entry.type !== "custom" && entry.type !== "custom_message") continue;
 		if (!entry.customType.startsWith("agent-coordination.")) continue;
+		// Recovery is a host-authored coordination entry, but not an Agent Message.
+		if (entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE) continue;
 		if (
 			entry.type !== "custom_message" ||
 			entry.customType !== MESSAGE_DELIVERY_CUSTOM_TYPE

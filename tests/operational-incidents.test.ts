@@ -591,6 +591,138 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 	await host.runtime.dispose();
 });
 
+test("a live successor tells its Run Failure Moderator to resolve immediately", async () => {
+	const executionGate = await createProcessExecutionGate("run-failure-recovery");
+	const host = await createUnboundTestOwnerHost(() => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+		implicitModeratorResponses: false,
+		additionalExtensionPaths: [
+			fileURLToPath(new URL("./support/execution-gate-tool.ts", import.meta.url)),
+		],
+	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = new WorkflowCoordinator(host.runtime, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+	});
+	const owner = coordinator.forAgent(identity.agentId);
+	const routeRecovery = (context: Context) => {
+		const messages = JSON.stringify(context.messages);
+		const latestUser = JSON.stringify(
+			[...context.messages].reverse().find(({ role }) => role === "user"),
+		);
+		if (context.tools?.some(({ name }) => name === "moderator_control")) {
+			if (messages.includes("successor_run_started")) {
+				return fauxAssistantMessage(
+					fauxToolCall(
+						"moderator_control",
+						{
+							operation: "resolve",
+							summary: "A successor Run started successfully.",
+							rationale:
+								"The Run Failure cleared; the Answer Obligation is ordinary Workflow work.",
+						},
+						{ id: "resolve-recovered-run-failure" },
+					),
+					{ stopReason: "toolUse" },
+				);
+			}
+			return fauxAssistantMessage("I will wait for exact recovery evidence.");
+		}
+		if (latestUser.includes("Start the live successor Run.")) {
+			return fauxAssistantMessage(
+				fauxToolCall("execution_gate", {}, { id: "hold-live-successor" }),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage("The first exact Run fails before answering.", {
+			stopReason: "error",
+			errorMessage: "deterministic first Run failure",
+		});
+	};
+	host.model.setResponses(Array.from(
+		{
+			length: host.services.settingsManager.getRetrySettings().maxRetries + 16,
+		},
+		() => routeRecovery,
+	));
+
+	try {
+		const affected = await spawnFromView(
+			host.session,
+			owner,
+			"spawn-run-failure-recovery-target",
+			"Fail the first Run before answering this Creation Request.",
+		);
+		const moderator = await waitForModeratorKind(host, "run_failure");
+		await sendMessageFromView(
+			host.session,
+			owner,
+			"start-live-successor-after-run-failure",
+			affected.agentId,
+			"Start the live successor Run.",
+		);
+		await executionGate.waitUntilStarted();
+		await waitForCondition(() => {
+			const run = owner.status(affected.agentId).run;
+			return run.phase === "live" && run.work === "active" &&
+				run.retentionReasons.some(({ reason }) => reason === "answer_owed");
+		});
+
+		const recoveryEntry = await waitForTranscriptEntry(
+			moderator.path,
+			(entry) => entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.run-failure-recovery",
+		);
+		assert.ok(
+			recoveryEntry.type === "custom_message" &&
+				typeof recoveryEntry.content === "string",
+		);
+		assert.deepEqual(JSON.parse(recoveryEntry.content), {
+			trigger: {
+				kind: "run_failure",
+				agentId: affected.agentId,
+				failedRunSequence: 1,
+			},
+			recovery: {
+				kind: "successor_run_started",
+				successorRunSequence: 2,
+			},
+			originalObligationsRemain: true,
+			requiredAction: "resolve",
+			guidance:
+				"Call moderator_control.resolve now. The remaining Answer Obligation is ordinary Workflow work.",
+		});
+		const resolution = await waitForTranscriptEntry(
+			moderator.path,
+			(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
+				entry.message.toolCallId === "resolve-recovered-run-failure",
+		);
+		assert.ok(resolution.type === "message" && resolution.message.role === "toolResult");
+		assert.deepEqual(resolution.message.details, { disposition: "resolved" });
+		const moderatorRun = owner.status(moderator.id).run;
+		assert.equal(
+			moderatorRun.retentionReasons.some(({ reason }) => reason === "awaiting_answer"),
+			false,
+		);
+		const moderatorEntries = SessionManager.open(moderator.path).getEntries();
+		assert.equal(
+			moderatorEntries.some(
+				(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+					entry.message.content.some(
+						(part) => part.type === "toolCall" && part.name === "agent_message",
+					),
+			),
+			false,
+		);
+	} finally {
+		await executionGate.release();
+		executionGate.restoreEnvironment();
+		await coordinator.shutdown(async () => host.runtime.dispose());
+	}
+});
+
 test("a successor clears Run Failure before its later Stall is handled separately", async () => {
 	const harness = await createIncidentBoundaryHarness();
 	const routeRuns = (context: Context) => {
