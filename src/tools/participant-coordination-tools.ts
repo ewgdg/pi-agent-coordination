@@ -128,7 +128,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("cancel"),
-			requestId: Type.String({ minLength: 1 }),
+			requestMessageId: Type.String({ minLength: 1 }),
 			reason: Type.String({ minLength: 1 }),
 		},
 		{ additionalProperties: false },

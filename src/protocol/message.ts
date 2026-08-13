@@ -275,7 +275,7 @@ export function inspectAgentMessageAuthorResult(options: {
 				: {
 					kind: "request_cancellation",
 					messageId,
-					requestId: input.requestId,
+					requestId: input.requestMessageId,
 				};
 	return inspectMessageAuthorResult({
 		authorAgentId,
@@ -331,11 +331,24 @@ function isNonAuthoringRequestResult(
 	if (
 		(message.kind !== "answer" && message.kind !== "request_cancellation") ||
 		!isRecord(value) ||
-		value.requestId !== message.requestId
+		(message.kind === "answer" && value.requestId !== message.requestId)
 	) {
 		return false;
 	}
 	const keys = Object.keys(value).sort();
+	if (message.kind === "request_cancellation") {
+		if (value.disposition === "already_answered") {
+			return sameStringList(keys, ["answerMessageId", "disposition"]) &&
+				typeof value.answerMessageId === "string" &&
+				value.answerMessageId.length > 0;
+		}
+		if (value.disposition === "already_cancelled") {
+			return sameStringList(keys, ["cancellationMessageId", "disposition"]) &&
+				typeof value.cancellationMessageId === "string" &&
+				value.cancellationMessageId.length > 0;
+		}
+		return false;
+	}
 	if (value.disposition === "already_answered") {
 		return sameStringList(
 			keys,
@@ -371,10 +384,8 @@ function validateMessageAuthorResult(
 	const identityKey = "messageId";
 	const correlationKeys = message.kind === "answer"
 		? ["requestId"]
-		: message.kind === "request_cancellation"
-			? ["cancellationId", "requestId"]
-			: message.kind === "request"
-				? ["requestId"]
+		: message.kind === "request"
+			? ["requestId"]
 			: [];
 	if (value.delivery === "pending" || value.delivery === "indeterminate") {
 		if (!sameStringList(keys, ["delivery", identityKey, ...correlationKeys].sort())) {
@@ -414,14 +425,6 @@ function validateMessageAuthorResult(
 	if (message.kind === "request" && value.requestId !== message.messageId) {
 		throw new Error(
 			`invariant_violation: Request ${messageId} author result has the wrong identity`,
-		);
-	}
-	if (
-		message.kind === "request_cancellation" &&
-		(value.requestId !== message.requestId || value.cancellationId !== message.messageId)
-	) {
-		throw new Error(
-			`invariant_violation: Cancellation ${messageId} author result has invalid correlation`,
 		);
 	}
 }

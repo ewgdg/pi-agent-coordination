@@ -2565,7 +2565,7 @@ async function cancelRequestFromView(
 ): Promise<void> {
 	const input = {
 		operation: "cancel" as const,
-		requestId,
+		requestMessageId: requestId,
 		reason: "The Creation Request is no longer needed.",
 	};
 	session.sessionManager.appendMessage(

@@ -297,7 +297,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 		"cancellation-admitted-while-held",
 		{
 			operation: "cancel",
-			requestId: incoming.requestId,
+			requestMessageId: incoming.requestId,
 			reason: heldCancellationText,
 		},
 	);

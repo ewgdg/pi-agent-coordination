@@ -35,6 +35,14 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		parameters.anyOf?.map((candidate) => candidate.properties?.operation?.const),
 		["send", "request", "answer", "cancel", "poll", "retry"],
 	);
+	const cancelSchema = parameters.anyOf?.find(
+		(candidate) => candidate.properties?.operation?.const === "cancel",
+	);
+	assert.deepEqual(Object.keys(cancelSchema?.properties ?? {}).sort(), [
+		"operation",
+		"reason",
+		"requestMessageId",
+	]);
 	const longContent = "Direction ".repeat(20).trim();
 	const args = {
 		operation: "send" as const,
@@ -105,6 +113,35 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	).render(160).join("\n");
 	assert.match(answerText, /request-identity/);
 	assert.match(answerText, /One canonical Answer/);
+
+	const cancellationText = tool.renderCall(
+		{
+			operation: "cancel",
+			requestMessageId: "request-message-identity",
+			reason: "The result is no longer needed.",
+		},
+		plainTheme,
+		{ ...renderContext, args: {
+			operation: "cancel",
+			requestMessageId: "request-message-identity",
+			reason: "The result is no longer needed.",
+		} },
+	).render(160).join("\n");
+	assert.match(cancellationText, /request-message-identity/);
+
+	const existingCancellationText = tool.renderResult(
+		{
+			content: [{ type: "text", text: "already cancelled" }],
+			details: {
+				disposition: "already_cancelled",
+				cancellationMessageId: "cancellation-message-identity",
+			},
+		},
+		{ expanded: false, isPartial: false },
+		plainTheme,
+		renderContext,
+	).render(160).join("\n");
+	assert.match(existingCancellationText, /cancellation-message-identity/);
 
 	const retrievalText = tool.renderResult(
 		{

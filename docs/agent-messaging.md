@@ -89,10 +89,12 @@ Only the requester may abandon its exact Request:
 ```json
 {
   "operation": "cancel",
-  "requestId": "source-derived-request-id",
+  "requestMessageId": "source-derived-request-id",
   "reason": "The result is no longer needed."
 }
 ```
+
+`requestMessageId` names the Request Message being withdrawn. A newly committed Cancellation receipt returns its own `messageId` and Delivery outcome. If the Request was already resolved, the receipt instead returns `already_cancelled` with `cancellationMessageId` or `already_answered` with `answerMessageId`; it does not repeat the Request identity from the call.
 
 Cancellation commitment ends only that requester wait. Fixed-Steer Cancellation Delivery ends only that responder obligation and supplies actionable context; it does not abort tools, retract facts, undo effects, or terminate a Run. Cancellation delivered before a queued Request suppresses that Request without waking the responder for obsolete work.
 

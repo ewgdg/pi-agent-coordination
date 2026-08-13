@@ -105,7 +105,7 @@ export function inspectCanonicalRequestResolution(options: {
 			input: Extract<AgentMessageInput, { operation: "cancel" }>;
 		} =>
 			source.input.operation === "cancel" &&
-			source.input.requestId === request.messageId
+			source.input.requestMessageId === request.messageId
 		)
 		.map(({ source, input }) => resolveCommittedCancellation({
 			requesterAgentId: request.fromAgentId,
@@ -149,10 +149,11 @@ export function findAuthoredAgentMessageSources(options: {
 	transcript: TranscriptInspection;
 }): AuthoredAgentMessageSource[] {
 	const sources: AuthoredAgentMessageSource[] = [];
-	for (const entry of currentCoordinationScope(
+	const entries = currentCoordinationScope(
 		options.transcript,
 		options.authorAgentId,
-	)) {
+	);
+	for (const entry of entries) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 		for (const part of entry.message.content) {
 			if (part.type !== "toolCall" || part.name !== "agent_message") continue;
@@ -160,6 +161,21 @@ export function findAuthoredAgentMessageSources(options: {
 			try {
 				input = validateAgentMessageInput(part.arguments);
 			} catch {
+				// Pi durably records model-emitted tool calls even when native schema
+				// validation rejects them before this extension executes.
+				const results = entries.filter(
+					(entry) =>
+						entry.type === "message" &&
+						entry.message.role === "toolResult" &&
+						entry.message.toolName === "agent_message" &&
+						entry.message.toolCallId === part.id,
+				);
+				if (
+					results.length === 1 &&
+					results[0]?.type === "message" &&
+					results[0].message.role === "toolResult" &&
+					results[0].message.isError
+				) continue;
 				throw new ProtocolInvariantError(
 					`committed agent_message source ${part.id} is invalid`,
 				);

@@ -465,7 +465,7 @@ export class MessageCoordinator {
 		input: CancellationInput,
 	): Promise<RequestCancellationReceipt> {
 		const admitted = await caller.host.lane.run(() => {
-			const request = this.#requestEvidence.requireRequest(input.requestId);
+			const request = this.#requestEvidence.requireRequest(input.requestMessageId);
 			if (request.fromAgentId !== caller.identity.agentId) {
 				throw new Error(
 					`wrong_participant: Agent ${caller.identity.agentId} is not the requester for Request ${request.messageId}`,
@@ -500,26 +500,18 @@ export class MessageCoordinator {
 		});
 		if (admitted.disposition === "answered") {
 			return {
-				messageId: admitted.answer.messageId,
-				answerId: admitted.answer.messageId,
-				requestId: admitted.request.messageId,
 				disposition: "already_answered",
+				answerMessageId: admitted.answer.messageId,
 			};
 		}
 		if (admitted.disposition === "existing") {
 			return {
-				messageId: admitted.cancellation.messageId,
-				cancellationId: admitted.cancellation.messageId,
-				requestId: admitted.request.messageId,
 				disposition: "already_cancelled",
+				cancellationMessageId: admitted.cancellation.messageId,
 			};
 		}
-		const { cancellation, request, responder } = admitted;
-		const identity = {
-			messageId: cancellation.messageId,
-			cancellationId: cancellation.messageId,
-			requestId: request.messageId,
-		};
+		const { cancellation, responder } = admitted;
+		const identity = { messageId: cancellation.messageId };
 		if (this.#isShuttingDown()) {
 			return {
 				...identity,

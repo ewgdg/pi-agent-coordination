@@ -314,8 +314,12 @@ export class RequestEvidence {
 			authorAgentId: author.identity.agentId,
 			transcript: author.transcript.inspect(),
 		}).filter(({ source, input }) =>
-			input.operation === operation &&
-			input.requestId === requestId &&
+			((operation === "answer" &&
+				input.operation === "answer" &&
+				input.requestId === requestId) ||
+				(operation === "cancel" &&
+					input.operation === "cancel" &&
+					input.requestMessageId === requestId)) &&
 			inspectAgentMessageAuthorResult({
 				authorAgentId: author.identity.agentId,
 				transcript: author.transcript.inspect(),
@@ -388,7 +392,11 @@ export class RequestEvidence {
 				providedInput: authored.input,
 			});
 		}
-		const request = this.requireRequest(authored.input.requestId);
+		const request = this.requireRequest(
+			authored.input.operation === "cancel"
+				? authored.input.requestMessageId
+				: authored.input.requestId,
+		);
 		return authored.input.operation === "answer"
 			? resolveCommittedAnswer({
 				responderAgentId: author.identity.agentId,

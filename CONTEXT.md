@@ -84,7 +84,7 @@ An immutable responder-authored Message correlated to exactly one Agent Request.
 Requester-initiated delivery of an already-committed Agent Answer through the model-visible result of retrying its Request. The result is the Answer's recipient-side delivery proof and transports the responder's immutable Answer without impersonating the responder or authoring another Message.
 
 **Request Cancellation**:
-An immutable requester-authored Message withdrawing one exact Agent Request. It ends the requester's wait when committed and the responder's Answer obligation when delivered, without retracting facts or stopping work. An undelivered Request is suppressed without waking its responder; cancellation of a delivered Request may start a dormant responder through ordinary Message delivery. Cancellation remains one hop and never grants authority over the responder's Requests.
+An immutable requester-authored Message withdrawing one exact Agent Request, named at the authoring boundary by that Request's Message identity. It ends the requester's wait when committed and the responder's Answer obligation when delivered, without retracting facts or stopping work. An undelivered Request is suppressed without waking its responder; cancellation of a delivered Request may start a dormant responder through ordinary Message delivery. Cancellation remains one hop and never grants authority over the responder's Requests.
 
 **Cooperative Cancellation**:
 A responder's explicit decision, after receiving Request Cancellation, to cancel its own downstream Requests that are no longer needed. Every cancellation remains an independent requester-authored fact; there is no cascade identity or runtime claim that an entire dependency chain was cancelled.

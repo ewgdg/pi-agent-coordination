@@ -172,6 +172,26 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		toolCallId: "call-message",
 		input: { operation: "send", targetAgentId: "target", content: "hello" },
 	}), true);
+	assert.equal(Check(agentControlMethods["coordination.message"].request, {
+		toolCallId: "call-cancel",
+		input: {
+			operation: "cancel",
+			requestMessageId: "request-message",
+			reason: "No longer needed.",
+		},
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.message"].request, {
+		toolCallId: "call-obsolete-cancel",
+		input: {
+			operation: "cancel",
+			requestId: "request-message",
+			reason: "No longer needed.",
+		},
+	}), false);
+	assert.equal(Check(agentControlMethods["coordination.message"].response, {
+		disposition: "already_cancelled",
+		cancellationMessageId: "cancellation-message",
+	}), true);
 	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
 		children: [{
 			agentId: "child",

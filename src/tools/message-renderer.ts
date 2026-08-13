@@ -40,7 +40,10 @@ export function renderAgentMessageCall(
 	}
 	if (args.operation === "cancel") {
 		text += theme.fg("accent", "cancel");
-		text += theme.fg("dim", ` · ${args.requestId} · ${boundedToolPreview(args.reason)}`);
+		text += theme.fg(
+			"dim",
+			` · ${args.requestMessageId} · ${boundedToolPreview(args.reason)}`,
+		);
 		return new Text(text, 0, 0);
 	}
 	text += theme.fg("accent", args.operation);
@@ -61,7 +64,13 @@ export function renderAgentMessageResult(
 		? receipt.delivery
 		: receipt.disposition;
 	let text = theme.fg(dispositionColor(disposition), disposition);
-	text += theme.fg("dim", ` · ${receipt.messageId}`);
+	if ("messageId" in receipt) {
+		text += theme.fg("dim", ` · ${receipt.messageId}`);
+	} else if ("answerMessageId" in receipt) {
+		text += theme.fg("dim", ` · ${receipt.answerMessageId}`);
+	} else {
+		text += theme.fg("dim", ` · ${receipt.cancellationMessageId}`);
+	}
 	if (
 		"disposition" in receipt &&
 		receipt.disposition === "answer_delivered"

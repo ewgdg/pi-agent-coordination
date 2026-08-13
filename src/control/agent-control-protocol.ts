@@ -262,17 +262,12 @@ const AgentMessageReceiptSchema = Type.Union([
 		cancellationId: NonEmptyStringSchema, disposition: Type.Literal("already_cancelled"),
 	}),
 	closed({
-		messageId: NonEmptyStringSchema, requestId: NonEmptyStringSchema,
-		cancellationId: NonEmptyStringSchema,
-		delivery: Type.Union([Type.Literal("pending"), Type.Literal("indeterminate")]),
+		disposition: Type.Literal("already_answered"),
+		answerMessageId: NonEmptyStringSchema,
 	}),
 	closed({
-		messageId: NonEmptyStringSchema, requestId: NonEmptyStringSchema,
-		cancellationId: NonEmptyStringSchema, delivery: Type.Literal("rejected"),
-		rejectionReason: Type.Union([
-			Type.Literal("target_unavailable"), Type.Literal("host_shutting_down"),
-			Type.Literal("capacity_exhausted"),
-		]),
+		disposition: Type.Literal("already_cancelled"),
+		cancellationMessageId: NonEmptyStringSchema,
 	}),
 	closed({
 		disposition: Type.Literal("delivered"), messageId: NonEmptyStringSchema,

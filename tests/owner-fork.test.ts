@@ -545,7 +545,7 @@ async function assertSourceIdentityIsUnavailable(
 			tool: "agent_message" as const,
 			input: {
 				operation: "cancel",
-				requestId: options.sourceRequestId,
+				requestMessageId: options.sourceRequestId,
 				reason: "Do not cancel across Workflows.",
 			},
 		},

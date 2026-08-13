@@ -45,33 +45,14 @@ export type AgentAnswerReceipt =
 	}>;
 
 export type RequestCancellationReceipt =
+	| AgentMessageSendReceipt
 	| Readonly<{
-		messageId: string;
-		cancellationId: string;
-		requestId: string;
-		delivery: "pending" | "indeterminate";
-	}>
-	| Readonly<{
-		messageId: string;
-		cancellationId: string;
-		requestId: string;
-		delivery: "rejected";
-		rejectionReason:
-			| "target_unavailable"
-			| "host_shutting_down"
-			| "capacity_exhausted";
-	}>
-	| Readonly<{
-		messageId: string;
-		cancellationId: string;
-		requestId: string;
 		disposition: "already_cancelled";
+		cancellationMessageId: string;
 	}>
 	| Readonly<{
-		messageId: string;
-		answerId: string;
-		requestId: string;
 		disposition: "already_answered";
+		answerMessageId: string;
 	}>;
 
 export type AgentMessagePollReceipt =

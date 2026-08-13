@@ -155,7 +155,7 @@ test("status reports exact Request retention multiplicity", async () => {
 	const cancelToolCallId = "cancel-one-of-several-retained-requests";
 	const cancelInput = {
 		operation: "cancel" as const,
-		requestId,
+		requestMessageId: requestId,
 		reason: "Resolve only this exact Request relationship.",
 	};
 	harness.host.session.sessionManager.appendMessage(
@@ -165,6 +165,7 @@ test("status reports exact Request retention multiplicity", async () => {
 		),
 	);
 	const cancellation = await harness.view.message(cancelToolCallId, cancelInput);
+	assert.ok("messageId" in cancellation && "delivery" in cancellation);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: cancelToolCallId,
@@ -175,6 +176,21 @@ test("status reports exact Request retention multiplicity", async () => {
 		timestamp: Date.now(),
 	});
 	assert.equal(retentionCount(harness.view.status().run, "awaiting_answer"), 2);
+
+	const repeatedCancelToolCallId = "cancel-already-cancelled-request";
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", cancelInput, { id: repeatedCancelToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	assert.deepEqual(
+		await harness.view.message(repeatedCancelToolCallId, cancelInput),
+		{
+			disposition: "already_cancelled",
+			cancellationMessageId: cancellation.messageId,
+		},
+	);
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
@@ -261,7 +277,7 @@ test("only the fixed responder may Answer and only the requester may cancel", as
 				"agent_message",
 				{
 					operation: "cancel",
-					requestId,
+					requestMessageId: requestId,
 					reason: "A responder cannot abandon the requester's wait.",
 				},
 				{ id: unauthorizedCancelCallId },
@@ -493,7 +509,7 @@ test("only the responder's first Answer becomes canonical and resolves its exact
 	const lateCancelCallId = "cancel-after-answer-delivery";
 	const lateCancelInput = {
 		operation: "cancel" as const,
-		requestId,
+		requestMessageId: requestId,
 		reason: "This cancellation lost the requester-lane race.",
 	};
 	harness.host.session.sessionManager.appendMessage(
@@ -506,9 +522,7 @@ test("only the responder's first Answer becomes canonical and resolves its exact
 		await harness.view.message(lateCancelCallId, lateCancelInput),
 		{
 			disposition: "already_answered",
-			messageId: answerId,
-			answerId,
-			requestId,
+			answerMessageId: answerId,
 		},
 	);
 
@@ -714,7 +728,7 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 	const cancelToolCallId = "cancel-undelivered-request";
 	const cancelInput = {
 		operation: "cancel" as const,
-		requestId,
+		requestMessageId: requestId,
 		reason: "The result is no longer needed.",
 	};
 	harness.host.session.sessionManager.appendMessage(
@@ -737,8 +751,6 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 	const cancellation = await harness.view.message(cancelToolCallId, cancelInput);
 	assert.deepEqual(cancellation, {
 		messageId: cancellationId,
-		cancellationId,
-		requestId,
 		delivery: "indeterminate",
 	});
 	harness.host.session.sessionManager.appendMessage({
@@ -894,7 +906,7 @@ test("Cancellation delivered to a busy responder suppresses its queued Request",
 
 	const cancelInput = {
 		operation: "cancel" as const,
-		requestId,
+		requestMessageId: requestId,
 		reason: "Suppress this queued work before Delivery.",
 	};
 	const cancelCallId = "cancel-queued-request";
@@ -996,7 +1008,7 @@ test("Cancellation Delivery wins the responder lane before a later Answer", asyn
 	const cancelToolCallId = "deliver-cancellation-before-answer";
 	const cancelInput = {
 		operation: "cancel" as const,
-		requestId,
+		requestMessageId: requestId,
 		reason: "Stop before authoring the Answer.",
 	};
 	harness.host.session.sessionManager.appendMessage(
@@ -1160,7 +1172,7 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 	const cancelToolCallId = "cancel-before-answer-delivery";
 	const cancelInput = {
 		operation: "cancel" as const,
-		requestId,
+		requestMessageId: requestId,
 		reason: "Abandon the wait while the committed Answer is undelivered.",
 	};
 	harness.host.session.sessionManager.appendMessage(
@@ -1193,8 +1205,6 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 	const cancellation = await harness.view.message(cancelToolCallId, cancelInput);
 	assert.deepEqual(cancellation, {
 		messageId: cancellationId,
-		cancellationId,
-		requestId,
 		delivery: "pending",
 	});
 	harness.host.session.sessionManager.appendMessage({

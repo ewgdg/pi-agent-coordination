@@ -32,7 +32,7 @@ export type AnswerInput = Readonly<{
 
 export type CancellationInput = Readonly<{
 	operation: "cancel";
-	requestId: string;
+	requestMessageId: string;
 	reason: string;
 }>;
 
@@ -67,7 +67,7 @@ export function sameAgentMessageInput(
 				left.answer === right.answer;
 		case "cancel":
 			return right.operation === "cancel" &&
-				left.requestId === right.requestId &&
+				left.requestMessageId === right.requestMessageId &&
 				left.reason === right.reason;
 		case "poll":
 			return right.operation === "poll" && left.messageId === right.messageId;
@@ -100,18 +100,23 @@ export function validateAgentMessageInput(
 	}
 	if (value.operation === "cancel") {
 		const keys = Object.keys(value).sort();
-		if (!sameStringList(keys, ["operation", "reason", "requestId"])) {
+		if (!sameStringList(keys, ["operation", "reason", "requestMessageId"])) {
 			throw new Error("invalid_input: Request Cancellation input has an invalid shape");
 		}
-		if (typeof value.requestId !== "string" || value.requestId.length === 0) {
-			throw new Error("invalid_input: Request Cancellation requestId must not be empty");
+		if (
+			typeof value.requestMessageId !== "string" ||
+			value.requestMessageId.length === 0
+		) {
+			throw new Error(
+				"invalid_input: Request Cancellation requestMessageId must not be empty",
+			);
 		}
 		if (typeof value.reason !== "string" || value.reason.length === 0) {
 			throw new Error("invalid_input: Request Cancellation reason must not be empty");
 		}
 		return {
 			operation: "cancel",
-			requestId: value.requestId,
+			requestMessageId: value.requestMessageId,
 			reason: value.reason,
 		};
 	}

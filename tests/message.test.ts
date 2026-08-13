@@ -19,6 +19,7 @@ import type {
 	AgentMessageReceipt,
 	MessageBoundaryHooks,
 } from "../src/coordination/workflow-coordinator.ts";
+import type { AgentMessageSendReceipt } from "../src/coordination/message-receipts.ts";
 import piAgentCoordination from "../src/index.ts";
 import {
 	WorkflowPolicyStore,
@@ -1587,10 +1588,15 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 		entryId: lateSourceEntry.id,
 		toolCallId: lateToolCallId,
 	};
-	let lateAdmission: Promise<AgentMessageReceipt> | undefined;
+	let lateAdmission: Promise<AgentMessageSendReceipt> | undefined;
 	admitAfterFreeze = () => {
 		admitAfterFreeze = undefined;
-		lateAdmission = harness.view.message(lateToolCallId, lateInput);
+		lateAdmission = harness.view.message(lateToolCallId, lateInput).then((receipt) => {
+			if (!("messageId" in receipt) || !("delivery" in receipt)) {
+				throw new Error("Message send returned a non-delivery receipt");
+			}
+			return receipt;
+		});
 	};
 
 	let releaseFirstGeneration!: () => void;
@@ -1992,6 +1998,9 @@ async function authorMessage(
 		toolCallId,
 	};
 	const receipt = await harness.view.message(toolCallId, input);
+	if (!("messageId" in receipt) || !("delivery" in receipt)) {
+		throw new Error("Message send returned a non-delivery receipt");
+	}
 	if (options.appendResult !== false) {
 		harness.host.session.sessionManager.appendMessage({
 			role: "toolResult",
