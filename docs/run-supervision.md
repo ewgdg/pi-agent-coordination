@@ -31,13 +31,9 @@ Each status contains the durable Agent identity and structural relationship, the
 
 Retention categories are `owner_host_binding`, `pending_delivery`, `awaiting_answer`, `answer_owed`, `interactive_selection`, `interruption_hold`, and `moderator_handling`. Status never exposes Message payloads, prompts, history summaries, Run handles, or raw Pi objects.
 
-## Generation failure and Automatic Reconciliation
+## Generation failure
 
-Coordinated sessions issue one generic provider request per model generation. Process-local safety overrides disable Pi's regenerated-prompt outer retry, context-overflow auto-compaction retry, and provider retry budget without rewriting the user's Pi settings. OpenAI Codex sessions configured with `auto` transport use SSE so transport fallback cannot silently start another request.
-
-Automatic Reconciliation requires a trusted provider or Agent Session adapter to return an exact same-generation handle, an admitted continuation recipe, and cumulative text-only output that preserves the already observed prefix. The runtime rejects tool-call content, a changed model or provider, regenerated output, stale generation proof, adapter failure, unavailable or exhausted continuation, and any indeterminate outcome. The adapter receives no callback capable of replaying the original prompt.
-
-No generic provider can prove native stream resumption, so the built-in path does not invent it. Pi's confirmed length truncation with tool calls remains safe because Pi commits error tool results without invoking those tools and continues within the same Run. Every other unreconciled generation fault ends the exact Run normally; an unresolved Answer Obligation then uses ordinary Run Failure moderation rather than a separate reconciliation or Operation Review trigger.
+Coordination preserves Pi's user-configured compaction, retry, provider-retry, and transport behavior. It does not apply hidden Runtime overrides or add a separate model-generation recovery layer. If Pi's configured native behavior ultimately ends the exact Run with an unresolved Answer Obligation, ordinary Run Failure moderation applies rather than a separate generation-failure or Operation Review mechanism.
 
 ## Interrupt an exact Run
 

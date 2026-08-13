@@ -19,6 +19,29 @@ import { openLiveAgentView } from "./support/agent-session.ts";
 
 const MAX_SESSION_DISCOVERY_ATTEMPTS = 1_000;
 
+test("coordination preserves user-controlled Pi recovery settings", async () => {
+	const settings = {
+		compaction: { enabled: true },
+		transport: "auto" as const,
+		retry: {
+			enabled: true,
+			maxRetries: 4,
+			provider: { maxRetries: 5 },
+		},
+	};
+	const host = await createTestOwnerHost(piAgentCoordination, { settings });
+	try {
+		assert.equal(host.services.settingsManager.getCompactionEnabled(), true);
+		assert.equal(host.services.settingsManager.getRetrySettings().enabled, true);
+		assert.equal(host.services.settingsManager.getRetrySettings().maxRetries, 4);
+		assert.equal(host.services.settingsManager.getProviderRetrySettings().maxRetries, 5);
+		assert.equal(host.services.settingsManager.getTransport(), "auto");
+		assert.equal(host.session.agent.transport, "auto");
+	} finally {
+		await host.runtime.dispose();
+	}
+});
+
 test("interactive Pi boots one observable Owner while preserving native interaction and disposal", async () => {
 	const host = await createTestOwnerHost(piAgentCoordination);
 	const ownerIdentity = host.session.sessionManager

@@ -13,7 +13,7 @@ Durable Pi agents that collaborate asynchronously under explicit Owner and Spawn
 - **Durable recovery:** a fresh host reconstructs verified authority, standalone Moderators, and residual Request retention from complete Pi transcripts without replaying volatile work.
 - **Interactive Agent views:** `/agents` presents attention plus live and dormant Agents without rebinding the Owner runtime. Selecting a Dormant Agent prepares its configured session and complete UI without admitting a Run. User input, extension effects, and coordination Delivery retain their normal power and can activate that same session without replacing the view. A native above-editor dock keeps selected identity, scoped direct-child activity, and Owner-only attention visible after the selector closes.
 
-Coordinated model generations never use generic regenerated-prompt retry. Only adapter-proven continuation of the same generation is eligible. One failed Moderator may be replaced once; a second failure creates passive, Owner-only Operational Attention.
+Coordination does not override Pi's user-configured compaction, retry, provider-retry, or transport behavior. One failed Moderator may be replaced once; a second failure creates passive, Owner-only Operational Attention.
 
 ## Installation
 

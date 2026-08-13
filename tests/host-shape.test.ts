@@ -266,12 +266,9 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 		[["services", "modelRuntime", "getModel"], "AgentSessionRuntime.services.modelRuntime.getModel"],
 		[["services", "settingsManager"], "AgentSessionRuntime.services.settingsManager"],
 		...[
-			"applyOverrides",
 			"getDefaultProjectTrust",
-			"getProviderRetrySettings",
 			"getShowHardwareCursor",
 			"getThemeSetting",
-			"getTransport",
 			"isProjectTrusted",
 		].map((member) => [
 			["services", "settingsManager", member],
@@ -305,20 +302,14 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 		[["session", "sessionManager", "flushed"], "AgentSession.sessionManager.flushed"],
 		[["session", "settingsManager"], "AgentSession.settingsManager"],
 		...[
-			"applyOverrides",
 			"getDefaultProjectTrust",
-			"getProviderRetrySettings",
 			"getShowHardwareCursor",
 			"getThemeSetting",
-			"getTransport",
 			"isProjectTrusted",
 		].map((member) => [
 			["session", "settingsManager", member],
 			`AgentSession.settingsManager.${member}`,
 		] as const),
-		[["session", "agent"], "AgentSession.agent"],
-		[["session", "agent", "streamFunction"], "AgentSession.agent.streamFunction"],
-		[["session", "agent", "transport"], "AgentSession.agent.transport"],
 	] as const;
 
 	for (const [path, expected] of requirements) {
@@ -428,8 +419,6 @@ test("preflight rejects read-only integration targets that coordination mutates"
 		[["session", "_extensionAbortHandler"], "AgentSession._extensionAbortHandler"],
 		[["session", "_extensionShutdownHandler"], "AgentSession._extensionShutdownHandler"],
 		[["session", "_extensionErrorListener"], "AgentSession._extensionErrorListener"],
-		[["session", "agent", "streamFunction"], "AgentSession.agent.streamFunction"],
-		[["session", "agent", "transport"], "AgentSession.agent.transport"],
 	] as const) {
 		assert.throws(
 			() => assertRuntimeInstanceShape(readonlyMemberAtPath(host.runtime, path)),
@@ -562,67 +551,6 @@ test("runtime capture rejects a malformed live AgentSession before bootstrap", a
 		configurable: true,
 		value: originalSendCustomMessage,
 	});
-	await host.runtime.dispose();
-});
-
-test("runtime capture identifies the coordinated settings override seam", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
-	const settings = host.services.settingsManager as unknown as Record<PropertyKey, unknown>;
-	const originalApplyOverrides = settings.applyOverrides;
-	settings.applyOverrides = undefined;
-	host.runtime.setBeforeSessionInvalidate(() => undefined);
-
-	await assert.rejects(
-		() => bindTestOwnerHost(host, "tui"),
-		(error: unknown) =>
-			error instanceof IncompatiblePiHostError &&
-			error.memberName === "AgentSessionRuntime.services.settingsManager.applyOverrides",
-	);
-	settings.applyOverrides = originalApplyOverrides;
-	await host.runtime.dispose();
-});
-
-test("runtime capture rejects transport incompatibility before Owner bootstrap", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
-	const settings = host.services.settingsManager as unknown as Record<PropertyKey, unknown>;
-	const originalGetTransport = settings.getTransport;
-	settings.getTransport = undefined;
-	host.runtime.setBeforeSessionInvalidate(() => undefined);
-
-	await assert.rejects(
-		() => bindTestOwnerHost(host, "tui"),
-		(error: unknown) =>
-			error instanceof IncompatiblePiHostError &&
-			error.memberName === "AgentSessionRuntime.services.settingsManager.getTransport",
-	);
-	assert.equal(
-		host.session.sessionManager
-			.getEntries()
-			.some(
-				(entry) =>
-					entry.type === "custom" &&
-					entry.customType === "agent-coordination.identity",
-			),
-		false,
-	);
-	settings.getTransport = originalGetTransport;
-	await host.runtime.dispose();
-});
-
-test("runtime capture identifies the provider stream adapter seam", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
-	const agent = host.session.agent as unknown as Record<PropertyKey, unknown>;
-	const originalStreamFunction = agent.streamFunction;
-	agent.streamFunction = undefined;
-	host.runtime.setBeforeSessionInvalidate(() => undefined);
-
-	await assert.rejects(
-		() => bindTestOwnerHost(host, "tui"),
-		(error: unknown) =>
-			error instanceof IncompatiblePiHostError &&
-			error.memberName === "AgentSession.agent.streamFunction",
-	);
-	agent.streamFunction = originalStreamFunction;
 	await host.runtime.dispose();
 });
 

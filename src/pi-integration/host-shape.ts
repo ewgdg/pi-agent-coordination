@@ -412,20 +412,6 @@ export function assertAgentSessionShape(
 		"AgentSession.settingsManager",
 		version,
 	);
-	const agent = requireRecord(session.agent, "AgentSession.agent", version);
-	requireFunction(
-		agent,
-		"streamFunction",
-		"AgentSession.agent.streamFunction",
-		version,
-	);
-	requireWritableMember(
-		agent,
-		"streamFunction",
-		"AgentSession.agent.streamFunction",
-		version,
-	);
-	requireWritableMember(agent, "transport", "AgentSession.agent.transport", version);
 }
 
 function assertSettingsManagerShape(
@@ -435,12 +421,9 @@ function assertSettingsManagerShape(
 ): void {
 	const settingsManager = requireRecord(value, name, version);
 	for (const member of [
-		"applyOverrides",
 		"getDefaultProjectTrust",
-		"getProviderRetrySettings",
 		"getShowHardwareCursor",
 		"getThemeSetting",
-		"getTransport",
 		"isProjectTrusted",
 	] as const) {
 		requireFunction(settingsManager, member, `${name}.${member}`, version);

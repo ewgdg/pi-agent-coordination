@@ -70,10 +70,6 @@ import type {
 } from "../protocol/moderator-control.ts";
 import { isModeratorIdentity } from "../protocol/moderator-input.ts";
 import type { OperationReviewClock } from "./operation-review.ts";
-import {
-	configureCoordinatedSession,
-	type AutomaticGenerationReconciliationAdapter,
-} from "../pi-integration/automatic-reconciliation.ts";
 import { participantLifecycleHandlers } from "../bootstrap/agent-extension.ts";
 import type {
 	AgentActivitySnapshot,
@@ -200,7 +196,6 @@ export class WorkflowCoordinator {
 			incidentBoundaryHooks?: OperationalIncidentBoundaryHooks;
 			operationalIncidentPresentation?: OperationalIncidentPresentation;
 			operationReviewClock?: OperationReviewClock;
-			automaticGenerationReconciliation?: AutomaticGenerationReconciliationAdapter;
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
@@ -214,10 +209,6 @@ export class WorkflowCoordinator {
 		this.#workflowPolicy = options.workflowPolicy ?? new WorkflowPolicyStore();
 		this.#executionScheduler = new WorkflowExecutionScheduler(this.#workflowPolicy);
 		this.#ownerIdentity = identity;
-		configureCoordinatedSession(
-			runtime.session,
-			options.automaticGenerationReconciliation,
-		);
 		this.#agents.set(identity.agentId, {
 			identity,
 			host: AgentRuntimeSupervisor.bindOwner(runtime),

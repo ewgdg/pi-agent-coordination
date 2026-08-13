@@ -122,7 +122,7 @@ An authorized controlled end of one exact current Agent Run that deliberately by
 _Avoid_: Agent termination
 
 **Run Failure**:
-The unexpected terminal end of one exact Agent Run after any applicable Automatic Reconciliation could not preserve that Run. It starts Moderator handling only while the failed Agent retains an unresolved Answer Obligation and clears when a successor Run starts or every such obligation ends through Agent Answer commit or Request Cancellation Delivery. It does not mark the durable Agent or Workflow failed, reconstruct work, or start a successor Run automatically. An open Interactive Selection keeps the same Agent Runtime and presentation while the Agent becomes Dormant; later input or coordination may admit a successor in that Runtime.
+The unexpected terminal end of one exact Agent Run after Pi's user-configured native recovery behavior has finished. It starts Moderator handling only while the failed Agent retains an unresolved Answer Obligation and clears when a successor Run starts or every such obligation ends through Agent Answer commit or Request Cancellation Delivery. It does not mark the durable Agent or Workflow failed, reconstruct work, or start a successor Run automatically. An open Interactive Selection keeps the same Agent Runtime and presentation while the Agent becomes Dormant; later input or coordination may admit a successor in that Runtime.
 
 **Dependency Deadlock**:
 A live closed component of current Agent Runs in which every Run is settled, retained solely by unresolved Request relationships within the component, and has no admitted input or other progress source. It is a transient observation that clears when its predicate changes, grants no additional authority, and is not reconstructed after host loss.
@@ -138,9 +138,6 @@ A derived host-local key that suppresses repeated Moderator creation while one c
 
 **Operation Review Deadline**:
 The runtime-owned limit on how long one root Pi tool call belonging to an Agent with an unresolved Answer Obligation may remain unresolved before operational review is required. The watcher does not inspect the tool's internal awaits or separately review background coordination work after its root call returns. A blocking call is reviewed from execution admission; an asynchronous call is reviewed only across a continuous unattended wait, beginning when its Run reaches an Idle boundary and ending if Agent work resumes before expiry. Terminal tool-result commit or explicit Moderator renewal ends the current interval, while tool progress, heartbeat, logs, or other machinery activity does not. It does not govern model generation, and expiry establishes no operational outcome.
-
-**Automatic Reconciliation**:
-A bounded runtime response to an exactly recognized model-generation fault, available only where the provider or Agent Session adapter guarantees safe continuation in the same exact Agent Run without repeating a committed tool effect. It never reconciles a tool call, reconstructs work in a successor Run, or retries an ambiguous generation outcome. Unavailable, exhausted, or indeterminate reconciliation ends the exact Run; ordinary Run Failure moderation then applies only while an Answer Obligation remains.
 
 **Moderator**:
 A fresh runtime-created normal Agent with no direct Spawner, running the predefined diagnostic role and role-scoped toolset for one Operational Incident and never reused. Moderator Input foregrounds the affected Agents, while trusted workflow-wide pull visibility permits broader diagnosis without eagerly loading unrelated context. Its separate Pi session keeps automatic operational investigation out of ordinary Agent working context.
@@ -158,7 +155,7 @@ The explicit Moderator tool outcome that records its summary and rationale, requ
 An ordinary free-form Agent Request from a Moderator to the Workflow Owner for task intent, policy, value, risk, Owner action, or another choice the Moderator cannot verify as mechanically safe. Its ordinary Agent Answer guides further handling; it creates no special packet, handoff, or transfer of control, and the Moderator still records Moderator Resolution afterward.
 
 **Moderator Failure Fallback**:
-The bounded response when a Moderator Run terminally fails after same-Run Automatic Reconciliation: one fresh replacement Moderator continues the original handling with pointers to the first attempt. Failure of that replacement stops automatic attempts and creates a passive Workflow Owner Attention Inbox entry centered on the original condition and affected Agents rather than on Moderator recovery.
+The bounded response when a Moderator Run terminally fails after Pi's user-configured native recovery behavior has finished: one fresh replacement Moderator continues the original handling with pointers to the first attempt. Failure of that replacement stops automatic attempts and creates a passive Workflow Owner Attention Inbox entry centered on the original condition and affected Agents rather than on Moderator recovery.
 
 **Human Request**:
 A blocking Request from an ordinary Agent or Moderator asking the human one free-form question. Each Agent may have at most one unresolved Human Request, while different Agents may have requests open concurrently; the Workflow Owner does not author Human Requests.
