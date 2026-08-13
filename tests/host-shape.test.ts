@@ -150,6 +150,8 @@ test("module preflight rejects every required host export and prototype seam", (
 			"bindCurrentSessionExtensions",
 			"rebindCurrentSession",
 			"getUserInput",
+			"queueCompactionMessage",
+			"restoreQueuedMessagesToEditor",
 			"renderInitialMessages",
 			"subscribeToAgent",
 			"stop",
@@ -390,7 +392,15 @@ test("live preflight rejects every required InteractiveMode seam", async () => {
 test("preflight rejects read-only integration targets that coordination mutates", async () => {
 	for (const [path, expected] of [
 		[["AgentSessionRuntime", "prototype", "dispose"], "AgentSessionRuntime.prototype.dispose"],
-		[["InteractiveMode", "prototype", "bindCurrentSessionExtensions"], "InteractiveMode.prototype.bindCurrentSessionExtensions"],
+		...[
+			"bindCurrentSessionExtensions",
+			"getUserInput",
+			"queueCompactionMessage",
+			"restoreQueuedMessagesToEditor",
+		].map((member) => [
+			["InteractiveMode", "prototype", member],
+			`InteractiveMode.prototype.${member}`,
+		] as const),
 	] as const) {
 		assert.throws(
 			() => assertHostModuleShape(hostModuleWithReadonlyMember(path)),

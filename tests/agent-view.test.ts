@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -766,6 +766,118 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
+});
+
+test("detached Dormant compaction retains its Runtime until queued input starts a successor", async (t) => {
+	const queuedInput = "Continue after detached Dormant compaction.";
+	const completedResponse = "Queued input survived detached Dormant compaction.";
+	const probe = configureProcessAgentViewProbe(t, "compaction-retention");
+	const root = await mkdtemp(join(tmpdir(), "pi-agent-compaction-retention-"));
+	const agentDir = join(root, "agent");
+	await mkdir(agentDir, { recursive: true });
+	await writeFile(join(agentDir, "settings.json"), JSON.stringify({
+		compaction: {
+			enabled: true,
+			reserveTokens: 64,
+			keepRecentTokens: 1,
+		},
+	}), "utf8");
+	const host = await createTestOwnerHost(piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		cwd: root,
+		agentDir,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
+	});
+	t.after(async () => {
+		await releaseProcessAgentViewProbe(probe.releasePath);
+		await host.runtime.dispose();
+	});
+	host.model.setResponses([
+		fauxAssistantMessage("Initial response supplies compactable Dormant history."),
+		fauxAssistantMessage("Second response supplies older compactable history."),
+		fauxAssistantMessage(completedResponse),
+	]);
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-dormant-compaction-worker",
+		{
+			request: "Become Dormant before compaction starts.",
+			label: "Dormant Compaction Worker",
+		},
+	);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"Initial response supplies compactable Dormant history.",
+		)
+	);
+	const initialView = await openSelectedAgentView(host, agentId);
+	initialView.view.handleInput?.("Add another turn before becoming Dormant.");
+	initialView.view.handleInput?.("\r");
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"Second response supplies older compactable history.",
+		)
+	);
+	await returnAgentViewToOwner(host, initialView.view, initialView.command);
+	const termination = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-dormant-compaction",
+		{ operation: "terminate", agentId },
+	);
+	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
+
+	const opened = await openDormantAgentView(host, agentId);
+	await waitForCondition(() =>
+		stripTerminalSequences(opened.view.render(80).join("\n"))
+			.replace(/\s+/g, "")
+			.includes("Secondresponsesuppliesoldercompactablehistory")
+	);
+	const childRuntime = childProcessSessionStarts(
+		await readProcessAgentViewEvidence(probe.evidencePath),
+		agentId,
+	).at(-1);
+	assert.ok(childRuntime);
+	opened.view.handleInput?.("/compact");
+	opened.view.handleInput?.("\r");
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "compaction_started" && entry.pid === childRuntime.pid,
+	));
+	await returnAgentViewToOwner(host, opened.view, opened.command);
+	assert.doesNotThrow(() => process.kill(childRuntime.pid, 0));
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
+
+	const compactingView = await openDormantAgentView(host, agentId);
+	compactingView.view.handleInput?.(queuedInput);
+	compactingView.view.handleInput?.("\r");
+	await waitForCondition(() =>
+		stripTerminalSequences(compactingView.view.render(80).join("\n")).includes(
+			"Queued message for after compaction",
+		)
+	);
+	await returnAgentViewToOwner(host, compactingView.view, compactingView.command);
+	assert.doesNotThrow(() => process.kill(childRuntime.pid, 0));
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
+
+	await releaseProcessAgentViewProbe(probe.releasePath);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "compaction_completed" && entry.pid === childRuntime.pid,
+	));
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(completedResponse)
+	);
+	assert.equal(
+		(await childEntries(host, agentId)).filter(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "user" &&
+				JSON.stringify(entry.message.content).includes(queuedInput),
+		).length,
+		1,
+	);
 });
 
 test("a Dormant command activates the already-attached Agent runtime once", async (t) => {

@@ -23,6 +23,7 @@ export interface HostedAgentRuntime {
 	snapshot(): EffectiveRuntimeSnapshot;
 	synchronizeState(): Promise<void>;
 	workState(): AgentRuntimeWorkState;
+	hasPendingActivity(): boolean;
 	queuedInputCount(): number;
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification;
 	cancellationSignal(): AbortSignal;

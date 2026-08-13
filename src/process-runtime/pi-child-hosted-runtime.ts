@@ -40,6 +40,8 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	#snapshotRevision = 0;
 	#toolExecutionModes = new Map<string, "sequential" | "parallel">();
 	#workState: AgentRuntimeWorkState = "settled";
+	#compacting = false;
+	#pendingNativeInputCount = 0;
 	#queuedInputCount = 0;
 	#currentRunId: string | undefined;
 	#latestRunId: string | undefined;
@@ -102,6 +104,10 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 
 	workState(): AgentRuntimeWorkState {
 		return this.#workState;
+	}
+
+	hasPendingActivity(): boolean {
+		return this.#compacting || this.#pendingNativeInputCount > 0 || this.#queuedInputCount > 0;
 	}
 
 	queuedInputCount(): number {
@@ -242,6 +248,21 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			));
 			return;
 		}
+		if (event.event === "runtime.compaction.started") {
+			this.#compacting = true;
+			this.#emit({ type: "state_changed" });
+			return;
+		}
+		if (event.event === "runtime.compaction.completed") {
+			this.#compacting = false;
+			this.#emit({ type: "state_changed" });
+			return;
+		}
+		if (event.event === "runtime.nativeInput.queued") {
+			this.#pendingNativeInputCount = event.payload.count;
+			this.#emit({ type: "state_changed" });
+			return;
+		}
 		if (
 			event.event !== "agent.start" &&
 			event.event !== "agent.end" &&
@@ -251,6 +272,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#updateQueuedInputCount(event.payload.queuedInputCount);
 		if (event.event === "agent.start") {
 			if (this.#cancellation.signal.aborted) this.#cancellation = new AbortController();
+			this.#pendingNativeInputCount = 0;
 			this.#workState = "active";
 			for (const waiter of this.#settlementWaiters) waiter.started = true;
 			this.#emit({ type: "state_changed" });

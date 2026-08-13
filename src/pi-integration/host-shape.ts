@@ -98,6 +98,8 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"bindCurrentSessionExtensions",
 		"rebindCurrentSession",
 		"getUserInput",
+		"queueCompactionMessage",
+		"restoreQueuedMessagesToEditor",
 		"renderInitialMessages",
 		"subscribeToAgent",
 		"stop",
@@ -109,12 +111,19 @@ export function assertHostModuleShape(hostValue: unknown): void {
 			version,
 		);
 	}
-	requireWritableMember(
-		interactivePrototype,
+	for (const member of [
 		"bindCurrentSessionExtensions",
-		"InteractiveMode.prototype.bindCurrentSessionExtensions",
-		version,
-	);
+		"getUserInput",
+		"queueCompactionMessage",
+		"restoreQueuedMessagesToEditor",
+	] as const) {
+		requireWritableMember(
+			interactivePrototype,
+			member,
+			`InteractiveMode.prototype.${member}`,
+			version,
+		);
+	}
 
 	const sessionManager = host.SessionManager as UnknownRecord;
 	for (const member of ["create", "open", "continueRecent", "inMemory"] as const) {

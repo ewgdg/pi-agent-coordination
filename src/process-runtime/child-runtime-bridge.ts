@@ -211,6 +211,10 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			completed: () => currentState.channel.sendEvent("runtime.input.completed", {}),
 		};
 		capture.observeInputLifecycle(inputLifecycle);
+		capture.observeCompactionQueuedInput((count) => {
+			void currentState.channel.sendEvent("runtime.nativeInput.queued", { count })
+				.catch(() => undefined);
+		});
 		const channel = currentState.channel;
 		try {
 			assertExpectedSession(binding.runtime, bootstrap);
@@ -263,6 +267,12 @@ function createChildRuntimeBinding(
 	let binding!: ChildRuntimeBinding;
 	const activity = new RemoteAgentActivitySource(agentId);
 	const removeLifecycleSubscription = runtime.session.subscribe((event) => {
+		if (event.type === "compaction_start") {
+			void state.channel.sendEvent("runtime.compaction.started", {}).catch(() => undefined);
+		}
+		if (event.type === "compaction_end") {
+			void state.channel.sendEvent("runtime.compaction.completed", {}).catch(() => undefined);
+		}
 		void reportRuntimeLifecycle(state, runtime, activity, event).catch((error: unknown) =>
 			reportFault(state.channel, "runtime_lifecycle_failed", error)
 		);

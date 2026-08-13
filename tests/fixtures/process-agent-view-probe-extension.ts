@@ -264,6 +264,22 @@ const processAgentViewProbe: ExtensionFactory = (pi) => {
 			return { action: "handled" };
 		});
 	}
+	if (activeScenario === "compaction-retention") {
+		pi.on("session_before_compact", async (event, ctx) => {
+			record({ kind: "compaction_started", sessionId: ctx.sessionManager.getSessionId() });
+			await waitForRelease();
+			return {
+				compaction: {
+					summary: "Compaction completed while the Agent view was detached.",
+					firstKeptEntryId: event.preparation.firstKeptEntryId,
+					tokensBefore: event.preparation.tokensBefore,
+				},
+			};
+		});
+		pi.on("session_compact", (_event, ctx) => {
+			record({ kind: "compaction_completed", sessionId: ctx.sessionManager.getSessionId() });
+		});
+	}
 
 	pi.on("session_shutdown", (event, ctx) => {
 		record({

@@ -49,6 +49,7 @@ type BoundAgentRuntime = {
 	failed: boolean;
 	expectedInterruption: boolean;
 	releaseDeferredUntilInputSettles: boolean;
+	releaseDeferredUntilActivitySettles: boolean;
 };
 
 type HeldNativeQueue = {
@@ -702,6 +703,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			this.#deferReleaseUntilProjectionInputSettles(run);
 			return "retained";
 		}
+		if (run.runtime.hasPendingActivity()) {
+			this.#deferReleaseUntilRuntimeActivitySettles(run);
+			return "retained";
+		}
 		if (
 			this.#starting ||
 			this.#ending ||
@@ -760,6 +765,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		if (!run || run.admitted) return "stale";
 		if (hasInFlightProjectionInput(run)) {
 			this.#deferReleaseUntilProjectionInputSettles(run);
+			return "retained";
+		}
+		if (run.runtime.hasPendingActivity()) {
+			this.#deferReleaseUntilRuntimeActivitySettles(run);
 			return "retained";
 		}
 		if (
@@ -953,12 +962,22 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			failed: false,
 			expectedInterruption: false,
 			releaseDeferredUntilInputSettles: false,
+			releaseDeferredUntilActivitySettles: false,
 		};
 		// Publish ownership before subscription so startup rollback can still dispose
 		// the exact hosted Runtime if event binding itself fails.
 		this.#runtime = run;
 		run.unsubscribe = runtime.subscribe((event) => {
-			if (event.type === "state_changed") this.#notifyStateChanged();
+			if (event.type === "state_changed") {
+				this.#notifyStateChanged();
+				if (
+					run.releaseDeferredUntilActivitySettles &&
+					!run.runtime.hasPendingActivity()
+				) {
+					run.releaseDeferredUntilActivitySettles = false;
+					this.#projectionInputSettledHandler?.();
+				}
+			}
 			if (event.type === "agent_end") {
 				const expectedInterruption = run.expectedInterruption;
 				run.expectedInterruption = false;
@@ -1032,6 +1051,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			run.releaseDeferredUntilInputSettles = false;
 			this.#projectionInputSettledHandler?.();
 		});
+	}
+
+	#deferReleaseUntilRuntimeActivitySettles(run: BoundAgentRuntime): void {
+		run.releaseDeferredUntilActivitySettles = true;
 	}
 }
 

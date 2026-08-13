@@ -60,6 +60,10 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		return this.#session.isIdle ? "settled" : "active";
 	}
 
+	hasPendingActivity(): boolean {
+		return this.#session.isCompacting || this.#session.pendingMessageCount > 0;
+	}
+
 	queuedInputCount(): number {
 		return this.#session.pendingMessageCount;
 	}
