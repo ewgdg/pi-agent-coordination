@@ -31,7 +31,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		agentId: host.session.sessionId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: null,
-		metadata: { label: "owner" },
+		metadata: { label: "owner", description: "workflow owner" },
 	});
 
 	const observe = host.session.getToolDefinition("agent_observe");
@@ -48,6 +48,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		agentId: host.session.sessionId,
 		workflowId: host.session.sessionId,
 		label: "owner",
+		description: "workflow owner",
 		directSpawnerAgentId: null,
 		primaryEvidence: {
 			transcriptPath: null,
@@ -75,6 +76,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 	assert.match(renderedAgents[0] ?? "", /^┌─+┐$/);
 	assert.match(renderedAgents.join("\n"), /Live.*Dormant/);
 	assert.match(renderedAgents.join("\n"), /Owner/);
+	assert.match(renderedAgents.join("\n"), /workflow owner/);
 	assert.match(renderedAgents.join("\n"), new RegExp(host.session.sessionId));
 	assert.match(
 		renderedAgents.join("\n"),

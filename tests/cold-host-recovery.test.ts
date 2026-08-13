@@ -842,7 +842,7 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 		moderatorAgents.surface.handleInput?.("j");
 		dormantModerator = moderatorAgents.surface.render(80).join("\n");
 	}
-	assert.match(dormantModerator, /moderator.*Moderator.*obligation stall/i);
+	assert.match(dormantModerator, /moderator.*moderating obligation stall/i);
 	assert.match(dormantModerator, new RegExp(moderator.agentId));
 	moderatorAgents.surface.handleInput?.("\x1b");
 	await moderatorAgents.command;

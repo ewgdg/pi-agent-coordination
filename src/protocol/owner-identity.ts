@@ -4,9 +4,9 @@ import {
 	AGENT_IDENTITY_CUSTOM_TYPE,
 	MODERATOR_INPUT_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
+import { resolveOwnerAgentMetadata } from "./agent-metadata.ts";
 
 export { AGENT_IDENTITY_CUSTOM_TYPE } from "./custom-entry-types.ts";
-const OWNER_LABEL = "owner";
 
 export type OwnerIdentity = Readonly<{
 	agentId: string;
@@ -14,6 +14,7 @@ export type OwnerIdentity = Readonly<{
 	directSpawnerAgentId: null;
 	metadata: Readonly<{
 		label: "owner";
+		description: "workflow owner";
 	}>;
 }>;
 
@@ -76,7 +77,7 @@ export function adoptOrValidateOwnerIdentity(
 		agentId: sessionId,
 		workflowId: sessionId,
 		directSpawnerAgentId: null,
-		metadata: { label: OWNER_LABEL },
+		metadata: resolveOwnerAgentMetadata(),
 	};
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, identity);
 	return identity;
@@ -103,15 +104,29 @@ function validateOwnerIdentity(value: unknown, sessionId: string): OwnerIdentity
 	if (identity.directSpawnerAgentId !== null) {
 		throw new InvalidOwnerIdentityError("Owner directSpawnerAgentId must be null");
 	}
-	const metadata = requireExactRecord(identity.metadata, ["label"]);
-	if (metadata.label !== OWNER_LABEL) {
+	const metadata = requireExactRecord(identity.metadata, [
+		"label",
+		...(isRecord(identity.metadata) && identity.metadata.description !== undefined
+			? ["description"]
+			: []),
+	]);
+	const canonicalMetadata = resolveOwnerAgentMetadata();
+	if (metadata.label !== canonicalMetadata.label) {
 		throw new InvalidOwnerIdentityError('Owner label must be "owner"');
+	}
+	if (
+		metadata.description !== undefined &&
+		metadata.description !== canonicalMetadata.description
+	) {
+		throw new InvalidOwnerIdentityError(
+			'Owner description must be "workflow owner"',
+		);
 	}
 	return {
 		agentId: sessionId,
 		workflowId: sessionId,
 		directSpawnerAgentId: null,
-		metadata: { label: OWNER_LABEL },
+		metadata: canonicalMetadata,
 	};
 }
 

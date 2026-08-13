@@ -413,8 +413,7 @@ class AgentSelectorSurface implements Component {
 			label: status.label,
 			description: [
 				formatRun(status),
-				moderator ? "Moderator" : undefined,
-				moderator && status.run.phase === "dormant" ? status.description : undefined,
+				moderator ? status.description : undefined,
 				children,
 			].filter(Boolean).join(" · "),
 			status,

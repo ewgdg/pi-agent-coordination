@@ -107,7 +107,7 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 		workflowId: host.session.sessionId,
 		metadata: {
 			label: "moderator",
-			description: "obligation stall",
+			description: "moderating obligation stall",
 		},
 	});
 	assert.equal(input.trigger.kind, "obligation_stall");
@@ -496,7 +496,7 @@ test("one failed provider request creates Run Failure without regenerating an an
 	assert.equal(
 		(moderatorInput.details as { metadata: { description: string } })
 			.metadata.description,
-		"run failure",
+		"moderating run failure",
 	);
 	assert.deepEqual((await observeStatus(host, input.trigger.agentId)).run, {
 		phase: "dormant",

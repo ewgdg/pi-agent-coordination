@@ -11,6 +11,7 @@ import { resolveAgentRunConfiguration } from "../src/templates/agent-configurati
 import {
 	resolveModeratorAgentMetadata,
 	resolveOrdinaryAgentMetadata,
+	resolveOwnerAgentMetadata,
 } from "../src/protocol/agent-metadata.ts";
 
 test("parses the complete strict Agent Template surface", () => {
@@ -208,23 +209,30 @@ test("resolves normalized ordinary Agent metadata without inheriting or weakenin
 	);
 });
 
-test("resolves fixed Moderator metadata and permits only its missing reserved Template", () => {
+test("resolves fixed Owner and Moderator role metadata", () => {
+	assert.deepEqual(resolveOwnerAgentMetadata(), {
+		label: "owner",
+		description: "workflow owner",
+	});
 	assert.deepEqual(resolveModeratorAgentMetadata("run_failure"), {
 		label: "moderator",
-		description: "run failure",
+		description: "moderating run failure",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("obligation_stall"), {
 		label: "moderator",
-		description: "obligation stall",
+		description: "moderating obligation stall",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("dependency_deadlock"), {
 		label: "moderator",
-		description: "dependency deadlock",
+		description: "moderating dependency deadlock",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("operation_review"), {
 		label: "moderator",
-		description: "operation review",
+		description: "moderating operation review",
 	});
+});
+
+test("permits only the missing reserved Moderator Template", () => {
 
 	const discovery = {
 		templates: new Map(),

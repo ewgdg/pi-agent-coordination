@@ -41,6 +41,22 @@ test("Owner tool renderers are registered before session_start", async () => {
 	await host.runtime.dispose();
 });
 
+test("a fresh Owner Identity records its role description", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	await bindTestOwnerHost(host, "tui");
+
+	const identity = host.session.sessionManager.getEntries().find(
+		(entry) =>
+			entry.type === "custom" && entry.customType === "agent-coordination.identity",
+	);
+	assert.ok(identity?.type === "custom");
+	assert.deepEqual((identity.data as { metadata: unknown }).metadata, {
+		label: "owner",
+		description: "workflow owner",
+	});
+	await host.runtime.dispose();
+});
+
 test("startup-triggered Owner work waits for coordination admission", async () => {
 	const startupBlock = createVoidDeferred();
 	const startupBlockEntered = createVoidDeferred();
@@ -96,7 +112,7 @@ test("startup-triggered Owner work waits for coordination admission", async () =
 	await host.runtime.dispose();
 });
 
-test("an existing exact Owner Identity is validated without duplication", async () => {
+test("an existing Owner Identity without a description is canonicalized without duplication", async () => {
 	const host = await createUnboundTestOwnerHost(piAgentCoordination);
 	host.session.sessionManager.appendCustomEntry(
 		"agent-coordination.identity",
@@ -105,15 +121,27 @@ test("an existing exact Owner Identity is validated without duplication", async 
 
 	await bindTestOwnerHost(host, "tui");
 
-	assert.equal(
-		host.session.sessionManager
-			.getEntries()
-			.filter(
-				(entry) =>
-					entry.type === "custom" && entry.customType === "agent-coordination.identity",
-			).length,
-		1,
+	const identityEntries = host.session.sessionManager
+		.getEntries()
+		.filter(
+			(entry) =>
+				entry.type === "custom" && entry.customType === "agent-coordination.identity",
+		);
+	assert.equal(identityEntries.length, 1);
+	assert.deepEqual(identityEntries[0]?.type === "custom" ? identityEntries[0].data : undefined, {
+		...ownerIdentityFor(host),
+		metadata: { label: "owner" },
+	});
+	const observe = host.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const status = await observe.execute(
+		"observe-canonical-owner-metadata",
+		{ operation: "status" },
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
 	);
+	assert.equal((status.details as { description?: string }).description, "workflow owner");
 	assert.ok(host.session.getToolDefinition("agent_observe"));
 	assert.ok(host.session.getToolDefinition("agent_control"));
 	assert.equal(host.session.getToolDefinition("ask_user_question"), undefined);
@@ -122,6 +150,30 @@ test("an existing exact Owner Identity is validated without duplication", async 
 		.extensions.filter((extension) => extension.tools.has("agent_spawn"));
 	assert.equal(ordinaryAgentExtensions.length, 1);
 	assert.equal(ordinaryAgentExtensions[0]?.hidden, true);
+	await host.runtime.dispose();
+});
+
+test("an Owner Identity rejects a contradictory role description", async () => {
+	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+	host.session.sessionManager.appendCustomEntry("agent-coordination.identity", {
+		...ownerIdentityFor(host),
+		metadata: {
+			label: "owner",
+			description: "unrelated role",
+		},
+	});
+
+	await bindTestOwnerHost(host, "tui");
+
+	assert.equal(
+		host.ui.notifications.some(
+			({ message, type }) =>
+				type === "error" &&
+				message.includes('Owner description must be "workflow owner"'),
+		),
+		true,
+	);
+	assertOwnerToolsRegisteredButInactive(host);
 	await host.runtime.dispose();
 });
 
