@@ -431,20 +431,24 @@ export class PiChildProcessRuntime {
 		if (!Number.isSafeInteger(graceMilliseconds) || graceMilliseconds < 1) {
 			throw new Error("invalid_child_runtime_shutdown_grace: expected a positive integer");
 		}
-		if (!this.#channelClosed) {
-			await this.channel.request("runtime.shutdown", {
-				...(reason === undefined ? {} : { reason }),
-			}).catch(() => undefined);
-		} else {
-			// If structured control is already unavailable, the native command is the
-			// last graceful path before the exact process is forcibly terminated.
-			try {
-				this.#projection.writeInput("/quit\r");
-			} catch {
-				// The exit may have won the race; the exact exited Promise settles below.
+		// The grace period bounds the complete exchange. A wedged child may keep the
+		// Control request pending forever, before process-exit waiting even begins.
+		const gracefulExit = await withTimeout((async () => {
+			if (!this.#channelClosed) {
+				await this.channel.request("runtime.shutdown", {
+					...(reason === undefined ? {} : { reason }),
+				}).catch(() => undefined);
+			} else {
+				// If structured control is already unavailable, the native command is the
+				// last graceful path before the exact process is forcibly terminated.
+				try {
+					this.#projection.writeInput("/quit\r");
+				} catch {
+					// The exit may have won the race; the exact exited Promise settles below.
+				}
 			}
-		}
-		const gracefulExit = await withTimeout(this.exited, graceMilliseconds);
+			return await this.exited;
+		})(), graceMilliseconds);
 		if (gracefulExit) return gracefulExit;
 		forceKillProjection(this.#projection);
 		return await this.exited;

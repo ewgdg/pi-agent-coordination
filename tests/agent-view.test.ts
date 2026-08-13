@@ -1527,6 +1527,9 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 		settings: { retry: { enabled: false } },
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
+	// Keep process cleanup failure-safe: any assertion before the explicit disposal
+	// below must not leave child Runtimes holding the test worker open.
+	t.after(() => host.runtime.dispose());
 	let releaseInitialFailure!: () => void;
 	const initialFailureGate = new Promise<void>((resolve) => {
 		releaseInitialFailure = resolve;

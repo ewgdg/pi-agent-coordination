@@ -731,6 +731,60 @@ test("process Runtime Host force-kills a child whose session shutdown never comp
 	}
 });
 
+test("process Runtime shutdown grace bounds an unresponsive Control request", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-runtime-unresponsive-test-"));
+	const cwd = join(root, "work");
+	const sessionDirectory = join(root, "sessions");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000008";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+
+	let runtime: PiChildProcessRuntime | undefined;
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "process-runtime-unresponsive-test-workflow",
+			agentId: "process-runtime-unresponsive-test-agent",
+			role: "ordinary",
+			expectedSessionId,
+			sessionPath,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_MODEL,
+				},
+				thinking: "off",
+				tools: [],
+				skills: [],
+				extensions: [CHILD_EXTENSION],
+			},
+			skillPaths: [],
+			agentsFiles: [],
+			projectTrusted: true,
+			ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
+			runtimeDirectory: root,
+		});
+		const pid = runtime.pid;
+		process.kill(pid, "SIGSTOP");
+		const exit = await runtime.shutdown("unresponsive Control request", 100);
+		assert.notEqual(exit.signal, 0);
+		assert.throws(() => process.kill(pid, 0), hasProcessCode("ESRCH"));
+	} finally {
+		await runtime?.dispose();
+	}
+});
+
 function ordinaryOwnerHandlers(options: Readonly<{
 	executionStarted?: () => void;
 	observe?: (input: { operation: "status" | "children"; agentId?: string }) => void;
