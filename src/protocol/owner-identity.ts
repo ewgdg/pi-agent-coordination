@@ -13,8 +13,8 @@ export type OwnerIdentity = Readonly<{
 	workflowId: string;
 	directSpawnerAgentId: null;
 	metadata: Readonly<{
-		label: "owner";
-		description: "workflow owner";
+		label: "Owner";
+		description: "Workflow Owner";
 	}>;
 }>;
 
@@ -112,14 +112,14 @@ function validateOwnerIdentity(value: unknown, sessionId: string): OwnerIdentity
 	]);
 	const canonicalMetadata = resolveOwnerAgentMetadata();
 	if (metadata.label !== canonicalMetadata.label) {
-		throw new InvalidOwnerIdentityError('Owner label must be "owner"');
+		throw new InvalidOwnerIdentityError('Owner label must be "Owner"');
 	}
 	if (
 		metadata.description !== undefined &&
 		metadata.description !== canonicalMetadata.description
 	) {
 		throw new InvalidOwnerIdentityError(
-			'Owner description must be "workflow owner"',
+			'Owner description must be "Workflow Owner"',
 		);
 	}
 	return {

@@ -317,7 +317,7 @@ test("focused Agent details use a stable four-row budget", async () => {
 	const owner = selectorAgent({
 		...agentStatus("owner-full-identity", "Owner", null),
 		workflowId: "owner-full-identity",
-		description: "workflow owner",
+		description: "Workflow Owner",
 		run: {
 			phase: "live",
 			work: "settled",
@@ -349,7 +349,7 @@ test("focused Agent details use a stable four-row budget", async () => {
 
 	const ownerLines = harness.component.render(80);
 	const ownerRendered = ownerLines.join("\n");
-	assert.match(ownerRendered, /workflow owner/);
+	assert.match(ownerRendered, /Workflow Owner/);
 	assert.match(ownerRendered, /owner-full-identity/);
 	assert.match(
 		ownerRendered,
@@ -431,7 +431,7 @@ test("Dormant Moderator rows show its active role description while Enter delega
 	const harness = surfaceHarness(30);
 	const moderator = selectorAgent({
 		...dormantAgentStatus("moderator-id", "moderator", null),
-		description: "moderating obligation stall",
+		description: "Moderating obligation stall",
 	}, "moderator-provider", "moderator-model", "high", 0);
 	const selection = openAgentSelectorSurface(harness.ui, {
 		live: [agentStatus("owner", "Owner", null)],
@@ -443,8 +443,8 @@ test("Dormant Moderator rows show its active role description while Enter delega
 	harness.component.handleInput?.("\t");
 
 	const rendered = harness.component.render(80);
-	const moderatorRow = rendered.find((line) => line.includes("moderator"));
-	assert.match(moderatorRow ?? "", /moderating obligation stall/);
+	const moderatorRow = rendered.find((line) => line.includes("Moderator"));
+	assert.match(moderatorRow ?? "", /Moderating obligation stall/);
 	assert.match(rendered.join("\n"), /moderator-id/);
 	harness.component.handleInput?.("\r");
 	assert.deepEqual(await selection, {

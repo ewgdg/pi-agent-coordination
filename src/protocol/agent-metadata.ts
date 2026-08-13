@@ -2,8 +2,8 @@ const MAX_AGENT_LABEL_CODE_POINTS = 64;
 const MAX_AGENT_DESCRIPTION_CODE_POINTS = 240;
 const CONTROL_OR_LINE_BREAK = /[\p{Cc}\p{Cs}\p{Zl}\p{Zp}]/u;
 const OWNER_METADATA = {
-	label: "owner",
-	description: "workflow owner",
+	label: "Owner",
+	description: "Workflow Owner",
 } as const;
 const MODERATOR_INCIDENT_BY_TRIGGER = {
 	run_failure: "run failure",
@@ -43,19 +43,19 @@ export function resolveOrdinaryAgentMetadata(options: {
 }
 
 export function resolveOwnerAgentMetadata(): Readonly<{
-	label: "owner";
-	description: "workflow owner";
+	label: "Owner";
+	description: "Workflow Owner";
 }> {
 	return OWNER_METADATA;
 }
 
 export function resolveModeratorAgentMetadata(
 	triggerKind: ModeratorTriggerKind,
-): Readonly<{ label: "moderator"; description: string }> {
+): Readonly<{ label: "Moderator"; description: string }> {
 	return {
-		label: "moderator",
+		label: "Moderator",
 		description: normalizeAgentMetadata(
-			`moderating ${MODERATOR_INCIDENT_BY_TRIGGER[triggerKind]}`,
+			`Moderating ${MODERATOR_INCIDENT_BY_TRIGGER[triggerKind]}`,
 			"description",
 			MAX_AGENT_DESCRIPTION_CODE_POINTS,
 		),

@@ -438,24 +438,24 @@ test("resolves normalized ordinary Agent metadata without inheriting or weakenin
 
 test("resolves fixed Owner and Moderator role metadata", () => {
 	assert.deepEqual(resolveOwnerAgentMetadata(), {
-		label: "owner",
-		description: "workflow owner",
+		label: "Owner",
+		description: "Workflow Owner",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("run_failure"), {
-		label: "moderator",
-		description: "moderating run failure",
+		label: "Moderator",
+		description: "Moderating run failure",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("obligation_stall"), {
-		label: "moderator",
-		description: "moderating obligation stall",
+		label: "Moderator",
+		description: "Moderating obligation stall",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("dependency_deadlock"), {
-		label: "moderator",
-		description: "moderating dependency deadlock",
+		label: "Moderator",
+		description: "Moderating dependency deadlock",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("operation_review"), {
-		label: "moderator",
-		description: "moderating operation review",
+		label: "Moderator",
+		description: "Moderating operation review",
 	});
 });
 

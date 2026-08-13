@@ -465,7 +465,7 @@ test("real fullscreen PTY switches one mounted view between two Agent modes", {
 		terminal.write("k");
 		terminal.write("k");
 		await terminal.waitForScreen((frame) => frame.some((line) =>
-			line.includes("→") && line.includes("owner")
+			line.includes("→") && line.includes("Owner")
 		));
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
@@ -530,7 +530,7 @@ test("real fullscreen PTY reflows the complete Agent view at 100x30", {
 		);
 		terminal.write("k");
 		await terminal.waitForScreen((frame) => frame.some((line) =>
-			line.includes("→") && line.includes("owner")
+			line.includes("→") && line.includes("Owner")
 		));
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
@@ -988,7 +988,7 @@ async function returnPtyAgentViewToOwner(terminal: PtyFixture): Promise<void> {
 	);
 	terminal.write(selector.some((line) => line.includes("Dormant Agents")) ? "\t" : "k");
 	await terminal.waitForScreen((frame) => frame.some((line) =>
-		line.includes("→") && line.includes("owner")
+		line.includes("→") && line.includes("Owner")
 	));
 	terminal.write("\r");
 }

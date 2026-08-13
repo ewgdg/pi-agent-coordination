@@ -63,8 +63,8 @@ test("native fork is cancelled for a matching Moderator bootstrap", async () => 
 			agentId: host.session.sessionId,
 			workflowId: "source-workflow",
 			metadata: {
-				label: "moderator",
-				description: "moderating run failure",
+				label: "Moderator",
+				description: "Moderating run failure",
 			},
 		},
 	);
@@ -259,7 +259,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 				agentId: forkOwner.sessionId,
 				workflowId: forkOwner.sessionId,
 				directSpawnerAgentId: null,
-				metadata: { label: "owner", description: "workflow owner" },
+				metadata: { label: "Owner", description: "Workflow Owner" },
 			},
 		);
 		const copiedContext = JSON.stringify(

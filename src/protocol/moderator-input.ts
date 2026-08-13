@@ -24,7 +24,7 @@ export type ModeratorIdentity = Readonly<{
 	workflowId: string;
 	directSpawnerAgentId: null;
 	metadata: Readonly<{
-		label: "moderator";
+		label: "Moderator";
 		description: string;
 	}>;
 }>;

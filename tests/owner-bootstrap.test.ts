@@ -51,8 +51,8 @@ test("a fresh Owner Identity records its role description", async () => {
 	);
 	assert.ok(identity?.type === "custom");
 	assert.deepEqual((identity.data as { metadata: unknown }).metadata, {
-		label: "owner",
-		description: "workflow owner",
+		label: "Owner",
+		description: "Workflow Owner",
 	});
 	await host.runtime.dispose();
 });
@@ -130,7 +130,7 @@ test("an existing Owner Identity without a description is canonicalized without 
 	assert.equal(identityEntries.length, 1);
 	assert.deepEqual(identityEntries[0]?.type === "custom" ? identityEntries[0].data : undefined, {
 		...ownerIdentityFor(host),
-		metadata: { label: "owner" },
+		metadata: { label: "Owner" },
 	});
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
@@ -141,7 +141,7 @@ test("an existing Owner Identity without a description is canonicalized without 
 		undefined,
 		host.session.extensionRunner.createContext(),
 	);
-	assert.equal((status.details as { description?: string }).description, "workflow owner");
+	assert.equal((status.details as { description?: string }).description, "Workflow Owner");
 	assert.ok(host.session.getToolDefinition("agent_observe"));
 	assert.ok(host.session.getToolDefinition("agent_control"));
 	assert.equal(host.session.getToolDefinition("ask_user_question"), undefined);
@@ -158,7 +158,7 @@ test("an Owner Identity rejects a contradictory role description", async () => {
 	host.session.sessionManager.appendCustomEntry("agent-coordination.identity", {
 		...ownerIdentityFor(host),
 		metadata: {
-			label: "owner",
+			label: "Owner",
 			description: "unrelated role",
 		},
 	});
@@ -169,7 +169,7 @@ test("an Owner Identity rejects a contradictory role description", async () => {
 		host.ui.notifications.some(
 			({ message, type }) =>
 				type === "error" &&
-				message.includes('Owner description must be "workflow owner"'),
+				message.includes('Owner description must be "Workflow Owner"'),
 		),
 		true,
 	);
@@ -428,7 +428,7 @@ test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async () 
 			agentId: host.session.sessionId,
 			workflowId: "workflow-owner",
 			metadata: {
-				label: "moderator",
+				label: "Moderator",
 				description: "run failure",
 			},
 		},
@@ -475,7 +475,7 @@ function ownerIdentityFor(host: TestOwnerHost) {
 		agentId: host.session.sessionId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: null,
-		metadata: { label: "owner" },
+		metadata: { label: "Owner" },
 	} as const;
 }
 

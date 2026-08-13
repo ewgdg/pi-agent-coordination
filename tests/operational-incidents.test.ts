@@ -106,8 +106,8 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 		agentId: moderator.id,
 		workflowId: host.session.sessionId,
 		metadata: {
-			label: "moderator",
-			description: "moderating obligation stall",
+			label: "Moderator",
+			description: "Moderating obligation stall",
 		},
 	});
 	assert.equal(input.trigger.kind, "obligation_stall");
@@ -145,7 +145,7 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 				directSpawnerAgentId: string | null;
 			}).directSpawnerAgentId,
 		},
-		{ agentId: moderator.id, label: "moderator", directSpawnerAgentId: null },
+		{ agentId: moderator.id, label: "Moderator", directSpawnerAgentId: null },
 	);
 
 	await new Promise<void>((resolve) => setImmediate(resolve));
@@ -181,7 +181,7 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
 	const dormantView = await openDormantAgentView(host, moderator.id);
 	await waitForCondition(() =>
-		stripTerminalSequences(dormantView.view.render(80).join("\n")).includes("moderator")
+		stripTerminalSequences(dormantView.view.render(80).join("\n")).includes("Moderator")
 	);
 	const dormantRendered = stripTerminalSequences(
 		dormantView.view.render(80).join("\n"),
@@ -496,7 +496,7 @@ test("one failed provider request creates Run Failure without regenerating an an
 	assert.equal(
 		(moderatorInput.details as { metadata: { description: string } })
 			.metadata.description,
-		"moderating run failure",
+		"Moderating run failure",
 	);
 	assert.deepEqual((await observeStatus(host, input.trigger.agentId)).run, {
 		phase: "dormant",
@@ -2363,7 +2363,7 @@ async function returnAgentViewToOwner(
 	assert.ok(ownerSelector);
 	assert.match(
 		stripTerminalSequences(ownerSelector.render(80).join("\n")),
-		new RegExp(`→ owner[\\s\\S]*${host.session.sessionId}`),
+		new RegExp(`→ Owner[\\s\\S]*${host.session.sessionId}`),
 	);
 	ownerSelector.handleInput?.("\r");
 	await Promise.all([returnCommand, opened.command]);

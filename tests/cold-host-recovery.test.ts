@@ -816,7 +816,7 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 		},
 		{
 			agentId: moderator.agentId,
-			label: "moderator",
+			label: "Moderator",
 			directSpawnerAgentId: null,
 			phase: "dormant",
 			retentionReasons: [],
@@ -1014,7 +1014,7 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 			agentId: malformedAgentId,
 			workflowId: host.session.sessionId,
 			metadata: {
-				label: "moderator",
+				label: "Moderator",
 				description: "obligation stall",
 			},
 		},
