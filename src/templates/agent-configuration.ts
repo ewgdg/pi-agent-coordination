@@ -16,7 +16,7 @@ export type AgentSpawnConfigurationInput = Readonly<{
 	cwd?: string;
 	tools?: readonly string[];
 	skills?: readonly string[];
-	extensions?: "inherit" | "none" | readonly string[];
+	extensions?: "inherit" | "none";
 	projectContext?: string;
 	projectContextMode?: ProjectContextMode;
 }>;
@@ -65,14 +65,13 @@ export function resolveAgentRunConfiguration(options: {
 }
 
 function resolveExtensions(
-	selection: "inherit" | "none" | readonly string[] | undefined,
+	selection: "inherit" | "none" | undefined,
 	inherited: readonly string[],
 	parentExtensions: readonly string[] = inherited,
 ): readonly string[] {
 	if (selection === undefined) return inherited;
 	if (selection === "inherit") return parentExtensions;
-	if (selection === "none") return [];
-	return selection;
+	return [];
 }
 
 function resolveProjectContext(

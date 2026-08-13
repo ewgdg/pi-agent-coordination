@@ -168,56 +168,6 @@ test("extensions none does not inspect or carry inherited extension paths", asyn
 	assert.deepEqual(preparation.configuration.extensions, []);
 });
 
-test("rejects arbitrary per-child extension paths instead of carrying inline inheritance forward", async () => {
-	const fixture = await mkdtemp(join(tmpdir(), "child-run-extension-selection-"));
-	const agentDir = join(fixture, "agent");
-	const cwd = join(fixture, "workspace");
-	const arbitraryExtension = join(fixture, "arbitrary-extension.ts");
-	await Promise.all([
-		mkdir(agentDir, { recursive: true }),
-		mkdir(cwd, { recursive: true }),
-		writeFile(arbitraryExtension, "export default function extension() {}\n"),
-	]);
-	const common = {
-		agentId: "extension-selection-child",
-		role: "ordinary" as const,
-		agentDir,
-		parentRuntime: {
-			configuration: {
-				cwd,
-				model: { provider: "test", modelId: "model" },
-				thinking: "off" as const,
-				tools: [],
-				skills: [],
-				extensions: [],
-			},
-			projectTrusted: true,
-			skillSources: [],
-		},
-	};
-
-	await assert.rejects(
-		prepareChildRuntime({
-			...common,
-			overrides: { extensions: [arbitraryExtension] },
-		}),
-		/extension selection must be inherit or none/,
-	);
-	await assert.rejects(
-		prepareChildRuntime({
-			...common,
-			template: {
-				name: "arbitrary-extension-template",
-				extensions: [arbitraryExtension],
-				projectContextMode: "append",
-				projectContext: "",
-				sourcePath: join(fixture, "template.md"),
-			},
-		}),
-		/extension selection must be inherit or none/,
-	);
-});
-
 test("uses current parent trust for the same cwd and saved or global trust for a new cwd", async () => {
 	const fixture = await mkdtemp(join(tmpdir(), "child-run-trust-"));
 	const agentDir = join(fixture, "agent");

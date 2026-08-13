@@ -11,7 +11,7 @@ export type AgentTemplate = Readonly<{
 	thinking?: RuntimeThinkingLevel;
 	tools?: readonly string[];
 	skills?: readonly string[];
-	extensions?: "inherit" | "none" | readonly string[];
+	extensions?: "inherit" | "none";
 	projectContextMode: ProjectContextMode;
 	projectContext: string;
 	sourcePath: string;

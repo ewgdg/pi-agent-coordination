@@ -220,9 +220,13 @@ function parseExtensions(
 	value: unknown,
 	sourcePath: string,
 	templateName: string,
-): "inherit" | "none" | readonly string[] {
+): "inherit" | "none" {
 	if (value === "inherit" || value === "none") return value;
-	return parseStringSelection(value, "extensions", sourcePath, templateName);
+	throw new AgentTemplateParseError(
+		sourcePath,
+		'extensions must be "inherit" or "none"',
+		templateName,
+	);
 }
 
 function parseProjectContextMode(

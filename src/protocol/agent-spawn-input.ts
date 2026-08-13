@@ -119,11 +119,11 @@ function validateThinking(value: unknown): RuntimeThinkingLevel {
 	return value;
 }
 
-function validateExtensions(
-	value: unknown,
-): "inherit" | "none" | readonly string[] {
+function validateExtensions(value: unknown): "inherit" | "none" {
 	if (value === "inherit" || value === "none") return value;
-	return validateStringList(value, "extensions");
+	throw new Error(
+		'invalid_input: Agent Spawn config.extensions must be "inherit" or "none"',
+	);
 }
 
 function validateStringList(value: unknown, field: string): readonly string[] {

@@ -210,6 +210,9 @@ export class PiChildProcessRuntime {
 				bootstrapPath,
 			});
 			environment.PI_CODING_AGENT_DIR = resolvedAgentDir;
+			// These describe the owned @xterm/headless PTY, not the Owner's terminal.
+			// xterm.js accepts 24-bit RGB sequences, which xterm-256color alone does
+			// not advertise to applications that use COLORTERM for capability detection.
 			environment.TERM = "xterm-256color";
 			environment.COLORTERM = "truecolor";
 			const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();

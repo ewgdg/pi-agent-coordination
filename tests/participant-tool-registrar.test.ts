@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Value } from "typebox/value";
 
 import {
 	registerOrdinaryAgentSurfaces,
@@ -97,6 +98,18 @@ test("participant registrar exposes the exact closed sequential role tool sets",
 			await host.runtime.dispose();
 		});
 	}
+});
+
+test("Agent Spawn schema rejects extension path arrays", () => {
+	const schema = participantCoordinationToolSchemas.agent_spawn;
+	assert.equal(Value.Check(schema, {
+		request: "Inspect the child Runtime.",
+		config: { extensions: "inherit" },
+	}), true);
+	assert.equal(Value.Check(schema, {
+		request: "Inspect the child Runtime.",
+		config: { extensions: ["/extensions/arbitrary.ts"] },
+	}), false);
 });
 
 test("participant registrar preserves role-specific tool presentation metadata", async () => {

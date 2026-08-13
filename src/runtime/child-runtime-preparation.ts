@@ -62,8 +62,6 @@ export async function prepareChildRuntime(options: {
 	template?: AgentTemplate;
 	overrides?: AgentSpawnConfigurationInput;
 }): Promise<PreparedChildRuntime> {
-	validateExtensionSelection(options.template?.extensions);
-	validateExtensionSelection(options.overrides?.extensions);
 	validateParentSkillSources(options.parentRuntime);
 	const inheritedExtensions = inheritsParentExtensions(
 		options.template?.extensions,
@@ -147,14 +145,6 @@ export async function prepareChildRuntime(options: {
 		})),
 		agentsFiles,
 	};
-}
-
-function validateExtensionSelection(
-	selection: AgentTemplate["extensions"] | AgentSpawnConfigurationInput["extensions"],
-): void {
-	if (Array.isArray(selection)) {
-		throw new Error("Child extension selection must be inherit or none");
-	}
 }
 
 function inheritsParentExtensions(

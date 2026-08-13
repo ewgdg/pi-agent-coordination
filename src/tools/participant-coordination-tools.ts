@@ -189,7 +189,6 @@ const agentSpawnParameters = Type.Object(
 						Type.Union([
 							Type.Literal("inherit"),
 							Type.Literal("none"),
-							Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
 						]),
 					),
 					projectContext: Type.Optional(Type.String()),

@@ -48,6 +48,16 @@ test("parses the complete strict Agent Template surface", () => {
 	});
 });
 
+test("rejects extension path arrays outside the Agent Template contract", () => {
+	assert.throws(
+		() => parseAgentTemplate(
+			"---\nname: research-agent\nextensions:\n  - /extensions/arbitrary.ts\n---\n",
+			"/templates/research-agent.md",
+		),
+		/extensions must be "inherit" or "none"/,
+	);
+});
+
 test("rejects YAML capabilities, coercion, and fields outside the Agent Template contract", () => {
 	const invalidTemplates = [
 		"---\nname: research-agent\ndescription: forbidden\n---\n",
