@@ -197,6 +197,32 @@ test("Owner activity renders Attention Inbox above direct children in creation o
 	dock.dispose();
 });
 
+test("activity roster shows three live children and reports the hidden remainder", () => {
+	const { dock } = createDock({
+		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
+		children: Array.from({ length: 6 }, (_, index) => agent({
+			agentId: `child-${index + 1}`,
+			label: `Child ${index + 1}`,
+			parent: "owner",
+		})),
+		answerMode: false,
+		humanAttention: [],
+		operationalAttention: [],
+	});
+
+	const rendered = dock.render(120).map((line) =>
+		stripTerminalSequences(line).replace(/<[^>]+>/g, "")
+	);
+	assert.deepEqual(rendered, [
+		"Agents",
+		"├─ ○ Child 1 · anthropic/claude-sonnet-4:high · idle",
+		"├─ ○ Child 2 · anthropic/claude-sonnet-4:high · idle",
+		"├─ ○ Child 3 · anthropic/claude-sonnet-4:high · idle",
+		"└─ … 3 more",
+	]);
+	dock.dispose();
+});
+
 test("Owner activity renders direct children without requiring attention", () => {
 	const { dock } = createDock({
 		scope: agent({ agentId: "owner", label: "Owner", parent: null }),

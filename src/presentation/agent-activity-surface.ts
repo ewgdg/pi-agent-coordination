@@ -27,6 +27,7 @@ import { boundedToolPreview } from "../tools/bounded-preview.ts";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const SPINNER_FRAME_INTERVAL_MS = 80;
+const MAX_VISIBLE_AGENT_ROWS = 3;
 
 export const AGENT_ACTIVITY_WIDGET_KEY = "agent-coordination-activity";
 
@@ -102,13 +103,19 @@ export class AgentActivityDock implements Component {
 			)
 			: [];
 		const liveChildren = snapshot.children.filter(hasLiveRun);
+		const visibleChildren = liveChildren.slice(0, MAX_VISIBLE_AGENT_ROWS);
+		const hiddenChildCount = liveChildren.length - visibleChildren.length;
+		const visibleAgentRowCount = visibleChildren.length + (hiddenChildCount > 0 ? 1 : 0);
 		const agentLines = liveChildren.length === 0
 			? []
 			: [
 				this.#heading("Agents"),
-				...liveChildren.map((child, index) =>
-					this.#renderAgent(child, index, liveChildren.length)
+				...visibleChildren.map((child, index) =>
+					this.#renderAgent(child, index, visibleAgentRowCount)
 				),
+				...(hiddenChildCount > 0
+					? [this.#theme.fg("dim", `└─ … ${hiddenChildCount} more`)]
+					: []),
 			];
 		const answerModeLines = snapshot.answerMode
 			? [
@@ -190,7 +197,10 @@ export class AgentActivityDock implements Component {
 
 	#syncSpinner(snapshot = this.#source.snapshot()): void {
 		if (this.#disposed) return;
-		const animated = snapshot.children.filter(hasLiveRun).some((child) => {
+		const animated = snapshot.children
+			.filter(hasLiveRun)
+			.slice(0, MAX_VISIBLE_AGENT_ROWS)
+			.some((child) => {
 			const status = activityRowStatus(child);
 			return status.kind === "active" || status.kind === "starting";
 		});
