@@ -35,10 +35,7 @@ export function renderAgentMessageCall(
 	}
 	if (args.operation === "answer") {
 		text += theme.fg("accent", "answer");
-		text += theme.fg(
-			"dim",
-			` · ${args.requestMessageId} · ${boundedToolPreview(args.answer)}`,
-		);
+		text += theme.fg("dim", ` · ${boundedToolPreview(args.answer)}`);
 		return new Text(text, 0, 0);
 	}
 	if (args.operation === "cancel") {

@@ -101,17 +101,14 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	const answerText = tool.renderCall(
 		{
 			operation: "answer",
-			requestMessageId: "request-identity",
 			answer: "One canonical Answer.",
 		},
 		plainTheme,
 		{ ...renderContext, args: {
 			operation: "answer",
-			requestMessageId: "request-identity",
 			answer: "One canonical Answer.",
 		} },
 	).render(160).join("\n");
-	assert.match(answerText, /request-identity/);
 	assert.match(answerText, /One canonical Answer/);
 
 	const cancellationText = tool.renderCall(

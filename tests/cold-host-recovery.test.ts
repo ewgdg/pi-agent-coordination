@@ -399,7 +399,6 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	await assert.rejects(
 		() => executeTool(reopened, "agent_message", "answer-quarantined-request", {
 			operation: "answer",
-			requestMessageId: inboundRequestId,
 			answer: "Unavailable requester proof must stay explicit.",
 		}),
 		/evidence_unavailable/,
@@ -673,7 +672,6 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 	]);
 	await executeTool(reopened, "agent_message", "answer-branch-residual", {
 		operation: "answer",
-		requestMessageId: request.requestMessageId,
 		answer: "Resolved after recovery.",
 	});
 	await reopened.session.waitForIdle();

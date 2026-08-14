@@ -1252,7 +1252,6 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 	]);
 	await answerAsOwner(
 		host,
-		requestId,
 		"Restore the obligated work before taking unrelated new work.",
 		"answer-moderator-escalation",
 	);
@@ -1338,7 +1337,6 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 				"agent_message",
 				{
 					operation: "answer",
-					requestMessageId: requestId,
 					answer: "The reminder restored enough context to answer.",
 				},
 				{ id: "answer-after-reminder" },
@@ -2908,13 +2906,11 @@ function moderatorTriggerKind(sessionFile: string): string {
 
 async function answerAsOwner(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
-	requestId: string,
 	answer: string,
 	toolCallId: string,
 ): Promise<void> {
 	const input = {
 		operation: "answer" as const,
-		requestMessageId: requestId,
 		answer,
 	};
 	host.session.sessionManager.appendMessage(

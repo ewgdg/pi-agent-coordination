@@ -115,18 +115,22 @@ test("participant registrar exposes the exact closed sequential role tool sets",
 	}
 });
 
-test("Agent Message schema names Answer and Cancellation correlation requestMessageId", () => {
+test("Agent Message schema correlates Answer implicitly and Cancellation explicitly", () => {
 	const variants = (participantCoordinationToolSchemas.agent_message as {
 		anyOf: Array<{ properties: Record<string, { const?: string }> }>;
 	}).anyOf;
-	for (const operation of ["answer", "cancel"] as const) {
-		const variant = variants.find(({ properties }) =>
-			properties.operation?.const === operation
-		);
-		assert.ok(variant);
-		assert.equal("requestMessageId" in variant.properties, true);
-		assert.equal("requestId" in variant.properties, false);
-	}
+	const answer = variants.find(({ properties }) =>
+		properties.operation?.const === "answer"
+	);
+	assert.ok(answer);
+	assert.deepEqual(Object.keys(answer.properties).sort(), ["answer", "operation"]);
+
+	const cancellation = variants.find(({ properties }) =>
+		properties.operation?.const === "cancel"
+	);
+	assert.ok(cancellation);
+	assert.equal("requestMessageId" in cancellation.properties, true);
+	assert.equal("requestId" in cancellation.properties, false);
 });
 
 test("Agent Spawn schema rejects extension path arrays", () => {
@@ -220,6 +224,8 @@ A successful asynchronous Message send returns messageStatus "sent". This includ
 "sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
 
 After a receipt containing requestMessageId with messageStatus "sent", continue only independent work or end the turn. The correlated Agent Answer will be delivered automatically; do not poll merely to wait.
+
+agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request; never select or guess a Request id.
 
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
 </agent_control>`;

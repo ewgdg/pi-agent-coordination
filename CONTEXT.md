@@ -72,13 +72,13 @@ The Owner-scoped configuration snapshot governing new host admissions, limits, a
 _Avoid_: Workflow state, Workflow configuration lifecycle
 
 **Agent Request**:
-A Request targeting a known Agent in the same Workflow. Its Request Message identity, named `requestMessageId`, is its sole public correlation identity for Answer, Cancellation, retry, and retrieval.
+A Request targeting a known Agent in the same Workflow. Requests waiting for one responder become eligible for Delivery in admission order, and only the front Request may deliver while that responder has no unresolved Answer Obligation. Each Request keeps its authored Delivery mode. Its Request Message identity, named `requestMessageId`, is the public identity for Cancellation, retry, and retrieval.
 
 **Answer Obligation**:
-The responder's live duty created by Agent Request Delivery and ended by committing the correlated Agent Answer or receiving Request Cancellation. Automatic moderation protects only work with at least one unresolved Answer Obligation.
+The responder's sole live duty created by Agent Request Delivery and ended by committing the correlated Agent Answer or receiving Request Cancellation. Automatic moderation protects only work with an unresolved Answer Obligation.
 
 **Agent Answer**:
-An immutable responder-authored Message correlated to exactly one Agent Request. Its route follows from the Request, and its commit ends the responder's Answer obligation.
+An immutable responder-authored Message correlated by the coordinator to the responder's sole Answer Obligation. Its route follows from that Request, and its commit ends the obligation.
 
 **Answer Retrieval**:
 Requester-initiated delivery of an already-committed Agent Answer through the model-visible result of retrying its Request. The result is the Answer's recipient-side delivery proof and transports the responder's immutable Answer without impersonating the responder or authoring another Message.

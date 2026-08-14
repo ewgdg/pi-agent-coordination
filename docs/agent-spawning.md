@@ -76,7 +76,7 @@ For every new Runtime, Template discovery is anchored to the current parent Runt
 
 The committed native `agent_spawn` tool call is the Creation Request source. The child Identity append commits the child and Request together. After that append, startup or scheduling failure never removes either fact.
 
-The child starts a fresh Pi CLI/TUI process and receives the Request through the same fixed Deferred lane used by ordinary [Agent messaging](agent-messaging.md). A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
+The child starts a fresh Pi CLI/TUI process and admits its fixed-Deferred Creation Request into the same serialized incoming-Request lane used by ordinary [Agent messaging](agent-messaging.md). The Creation Request occupies the child's sole incoming Request slot after Delivery; later Requests to that child wait until it is answered or its Cancellation is delivered. A successful spawn receipt reports volatile admission; it does not claim that Delivery committed, the model processed the Request, or an Answer exists.
 
 Confirmed Delivery admission failure releases the new child Run to dormant while preserving the committed child and Creation Request. Once Delivery commits, the Run remains retained while the child owes the corresponding Answer.
 

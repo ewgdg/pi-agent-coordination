@@ -56,19 +56,20 @@ Use a Request when the recipient owes one mechanically correlated Answer:
 }
 ```
 
-The Request fixes its requester, responder, Workflow, question, Answer destination, and delivery mode. Request commitment retains the requester's current Run with `awaiting_answer`. Valid Delivery retains the responder with `answer_owed`.
+The Request fixes its requester, responder, Workflow, question, Answer destination, and delivery mode. Request commitment retains the requester's current Run with `awaiting_answer`.
 
-Only the fixed responder may Answer, and only after valid Request Delivery:
+Requests targeting one responder wait in admission order. Only the front Request is eligible for its authored Deferred or Steer Delivery, and it cannot deliver while the responder has an unresolved Answer Obligation. Ordinary Messages, Answers, Cancellations, and Supervisory Resume are not blocked by this Request ordering. Valid Request Delivery creates the responder's sole `answer_owed` obligation.
+
+The responder Answers that sole active Request without supplying correlation identity:
 
 ```json
 {
   "operation": "answer",
-  "requestMessageId": "source-derived-request-id",
   "answer": "The model-visible Answer Delivery entry proves the handoff."
 }
 ```
 
-The responder lane admits at most one canonical Answer across the complete current-scope transcript tree. Answer commitment ends that exact responder obligation even if return scheduling fails. Answers use fixed Steer scheduling so they become actionable at the next safe boundary without aborting generation or tools.
+Answer commitment correlates the immutable Answer to the active Request, ends that obligation even if return scheduling fails, and makes the next waiting Request eligible. Calling Answer without an active Request is rejected. More than one active Request is a protocol invariant violation. Answers use fixed Steer scheduling so they become actionable at the requester's next safe boundary without aborting generation or tools.
 
 ## Retrieve an Answer
 
@@ -96,7 +97,7 @@ Only the requester may abandon its exact Request:
 
 `requestMessageId` names the Request Message being withdrawn. A newly committed Cancellation receipt returns its own `messageId` and Delivery outcome. If the Request was already resolved, the receipt instead returns `already_cancelled` with `cancellationMessageId` or `already_answered` with `answerMessageId`; it does not repeat the Request identity from the call.
 
-Cancellation commitment ends only that requester wait. Fixed-Steer Cancellation Delivery ends only that responder obligation and supplies actionable context; it does not abort tools, retract facts, undo effects, or terminate a Run. Cancellation delivered before a queued Request suppresses that Request without waking the responder for obsolete work.
+Cancellation commitment ends only that requester wait. Fixed-Steer Cancellation Delivery ends only that responder obligation, makes the next waiting Request eligible, and supplies actionable context; it does not abort tools, retract facts, undo effects, or terminate a Run. Cancellation delivered before a waiting Request suppresses that Request without waking the responder for obsolete work.
 
 Answer and Cancellation facts serialize independently in the requester and responder lanes. Either may commit while the other's Delivery is unavailable. Committed facts remain canonical, and a locally cancelled Request cannot be revived by retry or a late Answer.
 
@@ -144,6 +145,8 @@ If recipient evidence cannot be inspected, retry is rejected without scheduling.
 
 Each recipient admits at most the current Workflow Policy's `maxPendingDeliveriesPerAgent` distinct pending Message identities across Deferred and Steer; the default is 256. A retry of an already-pending identity consumes no additional capacity. Admitted work is never evicted, including when Owner reload lowers the limit.
 
+Waiting Requests consume this same pending Delivery capacity. A Request receipt with `messageStatus: "sent"` means the recipient lane admitted it; the Request may still be waiting behind the responder's active Request before ordinary Deferred or Steer scheduling applies.
+
 When capacity is exhausted, the invocation returns `messageStatus: "not_sent"` with reason `capacity_exhausted`. The canonical author Message remains in the sender transcript and can be retried explicitly after capacity becomes available; there is no hidden overflow or automatic retry.
 
 An exact [Interruption Hold](run-supervision.md) blocks every ordinary Message, Request, Answer, and Cancellation from committing Delivery or invoking the recipient model. Held items remain admitted and consume ordinary capacity. One Supervisory Resume Message uses a separate reserved slot and cannot evict ordinary work.
@@ -154,6 +157,6 @@ See [Workflow Policy](workflow-policy.md) for strict file validation and prospec
 
 Agent identity and a selected Agent Runtime can outlive any individual Run. When a child has no work and no Run Retention Reason, its current Run is released and the Agent becomes dormant. A Message, Request, Answer, or Cancellation to that Agent activates a successor Run in its prepared Runtime when available, commits at the first boundary allowed by its authored mode, and releases the successor again when no Run Retention Reason remains.
 
-Live scheduling is intentionally disposable. Run failure, exact Run termination, or Workflow shutdown discards every uncommitted item for that host. Receipts are not rewritten, Messages are not replayed automatically, and backlog is not transferred to a successor Run. Poll and explicit retry are the recovery path.
+Live scheduling, including the per-responder waiting Request order, is intentionally disposable. Run failure, exact Run termination, or Workflow shutdown discards every uncommitted item for that host. A successor reconstructs only the one active Request proved by durable Delivery and resolution evidence; it does not reconstruct waiting queue order. Receipts are not rewritten, Messages are not replayed automatically, and backlog is not transferred to a successor Run. Poll and explicit same-identity retry are the recovery path.
 
 Malformed or contradictory transcript evidence is an invariant violation. Unknown Agents, cross-Workflow routes, and poll or retry by anyone other than the original sender are rejected before they can claim Delivery state.

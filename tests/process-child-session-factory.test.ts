@@ -19,7 +19,6 @@ import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
-import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
@@ -223,7 +222,6 @@ test("ordinary production spawn runs in a real child process over Owner particip
 	const effectiveCwd = join(host.cwd, "process-child-cwd");
 	await mkdir(effectiveCwd);
 	const pidEvidence = join(effectiveCwd, "child-pid.txt");
-	let creationRequestId = "";
 	broker.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall("bash", { command: `printf '%s' "$PPID" > ${JSON.stringify(pidEvidence)}` }, {
@@ -240,7 +238,6 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		() => fauxAssistantMessage(
 			fauxToolCall("agent_message", {
 				operation: "answer",
-				requestMessageId: creationRequestId,
 				answer: "Process child answer crossed the Owner RPC boundary.",
 			}, { id: "proxied-child-message" }),
 			{ stopReason: "toolUse" },
@@ -260,18 +257,12 @@ test("ordinary production spawn runs in a real child process over Owner particip
 				allowed_tools: ["bash"],
 			},
 		};
-		const spawnEntryId = host.session.sessionManager.appendMessage(
+		host.session.sessionManager.appendMessage(
 			fauxAssistantMessage(
 				fauxToolCall("agent_spawn", input, { id: "spawn-real-process-child" }),
 				{ stopReason: "toolUse" },
 			),
 		);
-		creationRequestId = deriveMessageIdentity({
-			agentId: identity.agentId,
-			entryId: spawnEntryId,
-			toolCallId: "spawn-real-process-child",
-		});
-
 		const receipt = await owner.spawn("spawn-real-process-child", input);
 		assert.equal(receipt.spawnStatus, "created");
 		assert.equal("messageStatus" in receipt && receipt.messageStatus, "sent");

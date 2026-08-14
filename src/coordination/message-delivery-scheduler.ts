@@ -23,6 +23,9 @@ type ScheduledDeliveryBase = Readonly<{
 	inspectProof(): EntryPointer | undefined;
 	isSuppressed?(): boolean;
 	afterCommit?(): void;
+	isIncomingRequest?: boolean;
+	isIncomingRequestActive?(): boolean;
+	suppressesAfterCommitMessageId?: string;
 }>;
 
 export type ScheduledMessageDelivery = ScheduledDeliveryBase & Readonly<{
@@ -210,6 +213,10 @@ export class MessageDeliveryScheduler {
 		});
 	}
 
+	requestQueueAdvancedInLane(record: AgentRecord): Promise<void> {
+		return this.#drainInLane(record);
+	}
+
 	prepareInterruptionInLane(record: AgentRecord): void {
 		this.#frozenSteerByAgent.delete(record.identity.agentId);
 	}
@@ -368,11 +375,12 @@ export class MessageDeliveryScheduler {
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending || pending.size === 0) return;
 		if (record.host.currentWorkState() !== "settled") return;
-		if ([...pending.values()].some(({ deliveryMode }) => deliveryMode === "steer")) {
+		const eligible = this.#eligibleDeliveries(pending);
+		if (eligible.some(({ deliveryMode }) => deliveryMode === "steer")) {
 			this.#freezeSteerInLane(record);
 			return;
 		}
-		const delivery = pending.values().next().value;
+		const delivery = eligible[0];
 		if (!delivery) return;
 		// A settled Run may become active before Pi processes admission. followUp
 		// preserves Deferred ordering, while triggerTurn starts a standalone Idle turn.
@@ -433,9 +441,21 @@ export class MessageDeliveryScheduler {
 		if (this.#hasUnprovenFrozenBatch(record)) return;
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending) return;
-		const steer = [...pending.values()].filter(
+		const steerCandidates = this.#eligibleDeliveries(pending).filter(
 			(delivery): delivery is ScheduledMessageDelivery =>
 				delivery.deliveryMode === "steer" && "deliveryItem" in delivery,
+		);
+		const suppressedAfterBatch = new Set(
+			steerCandidates.flatMap(({ suppressesAfterCommitMessageId }) =>
+				suppressesAfterCommitMessageId
+					? [suppressesAfterCommitMessageId]
+					: []
+			),
+		);
+		// Deliver a Cancellation before its still-waiting Request. Batching both
+		// would wake the responder with work that the same batch withdraws.
+		const steer = steerCandidates.filter(
+			({ messageId }) => !suppressedAfterBatch.has(messageId),
 		);
 		if (steer.length === 0) return;
 		const messageIds = steer.map(({ messageId }) => messageId);
@@ -473,6 +493,22 @@ export class MessageDeliveryScheduler {
 			this.#frozenSteerByAgent.delete(record.identity.agentId);
 		}
 		this.#removePendingDeliveryReason(record);
+	}
+
+	#eligibleDeliveries(
+		pending: ReadonlyMap<string, ScheduledDelivery>,
+	): ScheduledDelivery[] {
+		const deliveries = [...pending.values()];
+		// Only the oldest waiting Request may compete for Delivery. Other Message
+		// kinds remain eligible so one unresolved Request cannot block coordination.
+		const frontRequest = deliveries.find(
+			({ isIncomingRequest }) => isIncomingRequest,
+		);
+		const requestIsActive = frontRequest?.isIncomingRequestActive?.() ?? false;
+		return deliveries.filter((delivery) =>
+			!delivery.isIncomingRequest ||
+			(!requestIsActive && delivery === frontRequest)
+		);
 	}
 
 	#hasUnprovenFrozenBatch(record: AgentRecord): boolean {

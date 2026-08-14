@@ -44,6 +44,8 @@ A successful asynchronous Message send returns messageStatus "sent". This includ
 
 After a receipt containing requestMessageId with messageStatus "sent", continue only independent work or end the turn. The correlated Agent Answer will be delivered automatically; do not poll merely to wait.
 
+agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request; never select or guess a Request id.
+
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
 </agent_control>`;
 
@@ -130,7 +132,6 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("answer"),
-			requestMessageId: Type.String({ minLength: 1 }),
 			answer: Type.String({ minLength: 1 }),
 		},
 		{ additionalProperties: false },

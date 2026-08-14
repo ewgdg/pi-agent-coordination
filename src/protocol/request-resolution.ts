@@ -4,10 +4,12 @@ import {
 	currentCoordinationScope,
 	deriveMessageIdentity,
 	ProtocolInvariantError,
+	sameToolCallPointer,
 	type ToolCallPointer,
 } from "./identities.ts";
 import {
 	inspectAnswerDelivery,
+	inspectAnswerRetrievals,
 	inspectCanonicalMessage,
 	inspectMessageDelivery,
 	resolveCommittedAnswer,
@@ -17,6 +19,10 @@ import {
 	type RequestSendInput,
 	validateAgentMessageInput,
 } from "./message.ts";
+import {
+	inspectMessageDeliveries,
+	validateDeliveredMessageEvidence,
+} from "./message-delivery.ts";
 
 type Request = Extract<Message, { kind: "request" }>;
 type Answer = Extract<Message, { kind: "answer" }>;
@@ -71,32 +77,46 @@ export function inspectCanonicalRequestResolution(options: {
 	const answers = findAuthoredAgentMessageSources({
 		authorAgentId: request.targetAgentId,
 		transcript: responderTranscript,
-	})
-		.filter((source): source is AuthoredAgentMessageSource & {
-			input: Extract<AgentMessageInput, { operation: "answer" }>;
-		} =>
-			source.input.operation === "answer" &&
-			source.input.requestMessageId === request.messageId
-		)
-		.map(({ source, input }) => resolveCommittedAnswer({
+	}).flatMap(({ source, input }) => {
+		if (input.operation !== "answer") return [];
+		const resultRequestId = answerSourceResultRequestId({
+			transcript: responderTranscript,
+			source,
+		});
+		const deliveryRequestId = answerSourceDeliveryRequestId({
+			requesterAgentId: request.fromAgentId,
+			transcript: requesterTranscript,
+			source,
+		});
+		if (
+			resultRequestId !== undefined &&
+			deliveryRequestId !== undefined &&
+			resultRequestId !== deliveryRequestId
+		) {
+			throw new ProtocolInvariantError(
+				`Agent Answer ${deriveMessageIdentity(source)} result and Delivery name different Requests`,
+			);
+		}
+		const correlatedRequestId = resultRequestId ?? deliveryRequestId;
+		if (correlatedRequestId !== request.messageId) return [];
+		const answer = resolveCommittedAnswer({
 			responderAgentId: request.targetAgentId,
 			transcript: responderTranscript,
 			toolCallId: source.toolCallId,
 			providedInput: input,
 			request,
-		}))
-		.filter((answer) => {
-			const delivery = inspectAnswerDelivery({
-				requesterAgentId: request.fromAgentId,
-				transcript: requesterTranscript,
-				answer,
-			});
-			return inspectCanonicalMessage({
-				message: answer,
-				authorTranscript: responderTranscript,
-				deliveryEvidence: delivery.deliveryEvidence,
-			}).state === "canonical";
 		});
+		const delivery = inspectAnswerDelivery({
+			requesterAgentId: request.fromAgentId,
+			transcript: requesterTranscript,
+			answer,
+		});
+		return inspectCanonicalMessage({
+			message: answer,
+			authorTranscript: responderTranscript,
+			deliveryEvidence: delivery.deliveryEvidence,
+		}).state === "canonical" ? [answer] : [];
+	});
 	const cancellations = findAuthoredAgentMessageSources({
 		authorAgentId: request.fromAgentId,
 		transcript: requesterTranscript,
@@ -142,6 +162,83 @@ export function inspectCanonicalRequestResolution(options: {
 			? {}
 			: { cancellation: cancellations[0] }),
 	};
+}
+
+export function answerSourceResultRequestId(options: {
+	transcript: TranscriptInspection;
+	source: ToolCallPointer;
+}): string | undefined {
+	const results = currentCoordinationScope(
+		options.transcript,
+		options.source.agentId,
+	).filter(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolName === "agent_message" &&
+			entry.message.toolCallId === options.source.toolCallId,
+	);
+	if (results.length > 1) {
+		throw new ProtocolInvariantError(
+			`Agent Answer source ${options.source.toolCallId} has multiple results`,
+		);
+	}
+	const result = results[0];
+	if (!result) return undefined;
+	if (result.type !== "message" || result.message.role !== "toolResult") {
+		return undefined;
+	}
+	// An error result carries no authoritative correlation. Candidate Delivery
+	// inspection still enforces the error-result-plus-Delivery crash invariant.
+	if (result.message.isError) return undefined;
+	const details = result.message.details;
+	if (
+		typeof details !== "object" ||
+		details === null ||
+		!("requestMessageId" in details) ||
+		typeof details.requestMessageId !== "string" ||
+		details.requestMessageId.length === 0
+	) {
+		throw new ProtocolInvariantError(
+			`Agent Answer source ${options.source.toolCallId} has malformed correlation evidence`,
+		);
+	}
+	return details.requestMessageId;
+}
+
+export function answerSourceDeliveryRequestId(options: {
+	requesterAgentId: string;
+	transcript: TranscriptInspection;
+	source: ToolCallPointer;
+}): string | undefined {
+	const direct = inspectMessageDeliveries({
+		recipientAgentId: options.requesterAgentId,
+		transcript: options.transcript,
+	}).filter(({ source }) => sameToolCallPointer(source, options.source));
+	const requestIds: string[] = [];
+	for (const delivery of direct) {
+		validateDeliveredMessageEvidence(delivery);
+		if (delivery.projection.kind !== "answer") {
+			throw new ProtocolInvariantError(
+				`Agent Answer source ${options.source.toolCallId} has non-Answer Delivery`,
+			);
+		}
+		requestIds.push(delivery.projection.requestMessageId);
+	}
+	for (const retrieval of inspectAnswerRetrievals({
+		requesterAgentId: options.requesterAgentId,
+		transcript: options.transcript,
+	})) {
+		if (sameToolCallPointer(retrieval.answerSource, options.source)) {
+			requestIds.push(retrieval.requestId);
+		}
+	}
+	if (requestIds.length > 1) {
+		throw new ProtocolInvariantError(
+			`Agent Answer source ${options.source.toolCallId} has duplicate Deliveries`,
+		);
+	}
+	return requestIds[0];
 }
 
 export function findAuthoredAgentMessageSources(options: {

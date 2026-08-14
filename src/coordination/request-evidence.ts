@@ -25,6 +25,8 @@ import {
 	validateDeliveredMessageEvidence,
 } from "../protocol/message-delivery.ts";
 import {
+	answerSourceDeliveryRequestId,
+	answerSourceResultRequestId,
 	findAuthoredAgentMessageSource,
 	findAuthoredAgentMessageSources,
 	findAuthoredRequestSources,
@@ -56,11 +58,60 @@ export class RequestEvidence {
 		this.#admittedAnswersByRequest.set(answer.requestId, answer);
 	}
 
+	isAnswerAwaitingAuthorResult(answer: Answer): boolean {
+		const responder = this.#requireAgent(answer.fromAgentId);
+		const resultRequestId = answerSourceResultRequestId({
+			transcript: responder.transcript.inspect(),
+			source: answer.source,
+		});
+		return resultRequestId === undefined &&
+			responder.host.currentHandle() !== undefined &&
+			!responder.host.currentRunFailed();
+	}
+
+	findAnswerBySource(
+		responder: AgentRecord,
+		toolCallId: string,
+	): Answer | undefined {
+		const matches = new Map<string, Answer>();
+		for (const answer of this.#admittedAnswersByRequest.values()) {
+			if (
+				answer.fromAgentId === responder.identity.agentId &&
+				answer.source.toolCallId === toolCallId
+			) matches.set(answer.messageId, answer);
+		}
+		for (const request of this.#requestsTargeting(responder)) {
+			const answer = this.findAnswer(request);
+			if (answer?.source.toolCallId === toolCallId) {
+				matches.set(answer.messageId, answer);
+			}
+		}
+		if (matches.size > 1) {
+			throw new Error(
+				`invariant_violation: Agent Answer source ${toolCallId} resolved multiple Requests`,
+			);
+		}
+		return matches.values().next().value;
+	}
+
 	rememberAdmittedCancellation(cancellation: Cancellation): void {
 		this.#admittedCancellationsByRequest.set(
 			cancellation.requestId,
 			cancellation,
 		);
+	}
+
+	discardAdmittedAuthorshipBy(author: AgentRecord): void {
+		for (const [requestId, answer] of this.#admittedAnswersByRequest) {
+			if (answer.fromAgentId === author.identity.agentId) {
+				this.#admittedAnswersByRequest.delete(requestId);
+			}
+		}
+		for (const [requestId, cancellation] of this.#admittedCancellationsByRequest) {
+			if (cancellation.fromAgentId === author.identity.agentId) {
+				this.#admittedCancellationsByRequest.delete(requestId);
+			}
+		}
 	}
 
 	findAnswer(request: Request): Answer | undefined {
@@ -155,7 +206,31 @@ export class RequestEvidence {
 		return requests;
 	}
 
+	activeRequestFor(responder: AgentRecord): Request {
+		const requestIds = this.residualRelationshipsFor(responder).answerOwedRequestIds;
+		if (requestIds.length === 0) {
+			throw new Error("invalid_input: Agent has no active Request to answer");
+		}
+		if (requestIds.length > 1) {
+			throw new Error(
+				`invariant_violation: Agent ${responder.identity.agentId} has multiple active Requests`,
+			);
+		}
+		return this.requireRequest(requestIds[0]!);
+	}
+
+	hasActiveRequest(responder: AgentRecord): boolean {
+		const requestIds = this.residualRelationshipsFor(responder).answerOwedRequestIds;
+		if (requestIds.length > 1) {
+			throw new Error(
+				`invariant_violation: Agent ${responder.identity.agentId} has multiple active Requests`,
+			);
+		}
+		return requestIds.length === 1;
+	}
+
 	residualRelationshipsFor(agent: AgentRecord): ResidualRequestRelationships {
+		this.#validateAnswerResultReferences(agent);
 		const awaitingAnswerRequestIds: string[] = [];
 		const answerOwedRequestIds: string[] = [];
 		const localDeliveries = inspectMessageDeliveries({
@@ -245,9 +320,15 @@ export class RequestEvidence {
 				answerOwedRequestIds.push(requestId);
 			}
 		}
+		const uniqueAnswerOwedRequestIds = uniqueRequestIds(answerOwedRequestIds);
+		if (uniqueAnswerOwedRequestIds.length > 1) {
+			throw new Error(
+				`invariant_violation: Agent ${agent.identity.agentId} has multiple active Requests`,
+			);
+		}
 		return {
 			awaitingAnswerRequestIds: uniqueRequestIds(awaitingAnswerRequestIds),
-			answerOwedRequestIds: uniqueRequestIds(answerOwedRequestIds),
+			answerOwedRequestIds: uniqueAnswerOwedRequestIds,
 		};
 	}
 
@@ -317,7 +398,12 @@ export class RequestEvidence {
 		}).filter(({ source, input }) =>
 			((operation === "answer" &&
 				input.operation === "answer" &&
-				input.requestMessageId === requestId) ||
+				(
+					answerSourceResultRequestId({
+						transcript: author.transcript.inspect(),
+						source,
+					}) ?? requestId
+				) === requestId) ||
 				(operation === "cancel" &&
 					input.operation === "cancel" &&
 					input.requestMessageId === requestId)) &&
@@ -326,6 +412,7 @@ export class RequestEvidence {
 				transcript: author.transcript.inspect(),
 				source,
 				input,
+				...(input.operation === "answer" ? { requestId } : {}),
 			}) === "canonical"
 		);
 		if (canonical.length > 1) {
@@ -393,22 +480,98 @@ export class RequestEvidence {
 				providedInput: authored.input,
 			});
 		}
-		const request = this.requireRequest(authored.input.requestMessageId);
-		return authored.input.operation === "answer"
-			? resolveCommittedAnswer({
-				responderAgentId: author.identity.agentId,
+		if (authored.input.operation === "answer") {
+			const answerInput = authored.input;
+			const resultRequestId = answerSourceResultRequestId({
 				transcript: author.transcript.inspect(),
-				toolCallId: authored.source.toolCallId,
-				providedInput: authored.input,
-				request,
-			})
-			: resolveCommittedCancellation({
-				requesterAgentId: author.identity.agentId,
-				transcript: author.transcript.inspect(),
-				toolCallId: authored.source.toolCallId,
-				providedInput: authored.input,
-				request,
+				source: authored.source,
 			});
+			if (resultRequestId !== undefined) {
+				this.#requireResponderRequest(author, resultRequestId);
+			}
+			const matches = this.#requestsTargeting(author).flatMap((request) => {
+				const requester = this.#agents.get(request.fromAgentId);
+				if (!requester) return [];
+				const deliveryRequestId = answerSourceDeliveryRequestId({
+					requesterAgentId: requester.identity.agentId,
+					transcript: requester.transcript.inspect(),
+					source: authored.source,
+				});
+				if (
+					resultRequestId !== undefined &&
+					deliveryRequestId !== undefined &&
+					resultRequestId !== deliveryRequestId
+				) {
+					throw new Error(
+						`invariant_violation: Agent Answer ${messageId} result and Delivery name different Requests`,
+					);
+				}
+				if ((resultRequestId ?? deliveryRequestId) !== request.messageId) return [];
+				const answer = resolveCommittedAnswer({
+					responderAgentId: author.identity.agentId,
+					transcript: author.transcript.inspect(),
+					toolCallId: authored.source.toolCallId,
+					providedInput: answerInput,
+					request,
+				});
+				const delivery = inspectAnswerDelivery({
+					requesterAgentId: requester.identity.agentId,
+					transcript: requester.transcript.inspect(),
+					answer,
+				});
+				return inspectCanonicalMessage({
+					message: answer,
+					authorTranscript: author.transcript.inspect(),
+					deliveryEvidence: delivery.deliveryEvidence,
+				}).state === "canonical" ? [answer] : [];
+			});
+			if (matches.length > 1) {
+				throw new Error(
+					`invariant_violation: Agent Answer ${messageId} correlates multiple Requests`,
+				);
+			}
+			return matches[0];
+		}
+		const request = this.requireRequest(authored.input.requestMessageId);
+		return resolveCommittedCancellation({
+			requesterAgentId: author.identity.agentId,
+			transcript: author.transcript.inspect(),
+			toolCallId: authored.source.toolCallId,
+			providedInput: authored.input,
+			request,
+		});
+	}
+
+	#validateAnswerResultReferences(author: AgentRecord): void {
+		for (const { source, input } of findAuthoredAgentMessageSources({
+			authorAgentId: author.identity.agentId,
+			transcript: author.transcript.inspect(),
+		})) {
+			if (input.operation !== "answer") continue;
+			const requestId = answerSourceResultRequestId({
+				transcript: author.transcript.inspect(),
+				source,
+			});
+			if (requestId !== undefined) this.#requireResponderRequest(author, requestId);
+		}
+	}
+
+	#requireResponderRequest(responder: AgentRecord, requestId: string): Request {
+		const request = this.requireRequest(requestId);
+		if (request.targetAgentId !== responder.identity.agentId) {
+			throw new Error(
+				`invariant_violation: Agent Answer result names a Request for another responder`,
+			);
+		}
+		return request;
+	}
+
+	#requestsTargeting(responder: AgentRecord): Request[] {
+		return [...this.#agents.values()].flatMap((requester) =>
+			this.findRequestsAuthoredBy(requester).filter(
+				(request) => request.targetAgentId === responder.identity.agentId,
+			)
+		);
 	}
 
 	#requireAgent(agentId: string): AgentRecord {

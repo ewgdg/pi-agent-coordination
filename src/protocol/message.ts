@@ -260,18 +260,22 @@ export function inspectAgentMessageAuthorResult(options: {
 	transcript: TranscriptInspection;
 	source: ToolCallPointer;
 	input: Exclude<AgentMessageInput, { operation: "poll" | "retry" }>;
+	requestId?: string;
 }): MessageAuthorResultState {
-	const { authorAgentId, transcript, source, input } = options;
+	const { authorAgentId, transcript, source, input, requestId } = options;
 	if (source.agentId !== authorAgentId) {
 		throw new ProtocolInvariantError("Agent Message source names another author");
 	}
 	const messageId = deriveMessageIdentity(source);
+	if (input.operation === "answer" && requestId === undefined) {
+		throw new Error("invariant_violation: Agent Answer inspection requires its Request");
+	}
 	const identity: MessageResultIdentity = input.operation === "send"
 		? { kind: "message", messageId }
 		: input.operation === "request"
 			? { kind: "request", messageId }
 			: input.operation === "answer"
-				? { kind: "answer", messageId, requestId: input.requestMessageId }
+				? { kind: "answer", messageId, requestId: requestId! }
 				: {
 					kind: "request_cancellation",
 					messageId,

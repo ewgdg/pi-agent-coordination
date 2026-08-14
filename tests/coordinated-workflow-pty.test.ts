@@ -867,7 +867,6 @@ function routeCliRepeatResponse(context: Context): AssistantMessage {
 		return fauxAssistantMessage(
 			fauxToolCall("agent_message", {
 				operation: "answer",
-				requestMessageId: requestId,
 				answer: "CLI worker is ready for repeated attachment.",
 			}, { id: "cli-repeat-answer" }),
 			{ stopReason: "toolUse" },

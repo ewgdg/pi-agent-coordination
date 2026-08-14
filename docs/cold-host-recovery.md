@@ -31,8 +31,8 @@ Before every newly started Run proceeds, the host inspects complete physical cur
 - `awaiting_answer` is initialized for each canonical Request authored by the Agent that has neither a canonical requester Cancellation nor Answer Delivery.
 - `answer_owed` is initialized for each canonical Request delivered to the Agent that has neither a canonical Answer commit nor Cancellation Delivery.
 
-Creation Requests use the same predicates after verified child Identity makes them canonical. Recovered relationships are exact Request-keyed Run Retention Reasons; they are not a durable or Workflow-global obligation store.
+Creation Requests use the same predicates after verified child Identity makes them canonical. Durable Request Delivery, Answer, and Cancellation evidence may re-establish at most one active incoming Request for an Agent; multiple unresolved delivered Requests are an invariant violation. Recovered relationships are exact Request-keyed Run Retention Reasons; they are not a durable or Workflow-global obligation store.
 
 Quarantining a peer does not erase relationships that the verified Agent's own transcript proves. Those local Retention Reasons return, while an operation that needs the quarantined peer's source transcript fails with `evidence_unavailable`.
 
-Cold bootstrap reconstructs no delivery queue, Delivery Invocation, pending scheduling, previous Run, Run sequence, model turn, Operational Incident, Handling Key, Moderator attempt chain, exhausted Operational Attention, or automatic Message replay. Uncommitted work remains lost. Transcript proof, polling, and explicit same-identity retry remain the recovery mechanisms.
+Cold bootstrap reconstructs no per-responder Request queue, general delivery queue, Delivery Invocation, pending scheduling, previous Run, Run sequence, model turn, Operational Incident, Handling Key, Moderator attempt chain, exhausted Operational Attention, or automatic Message replay. Waiting Request order and every other uncommitted item remain lost. Transcript proof, polling, and explicit same-identity retry remain the recovery mechanisms.

@@ -195,6 +195,9 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			{ request: "Create a nested source Workflow for clone coverage." },
 		);
 		const directChildId = (directSpawn as { agentId: string }).agentId;
+		const directCreationRequestId = (directSpawn as {
+			requestMessageId: string;
+		}).requestMessageId;
 		const nestedChildId = await waitForOnlyChild(host, directChildId);
 		await waitForAgentTranscript(
 			host,
@@ -207,6 +210,19 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			"The nested child is ready in the source Workflow.",
 		);
 		assert.equal(host.runtime.session, sourceOwner);
+		host.model.setResponses([
+			fauxAssistantMessage("The initial Request no longer occupies the incoming Request slot."),
+		]);
+		await executeTool(
+			host,
+			"agent_message",
+			"cancel-direct-creation-before-source-request",
+			{
+				operation: "cancel",
+				requestMessageId: directCreationRequestId,
+				reason: "The nested coordination is complete.",
+			},
+		);
 		host.model.setResponses([
 			fauxAssistantMessage("Keep the delivered Request unresolved in the source Workflow."),
 		]);
@@ -544,14 +560,6 @@ async function assertSourceIdentityIsUnavailable(
 		{
 			tool: "agent_message" as const,
 			input: { operation: "retry", messageId: options.sourceRequestId },
-		},
-		{
-			tool: "agent_message" as const,
-			input: {
-				operation: "answer",
-				requestMessageId: options.sourceRequestId,
-				answer: "Do not answer across Workflows.",
-			},
 		},
 		{
 			tool: "agent_message" as const,

@@ -115,6 +115,11 @@ export class MessageCoordinator {
 		record.host.setRunStartInitializer(
 			() => this.#requestEvidence.residualRelationshipsFor(record),
 		);
+		record.host.addSettledHandler((_handle, settlement) => {
+			if (settlement === "failed") {
+				this.#requestEvidence.discardAdmittedAuthorshipBy(record);
+			}
+		});
 		this.#deliveryScheduler.integrate(record);
 		if (record.host.currentHandle()) {
 			record.host.initializeCurrentRunRelationships();
@@ -245,6 +250,9 @@ export class MessageCoordinator {
 					source,
 				}).deliveryEvidence,
 			isSuppressed: () => this.#isCancellationDelivered(requestId, recipient),
+			isIncomingRequest: true,
+			isIncomingRequestActive: () =>
+				this.#requestEvidence.hasActiveRequest(recipient),
 			afterCommit: () => {
 				const request = this.#requestEvidence.requireRequest(requestId);
 				if (
@@ -280,11 +288,17 @@ export class MessageCoordinator {
 		if (record.host.observe().phase === "ending" || record.host.isInterrupting()) {
 			return Promise.resolve();
 		}
-		await record.host.lane.run(() => this.#reconcileAnswerDeliveries(record));
+		await record.host.lane.run(async () => {
+			this.#reconcileAnswerDeliveries(record);
+			if (this.#reconcileCommittedAnswerAuthorship(record)) {
+				await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
+			}
+		});
 		return this.#deliveryScheduler.reachSafeBoundary(record);
 	}
 
 	discardSchedulingInLane(record: AgentRecord): void {
+		this.#requestEvidence.discardAdmittedAuthorshipBy(record);
 		this.#deliveryScheduler.discardInLane(record);
 	}
 
@@ -337,13 +351,14 @@ export class MessageCoordinator {
 		toolCallId: string,
 		input: AnswerInput,
 	): Promise<AgentAnswerReceipt> {
-		const admitted = await caller.host.lane.run(() => {
-			const request = this.#requestEvidence.requireRequest(input.requestMessageId);
-			if (request.targetAgentId !== caller.identity.agentId) {
-				throw new Error(
-					`wrong_participant: Agent ${caller.identity.agentId} is not the responder for Request ${request.messageId}`,
-				);
-			}
+		const admitted = await caller.host.lane.run(async () => {
+			const repeatedAnswer = this.#requestEvidence.findAnswerBySource(
+				caller,
+				toolCallId,
+			);
+			const request = repeatedAnswer
+				? this.#requestEvidence.requireRequest(repeatedAnswer.requestId)
+				: this.#requestEvidence.activeRequestFor(caller);
 			const requester = this.#requireAgent(request.fromAgentId);
 			const delivery = inspectMessageDelivery({
 				recipientAgentId: caller.identity.agentId,
@@ -388,7 +403,6 @@ export class MessageCoordinator {
 				request,
 			});
 			this.#requestEvidence.rememberAdmittedAnswer(answer);
-			caller.host.removeRetentionReason("answer_owed", request.messageId);
 			return { disposition: "admitted", request, requester, answer } as const;
 		});
 		if (admitted.disposition === "existing") {
@@ -833,6 +847,15 @@ export class MessageCoordinator {
 			isSuppressed: message.kind === "request"
 				? () => this.#isCancellationDelivered(message.messageId, recipient)
 				: undefined,
+			isIncomingRequest: message.kind === "request"
+				? true
+				: undefined,
+			isIncomingRequestActive: message.kind === "request"
+				? () => this.#requestEvidence.hasActiveRequest(recipient)
+				: undefined,
+			suppressesAfterCommitMessageId: message.kind === "request_cancellation"
+				? message.requestId
+				: undefined,
 			afterCommit: message.kind === "request"
 				? () => {
 					if (
@@ -843,19 +866,49 @@ export class MessageCoordinator {
 					}
 				}
 					: message.kind === "answer"
-					? () =>
+					? () => {
 						recipient.host.removeRetentionReason(
 							"awaiting_answer",
 							message.requestId,
-						)
+						);
+						if (!this.#requestEvidence.isAnswerAwaitingAuthorResult(message)) {
+							const responder = this.#requireAgent(message.fromAgentId);
+							void responder.host.lane.run(async () => {
+								responder.host.removeRetentionReason(
+									"answer_owed",
+									message.requestId,
+								);
+								await this.#deliveryScheduler.requestQueueAdvancedInLane(responder);
+							});
+						}
+					}
 					: message.kind === "request_cancellation"
-						? () =>
+						? () => {
 							recipient.host.removeRetentionReason(
 								"answer_owed",
 								message.requestId,
-							)
+							);
+							const requester = this.#requireAgent(message.fromAgentId);
+							void requester.host.lane.run(() =>
+								requester.host.removeRetentionReason(
+									"awaiting_answer",
+									message.requestId,
+								)
+							);
+						}
 						: undefined,
 		};
+	}
+
+	#reconcileCommittedAnswerAuthorship(responder: AgentRecord): boolean {
+		const unresolved = new Set(this.answerObligationRequestIds(responder));
+		let changed = false;
+		for (const requestId of responder.host.requestRelationshipIds("answer_owed")) {
+			if (unresolved.has(requestId)) continue;
+			responder.host.removeRetentionReason("answer_owed", requestId);
+			changed = true;
+		}
+		return changed;
 	}
 
 	#reconcileAnswerDeliveries(requester: AgentRecord): void {

@@ -289,7 +289,6 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	});
 	const heldAnswer = await harness.messageAs(owner, "answer-admitted-while-held", {
 		operation: "answer",
-		requestMessageId: outgoing.requestMessageId,
 		answer: heldAnswerText,
 	});
 	const heldCancellation = await harness.messageAs(
