@@ -21,6 +21,7 @@ process.env.PROCESS_DETACHED_UI_PROBE_PATH = probeEvidencePath;
 const host = await createManuallyManagedUnboundTestOwnerHost(piAgentCoordination, {
 	cwd: fixtureRoot,
 	persistent: true,
+	processVisibleModel: true,
 	implicitModeratorResponses: false,
 	additionalExtensionPaths: [PROBE_EXTENSION],
 });

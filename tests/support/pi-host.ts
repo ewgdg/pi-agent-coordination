@@ -44,6 +44,14 @@ const PROVIDER_ID = "coordination-test";
 const MODEL_ID = "deterministic-owner";
 const PROVIDER_BASE_URL = "http://coordination-test.invalid";
 
+// Production discovers user Agent Templates under HOME. Give every test-file
+// process an isolated home so developer-installed templates cannot replace its
+// deterministic models or tools.
+process.env.HOME = await mkdtemp(join(tmpdir(), "pi-agent-coordination-test-home-"));
+// PTY fixtures are Owner processes. A Pi-hosted test runner may itself carry the
+// child-only bootstrap variable; child launches replace it with their own path.
+delete process.env.PI_AGENT_COORDINATION_BOOTSTRAP;
+
 async function loadPiBuiltInExtensionFactories(): Promise<readonly InlineExtension[]> {
 	const modulePath = join(getPackageDir(), "dist", "extensions", "index.js");
 	const moduleValue = await import(pathToFileURL(modulePath).href) as {

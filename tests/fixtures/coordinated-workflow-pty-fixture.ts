@@ -48,6 +48,7 @@ if (
 
 const host = await createManuallyManagedUnboundTestOwnerHost(piAgentCoordination, {
 	persistent: true,
+	processVisibleModel: true,
 	fauxTokensPerSecond: 20_000,
 });
 const ownerSession = host.session;

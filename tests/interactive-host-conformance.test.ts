@@ -27,8 +27,11 @@ const PROCESS_UI_PROBE = fileURLToPath(
 );
 const LLAMA_MODEL_ID = "local-conformance-model";
 const MAX_CONDITION_ATTEMPTS = 1_000;
+const INTERACTIVE_HOST_TEST_TIMEOUT_MS = 10_000;
 
-test("child session_start UI side effects stay detached before, during, and after Agent view attachment", async (t) => {
+test("child session_start UI side effects stay detached before, during, and after Agent view attachment", {
+	timeout: INTERACTIVE_HOST_TEST_TIMEOUT_MS,
+}, async (t) => {
 	const evidencePath = join(tmpdir(), `.process-ui-probe-${process.pid}-detached.jsonl`);
 	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
 	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
@@ -71,7 +74,9 @@ test("child session_start UI side effects stay detached before, during, and afte
 	assert.equal(host.ui.getEditorComponent(), ownerEditorFactory);
 });
 
-test("repeated Agent view attachment does not replay either session startup lifecycle", async (t) => {
+test("repeated Agent view attachment does not replay either session startup lifecycle", {
+	timeout: INTERACTIVE_HOST_TEST_TIMEOUT_MS,
+}, async (t) => {
 	const evidencePath = join(tmpdir(), `.process-ui-probe-${process.pid}-repeat.jsonl`);
 	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
 	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
@@ -104,7 +109,9 @@ test("repeated Agent view attachment does not replay either session startup life
 	assert.equal(host.runtime.session, host.session);
 });
 
-test("an open Agent view rejects exact-Run termination and closing permits ordinary termination", async (t) => {
+test("an open Agent view rejects exact-Run termination and closing permits ordinary termination", {
+	timeout: INTERACTIVE_HOST_TEST_TIMEOUT_MS,
+}, async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
@@ -141,7 +148,9 @@ test("an open Agent view rejects exact-Run termination and closing permits ordin
 	assert.equal(host.runtime.session, ownerSession);
 });
 
-test("a third-party child-view command remains unique and does not interfere with Agent startup", async (t) => {
+test("a third-party child-view command remains unique and does not interfere with Agent startup", {
+	timeout: INTERACTIVE_HOST_TEST_TIMEOUT_MS,
+}, async (t) => {
 	const evidencePath = join(tmpdir(), `.process-ui-probe-${process.pid}-command.jsonl`);
 	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
 	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
@@ -179,7 +188,9 @@ test("a third-party child-view command remains unique and does not interfere wit
 
 });
 
-test("the named llama.cpp extension remains usable through child startup and shutdown on the Owner ModelRuntime", async (t) => {
+test("the named llama.cpp extension remains usable through child startup and shutdown on the Owner ModelRuntime", {
+	timeout: INTERACTIVE_HOST_TEST_TIMEOUT_MS,
+}, async (t) => {
 	const router = await startMockLlamaRouter();
 	const previousBaseUrl = process.env.LLAMA_BASE_URL;
 	const previousApiKey = process.env.LLAMA_API_KEY;

@@ -36,6 +36,7 @@ process.env.PTY_AGENT_VIEW_FAILURE_EVIDENCE = evidencePath;
 process.env.PTY_AGENT_VIEW_FAILURE_RELEASE = initializationReleasePath;
 const host = await createManuallyManagedUnboundTestOwnerHost(piAgentCoordination, {
 	persistent: true,
+	processVisibleModel: true,
 	additionalExtensionPaths: [FAILURE_EXTENSION],
 });
 const ownerSession = host.session;
@@ -131,7 +132,7 @@ async function finishInteractiveFailure(): Promise<void> {
 	const settledSpawn = spawn ?? await spawning;
 	if (
 		failureKind === "initialization" &&
-		detailString(settledSpawn.details, "disposition") !== "pending"
+		detailString(settledSpawn.details, "spawnStatus") !== "created"
 	) throw new Error(`Process initialization failure was not admitted before the native TUI failed: ${JSON.stringify(settledSpawn.details)}`);
 	if (host.runtime.session !== ownerSession) {
 		throw new Error("Child UI failure changed the Owner runtime session");

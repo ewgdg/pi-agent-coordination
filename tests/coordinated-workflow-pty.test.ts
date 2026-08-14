@@ -567,7 +567,11 @@ test("real Pi CLI can return to Owner and attach the same Agent again", {
 			frame.some((line) => line.includes("deterministic-owner"))
 		);
 		terminal.write("Create one Agent with agent_spawn. Use label CLI Repeat Worker and request: Remain available for repeated CLI Agent view attachment.\r");
-		await terminal.waitFor("CLI worker is ready for");
+		await terminal.waitForScreen((frame) =>
+			normalizedFrameText(frame).includes(
+				"CLI worker is ready for repeated attachment.",
+			)
+		);
 
 		await attachCliRepeatWorker(terminal, "CLI child first attachment input", false);
 		await returnPtyAgentViewToOwner(terminal);
@@ -594,7 +598,7 @@ test("real Pi CLI can return to Owner and attach the same Agent again", {
 
 test("interactive /reload keeps a selected process child alive after inherited extension changes", {
 	skip: !existsSync(SCRIPT),
-	timeout: 10_000,
+	timeout: 2 * PTY_WAIT_TIMEOUT_MS,
 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-child-reload-"));
 	const agentDir = join(root, "agent");
@@ -637,7 +641,11 @@ test("interactive /reload keeps a selected process child alive after inherited e
 			frame.some((line) => line.includes("deterministic-owner"))
 		);
 		terminal.write("Create one Agent with agent_spawn. Use label CLI Repeat Worker and request: Remain available for repeated CLI Agent view attachment.\r");
-		await terminal.waitFor("CLI worker is ready for");
+		await terminal.waitForScreen((frame) =>
+			normalizedFrameText(frame).includes(
+				"CLI worker is ready for repeated attachment.",
+			)
+		);
 		await attachCliRepeatWorker(
 			terminal,
 			"CLI child before reload",
@@ -761,7 +769,7 @@ test("interactive /resume retains the compact historical agent_spawn renderer", 
 
 		const collapsed = await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("spawn Resumed Spawn Widget")) &&
-			frame.some((line) => line.includes("pending")) &&
+			frame.some((line) => line.includes("created") && line.includes("sent")) &&
 			!frame.some((line) => line.includes(expandedMarker))
 		);
 		assert.equal(collapsed.some((line) => line.includes(expandedMarker)), false);
@@ -837,6 +845,10 @@ async function attachCliRepeatWorker(
 	await terminal.waitForScreen((frame) =>
 		frame.some((line) => line.includes(`acknowledged: ${expectedInput}`))
 	);
+}
+
+function normalizedFrameText(frame: readonly string[]): string {
+	return frame.join(" ").replace(/\s+/g, " ");
 }
 
 function isCliRepeatWorkerRow(line: string): boolean {
