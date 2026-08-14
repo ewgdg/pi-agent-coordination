@@ -117,19 +117,13 @@ test("participant registrar exposes the exact closed sequential role tool sets",
 
 test("Agent Message schema correlates Answer implicitly and Cancellation explicitly", () => {
 	const variants = (participantCoordinationToolSchemas.agent_message as {
-		anyOf: Array<{
-			description?: string;
-			properties: Record<string, { const?: string }>;
-		}>;
+		anyOf: Array<{ properties: Record<string, { const?: string }> }>;
 	}).anyOf;
 	const answer = variants.find(({ properties }) =>
 		properties.operation?.const === "answer"
 	);
 	assert.ok(answer);
 	assert.deepEqual(Object.keys(answer.properties).sort(), ["answer", "operation"]);
-	assert.match(answer.description ?? "", /terminal response to that Request/);
-	assert.match(answer.description ?? "", /Do not add an assistant-message recap or summary/);
-	assert.match(answer.description ?? "", /end the turn immediately so the Agent Run settles/);
 
 	const cancellation = variants.find(({ properties }) =>
 		properties.operation?.const === "cancel"
@@ -231,7 +225,9 @@ A successful asynchronous Message send returns messageStatus "sent". This includ
 
 After a receipt containing requestMessageId with messageStatus "sent", continue only independent work or end the turn. The correlated Agent Answer will be delivered automatically; do not poll merely to wait.
 
-agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request; never select or guess a Request id.
+A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
+
+agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request. After the operation returns, the Answer is the terminal response to that Request. Do not add an assistant-message recap or summary. Unless another obligation or independent task remains, end the turn immediately so the Agent Run settles.
 
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
 </agent_control>`;
@@ -252,7 +248,8 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 	assert.equal(observedSystemPrompt.split("<agent_control>").length - 1, 1);
 	assert.equal(observedSystemPrompt.split("</agent_control>").length - 1, 1);
 	assert.match(observedSystemPrompt, /continue only independent work or end the turn/);
-	assert.doesNotMatch(observedSystemPrompt, /terminal response to that Request/);
+	assert.match(observedSystemPrompt, /creates one Answer obligation for the recipient/);
+	assert.match(observedSystemPrompt, /terminal response to that Request/);
 	await host.runtime.dispose();
 });
 
