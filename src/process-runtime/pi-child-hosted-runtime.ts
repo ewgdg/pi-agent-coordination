@@ -161,18 +161,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		return { completion, transcriptCommit };
 	}
 
-	continueFromCommittedInput(): Promise<void> {
-		const runId = this.#requireOrCreateRunId();
-		const settlement = this.#waitForSettlement();
-		const request = this.#admitted.then((runtime) =>
-			runtime.channel.request("run.continue", { runId })
-		).then(({ accepted }) => {
-			if (!accepted) throw new Error("child_runtime_continuation_rejected");
-		});
-		void request.catch((error: unknown) => settlement.reject(error));
-		return Promise.all([request, settlement.result]).then(() => undefined);
-	}
-
 	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void {
 		this.#handlers.add(handler);
 		return () => this.#handlers.delete(handler);

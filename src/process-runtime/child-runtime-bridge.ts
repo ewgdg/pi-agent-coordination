@@ -30,7 +30,6 @@ import {
 	type AgentActivitySnapshot,
 	type AgentActivitySource,
 } from "../presentation/agent-activity-surface.ts";
-import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
 import {
 	createParticipantInputHandler,
 	type ParticipantLifecycleHandlers,
@@ -410,28 +409,6 @@ async function handleOwnerRequest(
 			} finally {
 				request.signal.removeEventListener("abort", cancel);
 			}
-		}
-		case "run.continue": {
-			if (request.signal.aborted) throw requestCancellationError(request.signal);
-			if (state.currentRunId) {
-				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
-			}
-			state.currentRunId = request.payload.runId;
-			state.latestRunId = request.payload.runId;
-			state.currentRunOutcome = "completed";
-			// The Control response owns dispatch acceptance only. Exact completion and
-			// cancellation remain the agent lifecycle events and run.interrupt request;
-			// no long-running request is left pretending to own the model cycle.
-			void continueFromCommittedInput(binding.runtime.session).catch((error: unknown) =>
-				failCurrentRun(
-					state,
-					binding.runtime,
-					binding.activity,
-					request.payload.runId,
-					error,
-				)
-			);
-			return { accepted: true };
 		}
 		case "queue.clear": {
 			requireCurrentOrLatestRun(state, request.payload.runId);

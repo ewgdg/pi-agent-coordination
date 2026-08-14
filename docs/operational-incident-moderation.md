@@ -42,7 +42,7 @@ Before starting a Moderator Run, the host commits one visible `agent-coordinatio
 - inspection watermarks for every affected Agent;
 - for a replacement, the previous attempt's terminal transcript pointer.
 
-Failure before this commit creates no Agent and consumes no attempt. A committed Input creates a standalone Moderator with no Direct Spawner, even if startup or its Run then fails. Each new Moderator Runtime dynamically resolves the current Owner Runtime, current reserved `moderator` Template, resources, trust, and Project Context; those resolved values are not part of Moderator Input.
+Failure before this commit creates no Agent and consumes no attempt. A committed Input creates a standalone Moderator with no Direct Spawner, even if startup or its Run then fails. After Runtime admission, the host sends a hidden `agent-coordination.moderator-routine-start` message through ordinary public delivery to start the model turn; the durable identity and incident remain together in the preceding Input. Each new Moderator Runtime dynamically resolves the current Owner Runtime, current reserved `moderator` Template, resources, trust, and Project Context; those resolved values are not part of Moderator Input.
 
 An Operation Review trigger contains only `kind`, the exact `toolCall` pointer, and the elapsed `reviewIntervalMs`. It carries no inferred outcome, internal-stage details, deadline timestamp, adapter state, or eager diagnostics.
 

@@ -50,7 +50,6 @@ test("InProcessHostedRuntime translates Pi lifecycle and owns Pi intentions", as
 		},
 		sendUserMessage: async () => undefined,
 		sendCustomMessage: async () => undefined,
-		_runAgentPrompt: async () => undefined,
 	} as unknown as AgentSession;
 	const projection = {
 		sessionId: snapshot.sessionId,

@@ -27,7 +27,6 @@ test("the common Runtime Host awaits remote queue clearing before aborting", asy
 		classifyToolBatch: () => "asynchronous" as const,
 		cancellationSignal: () => new AbortController().signal,
 		deliver: () => ({ completion: Promise.resolve() }),
-		continueFromCommittedInput: async () => undefined,
 		subscribe: () => () => undefined,
 		async clearQueue() {
 			calls.push("clear:start");

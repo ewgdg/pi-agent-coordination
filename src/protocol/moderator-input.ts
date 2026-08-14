@@ -7,10 +7,13 @@ import { ProtocolInvariantError } from "./identities.ts";
 import {
 	AGENT_IDENTITY_CUSTOM_TYPE,
 	MODERATOR_INPUT_CUSTOM_TYPE,
+	MODERATOR_ROUTINE_START_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 export { MODERATOR_INPUT_CUSTOM_TYPE } from "./custom-entry-types.ts";
+
+export const MODERATOR_ROUTINE_START_INSTRUCTION = "Begin moderation.";
 
 export const MAX_MODERATOR_REQUEST_SOURCES = 16;
 
@@ -85,6 +88,12 @@ export type ModelVisibleModeratorInput = Readonly<{
 	}>;
 }>;
 
+export type ModelVisibleModeratorRoutineStart = Readonly<{
+	customType: typeof MODERATOR_ROUTINE_START_CUSTOM_TYPE;
+	content: typeof MODERATOR_ROUTINE_START_INSTRUCTION;
+	display: false;
+}>;
+
 export function createModelVisibleModeratorInput(
 	identity: ModeratorIdentity,
 	input: ModeratorInput,
@@ -98,6 +107,14 @@ export function createModelVisibleModeratorInput(
 			workflowId: identity.workflowId,
 			metadata: identity.metadata,
 		},
+	};
+}
+
+export function createModelVisibleModeratorRoutineStart(): ModelVisibleModeratorRoutineStart {
+	return {
+		customType: MODERATOR_ROUTINE_START_CUSTOM_TYPE,
+		content: MODERATOR_ROUTINE_START_INSTRUCTION,
+		display: false,
 	};
 }
 

@@ -3,7 +3,6 @@ import type {
 	AgentSessionServices,
 } from "@earendil-works/pi-coding-agent";
 
-import { continueFromCommittedInput } from "../pi-integration/committed-input.ts";
 import type {
 	AgentRuntimeDelivery,
 	AgentRuntimeDeliveryDispatch,
@@ -101,10 +100,6 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 			},
 		);
 		return { completion, transcriptCommit };
-	}
-
-	continueFromCommittedInput(): Promise<void> {
-		return continueFromCommittedInput(this.#session);
 	}
 
 	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void {

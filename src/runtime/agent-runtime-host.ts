@@ -3,6 +3,7 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import type { ModelVisibleRunFailureRecovery } from "../protocol/run-failure-recovery.ts";
 import type { ModelVisibleMessageDelivery } from "../protocol/message-delivery.ts";
+import type { ModelVisibleModeratorRoutineStart } from "../protocol/moderator-input.ts";
 import type {
 	ModelReference,
 	RuntimeThinkingLevel,
@@ -66,7 +67,10 @@ export type ToolBatchClassification = "blocking" | "asynchronous";
 export type AgentRuntimeDelivery =
 	| Readonly<{
 		kind: "custom";
-		message: ModelVisibleMessageDelivery | ModelVisibleRunFailureRecovery;
+		message:
+			| ModelVisibleMessageDelivery
+			| ModelVisibleModeratorRoutineStart
+			| ModelVisibleRunFailureRecovery;
 		triggerTurn: true;
 		deliverAs?: "steer" | "followUp";
 	}>
@@ -98,7 +102,6 @@ export interface AgentRuntimeHost {
 		delivery: AgentRuntimeDelivery,
 		confirmation?: TranscriptCommitConfirmation,
 	): AgentRuntimeDeliveryDispatch;
-	continueFromCommittedInputInLane(): Promise<void>;
 	startInLane(reasons?: readonly AgentRetentionReason[]): Promise<AgentRunHandle>;
 	prepareInLane(reasons?: readonly AgentRetentionReason[]): Promise<void>;
 	beginShutdown(): Promise<boolean>;

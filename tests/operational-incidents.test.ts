@@ -122,6 +122,23 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 			entryId: await transcriptTailFor(host, input.trigger.agentId),
 		},
 	]);
+	const routineStart = await waitForTranscriptEntry(
+		moderator.path,
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.moderator-routine-start",
+	);
+	assert.ok(routineStart?.type === "custom_message");
+	const committedModeratorEntries = SessionManager.open(moderator.path).getEntries();
+	const moderatorInputIndex = committedModeratorEntries.findIndex(
+		({ id }) => id === moderatorInput.id,
+	);
+	const routineStartIndex = committedModeratorEntries.findIndex(
+		({ id }) => id === routineStart.id,
+	);
+	assert.ok(moderatorInputIndex >= 0 && moderatorInputIndex < routineStartIndex);
+	assert.equal(routineStart.content, "Begin moderation.");
+	assert.equal(routineStart.display, false);
 	await waitForCondition(() => moderatorTools.length > 0);
 	assert.deepEqual(moderatorTools, [
 		"agent_control",

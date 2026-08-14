@@ -6,6 +6,7 @@ import {
 import { resolveModeratorAgentMetadata } from "../protocol/agent-metadata.ts";
 import {
 	createModelVisibleModeratorInput,
+	createModelVisibleModeratorRoutineStart,
 	isModeratorIdentity,
 	MAX_MODERATOR_REQUEST_SOURCES,
 	validateCommittedModeratorInput,
@@ -520,7 +521,11 @@ export class OperationalIncidentCoordinator {
 			await moderator.host.lane.run(async () => {
 				if (this.#isShuttingDown()) return;
 				await moderator.host.startInLane(["moderator_handling"]);
-				moderator.host.continueFromCommittedInputInLane();
+				moderator.host.deliverInLane({
+					kind: "custom",
+					message: createModelVisibleModeratorRoutineStart(),
+					triggerTurn: true,
+				});
 			});
 		} catch (error) {
 			this.#reportError(error);

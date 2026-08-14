@@ -286,7 +286,6 @@ export function assertAgentSessionShape(
 	] as const) {
 		requireMember(session, member, `AgentSession.${member}`, version);
 	}
-	requireFunction(session, "_runAgentPrompt", "AgentSession._runAgentPrompt", version);
 	requireRecord(session.extensionRunner, "AgentSession.extensionRunner", version);
 	requireRecord(session.sessionManager, "AgentSession.sessionManager", version);
 	assertSettingsManagerShape(

@@ -81,7 +81,6 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		"presentation.reinitialize",
 		"run.prompt",
 		"message.deliver",
-		"run.continue",
 		"queue.clear",
 		"run.interrupt",
 		"runtime.shutdown",
@@ -103,7 +102,6 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	]);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.snapshot"), true);
 	assert.equal(Check(AgentControlMethodSchema, "message.deliver"), true);
-	assert.equal(Check(AgentControlMethodSchema, "run.continue"), true);
 	assert.equal(Check(AgentControlMethodSchema, "queue.clear"), true);
 	assert.equal(Check(AgentControlMethodSchema, "run.interrupt"), true);
 	assert.equal(Check(AgentControlMethodSchema, "presentation.reinitialize"), true);

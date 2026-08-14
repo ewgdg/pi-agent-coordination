@@ -259,12 +259,6 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		return run.runtime.cancellationSignal();
 	}
 
-	continueFromCommittedInputInLane(): Promise<void> {
-		const continuation = this.#requireLiveRuntime().continueFromCommittedInput();
-		this.#trackOperation(continuation);
-		return continuation;
-	}
-
 	deliverInLane(
 		delivery: AgentRuntimeDelivery,
 		confirmation?: TranscriptCommitConfirmation,

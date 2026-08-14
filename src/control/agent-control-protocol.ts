@@ -7,8 +7,12 @@ import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
 import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
-import { RUN_FAILURE_RECOVERY_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
+import {
+	MODERATOR_ROUTINE_START_CUSTOM_TYPE,
+	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
+} from "../protocol/custom-entry-types.ts";
 import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
+import { MODERATOR_ROUTINE_START_INSTRUCTION } from "../protocol/moderator-input.ts";
 import type { ModeratorControlInput, ModeratorControlReceipt } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import { AgentTemplatePromptContextSchema } from "./control-protocol-schemas.ts";
@@ -385,6 +389,11 @@ const AgentRuntimeDeliverySchema = Type.Union([
 				}),
 			}),
 			closed({
+				customType: Type.Literal(MODERATOR_ROUTINE_START_CUSTOM_TYPE),
+				content: Type.Literal(MODERATOR_ROUTINE_START_INSTRUCTION),
+				display: Type.Literal(false),
+			}),
+			closed({
 				customType: Type.Literal(RUN_FAILURE_RECOVERY_CUSTOM_TYPE),
 				content: Type.String(),
 				display: Type.Literal(true),
@@ -582,10 +591,6 @@ export const agentControlMethods = {
 			modelCycleStarted: Type.Boolean(),
 			queuedInputCount: QueuedInputCountSchema,
 		}),
-	},
-	"run.continue": {
-		request: closed({ runId: NonEmptyStringSchema }),
-		response: AcknowledgementSchema,
 	},
 	"queue.clear": {
 		request: closed({ runId: NonEmptyStringSchema }),

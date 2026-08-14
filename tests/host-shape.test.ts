@@ -273,7 +273,6 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 		].map((member) => [["session", member], `AgentSession.${member}`] as const),
 		...["model", "thinkingLevel", "isIdle", "sessionId"]
 			.map((member) => [["session", member], `AgentSession.${member}`] as const),
-		[["session", "_runAgentPrompt"], "AgentSession._runAgentPrompt"],
 		[["session", "extensionRunner"], "AgentSession.extensionRunner"],
 		[["session", "sessionManager"], "AgentSession.sessionManager"],
 		[["session", "settingsManager"], "AgentSession.settingsManager"],
@@ -297,6 +296,18 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			expected,
 		);
 	}
+});
+
+test("live preflight admits a Runtime without private committed-input continuation", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined);
+	host.runtime.setRebindSession(async () => undefined);
+	host.runtime.setBeforeSessionInvalidate(() => undefined);
+
+	assert.doesNotThrow(() =>
+		assertRuntimeInstanceShape(
+			withoutMemberAtPath(host.runtime, ["session", "_runAgentPrompt"]),
+		),
+	);
 });
 
 test("live preflight rejects every required InteractiveMode seam", async (t) => {

@@ -220,11 +220,6 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			/stale_run/,
 		);
 
-		assert.deepEqual(await runtime.channel.request("run.continue", {
-			runId: "process-runtime-continued-run",
-		}), { accepted: true });
-		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 2);
-
 		const lifecycleBeforeDelivery = lifecycle.length;
 		const activeDelivery = runtime.channel.request("message.deliver", {
 			runId: "process-runtime-delivery-run",
@@ -275,7 +270,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			modelCycleStarted: true,
 			queuedInputCount: 0,
 		});
-		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 3);
+		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 2);
 		assert.equal(runtimeEvents.some((event) =>
 			event.event === "agent.end" &&
 			event.payload.runId === "process-runtime-delivery-run" &&
@@ -309,7 +304,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		await assert.rejects(cancelledDelivery, (error: unknown) =>
 			error instanceof Error && error.name === "AbortError"
 		);
-		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 4);
+		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 3);
 		assert.doesNotMatch(
 			JSON.stringify(SessionManager.open(sessionPath).getEntries()),
 			/This cancelled queued direction must never commit/,
@@ -327,7 +322,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			modelCycleStarted: true,
 			queuedInputCount: 0,
 		});
-		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 5);
+		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 4);
 		assert.doesNotMatch(
 			JSON.stringify(SessionManager.open(sessionPath).getEntries()),
 			/PROCESS_RUNTIME_DROP_MESSAGE_COMMIT/,
