@@ -433,8 +433,8 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 				targetAgentId: sourceChildId,
 				content: "Continue only in the reopened source Workflow.",
 			},
-		) as { delivery: string };
-		assert.equal(continued.delivery, "pending");
+		) as { messageStatus: string };
+		assert.equal(continued.messageStatus, "sent");
 		assert.equal(host.runtime.session, forkOwner);
 	} finally {
 		if (resumedSource) await resumedSource.runtime.dispose();

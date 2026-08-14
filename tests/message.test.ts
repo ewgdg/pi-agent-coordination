@@ -525,7 +525,7 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 		toolCallId: sendToolCallId,
 	};
 	const receipt = await view.message(sendToolCallId, input);
-	assert.equal("delivery" in receipt && receipt.delivery, "pending");
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, "sent");
 	if (!("messageId" in receipt)) throw new Error("Message receipt has no identity");
 	host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -1137,8 +1137,8 @@ test("Run failure discards uncommitted backlog and a successor receives only new
 	assert.equal(hasDelivery(entries, successorMessage.source), true);
 	assert.deepEqual(
 		[deliveredBeforeFailure.receipt, discardedBacklog.receipt].map((receipt) =>
-			"delivery" in receipt ? receipt.delivery : undefined),
-		["pending", "pending"],
+			"messageStatus" in receipt ? receipt.messageStatus : undefined),
+		["sent", "sent"],
 	);
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
@@ -1184,9 +1184,9 @@ test("Workflow shutdown discards admitted but uncommitted backlog", async (t) =>
 	assert.equal(hasDelivery(entries, committedBeforeShutdown.source), true);
 	assert.equal(hasDelivery(entries, discardedDuringShutdown.source), false);
 	assert.equal(
-		"delivery" in discardedDuringShutdown.receipt &&
-			discardedDuringShutdown.receipt.delivery,
-		"pending",
+		"messageStatus" in discardedDuringShutdown.receipt &&
+			discardedDuringShutdown.receipt.messageStatus,
+		"sent",
 	);
 });
 
@@ -1317,7 +1317,7 @@ test("an authored Steer mode is accepted and retry remains mode-free", async (t)
 		"Redirect the next model turn at its safe boundary.",
 		{ deliveryMode: "steer" },
 	);
-	assert.equal("delivery" in sent.receipt && sent.receipt.delivery, "pending");
+	assert.equal("messageStatus" in sent.receipt && sent.receipt.messageStatus, "sent");
 	await waitForDelivery(harness, sent.source);
 
 	const retryToolCallId = "retry-explicit-steer-message";
@@ -2022,8 +2022,8 @@ async function authorMessage(
 		toolCallId,
 	};
 	const receipt = await harness.view.message(toolCallId, input);
-	if (!("messageId" in receipt) || !("delivery" in receipt)) {
-		throw new Error("Message send returned a non-delivery receipt");
+	if (!("messageId" in receipt) || !("messageStatus" in receipt)) {
+		throw new Error("Message send returned a non-message receipt");
 	}
 	if (options.appendResult !== false) {
 		harness.host.session.sessionManager.appendMessage({

@@ -235,7 +235,13 @@ async function spawnRetainedChild(
 		toolCallId,
 		{ request: "Remain live for interactive host conformance." },
 	);
-	assert.equal((result.details as { disposition: string }).disposition, "pending");
+	assert.deepEqual(
+		{
+			spawnStatus: (result.details as { spawnStatus: string }).spawnStatus,
+			messageStatus: (result.details as { messageStatus: string }).messageStatus,
+		},
+		{ spawnStatus: "created", messageStatus: "sent" },
+	);
 	return (result.details as { agentId: string }).agentId;
 }
 

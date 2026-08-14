@@ -423,8 +423,8 @@ test("a successor Runtime re-resolves its current Template and project resources
 		"start-configured-child-v2",
 		successorInput,
 	);
-	assert.ok("delivery" in successorReceipt);
-	assert.equal(successorReceipt.delivery, "pending");
+	assert.ok("messageStatus" in successorReceipt);
+	assert.equal(successorReceipt.messageStatus, "sent");
 	await waitForCondition(() => successorSystemPrompt.length > 0);
 	assert.match(successorSystemPrompt, /Changed effective-cwd context/);
 	assert.match(successorSystemPrompt, /Changed Template context/);

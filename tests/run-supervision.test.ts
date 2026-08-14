@@ -123,8 +123,8 @@ test("interruption holds one exact settled Run and blocks ordinary Message Deliv
 		child.agentId,
 		"This ordinary Message must remain pending behind the Hold.",
 	);
-	assert.ok("delivery" in message);
-	assert.equal(message.delivery, "pending");
+	assert.ok("messageStatus" in message);
+	assert.equal(message.messageStatus, "sent");
 	await harness.ownerView.reachSafeBoundary();
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.equal(
@@ -222,8 +222,8 @@ test("interruption preserves Message admission that wins the target lane first",
 		child.agentId,
 		messageText,
 	);
-	assert.ok("delivery" in admitted);
-	assert.equal(admitted.delivery, "pending");
+	assert.ok("messageStatus" in admitted);
+	assert.equal(admitted.messageStatus, "sent");
 	const interruption = harness.control("interrupt-after-admission", {
 		operation: "interrupt",
 		agentId: child.agentId,

@@ -381,8 +381,8 @@ test("a selected Agent whose runtime initialization fails closes the invalid vie
 		label: "Startup Failure Worker",
 		config: {
 			model: {
-				provider: "missing-process-provider",
-				modelId: "missing-process-model",
+				id: "missing-process-provider/missing-process-model",
+				thinking: "inherit" as const,
 			},
 			extensions: "none" as const,
 		},
@@ -1676,7 +1676,10 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 			content: "Start the successor through ordinary Message delivery.",
 		},
 	);
-	assert.equal((sent.details as { delivery: string }).delivery, "pending");
+	assert.equal(
+		(sent.details as { messageStatus: string }).messageStatus,
+		"sent",
+	);
 	await successorExecutionStarted;
 	assert.equal(attachedBeforeExecution, true);
 	assert.equal(runAdmittedBeforeExecution, true);
@@ -1706,7 +1709,10 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 });
 
 test("Workflow shutdown disposes an open overlay once without disposing its live projection twice", async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
 	host.model.setResponses([
 		fauxAssistantMessage("Keep this live projection retained for host-driven view disposal."),
 	]);

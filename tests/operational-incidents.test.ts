@@ -849,8 +849,8 @@ test("a failed successor startup does not clear Run Failure handling", async (t)
 			),
 		);
 		const receipt = await harness.owner.message(toolCallId, input);
-		assert.ok("delivery" in receipt);
-		assert.equal(receipt.delivery, "pending");
+		assert.ok("messageStatus" in receipt);
+		assert.equal(receipt.messageStatus, "sent");
 		await harness.owner.reachSafeBoundary();
 		await waitForCondition(() =>
 			!harness.owner.status(moderator.id).run.retentionReasons.some(

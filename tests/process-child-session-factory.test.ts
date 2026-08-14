@@ -316,8 +316,8 @@ test("ordinary production spawn runs in a real child process over Owner particip
 			"start-process-successor",
 			successorInput,
 		);
-		assert.ok("delivery" in successorReceipt);
-		assert.equal(successorReceipt.delivery, "pending");
+		assert.ok("messageStatus" in successorReceipt);
+		assert.equal(successorReceipt.messageStatus, "sent");
 		await waitFor(() => {
 			const entries = SessionManager.open(sessionPath).getEntries();
 			return entries.length > entriesBeforeSuccessor && entries.some(
