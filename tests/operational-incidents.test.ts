@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import {
@@ -29,6 +30,7 @@ import {
 	bindTestOwnerHost,
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
+	type TestCleanupRegistrar,
 } from "./support/pi-host.ts";
 import {
 	executeAndCommitRegisteredTool,
@@ -45,12 +47,11 @@ const CONDITION_WAIT_TIMEOUT_MS = 5_000;
 const CONDITION_POLL_INTERVAL_MS = 1;
 
 test("a settled answer-obligated Agent creates one atomic Obligation Stall Moderator", async (t) => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
-	t.after(() => host.runtime.dispose());
 	let moderatorTools: string[] = [];
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -210,7 +211,7 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 	const childGate = new Promise<void>((resolve) => {
 		releaseChild = resolve;
 	});
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -272,7 +273,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	});
 	t.after(() => releaseModerator());
 	const clock = new ControllableOperationReviewClock();
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -284,7 +285,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy('{"operationReviewIntervalMs":1000}'),
@@ -417,7 +418,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("one failed provider request creates Run Failure without regenerating an answer-obligated Run", async () => {
+test("one failed provider request creates Run Failure without regenerating an answer-obligated Run", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-run-failure-"));
 	const agentDir = join(cwd, ".pi-agent");
 	await mkdir(agentDir, { recursive: true });
@@ -426,7 +427,7 @@ test("one failed provider request creates Run Failure without regenerating an an
 		JSON.stringify({ retry: { enabled: false, maxRetries: 0 } }),
 		"utf8",
 	);
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -514,8 +515,8 @@ test("one failed provider request creates Run Failure without regenerating an an
 	await host.runtime.dispose();
 });
 
-test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Moderator", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Moderator", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -598,9 +599,9 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 	await host.runtime.dispose();
 });
 
-test("a live successor tells its Run Failure Moderator to resolve immediately", async () => {
+test("a live successor tells its Run Failure Moderator to resolve immediately", async (t) => {
 	const executionGate = await createProcessExecutionGate("run-failure-recovery");
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -610,7 +611,7 @@ test("a live successor tells its Run Failure Moderator to resolve immediately", 
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	const coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	const owner = coordinator.forAgent(identity.agentId);
@@ -730,8 +731,8 @@ test("a live successor tells its Run Failure Moderator to resolve immediately", 
 	}
 });
 
-test("a successor clears Run Failure before its later Stall is handled separately", async () => {
-	const harness = await createIncidentBoundaryHarness();
+test("a successor clears Run Failure before its later Stall is handled separately", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t);
 	const routeRuns = (context: Context) => {
 		if (context.tools?.some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I will inspect this exact condition.");
@@ -784,8 +785,8 @@ test("a successor clears Run Failure before its later Stall is handled separatel
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("a failed successor startup does not clear Run Failure handling", async () => {
-	const harness = await createIncidentBoundaryHarness();
+test("a failed successor startup does not clear Run Failure handling", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t);
 	const routeFailure = (context: Context) =>
 		context.tools?.some(({ name }) => name === "moderator_control")
 			? fauxAssistantMessage("I will inspect the failed exact Run.")
@@ -845,8 +846,8 @@ test("a failed successor startup does not clear Run Failure handling", async () 
 	}
 });
 
-test("Request Cancellation clears Run Failure without starting a successor Incident", async () => {
-	const harness = await createIncidentBoundaryHarness();
+test("Request Cancellation clears Run Failure without starting a successor Incident", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t);
 	const routeFailure = (context: Context) =>
 		context.tools?.some(({ name }) => name === "moderator_control")
 			? fauxAssistantMessage("I will inspect the failed exact Run.")
@@ -889,8 +890,8 @@ test("Request Cancellation clears Run Failure without starting a successor Incid
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Moderator Resolution is blocked while the Obligation Stall remains", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("Moderator Resolution is blocked while the Obligation Stall remains", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -942,8 +943,8 @@ test("Moderator Resolution is blocked while the Obligation Stall remains", async
 	await host.runtime.dispose();
 });
 
-test("a Moderator observes the Workflow and controls only non-Owner Runs", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("a Moderator observes the Workflow and controls only non-Owner Runs", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -1058,8 +1059,8 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 	await host.runtime.dispose();
 });
 
-test("terminating the affected Run does not erase its durable Answer obligation", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("terminating the affected Run does not erase its durable Answer obligation", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -1135,8 +1136,8 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 	await host.runtime.dispose();
 });
 
-test("a Moderator escalates through an ordinary Owner Request before Resolution", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("a Moderator escalates through an ordinary Owner Request before Resolution", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -1250,12 +1251,11 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 });
 
 test("external Answer clearance releases Moderator handling", async (t) => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
 	});
-	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -1396,8 +1396,8 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 
 });
 
-test("a cleared Stall can recur with the same obligations and receive a fresh Moderator", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("a cleared Stall can recur with the same obligations and receive a fresh Moderator", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -1516,7 +1516,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 		}
 	});
 
-	host = await createUnboundTestOwnerHost(() => undefined, {
+	host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -1527,7 +1527,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectNextCreationDelivery = true;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
@@ -1611,8 +1611,8 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 	await waitForModeratorForAgent(host!, affected.agentId);
 });
 
-test("a closed settled Request cycle creates one normalized Dependency Deadlock Moderator", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+test("a closed settled Request cycle creates one normalized Dependency Deadlock Moderator", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -1621,7 +1621,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectedCreationDeliveries = 0;
 	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
@@ -1796,7 +1796,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 		}
 	});
 
-	host = await createUnboundTestOwnerHost(() => undefined, {
+	host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -1807,7 +1807,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectedCreationDeliveries = 0;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
@@ -1924,8 +1924,8 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 	await waitForModeratorKind(host, "dependency_deadlock");
 });
 
-test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -1933,7 +1933,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
@@ -2060,9 +2060,9 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 });
 
 
-test("a pre-commit Moderator bootstrap failure consumes no attempt", async () => {
+test("a pre-commit Moderator bootstrap failure consumes no attempt", async (t) => {
 	let bootstrapAttempts = 0;
-	const harness = await createIncidentBoundaryHarness({
+	const harness = await createIncidentBoundaryHarness(t, {
 		beforeModeratorBootstrapCommit: () => {
 			bootstrapAttempts += 1;
 			return bootstrapAttempts === 1 ? "confirmed_failure" : undefined;
@@ -2109,10 +2109,10 @@ test("a pre-commit Moderator bootstrap failure consumes no attempt", async () =>
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("shutdown before Moderator bootstrap prevents a post-snapshot Moderator admission", async () => {
+test("shutdown before Moderator bootstrap prevents a post-snapshot Moderator admission", async (t) => {
 	let shutdownPromise: Promise<void> | undefined;
 	let harness!: Awaited<ReturnType<typeof createIncidentBoundaryHarness>>;
-	harness = await createIncidentBoundaryHarness({
+	harness = await createIncidentBoundaryHarness(t, {
 		beforeModeratorBootstrapCommit: () => {
 			shutdownPromise ??= harness.coordinator.shutdown(
 				async () => harness.host.runtime.dispose(),
@@ -2134,9 +2134,9 @@ test("shutdown before Moderator bootstrap prevents a post-snapshot Moderator adm
 	assert.deepEqual(await findModerators(harness.host), []);
 });
 
-test("a post-commit Moderator startup failure creates one linked replacement", async () => {
+test("a post-commit Moderator startup failure creates one linked replacement", async (t) => {
 	let startupAttempts = 0;
-	const harness = await createIncidentBoundaryHarness({
+	const harness = await createIncidentBoundaryHarness(t, {
 		beforeModeratorRunStart: () => {
 			startupAttempts += 1;
 			return startupAttempts === 1 ? "confirmed_failure" : undefined;
@@ -2187,8 +2187,8 @@ test("a post-commit Moderator startup failure creates one linked replacement", a
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("a terminal Moderator Run failure creates one linked replacement", async () => {
-	const harness = await createIncidentBoundaryHarness();
+test("a terminal Moderator Run failure creates one linked replacement", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t);
 	const routeFailure = (context: Context) => {
 		if (!context.tools?.some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I settled without answering the Creation Request.");
@@ -2246,13 +2246,12 @@ test("a terminal Moderator Run failure creates one linked replacement", async ()
 
 test("an unopenable failed Dormant Moderator falls back to a read-only post-mortem view", async (t) => {
 	initTheme("dark", false);
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
 	});
-	t.after(async () => host.runtime.dispose());
 	const routeFailure = (context: Context) => {
 		if (!context.tools?.some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I settled without answering the Creation Request.");
@@ -2318,8 +2317,8 @@ test("an unopenable failed Dormant Moderator falls back to a read-only post-mort
 	assert.equal(host.runtime.session, ownerSession);
 });
 
-test("two committed Moderator failures publish bounded Owner Attention until clearance", async () => {
-	const harness = await createIncidentBoundaryHarness({
+test("two committed Moderator failures publish bounded Owner Attention until clearance", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t, {
 		beforeModeratorRunStart: () => "confirmed_failure",
 	});
 	harness.host.model.setResponses([
@@ -2378,8 +2377,8 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("orderly shutdown closes exhausted Operational Attention", async () => {
-	const harness = await createIncidentBoundaryHarness({
+test("orderly shutdown closes exhausted Operational Attention", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t, {
 		beforeModeratorRunStart: () => "confirmed_failure",
 	});
 	harness.host.model.setResponses([
@@ -2712,12 +2711,13 @@ async function controlFromView(
 }
 
 async function createIncidentBoundaryHarness(
+	t: TestCleanupRegistrar,
 	incidentBoundaryHooks: {
 		beforeModeratorBootstrapCommit?(): void | "confirmed_failure";
 		beforeModeratorRunStart?(): void | "confirmed_failure";
 	} = {},
 ) {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -2725,7 +2725,7 @@ async function createIncidentBoundaryHarness(
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		incidentBoundaryHooks,
 	});

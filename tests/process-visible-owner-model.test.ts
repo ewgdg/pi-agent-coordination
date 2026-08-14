@@ -14,8 +14,7 @@ const PROVIDER_ID = "coordination-test";
 const MODEL_ID = "deterministic-owner";
 
 test("Owner hosts use the in-memory model unless child processes need the provider", async (t) => {
-	const host = await createUnboundTestOwnerHost(() => undefined);
-	t.after(() => host.runtime.dispose());
+	const host = await createUnboundTestOwnerHost(t, () => undefined);
 	assert.equal(
 		host.services.resourceLoader.getExtensions().extensions.some(
 			(extension) => extension.resolvedPath.endsWith("process-model-broker-extension.mjs"),
@@ -30,8 +29,8 @@ test("Owner hosts use the in-memory model unless child processes need the provid
 	assert.equal(textOf(response.content), "In-memory response.");
 });
 
-test("opt-in Owner model calls use the retained file-backed broker until runtime disposal", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+test("opt-in Owner model calls use the retained file-backed broker until runtime disposal", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		processVisibleModel: true,
 		fauxTokensPerSecond: 100_000,
 	});

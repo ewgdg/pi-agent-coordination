@@ -11,7 +11,7 @@ import {
 } from "../../src/bootstrap/agent-extension.ts";
 import type { OrdinaryAgentCoordinatorView } from "../../src/coordination/workflow-coordinator.ts";
 import type { HumanAnswerCandidate } from "../../src/protocol/human-request.ts";
-import { createUnboundTestOwnerHost } from "../support/pi-host.ts";
+import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
 
 const QUESTION =
 	"Which transcript-native boundary should remain authoritative when this deliberately long Human Request wraps across several terminal lines?";
@@ -112,7 +112,7 @@ const extension: ExtensionFactory = (pi) => {
 	});
 };
 
-const host = await createUnboundTestOwnerHost(extension);
+const host = await createManuallyManagedUnboundTestOwnerHost(extension);
 host.model.setResponses([
 	fauxAssistantMessage(
 		fauxToolCall("ask_user_question", { question: QUESTION }, { id: "pty-ask-user" }),

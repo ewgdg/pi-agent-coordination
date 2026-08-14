@@ -110,8 +110,8 @@ test("failure, termination, and Workflow shutdown each dispose their exact proje
 	}
 });
 
-test("native-host clean release retains the borrowed Runtime and Owner binding", async () => {
-	const owner = await createTestOwnerHost(() => undefined);
+test("native-host clean release retains the borrowed Runtime and Owner binding", async (t) => {
+	const owner = await createTestOwnerHost(t, () => undefined);
 	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
 	const firstHandle = host.currentHandle();
 	assert.ok(firstHandle);
@@ -125,8 +125,8 @@ test("native-host clean release retains the borrowed Runtime and Owner binding",
 	await owner.runtime.dispose();
 });
 
-test("native-host Run Failure retains the borrowed Runtime for a successor Run", async () => {
-	const owner = await createTestOwnerHost(() => undefined);
+test("native-host Run Failure retains the borrowed Runtime for a successor Run", async (t) => {
+	const owner = await createTestOwnerHost(t, () => undefined);
 	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
 	const firstHandle = host.currentHandle();
 	assert.ok(firstHandle);
@@ -155,8 +155,8 @@ test("native-host Run Failure retains the borrowed Runtime for a successor Run",
 	assert.equal(sessionDisposals, 1);
 });
 
-test("failed successor admission also preserves the native-host Runtime", async () => {
-	const owner = await createTestOwnerHost(() => undefined);
+test("failed successor admission also preserves the native-host Runtime", async (t) => {
+	const owner = await createTestOwnerHost(t, () => undefined);
 	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
 	await host.lane.run(() => host.discardAndEndInLane("failure"));
 	const originalDispose = owner.session.dispose.bind(owner.session);
@@ -183,8 +183,8 @@ test("failed successor admission also preserves the native-host Runtime", async 
 	await owner.runtime.dispose();
 });
 
-test("Workflow shutdown leaves native Owner disposal to its host after its Run already ended", async () => {
-	const owner = await createTestOwnerHost(() => undefined);
+test("Workflow shutdown leaves native Owner disposal to its host after its Run already ended", async (t) => {
+	const owner = await createTestOwnerHost(t, () => undefined);
 	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
 	await host.lane.run(() => host.discardAndEndInLane("failure"));
 
@@ -464,8 +464,8 @@ test("native subscription failure rolls back the already-created projection and 
 	assert.equal(host.observe().phase, "dormant");
 });
 
-test("Runtime Host confirms user and custom Delivery transcript commits", async () => {
-	const ownerHost = await createTestOwnerHost(() => undefined, { persistent: true });
+test("Runtime Host confirms user and custom Delivery transcript commits", async (t) => {
+	const ownerHost = await createTestOwnerHost(t, () => undefined, { persistent: true });
 	ownerHost.model.setResponses([
 		fauxAssistantMessage("User Delivery completed."),
 		fauxAssistantMessage("Custom Delivery completed."),

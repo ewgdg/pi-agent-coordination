@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import piAgentCoordination from "../../src/index.ts";
-import { createUnboundTestOwnerHost } from "../support/pi-host.ts";
+import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
 
 const PROBE_EXTENSION = fileURLToPath(
 	new URL("./detached-child-ui-probe-extension.ts", import.meta.url),
@@ -18,7 +18,7 @@ const fixtureRoot = await mkdtemp(join(tmpdir(), "pi-detached-child-ui-"));
 const probeEvidencePath = join(fixtureRoot, "session-start.jsonl");
 process.env.PROCESS_DETACHED_UI_PROBE_PATH = probeEvidencePath;
 
-const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+const host = await createManuallyManagedUnboundTestOwnerHost(piAgentCoordination, {
 	cwd: fixtureRoot,
 	persistent: true,
 	implicitModeratorResponses: false,

@@ -236,8 +236,7 @@ test("module preflight rejects every required TUI, AI, and schema value", () => 
 });
 
 test("live preflight rejects every required runtime and AgentSession seam", async (t) => {
-	const host = await createUnboundTestOwnerHost(() => undefined);
-	t.after(() => host.runtime.dispose());
+	const host = await createUnboundTestOwnerHost(t, () => undefined);
 	host.runtime.setRebindSession(async () => undefined);
 	host.runtime.setBeforeSessionInvalidate(() => undefined);
 	const requirements = [
@@ -302,8 +301,8 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 	}
 });
 
-test("live preflight rejects every required InteractiveMode seam", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined);
+test("live preflight rejects every required InteractiveMode seam", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined);
 	const mode = {
 		runtimeHost: host.runtime,
 		ui: {
@@ -439,8 +438,8 @@ test("host bridge installation remains idempotent across extension and host modu
 	);
 });
 
-test("runtime capture rejects a malformed live AgentSession before bootstrap", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("runtime capture rejects a malformed live AgentSession before bootstrap", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const interactivePrototype = hostPi.InteractiveMode
 		.prototype as unknown as InteractivePrototype;
 	const installedCapture = interactivePrototype.bindCurrentSessionExtensions;

@@ -7,6 +7,7 @@ import {
 	fauxToolCall,
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import { WorkflowExecutionScheduler } from "../src/coordination/workflow-execution-scheduler.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import {
@@ -154,7 +155,7 @@ test("real ordinary child Runs share fair execution capacity before generation a
 	});
 	let generations = 0;
 
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -164,11 +165,10 @@ test("real ordinary child Runs share fair execution capacity before generation a
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);
 	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
 	});
-	t.after(() => coordinator.shutdown(async () => host.runtime.dispose()));
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
 		async () => {
@@ -221,7 +221,7 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 	const secondGenerationRelease = new Promise<void>((resolve) => {
 		releaseSecondGeneration = resolve;
 	});
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -231,11 +231,10 @@ test("an input-required ordinary Run releases capacity until work can resume", a
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);
 	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
 	});
-	t.after(() => coordinator.shutdown(async () => host.runtime.dispose()));
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
 		fauxAssistantMessage(

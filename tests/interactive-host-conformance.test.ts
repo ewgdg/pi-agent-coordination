@@ -33,13 +33,12 @@ test("child session_start UI side effects stay detached before, during, and afte
 	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
 	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
-	t.after(() => host.runtime.dispose());
 	assert.equal(host.ui.notifications.length, 1);
 	assert.equal(host.ui.notifications[0]?.message, "startup-notice");
 	const ownerEditorFactory = host.ui.getEditorComponent();
@@ -77,13 +76,12 @@ test("repeated Agent view attachment does not replay either session startup life
 	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
 	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
-	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Remain live through repeated interactive view cycles."),
 	]);
@@ -107,12 +105,11 @@ test("repeated Agent view attachment does not replay either session startup life
 });
 
 test("an open Agent view rejects exact-Run termination and closing permits ordinary termination", async (t) => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
 	});
-	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Remain live until interactive view retention is released."),
 	]);
@@ -149,13 +146,12 @@ test("a third-party child-view command remains unique and does not interfere wit
 	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
 	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
 	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
-	t.after(() => host.runtime.dispose());
 	const commands = host.session.extensionRunner.getRegisteredCommands()
 		.filter(({ name }) => name === "child-view");
 	assert.equal(commands.length, 1);
@@ -183,14 +179,14 @@ test("a third-party child-view command remains unique and does not interfere wit
 
 });
 
-test("the named llama.cpp extension remains usable through child startup and shutdown on the Owner ModelRuntime", async () => {
+test("the named llama.cpp extension remains usable through child startup and shutdown on the Owner ModelRuntime", async (t) => {
 	const router = await startMockLlamaRouter();
 	const previousBaseUrl = process.env.LLAMA_BASE_URL;
 	const previousApiKey = process.env.LLAMA_API_KEY;
 	process.env.LLAMA_BASE_URL = router.baseUrl;
 	process.env.LLAMA_API_KEY = "local-conformance-key";
 	hostPi.initTheme();
-	const host = await createPiCliTestOwnerHost(piAgentCoordination, {
+	const host = await createPiCliTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		fauxTokensPerSecond: 1,

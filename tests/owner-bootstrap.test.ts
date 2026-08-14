@@ -14,8 +14,8 @@ import {
 	type TestOwnerHost,
 } from "./support/pi-host.ts";
 
-test("Owner tool renderers are registered before session_start", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("Owner tool renderers are registered before session_start", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 
 	for (const toolName of [
 		"agent_spawn",
@@ -41,8 +41,8 @@ test("Owner tool renderers are registered before session_start", async () => {
 	await host.runtime.dispose();
 });
 
-test("Owner bootstrap leaves native Runtime disposal under Pi ownership", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("Owner bootstrap leaves native Runtime disposal under Pi ownership", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const nativeDispose = host.runtime.dispose;
 
 	await bindTestOwnerHost(host, "tui");
@@ -51,8 +51,8 @@ test("Owner bootstrap leaves native Runtime disposal under Pi ownership", async 
 	await host.runtime.dispose();
 });
 
-test("a fresh Owner Identity records its role description", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("a fresh Owner Identity records its role description", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	await bindTestOwnerHost(host, "tui");
 
 	const identity = host.session.sessionManager.getEntries().find(
@@ -67,7 +67,7 @@ test("a fresh Owner Identity records its role description", async () => {
 	await host.runtime.dispose();
 });
 
-test("startup-triggered Owner work waits for coordination admission", async () => {
+test("startup-triggered Owner work waits for coordination admission", async (t) => {
 	const startupBlock = createVoidDeferred();
 	const startupBlockEntered = createVoidDeferred();
 	const promptReachedStartBoundary = createVoidDeferred();
@@ -75,7 +75,7 @@ test("startup-triggered Owner work waits for coordination admission", async () =
 	let identityPresentAtAgentStart = false;
 	let agentStartedBeforeOwnerAdmission = false;
 	let ownerAdmissionReleased = false;
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		additionalExtensionFactories: [
 			{
 				name: "startup-user-message",
@@ -122,8 +122,8 @@ test("startup-triggered Owner work waits for coordination admission", async () =
 	await host.runtime.dispose();
 });
 
-test("an existing Owner Identity without a description is canonicalized without duplication", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("an existing Owner Identity without a description is canonicalized without duplication", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	host.session.sessionManager.appendCustomEntry(
 		"agent-coordination.identity",
 		ownerIdentityFor(host),
@@ -163,8 +163,8 @@ test("an existing Owner Identity without a description is canonicalized without 
 	await host.runtime.dispose();
 });
 
-test("an Owner Identity rejects a contradictory role description", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("an Owner Identity rejects a contradictory role description", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	host.session.sessionManager.appendCustomEntry("agent-coordination.identity", {
 		...ownerIdentityFor(host),
 		metadata: {
@@ -187,8 +187,8 @@ test("an Owner Identity rejects a contradictory role description", async () => {
 	await host.runtime.dispose();
 });
 
-test("a resumed Owner admits coordination evidence after its Identity cutoff", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+test("a resumed Owner admits coordination evidence after its Identity cutoff", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage("The self-addressed Message is available after restart."),
@@ -225,7 +225,7 @@ test("a resumed Owner admits coordination evidence after its Identity cutoff", a
 	assert.ok(sessionFile);
 	await host.runtime.dispose();
 
-	const reopened = await createUnboundTestOwnerHost(piAgentCoordination, {
+	const reopened = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		cwd: host.cwd,
 		agentDir: host.services.agentDir,
 		sessionFile,
@@ -240,8 +240,8 @@ test("a resumed Owner admits coordination evidence after its Identity cutoff", a
 	await reopened.runtime.dispose();
 });
 
-test("resource reload rebinds the hidden Owner Agent extension", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("resource reload rebinds the hidden Owner Agent extension", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	await bindTestOwnerHost(host, "tui");
 
 	await host.session.reload();
@@ -255,8 +255,8 @@ test("resource reload rebinds the hidden Owner Agent extension", async () => {
 	await host.runtime.dispose();
 });
 
-test("an invalid initial Workflow Policy prevents coordination runtime creation", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("an invalid initial Workflow Policy prevents coordination runtime creation", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const policyPath = join(
 		host.services.agentDir,
 		"config",
@@ -288,8 +288,8 @@ test("an invalid initial Workflow Policy prevents coordination runtime creation"
 	await host.runtime.dispose();
 });
 
-test("an ambiguous public Owner extension fails before Identity commitment", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("an ambiguous public Owner extension fails before Identity commitment", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const extensions = host.services.resourceLoader.getExtensions().extensions;
 	const publicOwnerExtension = extensions.find((extension) =>
 		extension.handlers.get("session_start")?.some(() => true),
@@ -322,8 +322,8 @@ test("an ambiguous public Owner extension fails before Identity commitment", asy
 	await host.runtime.dispose();
 });
 
-test("Owner reload publishes one prospective policy or preserves the prior snapshot", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+test("Owner reload publishes one prospective policy or preserves the prior snapshot", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -405,8 +405,8 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 	await host.runtime.dispose();
 });
 
-test("a child bootstrap cannot be reclassified as Workflow Owner", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("a child bootstrap cannot be reclassified as Workflow Owner", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	host.session.sessionManager.appendCustomEntry("agent-coordination.identity", {
 		...ownerIdentityFor(host),
 		workflowId: "workflow-owner",
@@ -431,8 +431,8 @@ test("a child bootstrap cannot be reclassified as Workflow Owner", async () => {
 	await host.runtime.dispose();
 });
 
-test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	host.session.sessionManager.appendCustomMessageEntry(
 		"agent-coordination.moderator-input",
 		"{}",

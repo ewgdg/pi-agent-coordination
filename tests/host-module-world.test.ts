@@ -9,8 +9,8 @@ import {
 
 const PACKAGE_ENTRY = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
-test("Pi's extension loader binds the package entry to the running host module world", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+test("Pi's extension loader binds the package entry to the running host module world", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		additionalExtensionPaths: [PACKAGE_ENTRY],
 	});
 

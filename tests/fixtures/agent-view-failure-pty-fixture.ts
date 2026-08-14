@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import piAgentCoordination from "../../src/index.ts";
-import { createUnboundTestOwnerHost } from "../support/pi-host.ts";
+import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
 
 const OWNER_EDITOR_TEXT = "Owner input survives child UI failure";
 const FAILURE_EXTENSION = fileURLToPath(
@@ -34,7 +34,7 @@ const initializationReleasePath = join(
 );
 process.env.PTY_AGENT_VIEW_FAILURE_EVIDENCE = evidencePath;
 process.env.PTY_AGENT_VIEW_FAILURE_RELEASE = initializationReleasePath;
-const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+const host = await createManuallyManagedUnboundTestOwnerHost(piAgentCoordination, {
 	persistent: true,
 	additionalExtensionPaths: [FAILURE_EXTENSION],
 });

@@ -11,8 +11,8 @@ const plainTheme = {
 	bold: (text: string) => text,
 } as unknown as Theme;
 
-test("native Agent Message rendering shows bounded Steer intent and typed disposition", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination);
+test("native Agent Message rendering shows bounded Steer intent and typed disposition", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination);
 	const tool = host.session.getToolDefinition("agent_message");
 	assert.ok(tool?.renderCall);
 	assert.ok(tool.renderResult);
@@ -171,8 +171,8 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	await host.runtime.dispose();
 });
 
-test("native Agent Spawn rendering exposes verified runtime configuration only in resolved receipts", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination);
+test("native Agent Spawn rendering exposes verified runtime configuration only in resolved receipts", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination);
 	const tool = host.session.getToolDefinition("agent_spawn");
 	assert.ok(tool?.renderCall);
 	assert.ok(tool.renderResult);

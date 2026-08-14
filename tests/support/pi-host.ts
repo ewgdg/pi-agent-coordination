@@ -34,6 +34,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { TestContext } from "node:test";
 
 import {
 	createProcessModelBroker,
@@ -87,7 +88,11 @@ export type TestOwnerHost = {
 	model: {
 		setResponses(responses: FauxResponseStep[]): void;
 	};
+	deferCleanup(cleanup: () => void | Promise<void>): void;
+	dispose(): Promise<void>;
 };
+
+export type TestCleanupRegistrar = Pick<TestContext, "after">;
 
 export type TestOwnerHostOptions = {
 	persistent?: boolean;
@@ -104,36 +109,64 @@ export type TestOwnerHostOptions = {
 };
 
 export async function createTestOwnerHost(
+	t: TestCleanupRegistrar,
 	extension: ExtensionFactory,
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
-	const host = await createUnboundTestOwnerHost(extension, options);
+	const host = registerTestOwnerHostCleanup(
+		t,
+		await createManuallyManagedUnboundTestOwnerHost(extension, options),
+	);
 	await bindTestOwnerHost(host, "tui");
 	return host;
 }
 
 export async function createPiCliTestOwnerHost(
+	t: TestCleanupRegistrar,
 	extension: ExtensionFactory,
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
-	const host = await createUnboundTestOwnerHostWithRuntime(
-		extension,
-		options,
-		await loadPiBuiltInExtensionFactories(),
-		// Avoid an unrelated public-catalog refresh during local-provider conformance.
-		// The runtime remains network-enabled, so the named provider can explicitly
-		// refresh and infer against the test's loopback router.
-		false,
+	const host = registerTestOwnerHostCleanup(
+		t,
+		await createUnboundTestOwnerHostWithRuntime(
+			extension,
+			options,
+			await loadPiBuiltInExtensionFactories(),
+			// Avoid an unrelated public-catalog refresh during local-provider conformance.
+			// The runtime remains network-enabled, so the named provider can explicitly
+			// refresh and infer against the test's loopback router.
+			false,
+		),
 	);
 	await bindTestOwnerHost(host, "tui");
 	return host;
 }
 
 export async function createUnboundTestOwnerHost(
+	t: TestCleanupRegistrar,
+	extension: ExtensionFactory,
+	options?: TestOwnerHostOptions,
+): Promise<TestOwnerHost> {
+	return registerTestOwnerHostCleanup(
+		t,
+		await createManuallyManagedUnboundTestOwnerHost(extension, options),
+	);
+}
+
+/** Standalone fixture programs own their Runtime lifecycle outside node:test. */
+export async function createManuallyManagedUnboundTestOwnerHost(
 	extension: ExtensionFactory,
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
 	return createUnboundTestOwnerHostWithRuntime(extension, options, [], false);
+}
+
+function registerTestOwnerHostCleanup(
+	t: TestCleanupRegistrar,
+	host: TestOwnerHost,
+): TestOwnerHost {
+	t.after(() => host.dispose());
+	return host;
 }
 
 async function createUnboundTestOwnerHostWithRuntime(
@@ -229,15 +262,47 @@ async function createUnboundTestOwnerHostWithRuntime(
 	);
 	if (processModelBroker) closeProcessModelBrokerWithRuntime(runtime, processModelBroker);
 	const ui = createTestUi();
-
-	return {
+	const deferredCleanups: Array<() => void | Promise<void>> = [];
+	let disposal: Promise<void> | undefined;
+	const host: TestOwnerHost = {
 		cwd,
 		services: initial.services,
 		session: initial.session,
 		runtime,
 		ui,
 		model: faux,
+		deferCleanup(cleanup) {
+			if (disposal) throw new Error("Test Owner host disposal already started");
+			deferredCleanups.push(cleanup);
+		},
+		dispose() {
+			disposal ??= disposeTestOwnerHost(runtime, deferredCleanups);
+			return disposal;
+		},
 	};
+	return host;
+}
+
+async function disposeTestOwnerHost(
+	runtime: AgentSessionRuntime,
+	deferredCleanups: Array<() => void | Promise<void>>,
+): Promise<void> {
+	const errors: unknown[] = [];
+	for (const cleanup of deferredCleanups.reverse()) {
+		try {
+			await cleanup();
+		} catch (error) {
+			errors.push(error);
+		}
+	}
+	try {
+		await runtime.dispose();
+	} catch (error) {
+		errors.push(error);
+	}
+	if (errors.length > 0) {
+		throw new AggregateError(errors, "Test Owner host cleanup failed");
+	}
 }
 
 function closeProcessModelBrokerWithRuntime(

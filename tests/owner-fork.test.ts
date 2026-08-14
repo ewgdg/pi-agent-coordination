@@ -24,8 +24,8 @@ import {
 const OWNER_FORK_WAIT_TIMEOUT_MS = 5_000;
 const OWNER_FORK_POLL_INTERVAL_MS = 1;
 
-test("native Owner clone closes an open Agent view and creates the replacement Workflow", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("native Owner clone closes an open Agent view and creates the replacement Workflow", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -54,8 +54,8 @@ test("native Owner clone closes an open Agent view and creates the replacement W
 	}
 });
 
-test("native fork is cancelled for a matching Moderator bootstrap", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+test("native fork is cancelled for a matching Moderator bootstrap", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 	});
 	host.session.sessionManager.appendCustomMessageEntry(
@@ -97,8 +97,8 @@ test("native fork is cancelled for a matching Moderator bootstrap", async () => 
 	}
 });
 
-test("offline fork preparation cannot reclassify copied child evidence as Owner", async () => {
-	const source = await createUnboundTestOwnerHost(piAgentCoordination, {
+test("offline fork preparation cannot reclassify copied child evidence as Owner", async (t) => {
+	const source = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 	});
 	source.session.sessionManager.appendCustomEntry("agent-coordination.identity", {
@@ -126,7 +126,7 @@ test("offline fork preparation cannot reclassify copied child evidence as Owner"
 	assert.ok(preparedFile);
 	await source.runtime.dispose();
 
-	const prepared = await createUnboundTestOwnerHost(piAgentCoordination, {
+	const prepared = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		cwd: source.cwd,
 		agentDir: source.services.agentDir,
 		sessionFile: preparedFile,
@@ -156,8 +156,8 @@ test("offline fork preparation cannot reclassify copied child evidence as Owner"
 	}
 });
 
-test("native Owner clone creates an isolated Workflow after nested coordination", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("native Owner clone creates an isolated Workflow after nested coordination", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -322,8 +322,8 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 	}
 });
 
-test("native Owner fork preserves branch editing and source Workflow continuation", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("native Owner fork preserves branch editing and source Workflow continuation", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -387,7 +387,7 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 			{ children: [] },
 		);
 
-		resumedSource = await createUnboundTestOwnerHost(piAgentCoordination, {
+		resumedSource = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 			cwd: host.cwd,
 			agentDir: host.services.agentDir,
 			sessionFile: sourceFile,

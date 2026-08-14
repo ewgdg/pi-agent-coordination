@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import type { MessageBoundaryHooks } from "../src/coordination/workflow-coordinator.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
@@ -16,10 +17,11 @@ import type { AgentRunState } from "../src/runtime/agent-runtime-supervisor.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
+	type TestCleanupRegistrar,
 } from "./support/pi-host.ts";
 
-test("Request commitment retains its requester and Delivery obligates its responder", async () => {
-	const harness = await createDormantChildHarness();
+test("Request commitment retains its requester and Delivery obligates its responder", async (t) => {
+	const harness = await createDormantChildHarness(t);
 	assert.equal(harness.view.status(harness.childId).run.phase, "dormant");
 
 	const input = {
@@ -115,8 +117,8 @@ test("Request commitment retains its requester and Delivery obligates its respon
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("status reports exact Request retention multiplicity", async () => {
-	const harness = await createDormantChildHarness({
+test("status reports exact Request retention multiplicity", async (t) => {
+	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: () => "confirmed_failure",
 	});
 	assert.equal(retentionCount(harness.view.status().run, "awaiting_answer"), 1);
@@ -195,8 +197,8 @@ test("status reports exact Request retention multiplicity", async () => {
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Request retry reports indeterminate when admission confirmation is lost", async () => {
-	const harness = await createDormantChildHarness({
+test("Request retry reports indeterminate when admission confirmation is lost", async (t) => {
+	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: ({ operation }) =>
 			operation === "send" ? "confirmed_failure" : undefined,
 		afterDeliveryAdmission: ({ operation }) =>
@@ -249,8 +251,8 @@ test("Request retry reports indeterminate when admission confirmation is lost", 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("only the fixed responder may Answer and only the requester may cancel", async () => {
-	const harness = await createDormantChildHarness();
+test("only the fixed responder may Answer and only the requester may cancel", async (t) => {
+	const harness = await createDormantChildHarness(t);
 	const requestInput = {
 		operation: "request" as const,
 		targetAgentId: harness.childId,
@@ -351,8 +353,8 @@ test("only the fixed responder may Answer and only the requester may cancel", as
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("only the responder's first Answer becomes canonical and resolves its exact obligation", async () => {
-	const harness = await createDormantChildHarness({
+test("only the responder's first Answer becomes canonical and resolves its exact obligation", async (t) => {
+	const harness = await createDormantChildHarness(t, {
 		afterDeliveryAdmission: ({ operation }) =>
 			operation === "answer" ? "confirmation_lost" : undefined,
 	});
@@ -529,8 +531,8 @@ test("only the responder's first Answer becomes canonical and resolves its exact
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Request retry retrieves a committed Answer whose Delivery was lost", async () => {
-	const harness = await createDormantChildHarness({
+test("Request retry retrieves a committed Answer whose Delivery was lost", async (t) => {
+	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: ({ operation }) =>
 			operation === "answer" ? "confirmed_failure" : undefined,
 	});
@@ -679,8 +681,8 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("requester Cancellation suppresses an undelivered Request without reviving it", async () => {
-	const harness = await createDormantChildHarness({
+test("requester Cancellation suppresses an undelivered Request without reviving it", async (t) => {
+	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: ({ operation }) =>
 			operation === "send" ? "confirmed_failure" : undefined,
 		afterDeliveryAdmission: ({ operation }) =>
@@ -830,8 +832,8 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Cancellation delivered to a busy responder suppresses its queued Request", async () => {
-	const harness = await createDormantChildHarness();
+test("Cancellation delivered to a busy responder suppresses its queued Request", async (t) => {
+	const harness = await createDormantChildHarness(t);
 	let markActiveGenerationStarted!: () => void;
 	const activeGenerationStarted = new Promise<void>((resolve) => {
 		markActiveGenerationStarted = resolve;
@@ -964,8 +966,8 @@ test("Cancellation delivered to a busy responder suppresses its queued Request",
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Cancellation Delivery wins the responder lane before a later Answer", async () => {
-	const harness = await createDormantChildHarness();
+test("Cancellation Delivery wins the responder lane before a later Answer", async (t) => {
+	const harness = await createDormantChildHarness(t);
 	const requestInput = {
 		operation: "request" as const,
 		targetAgentId: harness.childId,
@@ -1089,11 +1091,10 @@ test("Cancellation Delivery wins the responder lane before a later Answer", asyn
 });
 
 test("Answer commit and Cancellation commit remain canonical across crossed Deliveries", async (t) => {
-	const harness = await createDormantChildHarness({
+	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: ({ operation }) =>
 			operation === "answer" ? "confirmed_failure" : undefined,
 	});
-	t.after(() => harness.coordinator.shutdown(async () => harness.host.runtime.dispose()));
 	const requestInput = {
 		operation: "request" as const,
 		targetAgentId: harness.childId,
@@ -1269,8 +1270,8 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 
 });
 
-test("a created-unscheduled Creation Request uses ordinary retry and Answer behavior", async () => {
-	const harness = await createDormantChildHarness();
+test("a created-unscheduled Creation Request uses ordinary retry and Answer behavior", async (t) => {
+	const harness = await createDormantChildHarness(t);
 	const requestId = harness.creationRequestId;
 	const answerToolCallId = "answer-creation-request";
 	harness.host.model.setResponses([
@@ -1335,8 +1336,8 @@ test("a created-unscheduled Creation Request uses ordinary retry and Answer beha
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Answer Delivery starts a successor Run for a dormant requester", async () => {
-	const harness = await createDormantChildHarness();
+test("Answer Delivery starts a successor Run for a dormant requester", async (t) => {
+	const harness = await createDormantChildHarness(t);
 	const childRequestCallId = "child-request-before-run-failure";
 	harness.host.model.setResponses([
 		fauxAssistantMessage(
@@ -1461,16 +1462,17 @@ test("Answer Delivery starts a successor Run for a dormant requester", async () 
 });
 
 async function createDormantChildHarness(
+	t: TestCleanupRegistrar,
 	messageBoundaryHooks: MessageBoundaryHooks = {},
 ) {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		// This suite parks unanswered work to probe Request semantics. Suppress live
 		// Moderator Runs so incidental stall handling does not consume scripted replies.

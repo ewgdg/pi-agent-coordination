@@ -22,6 +22,7 @@ import {
 	type Component,
 } from "@earendil-works/pi-tui";
 
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
@@ -45,14 +46,10 @@ const PROCESS_AGENT_VIEW_PROBE = fileURLToPath(
 
 test("/agents presents the live Agent's native interactive mode while Owner stays bound", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "interactive");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
-	});
-	let disposed = false;
-	t.after(async () => {
-		if (!disposed) await host.runtime.dispose();
 	});
 	host.model.setResponses([
 		fauxAssistantMessage("The child is ready for direct interactive input."),
@@ -197,18 +194,15 @@ test("/agents presents the live Agent's native interactive mode while Owner stay
 	assert.equal(host.ui.getEditorComponent(), ownerEditorFactory);
 	assert.equal(nativeRebinds, 0);
 
-	await host.runtime.dispose();
-	disposed = true;
 });
 
 test("a real child editor failure closes the view and reports one Owner diagnostic", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "failure-input");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(async () => host.runtime.dispose());
 	host.model.setResponses(creationAnswerResponses(
 		"answer-throwing-editor-creation-request",
 		"The throwing-editor Agent is ready.",
@@ -257,12 +251,11 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 
 test("a real child render failure closes the view and restores Owner input", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "failure-render");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(async () => host.runtime.dispose());
 	host.model.setResponses(creationAnswerResponses(
 		"answer-throwing-render-creation-request",
 		"The throwing-render Agent is ready.",
@@ -309,12 +302,11 @@ test("a real child render failure closes the view and restores Owner input", asy
 
 test("a session_start modal is interactive before Agent Run startup settles", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "startup-modal");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(async () => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("The startup-modal Agent continued."),
 	]);
@@ -380,11 +372,10 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 });
 
 test("a selected Agent whose runtime initialization fails closes the invalid view", async (t) => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
-	t.after(async () => host.runtime.dispose());
 	const spawnInput = {
 		request: "Remain visible after this process Runtime cannot initialize.",
 		label: "Startup Failure Worker",
@@ -421,12 +412,11 @@ test("a selected Agent whose runtime initialization fails closes the invalid vie
 
 test("an unexpected child-process exit closes the exact selected view", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "unexpected-exit");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(async () => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("The initial passive-failure Run settles."),
 	]);
@@ -479,20 +469,19 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 	const submittedInput = "Continue after the Owner leaves this Agent view.";
 	const probe = configureProcessAgentViewProbe(t, "prompt-preflight");
 	let coordinator!: WorkflowCoordinator;
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
-	t.after(async () => {
+	host.deferCleanup(async () => {
 		await releaseProcessAgentViewProbe(probe.releasePath);
-		await coordinator.shutdown(async () => host.runtime.dispose());
 	});
 	const spawnInput = {
 		request: "Settle before the Owner submits a successor turn.",
@@ -587,12 +576,11 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 
 test("a handled Dormant Agent input can return to Owner after prompt preflight", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "handled-prompt-preflight");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Persist this response before handled input."),
 	]);
@@ -651,12 +639,11 @@ test("a handled Dormant Agent input can return to Owner after prompt preflight",
 
 test("a Dormant Agent keeps commands available and starts one successor on editor submission", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "dormant-command");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Persist this response for interactive Dormant inspection."),
 	]);
@@ -782,16 +769,15 @@ test("detached Dormant compaction retains its Runtime until queued input starts 
 			keepRecentTokens: 1,
 		},
 	}), "utf8");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		cwd: root,
 		agentDir,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(async () => {
+	host.deferCleanup(async () => {
 		await releaseProcessAgentViewProbe(probe.releasePath);
-		await host.runtime.dispose();
 	});
 	host.model.setResponses([
 		fauxAssistantMessage("Initial response supplies compactable Dormant history."),
@@ -883,12 +869,11 @@ test("detached Dormant compaction retains its Runtime until queued input starts 
 test("a Dormant command activates the already-attached Agent runtime once", async (t) => {
 	const submittedText = "Start the successor from a Dormant slash command.";
 	const probe = configureProcessAgentViewProbe(t, "dormant-command-message");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Initial Run settles before command-driven startup."),
 	]);
@@ -962,12 +947,11 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 
 test("Dormant session_start input activates the same attached Agent runtime", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "dormant-startup-modal");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(async () => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Initial Run settles before Dormant Runtime."),
 		fauxAssistantMessage("The session_start input activated this same runtime."),
@@ -1023,23 +1007,22 @@ test("Dormant session_start input activates the same attached Agent runtime", as
 
 test("closing a Dormant session_start modal cancels view initialization without modal input", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "selection-startup-close");
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
 	let activeView: Awaited<ReturnType<typeof owner.openAgentView>>;
-	t.after(async () => {
+	host.deferCleanup(async () => {
 		await releaseProcessAgentViewProbe(probe.releasePath);
 		await activeView?.close();
-		await coordinator.shutdown(async () => host.runtime.dispose());
 	});
 	const spawnInput = {
 		request: "Become Dormant before testing startup cancellation.",
@@ -1136,23 +1119,22 @@ test("closing a Dormant session_start modal cancels view initialization without 
 
 test("Workflow shutdown cancels unselected Message-started session_start UI before Agent lanes", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "unselected-startup-shutdown");
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	await bindTestOwnerHost(host, "tui");
 	const owner = coordinator.forAgent(identity.agentId);
 	let shutdown: Promise<void> | undefined;
-	t.after(async () => {
+	host.deferCleanup(async () => {
 		await releaseProcessAgentViewProbe(probe.releasePath);
 		await shutdown;
-		if (!shutdown) await coordinator.shutdown(async () => host.runtime.dispose());
 	});
 	const appendToolSource = (
 		toolName: string,
@@ -1246,12 +1228,11 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 
 test("/agents switches the mounted durable view between independent child modes", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "independent");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("First switch target is ready."),
 		fauxAssistantMessage("Second switch target is ready."),
@@ -1352,12 +1333,11 @@ test("/agents switches the mounted durable view between independent child modes"
 test("later Runtime preparations load current file-backed child configuration without mutating a retained mode", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "reload-generation");
 	setTestEnvironment(t, "PROCESS_AGENT_VIEW_GENERATION", "original");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	t.after(() => host.runtime.dispose());
 	host.model.setResponses([
 		fauxAssistantMessage("Original resource Run remains retained."),
 		fauxAssistantMessage("Replacement resource Run is ready."),
@@ -1411,7 +1391,7 @@ test("later Runtime preparations load current file-backed child configuration wi
 });
 
 test("a terminally failed viewed Run stays open on the durable Dormant Agent", async (t) => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		settings: { retry: { enabled: false } },
@@ -1424,9 +1404,8 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	const failureGate = new Promise<void>((resolve) => {
 		releaseFailure = resolve;
 	});
-	t.after(async () => {
+	host.deferCleanup(() => {
 		releaseFailure();
-		await host.runtime.dispose();
 	});
 	const routeResponse = async (context: Context) => {
 		const messages = JSON.stringify(context.messages);
@@ -1520,7 +1499,7 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 	const probe = configureProcessAgentViewProbe(t, "lifecycle");
 	const baselineListeners = processListenerCounts();
 	const baselineResources = processResourceCounts();
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,
@@ -1529,7 +1508,6 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 	});
 	// Keep process cleanup failure-safe: any assertion before the explicit disposal
 	// below must not leave child Runtimes holding the test worker open.
-	t.after(() => host.runtime.dispose());
 	let releaseInitialFailure!: () => void;
 	const initialFailureGate = new Promise<void>((resolve) => {
 		releaseInitialFailure = resolve;
@@ -1613,7 +1591,7 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 
 test("an ordinary Message activates the already-open Agent runtime before execution", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "message-runtime");
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
@@ -1630,10 +1608,9 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	const successorGate = new Promise<void>((resolve) => {
 		releaseSuccessor = resolve;
 	});
-	t.after(async () => {
+	host.deferCleanup(() => {
 		releaseInitialFailure();
 		releaseSuccessor();
-		await host.runtime.dispose();
 	});
 	let view!: Component;
 	let markSuccessorExecutionStarted!: () => void;
@@ -1729,8 +1706,8 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 });
 
-test("Workflow shutdown disposes an open overlay once without disposing its live projection twice", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+test("Workflow shutdown disposes an open overlay once without disposing its live projection twice", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	host.model.setResponses([
 		fauxAssistantMessage("Keep this live projection retained for host-driven view disposal."),
 	]);

@@ -21,6 +21,7 @@ import {
 } from "../src/tools/agent-template-catalogue-prompt.ts";
 import {
 	createTestOwnerHost,
+	type TestCleanupRegistrar,
 	type TestOwnerHost,
 } from "./support/pi-host.ts";
 
@@ -93,8 +94,8 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 
 test("participant registrar exposes the exact closed sequential role tool sets", async (t) => {
 	for (const role of ["ordinary", "moderator", "owner"] as const) {
-		await t.test(role, async () => {
-			const host = await createRegistrarHost(role, handlers);
+		await t.test(role, async (t) => {
+			const host = await createRegistrarHost(t, role, handlers);
 			assert.deepEqual(
 				host.session.getActiveToolNames().sort(),
 				[...roleToolNames[role]].sort(),
@@ -167,9 +168,9 @@ test("Template catalogue shows current Runtime and available Template configurat
 	assert.match(catalogue, /id: current\/model/);
 });
 
-test("Template catalogue is injected into the model prompt", async () => {
+test("Template catalogue is injected into the model prompt", async (t) => {
 	let observedSystemPrompt = "";
-	const host = await createTestOwnerHost((pi) => {
+	const host = await createTestOwnerHost(t, (pi) => {
 		registerAgentTemplateCataloguePrompt(pi, async () => ({
 			currentRuntime: {
 				model: { provider: "current", modelId: "model" },
@@ -198,10 +199,10 @@ test("Template catalogue is injected into the model prompt", async () => {
 	await host.runtime.dispose();
 });
 
-test("participant registrar preserves role-specific tool presentation metadata", async () => {
-	const ordinary = await createRegistrarHost("ordinary", handlers);
-	const moderator = await createRegistrarHost("moderator", handlers);
-	const owner = await createRegistrarHost("owner", handlers);
+test("participant registrar preserves role-specific tool presentation metadata", async (t) => {
+	const ordinary = await createRegistrarHost(t, "ordinary", handlers);
+	const moderator = await createRegistrarHost(t, "moderator", handlers);
+	const owner = await createRegistrarHost(t, "owner", handlers);
 
 	assert.deepEqual(toolMetadata(ordinary, "agent_message"), {
 		label: "Message Agent",
@@ -270,7 +271,7 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	]);
 });
 
-test("participant registrar routes intents and returns exact handler receipts", async () => {
+test("participant registrar routes intents and returns exact handler receipts", async (t) => {
 	const calls: unknown[] = [];
 	const messageReceipt = { messageId: "message-2", delivery: "pending" } as const;
 	const spawnReceipt = {
@@ -306,7 +307,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 			return humanReceipt;
 		},
 	};
-	const host = await createRegistrarHost("ordinary", routedHandlers);
+	const host = await createRegistrarHost(t, "ordinary", routedHandlers);
 	const samples = [
 		["agent_message", "call-message", { operation: "poll", messageId: "message-1" }, messageReceipt],
 		["agent_spawn", "call-spawn", { request: "Investigate." }, spawnReceipt],
@@ -331,7 +332,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 	await host.runtime.dispose();
 });
 
-test("participant registrar preserves handler errors and Moderator control routing", async () => {
+test("participant registrar preserves handler errors and Moderator control routing", async (t) => {
 	const failure = new Error("exact coordinator rejection");
 	const moderatorReceipt = { disposition: "resolved" } as const;
 	let moderatorCall: unknown;
@@ -345,7 +346,7 @@ test("participant registrar preserves handler errors and Moderator control routi
 			return moderatorReceipt;
 		},
 	};
-	const host = await createRegistrarHost("moderator", moderatorHandlers);
+	const host = await createRegistrarHost(t, "moderator", moderatorHandlers);
 	await assert.rejects(
 		executeTool(
 			host,
@@ -369,12 +370,12 @@ test("participant registrar preserves handler errors and Moderator control routi
 	await host.runtime.dispose();
 });
 
-test("ordinary surface composes the participant registrar with /agents without changing renderers", async () => {
-	const direct = await createRegistrarHost("ordinary", handlers);
+test("ordinary surface composes the participant registrar with /agents without changing renderers", async (t) => {
+	const direct = await createRegistrarHost(t, "ordinary", handlers);
 	const unavailableView = () => {
 		throw new Error("Surface composition does not resolve CoordinatorView");
 	};
-	const composed = await createTestOwnerHost((pi) => {
+	const composed = await createTestOwnerHost(t, (pi) => {
 		registerOrdinaryAgentSurfaces(
 			pi,
 			unavailableView as () => OrdinaryAgentCoordinatorView,
@@ -400,10 +401,11 @@ test("ordinary surface composes the participant registrar with /agents without c
 });
 
 async function createRegistrarHost<Role extends ParticipantCoordinationRole>(
+	t: TestCleanupRegistrar,
 	role: Role,
 	roleHandlers: ParticipantCoordinationToolHandlers<Role>,
 ): Promise<TestOwnerHost> {
-	return createTestOwnerHost((pi: ExtensionAPI) => {
+	return createTestOwnerHost(t, (pi: ExtensionAPI) => {
 		registerParticipantCoordinationTools(pi, role, roleHandlers);
 	});
 }

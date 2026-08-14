@@ -18,6 +18,7 @@ import {
 	type AgentSpawnReceipt,
 	type SpawnBoundaryHooks,
 } from "../src/coordination/workflow-coordinator.ts";
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import { ProtocolInvariantError } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
@@ -25,6 +26,7 @@ import {
 	bindTestOwnerHost,
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
+	type TestCleanupRegistrar,
 } from "./support/pi-host.ts";
 import {
 	executeAndCommitRegisteredTool as executeRegisteredTool,
@@ -33,8 +35,8 @@ import { capturedSessionManager } from "./support/captured-session-managers.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
 
-test("an authenticated ordinary Agent creates a durable isolated child and admits its Creation Request", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("an authenticated ordinary Agent creates a durable isolated child and admits its Creation Request", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -238,8 +240,8 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	await host.runtime.dispose();
 });
 
-test("a successor Runtime re-resolves its current Template and project resources", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+test("a successor Runtime re-resolves its current Template and project resources", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -270,7 +272,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 		},
 	]);
 	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		packageRoot: host.cwd,
 		templateRoots: (parentCwd, projectTrusted) => {
@@ -423,8 +425,8 @@ test("a successor Runtime re-resolves its current Template and project resources
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("invalid default-child metadata fails before Agent Identity", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+test("invalid default-child metadata fails before Agent Identity", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -461,8 +463,8 @@ test("invalid default-child metadata fails before Agent Identity", async () => {
 	await host.runtime.dispose();
 });
 
-test("ambiguous selected skills fail before Agent Identity", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, { persistent: true });
+test("ambiguous selected skills fail before Agent Identity", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	const piSkillDirectory = join(host.cwd, ".pi", "skills", "pi-copy");
 	const agentsSkillDirectory = join(host.cwd, ".agents", "skills", "agents-copy");
 	await mkdir(piSkillDirectory, { recursive: true });
@@ -502,8 +504,8 @@ test("ambiguous selected skills fail before Agent Identity", async () => {
 	await host.runtime.dispose();
 });
 
-test("an untrusted effective cwd cannot contribute selected project resources", async () => {
-	const harness = await createCoordinatorHarness({});
+test("an untrusted effective cwd cannot contribute selected project resources", async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
 	const effectiveCwd = join(harness.host.cwd, "untrusted-project");
 	const skillDirectory = join(effectiveCwd, ".agents", "skills", "untrusted-skill");
 	await mkdir(skillDirectory, { recursive: true });
@@ -536,8 +538,8 @@ test("an untrusted effective cwd cannot contribute selected project resources", 
 	await harness.shutdown();
 });
 
-test("effective cwd honors Pi's default project-trust policy", async () => {
-	const harness = await createCoordinatorHarness({});
+test("effective cwd honors Pi's default project-trust policy", async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
 	await mkdir(harness.host.services.agentDir, { recursive: true });
 	await writeFile(
 		join(harness.host.services.agentDir, "settings.json"),
@@ -572,7 +574,7 @@ test("effective cwd honors Pi's default project-trust policy", async () => {
 	await harness.shutdown();
 });
 
-test("allowed tools need not be registered or active in the child Runtime", async () => {
+test("allowed tools need not be registered or active in the child Runtime", async (t) => {
 	const ownerOnlyTool: ExtensionFactory = (pi) => {
 		pi.registerTool({
 			name: "owner_only_probe",
@@ -584,7 +586,7 @@ test("allowed tools need not be registered or active in the child Runtime", asyn
 			},
 		});
 	};
-	const harness = await createCoordinatorHarness({}, ownerOnlyTool);
+	const harness = await createCoordinatorHarness(t, {}, ownerOnlyTool);
 	const receipt = await harness.spawn("spawn-missing-inherited-resource");
 
 	assert.equal(receipt.disposition, "pending");
@@ -600,8 +602,8 @@ test("allowed tools need not be registered or active in the child Runtime", asyn
 	await harness.shutdown();
 });
 
-test("confirmed post-Identity Run startup failure keeps a visible dormant child", async () => {
-	const harness = await createCoordinatorHarness({
+test("confirmed post-Identity Run startup failure keeps a visible dormant child", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
 		beforeRunStart: () => "confirmed_failure",
 	});
 	const receipt = await harness.spawn("spawn-run-start-failure");
@@ -616,10 +618,10 @@ test("confirmed post-Identity Run startup failure keeps a visible dormant child"
 	await harness.shutdown();
 });
 
-test("shutdown after Agent Identity keeps the durable child dormant", async () => {
+test("shutdown after Agent Identity keeps the durable child dormant", async (t) => {
 	let shutdownPromise: Promise<void> | undefined;
 	let harness!: Awaited<ReturnType<typeof createCoordinatorHarness>>;
-	harness = await createCoordinatorHarness({
+	harness = await createCoordinatorHarness(t, {
 		beforeRunStart: () => {
 			shutdownPromise ??= harness.shutdown();
 		},
@@ -636,8 +638,8 @@ test("shutdown after Agent Identity keeps the durable child dormant", async () =
 	});
 });
 
-test("Run startup invariant failures are not downgraded to availability receipts", async () => {
-	const harness = await createCoordinatorHarness({
+test("Run startup invariant failures are not downgraded to availability receipts", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
 		beforeRunStart: () => {
 			throw new ProtocolInvariantError("started child Run contradicts its protocol binding");
 		},
@@ -651,8 +653,8 @@ test("Run startup invariant failures are not downgraded to availability receipts
 	await harness.shutdown();
 });
 
-test("confirmed post-Identity Delivery admission failure keeps the child and Request but releases its Run", async () => {
-	const harness = await createCoordinatorHarness({
+test("confirmed post-Identity Delivery admission failure keeps the child and Request but releases its Run", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
 		beforeDeliveryAdmission: () => "confirmed_failure",
 	});
 	const receipt = await harness.spawn("spawn-delivery-admission-failure");
@@ -667,8 +669,8 @@ test("confirmed post-Identity Delivery admission failure keeps the child and Req
 	await harness.shutdown();
 });
 
-test("lost Run-start confirmation stays indeterminate after confirmed Identity", async () => {
-	const harness = await createCoordinatorHarness({
+test("lost Run-start confirmation stays indeterminate after confirmed Identity", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
 		afterRunStart: (context) => {
 			assert.deepEqual(Object.keys(context).sort(), ["handle", "identity"]);
 			assert.equal(context.handle.sequence > 0, true);
@@ -688,8 +690,8 @@ test("lost Run-start confirmation stays indeterminate after confirmed Identity",
 	}
 });
 
-test("lost Identity confirmation stays indeterminate with a canonical dormant child", async () => {
-	const harness = await createCoordinatorHarness({
+test("lost Identity confirmation stays indeterminate with a canonical dormant child", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
 		afterIdentityCommit: () => "confirmation_lost",
 	});
 	const receipt = await harness.spawn("spawn-identity-confirmation-lost");
@@ -706,8 +708,8 @@ test("lost Identity confirmation stays indeterminate with a canonical dormant ch
 	await harness.shutdown();
 });
 
-test("lost Delivery confirmation stays indeterminate after confirmed Run start", async () => {
-	const harness = await createCoordinatorHarness({
+test("lost Delivery confirmation stays indeterminate after confirmed Run start", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
 		afterDeliveryAdmission: () => "confirmation_lost",
 	});
 	const receipt = await harness.spawn("spawn-delivery-confirmation-lost");
@@ -721,8 +723,8 @@ test("lost Delivery confirmation stays indeterminate after confirmed Run start",
 	await harness.shutdown();
 });
 
-test("contradictory child Identity evidence is an invariant violation", async () => {
-	const harness = await createCoordinatorHarness({
+test("contradictory child Identity evidence is an invariant violation", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
 		afterIdentityCommit: ({ identity }) => {
 			openDurableCapturedSession(identity.agentId).appendCustomEntry(
 				"agent-coordination.identity",
@@ -743,8 +745,8 @@ test("contradictory child Identity evidence is an invariant violation", async ()
 	}
 });
 
-test("forged Creation Request Delivery evidence is an invariant violation", async () => {
-	const harness = await createCoordinatorHarness({
+test("forged Creation Request Delivery evidence is an invariant violation", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
 		afterIdentityCommit: ({ identity }) => {
 			openDurableCapturedSession(identity.agentId).appendCustomMessageEntry(
 				"agent-coordination.message-delivery",
@@ -773,8 +775,8 @@ test("forged Creation Request Delivery evidence is an invariant violation", asyn
 	}
 });
 
-test("direct children remain in physical Agent Spawn call order", async () => {
-	const harness = await createCoordinatorHarness({});
+test("direct children remain in physical Agent Spawn call order", async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
 	const receipts = await harness.spawnMany([
 		"spawn-first-ordered-child",
 		"spawn-second-ordered-child",
@@ -916,17 +918,18 @@ async function shutdownAfterLostRunStart(
 }
 
 async function createCoordinatorHarness(
+	t: TestCleanupRegistrar,
 	hooks: SpawnBoundaryHooks,
 	ownerExtension: ExtensionFactory = () => undefined,
 ) {
-	const host = await createUnboundTestOwnerHost(ownerExtension, {
+	const host = await createUnboundTestOwnerHost(t, ownerExtension, {
 		persistent: true,
 		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: hooks,
 	});

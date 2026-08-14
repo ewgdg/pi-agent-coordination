@@ -17,6 +17,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import {
 	createAgentBoundExtension,
 } from "../src/bootstrap/agent-extension.ts";
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import {
 	inspectCommittedHumanRequestResult,
@@ -27,6 +28,7 @@ import { transcriptFromSessionManager } from "../src/pi-integration/session-mana
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
+	type TestCleanupRegistrar,
 	type TestOwnerHostOptions,
 } from "./support/pi-host.ts";
 
@@ -38,8 +40,8 @@ afterEach(async () => {
 	await Promise.allSettled(cleanups.map((cleanup) => cleanup()));
 });
 
-test("one native text Answer is the sole result and releases the sequential sibling barrier", async () => {
-	const { host, coordinator, view, child } = await createHumanRequestChild();
+test("one native text Answer is the sole result and releases the sequential sibling barrier", async (t) => {
+	const { host, coordinator, view, child } = await createHumanRequestChild(t);
 	const input = { question: "Which boundary should remain authoritative?" };
 	const toolCallId = "ask-native-answer";
 	host.model.setResponses([
@@ -123,8 +125,8 @@ test("one native text Answer is the sole result and releases the sequential sibl
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("registered Human Request schema rejects blank and malformed questions before attention", async () => {
-	const { host, coordinator, view, child } = await createHumanRequestChild();
+test("registered Human Request schema rejects blank and malformed questions before attention", async (t) => {
+	const { host, coordinator, view, child } = await createHumanRequestChild(t);
 	const toolCallIds = ["blank-human-question", "malformed-human-question"];
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -167,8 +169,8 @@ test("registered Human Request schema rejects blank and malformed questions befo
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("blank and image-bearing submissions do not resolve as Human Answers", async () => {
-	const { host, coordinator, view, child } = await createHumanRequestChild();
+test("blank and image-bearing submissions do not resolve as Human Answers", async (t) => {
+	const { host, coordinator, view, child } = await createHumanRequestChild(t);
 	const toolCallId = "ask-for-validation";
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -219,7 +221,7 @@ test("blank and image-bearing submissions do not resolve as Human Answers", asyn
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("Alt+Enter delivery and extension commands retain native behavior", async () => {
+test("Alt+Enter delivery and extension commands retain native behavior", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "human-answer-command-"));
 	const commandMarker = join(cwd, "answer-mode-command-ran");
 	const extensionPath = join(cwd, "answer-mode-command-probe.mjs");
@@ -232,7 +234,7 @@ export default function answerModeCommandProbe(pi) {
   });
 }
 `);
-	const { host, coordinator, view, child } = await createHumanRequestChild({
+	const { host, coordinator, view, child } = await createHumanRequestChild(t, {
 		cwd,
 		additionalExtensionPaths: [extensionPath],
 	});
@@ -297,8 +299,8 @@ export default function answerModeCommandProbe(pi) {
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("an unrecognized slash-prefixed string is ordinary Answer text", async () => {
-	const { host, coordinator, view, child } = await createHumanRequestChild();
+test("an unrecognized slash-prefixed string is ordinary Answer text", async (t) => {
+	const { host, coordinator, view, child } = await createHumanRequestChild(t);
 	const toolCallId = "ask-for-slash-answer";
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -327,7 +329,7 @@ test("an unrecognized slash-prefixed string is ordinary Answer text", async () =
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("primary Enter answers literally while Alt+Enter expands a prompt template", async () => {
+test("primary Enter answers literally while Alt+Enter expands a prompt template", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "human-answer-prompt-"));
 	const agentDir = join(cwd, ".pi");
 	await mkdir(join(agentDir, "prompts"), { recursive: true });
@@ -335,7 +337,7 @@ test("primary Enter answers literally while Alt+Enter expands a prompt template"
 		join(agentDir, "prompts", "answer-template.md"),
 		"---\ndescription: Queue a later prompt\n---\nExpanded follow-up: $@\n",
 	);
-	const { host, coordinator, view, child } = await createHumanRequestChild({
+	const { host, coordinator, view, child } = await createHumanRequestChild(t, {
 		cwd,
 		agentDir,
 		noPromptTemplates: false,
@@ -403,8 +405,7 @@ test("primary Enter answers literally while Alt+Enter expands a prompt template"
 
 test("different Agents wait and commit Human Answers independently", async (t) => {
 	const { host, coordinator, view, child: first, spawnChild } =
-		await createHumanRequestChild();
-	t.after(() => coordinator.shutdown(async () => host.runtime.dispose()));
+		await createHumanRequestChild(t);
 	const second = await spawnChild();
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -470,10 +471,10 @@ test("different Agents wait and commit Human Answers independently", async (t) =
 	await view.openAgentView(view.status().agentId);
 });
 
-test("a precommit Run fence rejects and restores the provisional Answer", async () => {
+test("a precommit Run fence rejects and restores the provisional Answer", async (t) => {
 	let ownerView: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
 	let selectedChild: HumanRequestChild | undefined;
-	const host = await createUnboundTestOwnerHost(
+	const host = await createUnboundTestOwnerHost(t,
 		createAgentBoundExtension(() => {
 			if (!ownerView) throw new Error("Owner view unavailable");
 			return ownerView;
@@ -482,7 +483,7 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 	);
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		humanRequestBoundaryHooks: {
 			beforeResultCommit: ({ failExactRun }) => {
@@ -531,8 +532,8 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("a committed Answer remains canonical after later Run failure and reopened inspection", async () => {
-	const { host, coordinator, view, child } = await createHumanRequestChild({ persistent: true });
+test("a committed Answer remains canonical after later Run failure and reopened inspection", async (t) => {
+	const { host, coordinator, view, child } = await createHumanRequestChild(t, { persistent: true });
 	const input = { question: "Commit this Answer before later failure." };
 	const toolCallId = "answer-before-later-failure";
 	host.model.setResponses([
@@ -583,9 +584,9 @@ test("a committed Answer remains canonical after later Run failure and reopened 
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("Human Request fails before input_required when no interactive Agent editor exists", async () => {
+test("Human Request fails before input_required when no interactive Agent editor exists", async (t) => {
 	let view: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-	const host = await createUnboundTestOwnerHost(
+	const host = await createUnboundTestOwnerHost(t,
 		(pi) => createAgentBoundExtension(() => {
 			if (!view) throw new Error("View unavailable");
 			return view;
@@ -593,7 +594,7 @@ test("Human Request fails before input_required when no interactive Agent editor
 	);
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});
@@ -625,7 +626,9 @@ test("Human Request fails before input_required when no interactive Agent editor
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-async function createHumanRequestChild(options?: Pick<
+async function createHumanRequestChild(
+	t: TestCleanupRegistrar,
+	options?: Pick<
 	TestOwnerHostOptions,
 	| "additionalExtensionFactories"
 	| "additionalExtensionPaths"
@@ -635,7 +638,7 @@ async function createHumanRequestChild(options?: Pick<
 	| "noPromptTemplates"
 >) {
 	let ownerView: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
-	const host = await createUnboundTestOwnerHost(
+	const host = await createUnboundTestOwnerHost(t,
 		createAgentBoundExtension(() => {
 			if (!ownerView) throw new Error("Human Request owner view is unavailable");
 			return ownerView;
@@ -644,7 +647,7 @@ async function createHumanRequestChild(options?: Pick<
 	);
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});

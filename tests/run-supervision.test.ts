@@ -14,6 +14,7 @@ import {
 	WorkflowCoordinator,
 	type AgentMessageInput,
 } from "../src/coordination/workflow-coordinator.ts";
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -24,6 +25,7 @@ import {
 	bindTestOwnerHost,
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
+	type TestCleanupRegistrar,
 } from "./support/pi-host.ts";
 import {
 	openLiveAgentView,
@@ -53,8 +55,7 @@ const PROCESS_RUNTIME_FIXTURE = fileURLToPath(
 );
 
 test("activity subscriptions publish queued Delivery changes while a child Run remains active", async (t) => {
-	const harness = await createRunSupervisionHarness();
-	t.after(() => harness.shutdown());
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-activity-queue-child");
 	await child.waitForIdle();
 
@@ -96,8 +97,8 @@ test("activity subscriptions publish queued Delivery changes while a child Run r
 	assert.equal(hasPendingDelivery, true);
 });
 
-test("interruption holds one exact settled Run and blocks ordinary Message Delivery", async () => {
-	const harness = await createRunSupervisionHarness();
+test("interruption holds one exact settled Run and blocks ordinary Message Delivery", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-held-child");
 	await child.waitForIdle();
 
@@ -140,8 +141,7 @@ test("interruption holds one exact settled Run and blocks ordinary Message Deliv
 });
 
 test("interruption keeps an aborted Human Request Run held when Pi reports an error", async (t) => {
-	const harness = await createRunSupervisionHarness();
-	t.after(() => harness.shutdown());
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-aborted-human-request-child");
 	await child.waitForIdle();
 	const input = {
@@ -176,8 +176,8 @@ test("interruption keeps an aborted Human Request Run held when Pi reports an er
 
 });
 
-test("an unrelated Agent abort does not preempt a later explicit interruption", async () => {
-	const harness = await createRunSupervisionHarness();
+test("an unrelated Agent abort does not preempt a later explicit interruption", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-direct-abort-child");
 	await child.waitForIdle();
 
@@ -194,8 +194,8 @@ test("an unrelated Agent abort does not preempt a later explicit interruption", 
 	await harness.shutdown();
 });
 
-test("interruption preserves Message admission that wins the target lane first", async () => {
-	const harness = await createRunSupervisionHarness();
+test("interruption preserves Message admission that wins the target lane first", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-interruption-order-child");
 	await child.waitForIdle();
 	let markGenerationStarted!: () => void;
@@ -246,8 +246,8 @@ test("interruption preserves Message admission that wins the target lane first",
 	await harness.shutdown();
 });
 
-test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async () => {
-	const harness = await createRunSupervisionHarness();
+test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-held-request-child");
 	await child.waitForIdle();
 	const owner = { session: harness.host.session, view: harness.ownerView };
@@ -329,8 +329,8 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	await harness.shutdown();
 });
 
-test("one Supervisory Resume Message commits alone before ordinary held backlog", async () => {
-	const harness = await createRunSupervisionHarness();
+test("one Supervisory Resume Message commits alone before ordinary held backlog", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-resumed-child");
 	await child.waitForIdle();
 	await harness.control("interrupt-resumed-child", {
@@ -404,8 +404,8 @@ test("one Supervisory Resume Message commits alone before ordinary held backlog"
 	await harness.shutdown();
 });
 
-test("a failed Supervisory Resume dispatch leaves its exact Hold retryable", async () => {
-	const harness = await createRunSupervisionHarness();
+test("a failed Supervisory Resume dispatch leaves its exact Hold retryable", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-failed-supervisory-resume-child");
 	await child.waitForIdle();
 	await harness.control("interrupt-before-failed-supervisory-resume", {
@@ -453,8 +453,8 @@ test("a failed Supervisory Resume dispatch leaves its exact Hold retryable", asy
 	await harness.shutdown();
 });
 
-test("a native human editor Message clears its exact Hold for one isolated turn", async () => {
-	const harness = await createRunSupervisionHarness();
+test("a native human editor Message clears its exact Hold for one isolated turn", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-human-resumed-child");
 	await child.waitForIdle();
 	await harness.control("interrupt-human-resumed-child", {
@@ -516,8 +516,7 @@ test("a native human editor Message clears its exact Hold for one isolated turn"
 });
 
 test("a failed native human resume dispatch leaves its exact Hold retryable", async (t) => {
-	const harness = await createRunSupervisionHarness();
-	t.after(() => harness.shutdown());
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-failed-human-resume-child");
 	await child.waitForIdle();
 	await harness.control("interrupt-before-failed-human-resume", {
@@ -581,8 +580,8 @@ test("a failed native human resume dispatch leaves its exact Hold retryable", as
 
 });
 
-test("supervisory interruption settles an active Human Request through its error result", async () => {
-	const harness = await createRunSupervisionHarness();
+test("supervisory interruption settles an active Human Request through its error result", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-human-request-child");
 	await child.waitForIdle();
 	const toolCallId = "human-request-before-supervisor-interrupt";
@@ -643,8 +642,8 @@ test("supervisory interruption settles an active Human Request through its error
 	await harness.shutdown();
 });
 
-test("termination discards exact-Run backlog, reports residual Requests, and permits a successor", async () => {
-	const harness = await createRunSupervisionHarness();
+test("termination discards exact-Run backlog, reports residual Requests, and permits a successor", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-terminated-child");
 	await child.waitForIdle();
 
@@ -714,8 +713,8 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 	await harness.shutdown();
 });
 
-test("authority follows only Owner descendants and immediate Direct-Spawner edges", async () => {
-	const harness = await createRunSupervisionHarness();
+test("authority follows only Owner descendants and immediate Direct-Spawner edges", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const parent = await harness.spawnChild("spawn-authority-parent");
 	const sibling = await harness.spawnChild("spawn-authority-sibling");
 	const grandchild = await harness.spawnChildFrom(
@@ -790,8 +789,8 @@ test("authority follows only Owner descendants and immediate Direct-Spawner edge
 	await harness.shutdown();
 });
 
-test("the one resume reservation remains available when ordinary capacity is exhausted", async () => {
-	const harness = await createRunSupervisionHarness({
+test("the one resume reservation remains available when ordinary capacity is exhausted", async (t) => {
+	const harness = await createRunSupervisionHarness(t, {
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy('{"maxPendingDeliveriesPerAgent": 1}'),
 		),
@@ -849,8 +848,8 @@ test("the one resume reservation remains available when ordinary capacity is exh
 	await harness.shutdown();
 });
 
-test("a resume bound to an earlier Hold becomes ordinary direction and cannot clear a later Hold", async () => {
-	const harness = await createRunSupervisionHarness({ deferFirstResume: true });
+test("a resume bound to an earlier Hold becomes ordinary direction and cannot clear a later Hold", async (t) => {
+	const harness = await createRunSupervisionHarness(t, { deferFirstResume: true });
 	const child = await harness.spawnChild("spawn-stale-resume-child");
 	await child.waitForIdle();
 	await harness.control("interrupt-for-stale-resume", {
@@ -937,8 +936,8 @@ test("a resume bound to an earlier Hold becomes ordinary direction and cannot cl
 	await harness.shutdown();
 });
 
-test("the registered agent_control tool authenticates structural committed input", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("the registered agent_control tool authenticates structural committed input", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -992,8 +991,8 @@ test("the registered agent_control tool authenticates structural committed input
 	await host.runtime.dispose();
 });
 
-test("/agents retains only the viewed exact Run and keeps Owner bound through close", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("/agents retains only the viewed exact Run and keeps Owner bound through close", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -1058,8 +1057,8 @@ test("/agents retains only the viewed exact Run and keeps Owner bound through cl
 	await host.runtime.dispose();
 });
 
-test("shutdown fences Run, tool, control, and Human Request admission", async () => {
-	const harness = await createRunSupervisionHarness();
+test("shutdown fences Run, tool, control, and Human Request admission", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
 	const child = await harness.spawnChild("spawn-before-admission-fence");
 	await child.waitForIdle();
 	let markNativeDisposalStarted!: () => void;
@@ -1109,7 +1108,9 @@ test("shutdown fences Run, tool, control, and Human Request admission", async ()
 	await shutdown;
 });
 
-async function createRunSupervisionHarness(options?: {
+async function createRunSupervisionHarness(
+	t: TestCleanupRegistrar,
+	options?: {
 	workflowPolicy?: WorkflowPolicyStore;
 	deferFirstResume?: boolean;
 }) {
@@ -1117,14 +1118,14 @@ async function createRunSupervisionHarness(options?: {
 	let didDeferResume = false;
 	let activeAgentView: Awaited<ReturnType<CoordinatorView["openAgentView"]>>;
 	let promptSequence = 0;
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: [PROCESS_RUNTIME_FIXTURE],
 	});
 	await bindTestOwnerHost(host, "tui");
 	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = new WorkflowCoordinator(host.runtime, ownerIdentity, {
+	const coordinator = createTestWorkflowCoordinator(host, ownerIdentity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: options?.workflowPolicy,
 		messageBoundaryHooks: options?.deferFirstResume

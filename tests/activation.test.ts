@@ -12,8 +12,8 @@ import {
 test("print, JSON, and RPC modes keep coordination tools inactive", async (t) => {
 	const nativeSetRebindSession = hostPi.AgentSessionRuntime.prototype.setRebindSession;
 	for (const mode of ["print", "json", "rpc"] as const) {
-		await t.test(mode, async () => {
-			const host = await createUnboundTestOwnerHost(piAgentCoordination);
+		await t.test(mode, async (t) => {
+			const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 			assert.equal(
 				hostPi.AgentSessionRuntime.prototype.setRebindSession,
 				nativeSetRebindSession,
@@ -42,8 +42,8 @@ test("print, JSON, and RPC modes keep coordination tools inactive", async (t) =>
 	}
 });
 
-test("headless startup never admits or inspects a malformed interactive runtime", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination);
+test("headless startup never admits or inspects a malformed interactive runtime", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const originalSendCustomMessage = host.session.sendCustomMessage;
 	Object.defineProperty(host.session, "sendCustomMessage", {
 		configurable: true,

@@ -14,6 +14,7 @@ import {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import type {
 	AgentMessageReceipt,
@@ -30,11 +31,12 @@ import {
 	bindTestOwnerHost,
 	createTestOwnerHost,
 	createUnboundTestOwnerHost,
+	type TestCleanupRegistrar,
 } from "./support/pi-host.ts";
 import { REVERSE_BOUNDARY_ROOT_VARIABLE } from "./support/reverse-boundary-tools.ts";
 
-test("an authenticated Agent authors and polls one immutable Deferred Message through recipient proof", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("an authenticated Agent authors and polls one immutable Deferred Message through recipient proof", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -184,8 +186,8 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 	await host.runtime.dispose();
 });
 
-test("poll reports an all-branch watermark for canonical absence and indeterminate for an unresolved source", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("poll reports an all-branch watermark for canonical absence and indeterminate for an unresolved source", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -324,12 +326,12 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 	await host.runtime.dispose();
 });
 
-test("racing same-identity retries coalesce while the recipient is busy and commit one Delivery", async () => {
+test("racing same-identity retries coalesce while the recipient is busy and commit one Delivery", async (t) => {
 	let releaseRecipient!: () => void;
 	const recipientGate = new Promise<void>((resolve) => {
 		releaseRecipient = resolve;
 	});
-	const host = await createTestOwnerHost(piAgentCoordination, {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -458,15 +460,15 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 	await host.runtime.dispose();
 });
 
-test("a Message to a dormant child starts a successor Run and releases it after Delivery settles", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+test("a Message to a dormant child starts a successor Run and releases it after Delivery settles", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.
@@ -551,7 +553,7 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("the recipient lane resolves delivery-first, close-first, and stale close candidates against exact Runs", async () => {
+test("the recipient lane resolves delivery-first, close-first, and stale close candidates against exact Runs", async (t) => {
 	const releaseCandidates: Array<{
 		context: { agentId: string; runSequence: number };
 		evaluate: () => void;
@@ -561,7 +563,7 @@ test("the recipient lane resolves delivery-first, close-first, and stale close c
 			releaseCandidates.push({ context, evaluate });
 		},
 	};
-	const harness = await createDormantChildHarness(messageBoundaryHooks);
+	const harness = await createDormantChildHarness(t, messageBoundaryHooks);
 
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The first successor turn settled."),
@@ -637,8 +639,8 @@ test("the recipient lane resolves delivery-first, close-first, and stale close c
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("recipient Delivery ratifies a missing author result while an error result plus Delivery violates the crash table", async () => {
-	const harness = await createDormantChildHarness({});
+test("recipient Delivery ratifies a missing author result while an error result plus Delivery violates the crash table", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("Delivery committed before author-result confirmation."),
 	]);
@@ -703,8 +705,8 @@ test("recipient Delivery ratifies a missing author result while an error result 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("poll rejects malformed normal author-result evidence", async () => {
-	const harness = await createDormantChildHarness({});
+test("poll rejects malformed normal author-result evidence", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The Message reached the recipient transcript."),
 	]);
@@ -748,8 +750,8 @@ test("poll rejects malformed normal author-result evidence", async () => {
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("poll rejects malformed committed Agent Message source evidence", async () => {
-	const harness = await createDormantChildHarness({});
+test("poll rejects malformed committed Agent Message source evidence", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid Message reached the recipient transcript."),
 	]);
@@ -793,8 +795,8 @@ test("poll rejects malformed committed Agent Message source evidence", async () 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("poll rejects malformed Message Delivery evidence for another source", async () => {
-	const harness = await createDormantChildHarness({});
+test("poll rejects malformed Message Delivery evidence for another source", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid Message committed first."),
 	]);
@@ -844,8 +846,8 @@ test("poll rejects malformed Message Delivery evidence for another source", asyn
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("poll ignores host-authored Run Failure Recovery evidence", async () => {
-	const harness = await createDormantChildHarness({});
+test("poll ignores host-authored Run Failure Recovery evidence", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid Message committed before recovery evidence."),
 	]);
@@ -886,8 +888,8 @@ test("poll ignores host-authored Run Failure Recovery evidence", async () => {
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("poll rejects unknown current-scope coordination evidence", async () => {
-	const harness = await createDormantChildHarness({});
+test("poll rejects unknown current-scope coordination evidence", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid Message committed before unknown evidence."),
 	]);
@@ -921,8 +923,8 @@ test("poll rejects unknown current-scope coordination evidence", async () => {
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("poll rejects a hidden custom message as Delivery evidence", async () => {
-	const harness = await createDormantChildHarness({});
+test("poll rejects a hidden custom message as Delivery evidence", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid model-visible Message committed."),
 	]);
@@ -971,15 +973,15 @@ test("poll rejects a hidden custom message as Delivery evidence", async () => {
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("only the original sender can poll a Message", async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+test("only the original sender can poll a Message", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		// This test needs a live unanswered child to exercise poll authorization.
 		// Keep any incidental Moderator attempt dormant so it cannot steal replies.
@@ -1087,8 +1089,8 @@ test("only the original sender can poll a Message", async () => {
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
-test("Run failure discards uncommitted backlog and a successor receives only newly admitted work", async () => {
-	const harness = await createDormantChildHarness({});
+test("Run failure discards uncommitted backlog and a successor receives only newly admitted work", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	let releaseFailure!: () => void;
 	const failureGate = new Promise<void>((resolve) => {
 		releaseFailure = resolve;
@@ -1141,8 +1143,8 @@ test("Run failure discards uncommitted backlog and a successor receives only new
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Workflow shutdown discards admitted but uncommitted backlog", async () => {
-	const harness = await createDormantChildHarness({});
+test("Workflow shutdown discards admitted but uncommitted backlog", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	let releaseActiveRun!: () => void;
 	const activeRunGate = new Promise<void>((resolve) => {
 		releaseActiveRun = resolve;
@@ -1187,8 +1189,8 @@ test("Workflow shutdown discards admitted but uncommitted backlog", async () => 
 	);
 });
 
-test("poll is indeterminate when authoritative recipient inspection cannot complete", async () => {
-	const harness = await createDormantChildHarness({
+test("poll is indeterminate when authoritative recipient inspection cannot complete", async (t) => {
+	const harness = await createDormantChildHarness(t, {
 		beforeRecipientInspection: () => "inspection_incomplete",
 	});
 	harness.host.model.setResponses([
@@ -1221,8 +1223,8 @@ test("poll is indeterminate when authoritative recipient inspection cannot compl
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("send reports indeterminate when admission confirmation is lost without cancelling Delivery", async () => {
-	const harness = await createDormantChildHarness({
+test("send reports indeterminate when admission confirmation is lost without cancelling Delivery", async (t) => {
+	const harness = await createDormantChildHarness(t, {
 		afterDeliveryAdmission: ({ operation }) =>
 			operation === "send" ? "confirmation_lost" : undefined,
 	});
@@ -1245,8 +1247,8 @@ test("send reports indeterminate when admission confirmation is lost without can
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("retry reports indeterminate when admission confirmation is lost without cancelling Delivery", async () => {
-	const harness = await createDormantChildHarness({
+test("retry reports indeterminate when admission confirmation is lost without cancelling Delivery", async (t) => {
+	const harness = await createDormantChildHarness(t, {
 		afterDeliveryAdmission: ({ operation }) =>
 			operation === "retry" ? "confirmation_lost" : undefined,
 	});
@@ -1302,8 +1304,8 @@ test("retry reports indeterminate when admission confirmation is lost without ca
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("an authored Steer mode is accepted and retry remains mode-free", async () => {
-	const harness = await createDormantChildHarness({});
+test("an authored Steer mode is accepted and retry remains mode-free", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The explicit Steer Message reached this dormant Agent."),
 	]);
@@ -1333,8 +1335,8 @@ test("an authored Steer mode is accepted and retry remains mode-free", async () 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("recipient capacity counts distinct pending identities without evicting admitted work", async () => {
-	const harness = await createDormantChildHarness({}, {
+test("recipient capacity counts distinct pending identities without evicting admitted work", async (t) => {
+	const harness = await createDormantChildHarness(t, {}, {
 		workflowPolicy: deliveryPolicy(1),
 	});
 	let releaseActiveWork!: () => void;
@@ -1430,9 +1432,9 @@ test("recipient capacity counts distinct pending identities without evicting adm
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("a lower delivery limit rejects new identities without evicting admitted Messages", async () => {
+test("a lower delivery limit rejects new identities without evicting admitted Messages", async (t) => {
 	const workflowPolicy = deliveryPolicy(2);
-	const harness = await createDormantChildHarness({}, { workflowPolicy });
+	const harness = await createDormantChildHarness(t, {}, { workflowPolicy });
 	let releaseActiveWork!: () => void;
 	const activeWorkGate = new Promise<void>((resolve) => {
 		releaseActiveWork = resolve;
@@ -1493,8 +1495,8 @@ test("a lower delivery limit rejects new identities without evicting admitted Me
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Steer freezes an ordered batch after active generation and before the next model turn", async () => {
-	const harness = await createDormantChildHarness({});
+test("Steer freezes an ordered batch after active generation and before the next model turn", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	let releaseGeneration!: () => void;
 	const generationGate = new Promise<void>((resolve) => {
 		releaseGeneration = resolve;
@@ -1578,9 +1580,9 @@ test("Steer freezes an ordered batch after active generation and before the next
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("a Steer Message admitted after freeze waits for the following safe boundary", async () => {
+test("a Steer Message admitted after freeze waits for the following safe boundary", async (t) => {
 	let admitAfterFreeze: (() => void) | undefined;
-	const harness = await createDormantChildHarness({
+	const harness = await createDormantChildHarness(t, {
 		afterSteerFreeze: () => admitAfterFreeze?.(),
 	});
 	const lateToolCallId = "admit-steer-after-freeze";
@@ -1732,7 +1734,7 @@ test("Steer waits for an already-issued parallel tool batch even when tools fini
 			}
 		}
 	});
-	harness = await createDormantChildHarness({}, {
+	harness = await createDormantChildHarness(t, {}, {
 		additionalExtensionPaths: [
 			fileURLToPath(new URL("./support/reverse-boundary-tools.ts", import.meta.url)),
 		],
@@ -1809,8 +1811,8 @@ test("Steer waits for an already-issued parallel tool batch even when tools fini
 
 });
 
-test("Steer takes the next model turn before an earlier Deferred Message", async () => {
-	const harness = await createDormantChildHarness({});
+test("Steer takes the next model turn before an earlier Deferred Message", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
 	let releaseActiveGeneration!: () => void;
 	const activeGenerationGate = new Promise<void>((resolve) => {
 		releaseActiveGeneration = resolve;
@@ -1928,13 +1930,14 @@ async function waitForEntry(
 }
 
 async function createDormantChildHarness(
+	t: TestCleanupRegistrar,
 	messageBoundaryHooks: MessageBoundaryHooks,
 	options: {
 		workflowPolicy?: WorkflowPolicyStore;
 		additionalExtensionPaths?: string[];
 	} = {},
 ) {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		additionalExtensionPaths: options.additionalExtensionPaths,
@@ -1942,7 +1945,7 @@ async function createDormantChildHarness(
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
-	coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		// Message-ordering tests intentionally strand unanswered work. Keep any
 		// incidental Moderator bootstrap dormant so it cannot consume scripted replies.

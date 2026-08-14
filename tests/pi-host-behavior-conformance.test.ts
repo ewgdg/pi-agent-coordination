@@ -28,7 +28,7 @@ type Snapshot = Readonly<{
 	toolStarts: readonly string[];
 }>;
 
-test("the concrete Pi host satisfies transcript, Delivery, compaction, and branch semantics", async () => {
+test("the concrete Pi host satisfies transcript, Delivery, compaction, and branch semantics", async (t) => {
 	const snapshots: Snapshot[] = [];
 	const toolStarts: string[] = [];
 	const completionOrder: string[] = [];
@@ -125,7 +125,7 @@ test("the concrete Pi host satisfies transcript, Delivery, compaction, and branc
 			}
 		});
 	};
-	const host = await createTestOwnerHost(extension, {
+	const host = await createTestOwnerHost(t, extension, {
 		persistent: true,
 		settings: {
 			compaction: {

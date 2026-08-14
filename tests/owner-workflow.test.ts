@@ -19,7 +19,7 @@ import { openLiveAgentView } from "./support/agent-session.ts";
 
 const MAX_SESSION_DISCOVERY_ATTEMPTS = 1_000;
 
-test("coordination preserves user-controlled Pi recovery settings", async () => {
+test("coordination preserves user-controlled Pi recovery settings", async (t) => {
 	const settings = {
 		compaction: { enabled: true },
 		transport: "auto" as const,
@@ -29,7 +29,7 @@ test("coordination preserves user-controlled Pi recovery settings", async () => 
 			provider: { maxRetries: 5 },
 		},
 	};
-	const host = await createTestOwnerHost(piAgentCoordination, { settings });
+	const host = await createTestOwnerHost(t, piAgentCoordination, { settings });
 	try {
 		assert.equal(host.services.settingsManager.getCompactionEnabled(), true);
 		assert.equal(host.services.settingsManager.getRetrySettings().enabled, true);
@@ -42,8 +42,8 @@ test("coordination preserves user-controlled Pi recovery settings", async () => 
 	}
 });
 
-test("interactive Pi boots one observable Owner while preserving native interaction and disposal", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination);
+test("interactive Pi boots one observable Owner while preserving native interaction and disposal", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination);
 	const ownerIdentity = host.session.sessionManager
 		.getEntries()
 		.find(
@@ -131,8 +131,8 @@ test("interactive Pi boots one observable Owner while preserving native interact
 	assert.equal(disposeCalls, 1);
 });
 
-test("native Owner replacement closes every retained source Workflow process", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("native Owner replacement closes every retained source Workflow process", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -176,8 +176,8 @@ test("native Owner replacement closes every retained source Workflow process", a
 	await host.runtime.dispose();
 });
 
-test("shutdown with an open Agent view closes it without rebinding stopped interactive UI", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("shutdown with an open Agent view closes it without rebinding stopped interactive UI", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -217,8 +217,8 @@ test("shutdown with an open Agent view closes it without rebinding stopped inter
 	assert.equal(host.ui.customSurfaces.length, 0);
 });
 
-test("orderly shutdown disposes retained child and Moderator processes plus Owner session", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("orderly shutdown disposes retained child and Moderator processes plus Owner session", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
 		processVisibleModel: true,
@@ -278,8 +278,8 @@ test("orderly shutdown disposes retained child and Moderator processes plus Owne
 	}
 });
 
-test("child AgentSession patches cannot affect process shutdown or Owner disposal", async () => {
-	const host = await createTestOwnerHost(piAgentCoordination, {
+test("child AgentSession patches cannot affect process shutdown or Owner disposal", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});

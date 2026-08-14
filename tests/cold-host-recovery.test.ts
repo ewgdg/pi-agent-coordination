@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import {
 	fauxAssistantMessage,
@@ -41,8 +41,8 @@ test.after(async () => {
 	await Promise.all(brokers.map((broker) => broker.close()));
 });
 
-test("a fresh Owner host rediscovers one dormant child without starting its Run", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+test("a fresh Owner host rediscovers one dormant child without starting its Run", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	const effectiveCwd = join(host.cwd, "child-effective-cwd");
 	await mkdir(effectiveCwd);
@@ -98,7 +98,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		fauxAssistantMessage("Persist recovered grandchild evidence."),
 	);
 
-	const reopened = await reopenOwner(host, ownerSessionFile);
+	const reopened = await reopenOwner(t, host, ownerSessionFile);
 	const observe = reopened.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const childrenResult = await observe.execute(
@@ -157,7 +157,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 	);
 	await reopened.runtime.dispose();
 
-	const reopenedAgain = await reopenOwner(host, ownerSessionFile);
+	const reopenedAgain = await reopenOwner(t, host, ownerSessionFile);
 	const secondObserve = reopenedAgain.session.getToolDefinition("agent_observe");
 	assert.ok(secondObserve);
 	const secondChildren = await secondObserve.execute(
@@ -176,8 +176,8 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 	await reopenedAgain.runtime.dispose();
 });
 
-test("duplicate spawn claims quarantine only their dependent authority subtree", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+test("duplicate spawn claims quarantine only their dependent authority subtree", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage("First child settled."),
@@ -360,7 +360,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	);
 	const bytesBeforeAdmission = await snapshotDirectory(directory);
 
-	const reopened = await reopenOwner(host, ownerSessionFile);
+	const reopened = await reopenOwner(t, host, ownerSessionFile);
 	const observe = reopened.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const result = await observe.execute(
@@ -438,8 +438,8 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	await reopened.runtime.dispose();
 });
 
-test("opening and closing a cold-recovered answer-obligated Agent keeps it dormant", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+test("opening and closing a cold-recovered answer-obligated Agent keeps it dormant", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
@@ -483,7 +483,7 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
 
-	const reopened = await reopenOwner(host, ownerSessionFile, {
+	const reopened = await reopenOwner(t, host, ownerSessionFile, {
 		implicitModeratorResponses: false,
 	});
 	const observe = reopened.session.getToolDefinition("agent_observe");
@@ -514,8 +514,8 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 	assert.equal(await countModeratorSessions(workflowDirectory), 0);
 });
 
-test("cold successor re-resolves current configuration and recovers residual Creation Request retention", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+test("cold successor re-resolves current configuration and recovers residual Creation Request retention", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	const templateDirectory = join(host.services.agentDir, "agents");
 	const templatePath = join(templateDirectory, "residual.md");
 	await mkdir(templateDirectory, { recursive: true });
@@ -548,7 +548,7 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 		"---\nname: residual-agent\nuse-when: Use for residual work.\nallowed-tools:\n  - read\n  - bash\n---\nCurrent context",
 	);
 
-	const reopened = await reopenOwner(host, ownerSessionFile);
+	const reopened = await reopenOwner(t, host, ownerSessionFile);
 	const observe = reopened.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const ownerStatus = await observe.execute(
@@ -627,8 +627,8 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 	await reopened.runtime.dispose();
 });
 
-test("reopen derives ordinary Request evidence from abandoned branches across compaction", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+test("reopen derives ordinary Request evidence from abandoned branches across compaction", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage("The self Request is delivered but remains unanswered."),
@@ -653,7 +653,7 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
 
-	const reopened = await reopenOwner(host, ownerSessionFile);
+	const reopened = await reopenOwner(t, host, ownerSessionFile);
 	const observe = reopened.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const reopenedStatus = await observe.execute(
@@ -680,7 +680,7 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 	await reopened.session.waitForIdle();
 	await reopened.runtime.dispose();
 
-	const reopenedAgain = await reopenOwner(host, ownerSessionFile);
+	const reopenedAgain = await reopenOwner(t, host, ownerSessionFile);
 	const secondObserve = reopenedAgain.session.getToolDefinition("agent_observe");
 	assert.ok(secondObserve);
 	const resolvedStatus = await secondObserve.execute(
@@ -698,8 +698,8 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 	await reopenedAgain.runtime.dispose();
 });
 
-test("recovered authority keeps physical child order while Dormant view uses Pi recency", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+test("recovered authority keeps physical child order while Dormant view uses Pi recency", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage("First ordered child settled."),
@@ -733,7 +733,7 @@ test("recovered authority keeps physical child order while Dormant view uses Pi 
 		}),
 	);
 
-	const reopened = await reopenOwner(host, ownerSessionFile);
+	const reopened = await reopenOwner(t, host, ownerSessionFile);
 	const observe = reopened.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	const children = await observe.execute(
@@ -760,8 +760,8 @@ test("recovered authority keeps physical child order while Dormant view uses Pi 
 	await reopened.runtime.dispose();
 });
 
-test("a fresh Owner host rediscovers a standalone Moderator without reconstructing handling", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+test("a fresh Owner host rediscovers a standalone Moderator without reconstructing handling", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
@@ -788,7 +788,7 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
 
-	const reopened = await reopenOwner(host, ownerSessionFile, {
+	const reopened = await reopenOwner(t, host, ownerSessionFile, {
 		implicitModeratorResponses: false,
 	});
 	const observe = reopened.session.getToolDefinition("agent_observe");
@@ -889,8 +889,8 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 	await reopened.runtime.dispose();
 });
 
-test("host loss removes exhausted Operational Attention and attempt handling", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+test("host loss removes exhausted Operational Attention and attempt handling", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
 	});
@@ -979,7 +979,7 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 	const ownerSessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
-	const reopened = await reopenOwner(host, ownerSessionFile, {
+	const reopened = await reopenOwner(t, host, ownerSessionFile, {
 		implicitModeratorResponses: false,
 	});
 	const reopenedAgents = await openAgentsSurface(reopened);
@@ -989,8 +989,8 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 	await reopened.runtime.dispose();
 });
 
-test("cold discovery quarantines malformed Moderator bootstrap evidence", async () => {
-	const host = await createUnboundTestOwnerHost(piAgentCoordination, { persistent: true });
+test("cold discovery quarantines malformed Moderator bootstrap evidence", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage("Persist the Owner before malformed candidate discovery."),
@@ -1036,7 +1036,7 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 	await host.runtime.dispose();
 	await waitForSessionFile(candidateDirectory, malformedAgentId);
 
-	const reopened = await reopenOwner(host, ownerSessionFile);
+	const reopened = await reopenOwner(t, host, ownerSessionFile);
 	const observe = reopened.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
 	await assert.rejects(
@@ -1061,6 +1061,7 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 });
 
 async function createUnboundTestOwnerHost(
+	t: TestContext,
 	extension: typeof piAgentCoordination,
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
@@ -1072,7 +1073,7 @@ async function createUnboundTestOwnerHost(
 	});
 	durableModelBrokers.add(broker);
 	try {
-		return await createHostWithDurableModelBroker(extension, broker, options);
+		return await createHostWithDurableModelBroker(t, extension, broker, options);
 	} catch (error) {
 		durableModelBrokers.delete(broker);
 		await broker.close();
@@ -1081,6 +1082,7 @@ async function createUnboundTestOwnerHost(
 }
 
 async function reopenOwner(
+	t: TestContext,
 	previous: TestOwnerHost,
 	sessionFile: string,
 	options?: {
@@ -1090,6 +1092,7 @@ async function reopenOwner(
 	const broker = hostModelBrokers.get(previous);
 	assert.ok(broker, "Expected the previous host's durable process model broker");
 	const reopened = await createHostWithDurableModelBroker(
+		t,
 		piAgentCoordination,
 		broker,
 		{
@@ -1104,11 +1107,12 @@ async function reopenOwner(
 }
 
 async function createHostWithDurableModelBroker(
+	t: TestContext,
 	extension: typeof piAgentCoordination,
 	broker: ProcessModelBroker,
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
-	const host = await createBaseUnboundTestOwnerHost(extension, {
+	const host = await createBaseUnboundTestOwnerHost(t, extension, {
 		...options,
 		processVisibleModel: false,
 		additionalExtensionPaths: [

@@ -12,7 +12,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import piAgentCoordination from "../../src/index.ts";
-import { createUnboundTestOwnerHost } from "../support/pi-host.ts";
+import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
 
 const OWNER_EDITOR_TEXT = "unfinished Owner editor text";
 const DIRECT_AGENT_INPUT = "direct input through child editor";
@@ -46,7 +46,7 @@ if (
 	if (resized.status !== 0) throw new Error("PTY fixture could not resize its terminal");
 }
 
-const host = await createUnboundTestOwnerHost(piAgentCoordination, {
+const host = await createManuallyManagedUnboundTestOwnerHost(piAgentCoordination, {
 	persistent: true,
 	fauxTokensPerSecond: 20_000,
 });

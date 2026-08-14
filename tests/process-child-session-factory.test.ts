@@ -15,6 +15,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
+import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
@@ -31,7 +32,7 @@ import { createProcessModelBroker } from "./support/process-model-broker.ts";
 const TEST_TIMEOUT_MS = 45_000;
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 
-test("a dormant parent is dynamically re-resolved before each descendant Runtime preparation", async () => {
+test("a dormant parent is dynamically re-resolved before each descendant Runtime preparation", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-dynamic-parent-runtime-"));
 	const templateRoot = join(root, "templates");
 	await mkdir(templateRoot);
@@ -40,7 +41,7 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 		templatePath,
 		"---\nname: dynamic-parent\nuse-when: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowed-tools:\n  - read\n  - bash\n---\n",
 	);
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -121,9 +122,9 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 	}
 });
 
-test("a live parent contributes its current synchronized Runtime state", async () => {
+test("a live parent contributes its current synchronized Runtime state", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-live-parent-runtime-"));
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -207,12 +208,12 @@ test("a live parent contributes its current synchronized Runtime state", async (
 test("ordinary production spawn runs in a real child process over Owner participant RPC", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
-}, async () => {
+}, async (t) => {
 	const broker = await createProcessModelBroker({
 		providerId: "process-child-cutover-test",
 		modelId: "process-child-cutover-model",
 	});
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: false,
 		additionalExtensionPaths: [broker.extensionPath],
@@ -246,7 +247,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		),
 		fauxAssistantMessage("Real process child completed after proxied observation."),
 	]);
-	const coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	const coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	try {
@@ -346,14 +347,14 @@ test("ordinary production spawn runs in a real child process over Owner particip
 test("post-Identity process startup failure leaves exact durable evidence and a dormant record", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
-}, async () => {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+}, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: false,
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	const coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	try {
@@ -396,7 +397,7 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 test("Moderator attempts use process Runtimes and one committed failure creates one linked replacement", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
-}, async () => {
+}, async (t) => {
 	const broker = await createProcessModelBroker();
 	initTheme("dark");
 	const ownerTheme = (globalThis as Record<PropertyKey, unknown>)[THEME_KEY];
@@ -416,7 +417,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 		"  });",
 		"}",
 	].join("\n"), { mode: 0o600 });
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: false,
 		additionalExtensionPaths: [broker.extensionPath, moderatorWidgetExtension],
@@ -453,7 +454,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 			errorMessage: "deterministic ordinary process failure",
 		});
 	}));
-	const coordinator = new WorkflowCoordinator(host.runtime, identity, {
+	const coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	let replacementPid: number | undefined;

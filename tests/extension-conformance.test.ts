@@ -36,14 +36,14 @@ const plainTheme = {
 	bold: (text: string) => text,
 } as unknown as Theme;
 
-test("child session surfaces cancel native session replacement", async () => {
+test("child session surfaces cancel native session replacement", async (t) => {
 	const unavailableView = () => {
 		throw new Error("Child session command conformance does not execute coordination behavior");
 	};
 	const extension = createAgentBoundExtension(
 		unavailableView as () => OrdinaryAgentCoordinatorView,
 	);
-	const host = await createTestOwnerHost(extension, { persistent: true });
+	const host = await createTestOwnerHost(t, extension, { persistent: true });
 	const sessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(sessionFile);
 	assert.deepEqual(
@@ -66,7 +66,7 @@ test("child session surfaces cancel native session replacement", async () => {
 
 test("role-bound extensions expose strict sequential tools with compact native renderers", async (t) => {
 	for (const role of ["ordinary", "moderator"] as const) {
-		await t.test(role, async () => {
+		await t.test(role, async (t) => {
 			const unavailableView = () => {
 				throw new Error("Role conformance does not execute coordination behavior");
 			};
@@ -77,7 +77,7 @@ test("role-bound extensions expose strict sequential tools with compact native r
 				: createModeratorBoundExtension(
 					unavailableView as () => ModeratorAgentCoordinatorView,
 				);
-			const host = await createTestOwnerHost(extension, {
+			const host = await createTestOwnerHost(t, extension, {
 				processVisibleModel: false,
 			});
 			const expectedTools = role === "ordinary" ? ordinaryTools : moderatorTools;
@@ -99,16 +99,16 @@ test("role-bound extensions expose strict sequential tools with compact native r
 	}
 });
 
-test("coordination renderers keep collapsed receipts to one bounded line", async () => {
+test("coordination renderers keep collapsed receipts to one bounded line", async (t) => {
 	const unavailableView = () => {
 		throw new Error("Renderer conformance does not execute coordination behavior");
 	};
-	const ordinaryHost = await createTestOwnerHost(
+	const ordinaryHost = await createTestOwnerHost(t,
 		createAgentBoundExtension(
 			unavailableView as () => OrdinaryAgentCoordinatorView,
 		),
 	);
-	const moderatorHost = await createTestOwnerHost(
+	const moderatorHost = await createTestOwnerHost(t,
 		createModeratorBoundExtension(
 			unavailableView as () => ModeratorAgentCoordinatorView,
 		),
@@ -197,12 +197,12 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 	await moderatorHost.runtime.dispose();
 });
 
-test("Human Request owns a transcript-native question and Answer shell", async () => {
+test("Human Request owns a transcript-native question and Answer shell", async (t) => {
 	initTheme("dark");
 	const unavailableView = () => {
 		throw new Error("Renderer conformance does not execute coordination behavior");
 	};
-	const host = await createTestOwnerHost(
+	const host = await createTestOwnerHost(t,
 		createAgentBoundExtension(
 			unavailableView as () => OrdinaryAgentCoordinatorView,
 		),

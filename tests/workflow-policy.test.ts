@@ -58,10 +58,9 @@ test("strict Workflow Policy parsing rejects the complete invalid document", () 
 });
 
 test("Workflow Policy loads only the exact optional user file", async (t) => {
-	const host = await createUnboundTestOwnerHost(() => undefined, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		processVisibleModel: false,
 	});
-	t.after(() => host.runtime.dispose());
 	const expectedPolicyPath = join(
 		host.services.agentDir,
 		"config",
