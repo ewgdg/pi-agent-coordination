@@ -37,7 +37,7 @@ import {
 
 export type ParticipantCoordinationRole = "ordinary" | "moderator" | "owner";
 
-const AGENT_TOOLS_PROMPT_GUIDE = `<agent_tools>
+const AGENT_TOOLS_PROMPT_GUIDE = `<agent_control>
 A successful asynchronous Message send returns messageStatus "sent". This includes ordinary Messages, Agent Requests, and the Creation Request sent by agent_spawn. A successful agent_spawn also returns spawnStatus "created".
 
 "sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
@@ -45,7 +45,7 @@ A successful asynchronous Message send returns messageStatus "sent". This includ
 After a receipt containing requestMessageId with messageStatus "sent", continue only independent work or end the turn. The correlated Agent Answer will be delivered automatically; do not poll merely to wait.
 
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
-</agent_tools>`;
+</agent_control>`;
 
 export type AgentObserveInput = Readonly<{
 	operation: "status" | "children";

@@ -213,8 +213,8 @@ test("Template catalogue is injected into the model prompt", async (t) => {
 	await host.runtime.dispose();
 });
 
-test("participant registrar contributes one shared asynchronous Agent tools guide", async (t) => {
-	const expectedGuide = `<agent_tools>
+test("participant registrar contributes one shared asynchronous Agent control guide", async (t) => {
+	const expectedGuide = `<agent_control>
 A successful asynchronous Message send returns messageStatus "sent". This includes ordinary Messages, Agent Requests, and the Creation Request sent by agent_spawn. A successful agent_spawn also returns spawnStatus "created".
 
 "sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
@@ -222,7 +222,7 @@ A successful asynchronous Message send returns messageStatus "sent". This includ
 After a receipt containing requestMessageId with messageStatus "sent", continue only independent work or end the turn. The correlated Agent Answer will be delivered automatically; do not poll merely to wait.
 
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
-</agent_tools>`;
+</agent_control>`;
 	let observedSystemPrompt = "";
 	const host = await createRegistrarHost(t, "ordinary", handlers);
 	const message = host.session.getToolDefinition("agent_message");
@@ -237,8 +237,8 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 	}]);
 
 	await host.session.prompt("Inspect the Agent tool guidance.");
-	assert.equal(observedSystemPrompt.split("<agent_tools>").length - 1, 1);
-	assert.equal(observedSystemPrompt.split("</agent_tools>").length - 1, 1);
+	assert.equal(observedSystemPrompt.split("<agent_control>").length - 1, 1);
+	assert.equal(observedSystemPrompt.split("</agent_control>").length - 1, 1);
 	assert.match(observedSystemPrompt, /continue only independent work or end the turn/);
 	await host.runtime.dispose();
 });
