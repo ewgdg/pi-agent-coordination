@@ -416,6 +416,7 @@ class CapturedExtensionApi {
 		},
 		registerTool() {},
 		registerCommand() {},
+		registerMessageRenderer() {},
 	} as unknown as ExtensionAPI;
 
 	async emit(

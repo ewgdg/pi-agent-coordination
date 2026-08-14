@@ -38,6 +38,7 @@ import {
 import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
 import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
 import { registerAgentTemplateCataloguePrompt } from "../tools/agent-template-catalogue-prompt.ts";
+import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
 import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
@@ -94,6 +95,7 @@ const childControls = (
 );
 
 const childRuntimeBridge: ExtensionFactory = async (pi) => {
+	registerMessageDeliveryRenderer(pi);
 	const bootstrap = await readBootstrapDescriptor();
 	const interactiveBridge = installInteractiveHostBridge(hostPi);
 	let state: ChildControlState | undefined;

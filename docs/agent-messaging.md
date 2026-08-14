@@ -44,6 +44,10 @@ The initial receipt reports live sending only:
 
 An ordinary Message receipt returns its source-derived `messageId`. An Agent Request receipt instead returns `requestMessageId`, the Request Message's source-derived identity.
 
+## Delivery presentation
+
+The recipient transcript renders each delivered item as a readable message block. Its collapsed view shows the Message type, sender Agent identity, and a body snippet bounded to two terminal-width-aware lines. Expanding the block shows the complete Message, Request question, Answer, or Cancellation reason with Markdown formatting. Batched Deliveries keep each item's sender and type visible instead of presenting the protocol JSON.
+
 ## Request one Answer
 
 Use a Request when the recipient owes one mechanically correlated Answer:

@@ -18,6 +18,7 @@ import {
 	assertTypeboxModuleShape,
 } from "./pi-integration/host-shape.ts";
 import { installInteractiveHostBridge } from "./pi-integration/interactive-host-bridge.ts";
+import { registerMessageDeliveryRenderer } from "./tools/message-delivery-renderer.ts";
 import {
 	activateOwnerAgentTools,
 	deactivateOwnerAgentTools,
@@ -32,6 +33,7 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	assertPiAiModuleShape(hostAi, hostPi.VERSION);
 	assertTuiModuleShape(hostTui, hostPi.VERSION);
 	assertTypeboxModuleShape(hostTypebox, hostPi.VERSION);
+	registerMessageDeliveryRenderer(pi);
 	const bridge = installInteractiveHostBridge(hostPi);
 	let currentWorkflowOwnerAdmitted = false;
 	let resolveOwnerView: (() => OrdinaryAgentCoordinatorView) | undefined;

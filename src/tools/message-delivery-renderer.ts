@@ -1,0 +1,133 @@
+import {
+	getMarkdownTheme,
+	type ExtensionAPI,
+	type MessageRenderOptions,
+	type Theme,
+} from "@earendil-works/pi-coding-agent";
+import {
+	Box,
+	Markdown,
+	Spacer,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+	type Component,
+} from "@earendil-works/pi-tui";
+
+import {
+	MESSAGE_DELIVERY_CUSTOM_TYPE,
+	parseMessageDeliveryContent,
+	type ModelVisibleMessage,
+} from "../protocol/message-delivery.ts";
+
+const COLLAPSED_BODY_LINES = 2;
+
+export function registerMessageDeliveryRenderer(pi: ExtensionAPI): void {
+	pi.registerMessageRenderer(
+		MESSAGE_DELIVERY_CUSTOM_TYPE,
+		renderMessageDelivery,
+	);
+}
+
+export function renderMessageDelivery(
+	message: Readonly<{ content: unknown }>,
+	options: MessageRenderOptions,
+	theme: Theme,
+): Component {
+	const projections = parseMessageDeliveryContent(message.content);
+	const box = new Box(
+		options.outputPad,
+		1,
+		(content) => theme.bg("customMessageBg", content),
+	);
+
+	for (const [index, projection] of projections.entries()) {
+		if (index > 0) box.addChild(new Spacer(1));
+		box.addChild(new Text(renderHeader(projection, theme), 0, 0));
+		if (options.expanded) {
+			box.addChild(new Spacer(1));
+			box.addChild(new Markdown(
+				messageBody(projection),
+				0,
+				0,
+				getMarkdownTheme(),
+				{ color: (content) => theme.fg("customMessageText", content) },
+				{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+			));
+		} else {
+			box.addChild(new CollapsedBodyPreview(
+				messageBody(projection),
+				(content) => theme.fg("customMessageText", content),
+			));
+		}
+	}
+
+	return box;
+}
+
+class CollapsedBodyPreview implements Component {
+	readonly #body: string;
+	readonly #color: (content: string) => string;
+
+	constructor(body: string, color: (content: string) => string) {
+		this.#body = body;
+		this.#color = color;
+	}
+
+	render(width: number): string[] {
+		if (width <= 0) return [];
+		const normalized = this.#body.replaceAll(/\s+/g, " ").trim();
+		const lines = wrapTextWithAnsi(this.#color(normalized), width);
+		if (lines.length <= COLLAPSED_BODY_LINES) return lines;
+
+		const visibleLines = lines.slice(0, COLLAPSED_BODY_LINES);
+		const ellipsis = this.#color("…");
+		const bodyWidth = Math.max(0, width - visibleWidth(ellipsis));
+		visibleLines[COLLAPSED_BODY_LINES - 1] =
+			truncateToWidth(
+				visibleLines[COLLAPSED_BODY_LINES - 1]!,
+				bodyWidth,
+				"",
+			) + ellipsis;
+		return visibleLines;
+	}
+
+	invalidate(): void {}
+}
+
+function renderHeader(projection: ModelVisibleMessage, theme: Theme): string {
+	return [
+		theme.fg(
+			"customMessageLabel",
+			theme.bold(`[${messageTypeLabel(projection.kind)}]`),
+		),
+		theme.fg("muted", ` from ${projection.fromAgentId}`),
+	].join("");
+}
+
+function messageTypeLabel(kind: ModelVisibleMessage["kind"]): string {
+	switch (kind) {
+		case "message":
+			return "Message";
+		case "request":
+			return "Request";
+		case "answer":
+			return "Answer";
+		case "request_cancellation":
+			return "Request cancellation";
+	}
+}
+
+function messageBody(projection: ModelVisibleMessage): string {
+	switch (projection.kind) {
+		case "message":
+			return projection.content;
+		case "request":
+			return projection.question;
+		case "answer":
+			return projection.answer;
+		case "request_cancellation":
+			return projection.reason;
+	}
+}

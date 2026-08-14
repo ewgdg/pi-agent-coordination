@@ -215,7 +215,7 @@ function parseMessageDelivery(
 	projections: readonly ModelVisibleMessage[];
 }> {
 	const sources = parseDeliverySources(details);
-	const projections = parseDeliveryContent(content);
+	const projections = parseMessageDeliveryContent(content);
 	if (sources.length !== projections.length) {
 		throw new ProtocolInvariantError(
 			"Message Delivery source and projection counts differ",
@@ -259,7 +259,7 @@ function parseDeliverySources(value: unknown): ToolCallPointer[] {
 	return sources;
 }
 
-function parseDeliveryContent(value: unknown): ModelVisibleMessage[] {
+export function parseMessageDeliveryContent(value: unknown): readonly ModelVisibleMessage[] {
 	if (typeof value !== "string") {
 		throw new ProtocolInvariantError("Message Delivery content must be JSON text");
 	}
