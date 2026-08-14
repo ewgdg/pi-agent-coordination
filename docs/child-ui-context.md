@@ -1,6 +1,6 @@
 # Child UI context
 
-Every non-Owner ordinary Agent and Moderator runs in a fresh Pi CLI process with a real pseudoterminal. The child owns one `AgentSessionRuntime`, one `AgentSession`, one fullscreen `InteractiveMode`, and the live session JSONL. Its extension context is truthful: `ctx.mode === "tui"` and `ctx.hasUI === true`.
+Every non-Owner ordinary Agent and Moderator runs in a fresh Pi CLI process with a real pseudoterminal. The child owns one `AgentSessionRuntime`, one `AgentSession`, one fullscreen `InteractiveMode`, and the live session JSONL. Its extension context is truthful: `ctx.mode === "tui"` and `ctx.hasUI === true`. During public TUI session binding, the Runtime Bridge associates Pi's public Runtime registration with the exact `SessionManager`. A zero-line extension widget receives and retains Pi's stable public `TUI` reference for physical presentation handoff.
 
 The Owner process remains the Workflow authority. It owns scheduling, retention, Requests, Messages, Operational Incidents, child process supervision, and the physical human attachment.
 

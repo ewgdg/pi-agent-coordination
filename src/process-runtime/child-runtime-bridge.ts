@@ -1,4 +1,4 @@
-import "./child-runtime-interactive-mode.ts";
+import { bindChildInteractiveInputLifecycle } from "./child-runtime-interactive-mode.ts";
 
 import * as hostPi from "@earendil-works/pi-coding-agent";
 import type {
@@ -142,9 +142,13 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		if (ctx.mode !== "tui" || !ctx.hasUI) {
 			throw new Error("child_runtime_bridge_requires_tui: expected mode=tui and hasUI=true");
 		}
-		const capture = await interactiveBridge.capture(ctx.sessionManager as hostPi.SessionManager);
-		assertExpectedSession(capture.runtime, bootstrap);
-		const retained = childControls.get(capture.runtime.session);
+		const capture = await interactiveBridge.capture(
+			ctx.sessionManager as hostPi.SessionManager,
+			ctx.ui,
+		);
+		const { runtime } = capture;
+		assertExpectedSession(runtime, bootstrap);
+		const retained = childControls.get(runtime.session);
 		if (retained && event.reason !== "reload") {
 			throw new Error("child_runtime_bridge_rebound: session replacement is not supported");
 		}
@@ -179,7 +183,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				shutdownStarted: false,
 				inputSubmissionAcknowledger,
 			};
-			childControls.set(capture.runtime.session, state);
+			childControls.set(runtime.session, state);
 			channel.onRequest((request) => requireCurrentBinding(state as ChildControlState)
 				.handleOwnerRequest(request));
 			channel.onEvent((event) => requireCurrentBinding(state as ChildControlState)
@@ -193,14 +197,19 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			inputSubmissionAcknowledgment.handleInput(data);
 			return undefined;
 		});
+		const inputLifecycle = {
+			started: () => currentState.channel.sendEvent("runtime.input.started", {}),
+			completed: () => currentState.channel.sendEvent("runtime.input.completed", {}),
+		};
 		const binding = createChildRuntimeBinding(
 			currentState,
-			capture.runtime,
+			runtime,
 			ctx,
 			capture.reinitializePresentation,
 			bootstrap.agentId,
 			inputSubmissionAcknowledgment,
 			removeInputSubmissionListener,
+			bindChildInteractiveInputLifecycle(runtime.session, inputLifecycle),
 		);
 		currentState.currentBinding = binding;
 		currentState.shutdownStarted = false;
@@ -210,11 +219,6 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			ctx.sessionManager,
 			createParticipantInputHandler(participantLifecycle),
 		);
-		const inputLifecycle = {
-			started: () => currentState.channel.sendEvent("runtime.input.started", {}),
-			completed: () => currentState.channel.sendEvent("runtime.input.completed", {}),
-		};
-		capture.observeInputLifecycle(inputLifecycle);
 		const channel = currentState.channel;
 		try {
 			assertExpectedSession(binding.runtime, bootstrap);
@@ -263,6 +267,7 @@ function createChildRuntimeBinding(
 	agentId: string,
 	inputSubmissionAcknowledgment: TerminalInputSubmissionAcknowledgmentBinding,
 	removeInputSubmissionListener: () => void,
+	removeInputLifecycleObserver: () => void,
 ): ChildRuntimeBinding {
 	let binding!: ChildRuntimeBinding;
 	const activity = new RemoteAgentActivitySource(agentId);
@@ -301,6 +306,7 @@ function createChildRuntimeBinding(
 			context.shutdown();
 		},
 		dispose() {
+			removeInputLifecycleObserver();
 			inputSubmissionAcknowledgment.dispose();
 			removeInputSubmissionListener();
 			removeLifecycleSubscription();

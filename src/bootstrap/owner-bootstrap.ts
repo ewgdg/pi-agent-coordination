@@ -50,6 +50,7 @@ export async function initializeOwnerWorkflow(options: {
 	const { pi, ctx, bridge, entryModulePath, bootstrapHandler, event } = options;
 	const { runtime } = await bridge.capture(
 		ctx.sessionManager as AgentSession["sessionManager"],
+		ctx.ui,
 	);
 	const existing = initializedWorkflows.get(runtime.session);
 	if (existing) {

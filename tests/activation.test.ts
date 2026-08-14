@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import * as hostPi from "@earendil-works/pi-coding-agent";
-
 import piAgentCoordination from "../src/index.ts";
 import {
 	bindTestOwnerHost,
@@ -10,14 +8,9 @@ import {
 } from "./support/pi-host.ts";
 
 test("print, JSON, and RPC modes keep coordination tools inactive", async (t) => {
-	const nativeSetRebindSession = hostPi.AgentSessionRuntime.prototype.setRebindSession;
 	for (const mode of ["print", "json", "rpc"] as const) {
 		await t.test(mode, async (t) => {
 			const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
-			assert.equal(
-				hostPi.AgentSessionRuntime.prototype.setRebindSession,
-				nativeSetRebindSession,
-			);
 			host.runtime.setRebindSession(async () => undefined);
 			await bindTestOwnerHost(host, mode);
 
@@ -42,7 +35,7 @@ test("print, JSON, and RPC modes keep coordination tools inactive", async (t) =>
 	}
 });
 
-test("headless startup never admits or inspects a malformed interactive runtime", async (t) => {
+test("headless startup never validates a malformed interactive Runtime", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const originalSendCustomMessage = host.session.sendCustomMessage;
 	Object.defineProperty(host.session, "sendCustomMessage", {

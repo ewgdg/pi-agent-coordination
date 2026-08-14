@@ -11,7 +11,6 @@ import piAgentCoordination from "../src/index.ts";
 import {
 	assertExtensionApiShape,
 	assertHostModuleShape,
-	assertInteractiveModeInstanceShape,
 	assertPiAiModuleShape,
 	assertRuntimeInstanceShape,
 	assertTuiModuleShape,
@@ -21,8 +20,8 @@ import {
 import { installInteractiveHostBridge } from "../src/pi-integration/interactive-host-bridge.ts";
 import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
 
-type InteractivePrototype = {
-	bindCurrentSessionExtensions(): Promise<void>;
+type RuntimePrototype = {
+	setRebindSession(rebindSession?: (session: hostPi.AgentSession) => Promise<void>): void;
 };
 
 test("the package declares exactly the Pi host modules imported by production", async () => {
@@ -51,10 +50,8 @@ test("host preflight identifies a missing export without installing a patch", ()
 		...hostPi,
 		createAgentSessionServices: undefined,
 	};
-	const interactivePrototype = fixture.InteractiveMode
-		.prototype as unknown as InteractivePrototype;
-	const originalBindCurrentSessionExtensions =
-		interactivePrototype.bindCurrentSessionExtensions;
+	const runtimePrototype = fixture.AgentSessionRuntime.prototype as RuntimePrototype;
+	const originalSetRebindSession = runtimePrototype.setRebindSession;
 
 	assert.throws(
 		() => installInteractiveHostBridge(fixture),
@@ -64,12 +61,90 @@ test("host preflight identifies a missing export without installing a patch", ()
 			error.message.includes(`running Pi ${hostPi.VERSION}`),
 	);
 	assert.equal(
-		interactivePrototype.bindCurrentSessionExtensions,
-		originalBindCurrentSessionExtensions,
+		runtimePrototype.setRebindSession,
+		originalSetRebindSession,
 	);
 });
 
-test("host preflight identifies a malformed private seam by canonical name", () => {
+test("host bridge captures the Runtime without private InteractiveMode members", async (t) => {
+	class PublicRuntime extends hostPi.AgentSessionRuntime {}
+	class PublicSession extends hostPi.AgentSession {}
+	class PublicInteractiveMode {
+		getUserInput(): Promise<string> {
+			return Promise.resolve("");
+		}
+	}
+	const host = await createUnboundTestOwnerHost(t, () => undefined);
+	Object.setPrototypeOf(host.runtime, PublicRuntime.prototype);
+	Object.setPrototypeOf(host.session, PublicSession.prototype);
+	const bridge = installInteractiveHostBridge({
+		...hostPi,
+		AgentSession: PublicSession,
+		AgentSessionRuntime: PublicRuntime,
+		InteractiveMode: PublicInteractiveMode,
+	});
+	const capture = bridge.capture(
+		host.session.sessionManager,
+		createPresentationCaptureUi([]),
+	);
+
+	host.runtime.setRebindSession(async () => undefined);
+
+	assert.equal((await capture).runtime, host.runtime);
+});
+
+test("host bridge follows public Runtime rebinding to a replacement session", { timeout: 1_000 }, async (t) => {
+	class PublicRuntime extends hostPi.AgentSessionRuntime {
+		observedRebind?: (session: hostPi.AgentSession) => Promise<void>;
+
+		override setRebindSession(
+			rebindSession?: (session: hostPi.AgentSession) => Promise<void>,
+		): void {
+			this.observedRebind = rebindSession;
+		}
+	}
+	class PublicSession extends hostPi.AgentSession {}
+	class PublicInteractiveMode {
+		getUserInput(): Promise<string> {
+			return Promise.resolve("");
+		}
+	}
+	const host = await createUnboundTestOwnerHost(t, () => undefined);
+	Object.setPrototypeOf(host.runtime, PublicRuntime.prototype);
+	Object.setPrototypeOf(host.session, PublicSession.prototype);
+	const bridge = installInteractiveHostBridge({
+		...hostPi,
+		AgentSession: PublicSession,
+		AgentSessionRuntime: PublicRuntime,
+		InteractiveMode: PublicInteractiveMode,
+	});
+	const presentationLifecycle: string[] = [];
+	const replacementSessionManager = hostPi.SessionManager.inMemory(host.cwd);
+	host.runtime.setRebindSession(async (session) => {
+		presentationLifecycle.push("rebind:start");
+		await bridge.capture(
+			session.sessionManager,
+			createPresentationCaptureUi(presentationLifecycle),
+		);
+		presentationLifecycle.push("rebind:end");
+	});
+	await bridge.capture(
+		host.session.sessionManager,
+		createPresentationCaptureUi(presentationLifecycle),
+	);
+
+	await (host.runtime as PublicRuntime).observedRebind?.({
+		sessionManager: replacementSessionManager,
+	} as hostPi.AgentSession);
+
+	assert.deepEqual(presentationLifecycle, [
+		"rebind:start",
+		"rebind:end",
+		"render:true",
+	]);
+});
+
+test("host preflight identifies a malformed public seam by canonical name", () => {
 	function MalformedInteractiveMode() {}
 	MalformedInteractiveMode.prototype = Object.create(hostPi.InteractiveMode.prototype, {
 		getUserInput: { configurable: true, value: undefined },
@@ -129,6 +204,7 @@ test("host preflight covers every host constructor member used after admission",
 
 test("module preflight rejects every required host export and prototype seam", () => {
 	const requirements = [
+		["AgentSession"],
 		["AgentSessionRuntime"],
 		["InteractiveMode"],
 		["SessionManager"],
@@ -141,10 +217,9 @@ test("module preflight rejects every required host export and prototype seam", (
 		["getPackageDir"],
 		["hasTrustRequiringProjectResources"],
 		["CURRENT_SESSION_VERSION"],
-		...[
-			"bindCurrentSessionExtensions",
-			"getUserInput",
-		].map((member) => ["InteractiveMode", "prototype", member]),
+		["InteractiveMode", "prototype", "getUserInput"],
+		["AgentSessionRuntime", "prototype", "setRebindSession"],
+		["AgentSession", "prototype", "bindExtensions"],
 		...["create", "open", "continueRecent", "inMemory"].map(
 			(member) => ["SessionManager", member],
 		),
@@ -260,6 +335,7 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 		] as const),
 		[["session"], "AgentSession"],
 		...[
+			"bindExtensions",
 			"prompt",
 			"sendUserMessage",
 			"sendCustomMessage",
@@ -310,45 +386,11 @@ test("live preflight admits a Runtime without private committed-input continuati
 	);
 });
 
-test("live preflight rejects every required InteractiveMode seam", async (t) => {
-	const host = await createUnboundTestOwnerHost(t, () => undefined);
-	const mode = {
-		runtimeHost: host.runtime,
-		ui: {
-			requestRender() {},
-			start() {},
-			stop() {},
-		},
-	};
-	const requirements = [
-		[["runtimeHost"], "InteractiveMode.runtimeHost"],
-		[["runtimeHost", "session"], "InteractiveMode.runtimeHost.session"],
-		[["ui"], "InteractiveMode.ui"],
-		[["ui", "requestRender"], "InteractiveMode.ui.requestRender"],
-		[["ui", "start"], "InteractiveMode.ui.start"],
-		[["ui", "stop"], "InteractiveMode.ui.stop"],
-	] as const;
-	for (const [path, expected] of requirements) {
-		assert.throws(
-			() => assertInteractiveModeInstanceShape(withoutMemberAtPath(mode, path)),
-			(error: unknown) =>
-				error instanceof IncompatiblePiHostError &&
-				error.memberName === expected,
-			expected,
-		);
-	}
-	await host.runtime.dispose();
-});
-
 test("preflight rejects read-only prototype seams that coordination mutates", () => {
 	for (const [path, expected] of [
-		...[
-			"bindCurrentSessionExtensions",
-			"getUserInput",
-		].map((member) => [
-			["InteractiveMode", "prototype", member],
-			`InteractiveMode.prototype.${member}`,
-		] as const),
+		[["InteractiveMode", "prototype", "getUserInput"], "InteractiveMode.prototype.getUserInput"],
+		[["AgentSessionRuntime", "prototype", "setRebindSession"], "AgentSessionRuntime.prototype.setRebindSession"],
+		[["AgentSession", "prototype", "bindExtensions"], "AgentSession.prototype.bindExtensions"],
 	] as const) {
 		assert.throws(
 			() => assertHostModuleShape(hostModuleWithReadonlyMember(path)),
@@ -422,10 +464,8 @@ test("host preflight validates running-host AI and schema values", () => {
 
 test("host bridge installation remains idempotent across extension and host module reload", async () => {
 	installInteractiveHostBridge(hostPi);
-	const interactivePrototype = hostPi.InteractiveMode
-		.prototype as unknown as InteractivePrototype;
-	const installedBindCurrentSessionExtensions =
-		interactivePrototype.bindCurrentSessionExtensions;
+	const runtimePrototype = hostPi.AgentSessionRuntime.prototype as RuntimePrototype;
+	const installedSetRebindSession = runtimePrototype.setRebindSession;
 	const reloadedModuleUrl = new URL(
 		"../src/pi-integration/interactive-host-bridge.ts",
 		import.meta.url,
@@ -440,16 +480,61 @@ test("host bridge installation remains idempotent across extension and host modu
 	reloadedBridgeModule.installInteractiveHostBridge({ ...hostPi });
 
 	assert.equal(
-		interactivePrototype.bindCurrentSessionExtensions,
-		installedBindCurrentSessionExtensions,
+		runtimePrototype.setRebindSession,
+		installedSetRebindSession,
 	);
+});
+
+test("failed interactive admission restores the Runtime's native rebind callback", async (t) => {
+	class PublicRuntime extends hostPi.AgentSessionRuntime {
+		observedRebind?: (session: hostPi.AgentSession) => Promise<void>;
+
+		override setRebindSession(
+			rebindSession?: (session: hostPi.AgentSession) => Promise<void>,
+		): void {
+			this.observedRebind = rebindSession;
+		}
+	}
+	class PublicSession extends hostPi.AgentSession {}
+	class PublicInteractiveMode {
+		getUserInput(): Promise<string> {
+			return Promise.resolve("");
+		}
+	}
+	const host = await createUnboundTestOwnerHost(t, () => undefined);
+	Object.setPrototypeOf(host.runtime, PublicRuntime.prototype);
+	Object.setPrototypeOf(host.session, PublicSession.prototype);
+	installInteractiveHostBridge({
+		...hostPi,
+		AgentSession: PublicSession,
+		AgentSessionRuntime: PublicRuntime,
+		InteractiveMode: PublicInteractiveMode,
+	});
+	const nativeRebind = async () => undefined;
+	host.runtime.setRebindSession(nativeRebind);
+	const originalSendCustomMessage = host.session.sendCustomMessage;
+	Object.defineProperty(host.session, "sendCustomMessage", {
+		configurable: true,
+		value: undefined,
+	});
+
+	await assert.rejects(
+		() => host.session.bindExtensions({ uiContext: host.ui, mode: "tui" }),
+		/AgentSession\.sendCustomMessage/,
+	);
+
+	assert.equal((host.runtime as PublicRuntime).observedRebind, nativeRebind);
+	Object.defineProperty(host.session, "sendCustomMessage", {
+		configurable: true,
+		value: originalSendCustomMessage,
+	});
 });
 
 test("runtime capture rejects a malformed live AgentSession before bootstrap", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
-	const interactivePrototype = hostPi.InteractiveMode
-		.prototype as unknown as InteractivePrototype;
-	const installedCapture = interactivePrototype.bindCurrentSessionExtensions;
+	const runtimePrototype = hostPi.AgentSessionRuntime.prototype as RuntimePrototype;
+	const installedCapture = runtimePrototype.setRebindSession;
+	const installedSessionBinding = hostPi.AgentSession.prototype.bindExtensions;
 	const originalSendCustomMessage = host.session.sendCustomMessage;
 	Object.defineProperty(host.session, "sendCustomMessage", {
 		configurable: true,
@@ -473,9 +558,14 @@ test("runtime capture rejects a malformed live AgentSession before bootstrap", a
 		false,
 	);
 	assert.notEqual(
-		interactivePrototype.bindCurrentSessionExtensions,
+		runtimePrototype.setRebindSession,
 		installedCapture,
-		"failed live admission must restore the native host prototype",
+		"failed live admission must restore the native Runtime prototype",
+	);
+	assert.notEqual(
+		hostPi.AgentSession.prototype.bindExtensions,
+		installedSessionBinding,
+		"failed live admission must restore the native session prototype",
 	);
 	Object.defineProperty(host.session, "sendCustomMessage", {
 		configurable: true,
@@ -483,6 +573,26 @@ test("runtime capture rejects a malformed live AgentSession before bootstrap", a
 	});
 	await host.runtime.dispose();
 });
+
+function createPresentationCaptureUi(
+	lifecycle: string[],
+): hostPi.ExtensionUIContext {
+	const tui = {
+		stop() {},
+		start() {},
+		requestRender(force?: boolean) {
+			lifecycle.push(`render:${String(force)}`);
+		},
+	};
+	return {
+		setWidget(
+			_key: string,
+			factory: Parameters<hostPi.ExtensionUIContext["setWidget"]>[1],
+		) {
+			if (typeof factory === "function") factory(tui as never, {} as never);
+		},
+	} as unknown as hostPi.ExtensionUIContext;
+}
 
 function withoutMemberAtPath<T extends object>(
 	target: T,

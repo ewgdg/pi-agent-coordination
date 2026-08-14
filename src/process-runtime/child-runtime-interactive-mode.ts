@@ -5,35 +5,59 @@ type InputLifecycleObserver = Readonly<{
 	completed(): Promise<void>;
 }>;
 
-type InteractiveModeWithInputLifecycle = InstanceType<typeof hostPi.InteractiveMode> & {
-	observeInputLifecycle?: InputLifecycleObserver;
+type InteractivePrototype = {
+	getUserInput(): Promise<string>;
 };
 
-type InteractivePrototype = {
-	getUserInput(this: InteractiveModeWithInputLifecycle): Promise<string>;
+type InputLifecycleBinding = Readonly<{
+	session: hostPi.AgentSession;
+	observer: InputLifecycleObserver;
+}>;
+
+type InputPatchState = {
+	binding?: InputLifecycleBinding;
 };
 
 const PATCH_REGISTRY_KEY = "__piAgentCoordinationChildInteractiveInputPatch";
 const globalPatchRegistry = globalThis as typeof globalThis & {
-	[PATCH_REGISTRY_KEY]?: WeakSet<object>;
+	[PATCH_REGISTRY_KEY]?: WeakMap<object, InputPatchState>;
 };
-const patchedPrototypes = globalPatchRegistry[PATCH_REGISTRY_KEY] ??= new WeakSet();
-const prototype = hostPi.InteractiveMode.prototype as InteractivePrototype;
+const patchStates = globalPatchRegistry[PATCH_REGISTRY_KEY] ??= new WeakMap();
+const prototype = hostPi.InteractiveMode.prototype as unknown as InteractivePrototype;
+let state = patchStates.get(prototype);
+if (!state) {
+	const installedState: InputPatchState = {};
+	installInputLifecyclePatch(prototype, installedState);
+	patchStates.set(prototype, installedState);
+	state = installedState;
+}
+const inputPatchState = state;
 
-if (!patchedPrototypes.has(prototype)) {
-	patchedPrototypes.add(prototype);
-	const originalGetUserInput = prototype.getUserInput;
-	prototype.getUserInput = async function getObservedUserInput(
-		this: InteractiveModeWithInputLifecycle,
-	): Promise<string> {
+/** Bind the one child process's interactive loop to its already captured public session. */
+export function bindChildInteractiveInputLifecycle(
+	session: hostPi.AgentSession,
+	observer: InputLifecycleObserver,
+): () => void {
+	const binding = { session, observer };
+	inputPatchState.binding = binding;
+	return () => {
+		if (inputPatchState.binding === binding) inputPatchState.binding = undefined;
+	};
+}
+
+function installInputLifecyclePatch(
+	interactivePrototype: InteractivePrototype,
+	patchState: InputPatchState,
+): void {
+	const originalGetUserInput = interactivePrototype.getUserInput;
+	interactivePrototype.getUserInput = async function getObservedUserInput(): Promise<string> {
 		const input = await originalGetUserInput.call(this);
-		const observer = this.observeInputLifecycle;
-		if (!observer) return input;
+		const binding = patchState.binding;
+		if (!binding) return input;
 
 		// Admit the input lifecycle before Pi can enter an inherited async preflight.
-		await observer.started();
-		const session = (this as unknown as { runtimeHost: hostPi.AgentSessionRuntime })
-			.runtimeHost.session;
+		await binding.observer.started();
+		const { session, observer } = binding;
 		const originalPrompt = session.prompt;
 		let invoked = false;
 		let inputCompleted = false;

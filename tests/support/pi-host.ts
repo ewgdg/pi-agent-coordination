@@ -9,7 +9,6 @@ import {
 } from "@earendil-works/pi-ai";
 import {
 	AgentSessionRuntime,
-	InteractiveMode,
 	ModelRuntime,
 	SessionManager,
 	SettingsManager,
@@ -76,7 +75,7 @@ export type TestUi = ExtensionUIContext & {
 	readonly notifications: Array<{ message: string; type?: "info" | "warning" | "error" }>;
 	readonly customSurfaces: Component[];
 	readonly statuses: Map<string, string>;
-	readonly widgets: Map<string, readonly string[]>;
+	readonly widgets: Map<string, readonly string[] | Component>;
 };
 
 export type TestOwnerHost = {
@@ -324,88 +323,18 @@ export async function bindTestOwnerHost(
 	host: TestOwnerHost,
 	mode: "tui" | "rpc" | "json" | "print",
 ): Promise<void> {
-	if (mode === "tui") {
-		// InteractiveMode installs these callbacks before it binds extensions. Using
-		// the real runtime here preserves that observable startup order without a TTY.
-		host.runtime.setBeforeSessionInvalidate(() => undefined);
-		host.runtime.setRebindSession(async () => undefined);
-		await bindInteractiveTestHost(host);
-		return;
-	}
-	await host.session.bindExtensions({
+	const bindSession = (session: AgentSession) => session.bindExtensions({
 		uiContext: host.ui,
 		mode,
 		onError: (error) => host.ui.notify(error.error, "error"),
 	});
-}
-
-async function bindInteractiveTestHost(host: TestOwnerHost): Promise<void> {
-	type InteractiveBindingHarness = {
-		runtimeHost: AgentSessionRuntime;
-		ui: {
-			inputListeners: Set<unknown>;
-			addInputListener(listener: unknown): () => void;
-			invalidate(): void;
-			requestRender(): void;
-		};
-		renderer: {
-			terminal: {
-				columns: number;
-				rows: number;
-				kittyProtocolActive: boolean;
-			};
-		};
-		createExtensionUIContext(): ExtensionUIContext;
-		setupAutocompleteProvider(): void;
-		setupExtensionShortcuts(): void;
-		showLoadedResources(): void;
-		showStartupNoticesIfNeeded(): void;
-		showExtensionError(_extensionPath: string, error: string): void;
-		updateEditorBorderColor(): void;
-	};
-	type InteractiveBindingPrototype = {
-		bindCurrentSessionExtensions(this: InteractiveBindingHarness): Promise<void>;
-	};
-
-	// Exercise Pi's real TUI-only binding seam without starting a terminal. The
-	// post-bind rendering hooks are irrelevant to extension startup in this harness.
-	const inputListeners = new Set<unknown>();
-	const interactiveMode = Object.assign(Object.create(InteractiveMode.prototype), {
-		runtimeHost: host.runtime,
-		ui: {
-			inputListeners,
-			addInputListener(listener: unknown) {
-				inputListeners.add(listener);
-				return () => { inputListeners.delete(listener); };
-			},
-			invalidate() {},
-			requestRender() {},
-			start() {},
-			stop() {},
-		},
-		renderer: {
-			terminal: {
-				columns: 80,
-				rows: 24,
-				kittyProtocolActive: false,
-			},
-		},
-		createExtensionUIContext: () => host.ui,
-		setupAutocompleteProvider() {},
-		setupExtensionShortcuts() {},
-		showLoadedResources() {},
-		showStartupNoticesIfNeeded() {},
-		updateEditorBorderColor() {},
-		showExtensionError(_extensionPath: string, error: string) {
-			host.ui.notify(error, "error");
-		},
-	}) as InteractiveBindingHarness;
-	const bindCurrentSessionExtensions = () => {
-		const binding = InteractiveMode.prototype as unknown as InteractiveBindingPrototype;
-		return binding.bindCurrentSessionExtensions.call(interactiveMode);
-	};
-	host.runtime.setRebindSession(bindCurrentSessionExtensions);
-	await bindCurrentSessionExtensions();
+	if (mode === "tui") {
+		// InteractiveMode installs these callbacks before it binds extensions. Using
+		// the real runtime here preserves that observable startup order without a TTY.
+		host.runtime.setBeforeSessionInvalidate(() => undefined);
+		host.runtime.setRebindSession(bindSession);
+	}
+	await bindSession(host.session);
 }
 
 function createTestUi(): TestUi {
@@ -504,9 +433,18 @@ function createTestUi(): TestUi {
 		setWorkingVisible() {},
 		setWorkingIndicator() {},
 		setHiddenThinkingLabel() {},
-		setWidget(key: string, value: readonly string[] | undefined) {
+		setWidget(
+			key: string,
+			value:
+				| readonly string[]
+				| ((tui: TUI, theme: Theme) => Component & { dispose?(): void })
+				| undefined,
+		) {
 			if (value === undefined) widgets.delete(key);
-			else widgets.set(key, value);
+			else widgets.set(
+				key,
+				typeof value === "function" ? value(testTui, testTheme) : value,
+			);
 		},
 		setFooter() {},
 		setHeader() {},

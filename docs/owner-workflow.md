@@ -1,6 +1,6 @@
 # Owner Workflow
 
-Loading `pi-agent-coordination` in an interactive Pi TUI establishes the current Pi session as the Workflow Owner. No separate start command is required.
+Loading `pi-agent-coordination` in an interactive Pi TUI establishes the current Pi session as the Workflow Owner. No separate start command is required. Coordination associates Pi's public Runtime registration and TUI session binding with the current `SessionManager`, then borrows that native Runtime without taking disposal authority.
 
 Before creating the coordination runtime, bootstrap loads and validates the optional user [Workflow Policy](workflow-policy.md). Invalid initial policy prevents runtime creation without appending Owner Identity.
 
@@ -41,7 +41,7 @@ Coordination activates only when Pi reports interactive TUI mode with UI support
 
 ## Host compatibility
 
-Compatibility is determined jointly by the running Pi host's integration shape and native behavioral conformance. Before bootstrapping a Workflow, the package verifies the required runtime, interactive-mode, session, transcript, resource, extension, TUI, schema, and disposal seams from host-provided peer modules. A missing or malformed seam is reported by its canonical member name, and incompatible startup appends no Owner Identity or partial runtime.
+Compatibility is determined jointly by the running Pi host's integration shape and native behavioral conformance. Before bootstrapping a Workflow, the package verifies the required public Runtime registration, session binding, interactive input, transcript, resource, extension, TUI, schema, and disposal seams from host-provided peer modules. A missing or malformed seam is reported by its canonical member name, and incompatible startup appends no Owner Identity or partial runtime.
 
 The conformance gate then exercises transcript ordering and branches, model-visible Delivery, sequential Human Requests, Pi-native Agent projections, full-window Owner-preserving views, role-bound extensions, and coordinated disposal against the concrete installed Pi graph. Run it with `npm run test:conformance`; `npm test` remains the complete regression gate.
 

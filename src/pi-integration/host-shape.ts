@@ -36,6 +36,7 @@ export function assertHostModuleShape(hostValue: unknown): void {
 	const version = host.VERSION;
 
 	for (const constructorName of [
+		"AgentSession",
 		"AgentSessionRuntime",
 		"InteractiveMode",
 		"SessionManager",
@@ -77,28 +78,48 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		);
 	}
 	const interactivePrototype = requirePrototype(host.InteractiveMode, "InteractiveMode", version);
-	for (const member of [
-		"bindCurrentSessionExtensions",
+	requireFunction(
+		interactivePrototype,
 		"getUserInput",
-	] as const) {
-		requireFunction(
-			interactivePrototype,
-			member,
-			`InteractiveMode.prototype.${member}`,
-			version,
-		);
-	}
-	for (const member of [
-		"bindCurrentSessionExtensions",
+		"InteractiveMode.prototype.getUserInput",
+		version,
+	);
+	requireWritableMember(
+		interactivePrototype,
 		"getUserInput",
-	] as const) {
-		requireWritableMember(
-			interactivePrototype,
-			member,
-			`InteractiveMode.prototype.${member}`,
-			version,
-		);
-	}
+		"InteractiveMode.prototype.getUserInput",
+		version,
+	);
+	const runtimePrototype = requirePrototype(
+		host.AgentSessionRuntime,
+		"AgentSessionRuntime",
+		version,
+	);
+	requireFunction(
+		runtimePrototype,
+		"setRebindSession",
+		"AgentSessionRuntime.prototype.setRebindSession",
+		version,
+	);
+	requireWritableMember(
+		runtimePrototype,
+		"setRebindSession",
+		"AgentSessionRuntime.prototype.setRebindSession",
+		version,
+	);
+	const sessionPrototype = requirePrototype(host.AgentSession, "AgentSession", version);
+	requireFunction(
+		sessionPrototype,
+		"bindExtensions",
+		"AgentSession.prototype.bindExtensions",
+		version,
+	);
+	requireWritableMember(
+		sessionPrototype,
+		"bindExtensions",
+		"AgentSession.prototype.bindExtensions",
+		version,
+	);
 
 	const sessionManager = host.SessionManager as UnknownRecord;
 	for (const member of ["create", "open", "continueRecent", "inMemory"] as const) {
@@ -245,26 +266,13 @@ export function assertRuntimeInstanceShape(
 	assertAgentSessionShape(runtime.session, version);
 }
 
-export function assertInteractiveModeInstanceShape(value: unknown, version?: unknown): void {
-	const interactiveMode = requireRecord(value, "InteractiveMode", version);
-	const runtimeHost = requireRecord(
-		interactiveMode.runtimeHost,
-		"InteractiveMode.runtimeHost",
-		version,
-	);
-	requireRecord(runtimeHost.session, "InteractiveMode.runtimeHost.session", version);
-	const ui = requireRecord(interactiveMode.ui, "InteractiveMode.ui", version);
-	for (const member of ["requestRender", "start", "stop"] as const) {
-		requireFunction(ui, member, `InteractiveMode.ui.${member}`, version);
-	}
-}
-
 export function assertAgentSessionShape(
 	sessionValue: unknown,
 	version?: unknown,
 ): asserts sessionValue is AgentSession {
 	const session = requireRecord(sessionValue, "AgentSession", version);
 	for (const member of [
+		"bindExtensions",
 		"prompt",
 		"sendUserMessage",
 		"sendCustomMessage",

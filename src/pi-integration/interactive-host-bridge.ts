@@ -1,45 +1,59 @@
 import type {
+	AgentSession,
 	AgentSessionRuntime,
+	ExtensionUIContext,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 
 import {
 	assertHostModuleShape,
-	assertInteractiveModeInstanceShape,
 	assertRuntimeInstanceShape,
+	IncompatiblePiHostError,
 } from "./host-shape.ts";
+import {
+	captureInteractivePresentation,
+	type InteractivePresentation,
+} from "./interactive-presentation.ts";
 
+type RuntimeRebind = (session: AgentSession) => Promise<void>;
+type RuntimePrototype = {
+	setRebindSession(rebindSession?: RuntimeRebind): void;
+};
+type SessionPrototype = {
+	bindExtensions: AgentSession["bindExtensions"];
+};
 type HostModule = {
 	VERSION?: unknown;
-	InteractiveMode: {
-		prototype: {
-			bindCurrentSessionExtensions(): Promise<void>;
-		};
+	AgentSessionRuntime: {
+		prototype: RuntimePrototype;
+	};
+	AgentSession: {
+		prototype: SessionPrototype;
 	};
 };
 
-export type InteractiveCapture = Readonly<{
-	runtime: AgentSessionRuntime;
-	observeInputLifecycle(observer: Readonly<{
-		started(): Promise<void>;
-		completed(): Promise<void>;
-	}>): void;
-	reinitializePresentation(): void;
-}>;
-
 type RuntimeWaiter = {
 	sessionManager: SessionManager;
-	resolve(capture: InteractiveCapture): void;
+	resolve(runtime: AgentSessionRuntime): void;
 	reject(error: unknown): void;
 };
 
 type BridgeState = {
-	capturesBySessionManager: WeakMap<SessionManager, InteractiveCapture>;
+	runtimesBySessionManager: WeakMap<SessionManager, AgentSessionRuntime>;
+	presentationsByRuntime: WeakMap<AgentSessionRuntime, InteractivePresentation>;
+	nativeRebindByRuntime: WeakMap<AgentSessionRuntime, RuntimeRebind | undefined>;
 	waiters: RuntimeWaiter[];
+	validate(runtime: AgentSessionRuntime): AgentSessionRuntime;
 };
 
 export type InteractiveHostBridge = {
-	capture(sessionManager: SessionManager): Promise<InteractiveCapture>;
+	capture(
+		sessionManager: SessionManager,
+		ui: ExtensionUIContext,
+	): Promise<Readonly<{
+		runtime: AgentSessionRuntime;
+		reinitializePresentation(): void;
+	}>>;
 };
 
 const BRIDGE_REGISTRY_KEY = "__piAgentCoordinationInteractiveHostBridge";
@@ -47,16 +61,13 @@ const globalBridgeRegistry = globalThis as typeof globalThis & {
 	[BRIDGE_REGISTRY_KEY]?: WeakMap<object, BridgeState>;
 };
 // Pi may re-evaluate extension modules during resource reload. Process-global
-// ownership prevents a second evaluation from stacking private host patches.
+// ownership prevents a second evaluation from stacking host patches.
 const bridgeStates = (globalBridgeRegistry[BRIDGE_REGISTRY_KEY] ??= new WeakMap());
 
 export function installInteractiveHostBridge(hostValue: unknown): InteractiveHostBridge {
 	assertHostModuleShape(hostValue);
 	const host = hostValue as HostModule & object;
-	// Pi's reload loader recreates the host module namespace while reusing the
-	// running host constructors. The prototype is the stable seam we mutate and
-	// therefore remains the ownership key across those namespace re-evaluations.
-	const bridgeKey = host.InteractiveMode.prototype;
+	const bridgeKey = host.AgentSessionRuntime.prototype;
 	let state = bridgeStates.get(bridgeKey);
 	if (!state) {
 		state = installRuntimeCapture(host);
@@ -64,11 +75,23 @@ export function installInteractiveHostBridge(hostValue: unknown): InteractiveHos
 	}
 
 	return {
-		capture(sessionManager) {
-			const capture = state.capturesBySessionManager.get(sessionManager);
-			if (capture) return Promise.resolve(capture);
-			return new Promise((resolve, reject) =>
+		capture(sessionManager, ui) {
+			const runtime = state.runtimesBySessionManager.get(sessionManager);
+			if (runtime) {
+				try {
+					return Promise.resolve(bindInteractivePresentation(
+						state,
+						state.validate(runtime),
+						ui,
+					));
+				} catch (error) {
+					return Promise.reject(error);
+				}
+			}
+			return new Promise<AgentSessionRuntime>((resolve, reject) =>
 				state.waiters.push({ sessionManager, resolve, reject })
+			).then((capturedRuntime) =>
+				bindInteractivePresentation(state, capturedRuntime, ui)
 			);
 		},
 	};
@@ -76,87 +99,124 @@ export function installInteractiveHostBridge(hostValue: unknown): InteractiveHos
 
 function installRuntimeCapture(host: HostModule): BridgeState {
 	const state: BridgeState = {
-		capturesBySessionManager: new WeakMap(),
+		runtimesBySessionManager: new WeakMap(),
+		presentationsByRuntime: new WeakMap(),
+		nativeRebindByRuntime: new WeakMap(),
 		waiters: [],
+		validate: () => {
+			throw new Error("Interactive Runtime validation is not installed");
+		},
 	};
-	const interactivePrototype = host.InteractiveMode.prototype;
-	const originalBindCurrentSessionExtensions =
-		interactivePrototype.bindCurrentSessionExtensions;
+	const runtimePrototype = host.AgentSessionRuntime.prototype;
+	const originalSetRebindSession = runtimePrototype.setRebindSession;
+	const sessionPrototype = host.AgentSession.prototype;
+	const originalBindExtensions = sessionPrototype.bindExtensions;
+	const rejectInteractiveAdmission = (
+		error: unknown,
+		runtime?: AgentSessionRuntime,
+	) => {
+		if (runtime && state.nativeRebindByRuntime.has(runtime)) {
+			originalSetRebindSession.call(
+				runtime,
+				state.nativeRebindByRuntime.get(runtime),
+			);
+			state.nativeRebindByRuntime.delete(runtime);
+		}
+		if (runtimePrototype.setRebindSession === captureInteractiveRuntime) {
+			runtimePrototype.setRebindSession = originalSetRebindSession;
+		}
+		if (sessionPrototype.bindExtensions === validateInteractiveBinding) {
+			sessionPrototype.bindExtensions = originalBindExtensions;
+		}
+		bridgeStates.delete(host.AgentSessionRuntime.prototype);
+		for (const waiter of state.waiters.splice(0)) waiter.reject(error);
+	};
 
-	const captureValidatedInteractiveRuntime =
-		async function captureValidatedInteractiveRuntime(this: unknown): Promise<void> {
-			let runtime: AgentSessionRuntime;
-			try {
-				assertInteractiveModeInstanceShape(this, host.VERSION);
-				const runtimeValue = (this as { runtimeHost: unknown }).runtimeHost;
-				assertRuntimeInstanceShape(runtimeValue, host.VERSION);
-				runtime = runtimeValue;
-			} catch (error) {
-				// A live structural rejection is still startup failure. Restore the
-				// native prototype and reject capture waiters so no patch or pending
-				// bootstrap remains installed after incompatible admission.
-				if (
-					interactivePrototype.bindCurrentSessionExtensions ===
-					captureValidatedInteractiveRuntime
-				) {
-					interactivePrototype.bindCurrentSessionExtensions =
-						originalBindCurrentSessionExtensions;
-				}
-				bridgeStates.delete(host.InteractiveMode.prototype);
-				for (const waiter of state.waiters.splice(0)) waiter.reject(error);
+	const captureInteractiveRuntime = function captureInteractiveRuntime(
+		this: unknown,
+		rebindSession?: RuntimeRebind,
+	): void {
+		const runtime = this as AgentSessionRuntime;
+		state.nativeRebindByRuntime.set(runtime, rebindSession);
+		publishCapture(state, runtime, runtime.session.sessionManager);
+		const observedRebind = rebindSession && (async (session: AgentSession) => {
+			// The public Runtime callback is the exact handoff to a replacement
+			// session. Publish it before extension session_start waits for capture.
+			publishCapture(state, runtime, session.sessionManager);
+			await rebindSession(session);
+			state.presentationsByRuntime.get(runtime)?.requestFullRender();
+		});
+		originalSetRebindSession.call(runtime, observedRebind);
+	};
+	const validateInteractiveBinding: AgentSession["bindExtensions"] = async function (
+		this: AgentSession,
+		bindings,
+	): Promise<void> {
+		if (bindings.mode === "tui") {
+			const runtime = state.runtimesBySessionManager.get(this.sessionManager);
+			if (!runtime) {
+				const error = new IncompatiblePiHostError(
+					"AgentSessionRuntime interactive capture",
+					host.VERSION,
+				);
+				rejectInteractiveAdmission(error);
 				throw error;
 			}
-			const sessionManager = runtime.session.sessionManager;
-			const interactive = this as {
-				observeInputLifecycle?: Readonly<{
-					started(): Promise<void>;
-					completed(): Promise<void>;
-				}>;
-				ui: {
-					stop(options?: { preserveScreen?: boolean }): void;
-					start(): void;
-					requestRender(force?: boolean): void;
-				};
-			};
-			const capture = {
-				runtime,
-				observeInputLifecycle(observer: Readonly<{
-					started(): Promise<void>;
-					completed(): Promise<void>;
-				}>) {
-					interactive.observeInputLifecycle = observer;
-				},
-				reinitializePresentation() {
-					// Restarting the exact child TUI makes Pi itself replay terminal modes
-					// and a complete frame when physical attachment changes.
-					interactive.ui.stop({ preserveScreen: true });
-					interactive.ui.start();
-					interactive.ui.requestRender(true);
-				},
-			};
-			// TUI binding is Pi's first mode-specific seam. The WeakMap association
-			// cannot retain a failed or disposed Owner session by itself.
-			state.capturesBySessionManager.set(sessionManager, capture);
-			for (const waiter of [...state.waiters]) {
-				if (waiter.sessionManager !== sessionManager) continue;
-				state.waiters.splice(state.waiters.indexOf(waiter), 1);
-				waiter.resolve(capture);
-			}
-			await originalBindCurrentSessionExtensions.call(this);
-			requestFullInteractiveRender(this);
-		};
-	interactivePrototype.bindCurrentSessionExtensions =
-		captureValidatedInteractiveRuntime;
+			state.validate(runtime);
+		}
+		await originalBindExtensions.call(this, bindings);
+	};
+	state.validate = (runtime) => {
+		try {
+			assertRuntimeInstanceShape(runtime, host.VERSION);
+			return runtime;
+		} catch (error) {
+			// Structural validation belongs to interactive admission. Headless modes
+			// may call the observed public setter but never inspect their Runtime.
+			rejectInteractiveAdmission(error, runtime);
+			throw error;
+		}
+	};
+	runtimePrototype.setRebindSession = captureInteractiveRuntime;
+	sessionPrototype.bindExtensions = validateInteractiveBinding;
 
 	return state;
 }
 
-function requestFullInteractiveRender(interactiveMode: unknown): void {
-	const interactive = interactiveMode as {
-		ui: { requestRender(force?: boolean): void };
+function bindInteractivePresentation(
+	state: BridgeState,
+	runtime: AgentSessionRuntime,
+	ui: ExtensionUIContext,
+) {
+	const presentation = captureInteractivePresentation(ui);
+	state.presentationsByRuntime.set(runtime, presentation);
+	return {
+		runtime,
+		reinitializePresentation: presentation.reinitialize,
 	};
-	// Differential rendering cannot erase rows left by a longer deselected
-	// transcript. A retained-session replacement therefore needs one native full
-	// redraw after Pi reconstructs the selected session's complete presentation.
-	interactive.ui.requestRender(true);
+}
+
+function publishCapture(
+	state: BridgeState,
+	runtime: AgentSessionRuntime,
+	sessionManager: SessionManager,
+): void {
+	state.runtimesBySessionManager.set(sessionManager, runtime);
+	const matchingWaiters = state.waiters.filter(
+		(waiter) => waiter.sessionManager === sessionManager,
+	);
+	if (matchingWaiters.length === 0) return;
+	for (const waiter of matchingWaiters) {
+		state.waiters.splice(state.waiters.indexOf(waiter), 1);
+	}
+	let capture: AgentSessionRuntime;
+	try {
+		capture = state.validate(runtime);
+	} catch (error) {
+		for (const waiter of matchingWaiters) waiter.reject(error);
+		return;
+	}
+	for (const waiter of matchingWaiters) {
+		waiter.resolve(capture);
+	}
 }
