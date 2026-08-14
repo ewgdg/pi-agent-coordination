@@ -37,6 +37,11 @@ import { SerialLane } from "./serial-lane.ts";
 type RequestRelationshipReason = "awaiting_answer" | "answer_owed";
 type RuntimeOwnership = "supervisor" | "native-host";
 
+// Pi publishes public compaction completion immediately before its interactive
+// mode can transfer accepted input into a successor Run. Give that transfer a
+// bounded opportunity to become visible through public Runtime state.
+const RUNTIME_ACTIVITY_SETTLEMENT_GRACE_MS = 100;
+
 export type StartedAgentRuntime = Readonly<{
 	runtime: HostedAgentRuntime;
 	ready?: Promise<void>;
@@ -51,6 +56,7 @@ type BoundAgentRuntime = {
 	expectedInterruption: boolean;
 	releaseDeferredUntilInputSettles: boolean;
 	releaseDeferredUntilActivitySettles: boolean;
+	releaseActivitySettlementTimer?: ReturnType<typeof setTimeout>;
 };
 
 type HeldNativeQueue = {
@@ -608,6 +614,8 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	}
 
 	#markPreparedRunAdmitted(run: BoundAgentRuntime): void {
+		this.#cancelReleaseAfterActivitySettlement(run);
+		run.releaseDeferredUntilActivitySettles = false;
 		this.#runSequence += 1;
 		run.handle = Object.freeze({ sequence: this.#runSequence });
 		run.admitted = true;
@@ -712,6 +720,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			this.#deferReleaseUntilRuntimeActivitySettles(run);
 			return "retained";
 		}
+		if (run.releaseActivitySettlementTimer) return "retained";
 		if (
 			this.#starting ||
 			this.#ending ||
@@ -777,6 +786,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			this.#deferReleaseUntilRuntimeActivitySettles(run);
 			return "retained";
 		}
+		if (run.releaseActivitySettlementTimer) return "retained";
 		if (
 			this.#starting ||
 			this.#ending ||
@@ -824,6 +834,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			if (disposeRuntime) await disposeRuntime();
 			return;
 		}
+		this.#cancelReleaseAfterActivitySettlement(run);
 		// Pi owns the native Owner Runtime across coordination Runs. A selected child
 		// is supervisor-owned but temporarily retained to preserve its attached view.
 		const retainRuntime = disposeRuntime === undefined && (
@@ -924,6 +935,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	): Promise<unknown[]> {
 		const failedStart = this.#runtime;
 		if (!failedStart) return [];
+		this.#cancelReleaseAfterActivitySettlement(failedStart);
 		const retainRuntime = this.#runtimeOwnership === "native-host";
 		const cleanupErrors: unknown[] = [];
 		const attemptCleanup = async (cleanup: () => unknown | Promise<unknown>) => {
@@ -989,6 +1001,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			expectedInterruption: false,
 			releaseDeferredUntilInputSettles: false,
 			releaseDeferredUntilActivitySettles: false,
+			releaseActivitySettlementTimer: undefined,
 		};
 		// Publish ownership before subscription so startup rollback can still dispose
 		// the exact hosted Runtime if event binding itself fails.
@@ -997,11 +1010,19 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			if (event.type === "state_changed") {
 				this.#notifyStateChanged();
 				if (
+					run.releaseActivitySettlementTimer &&
+					run.runtime.hasPendingActivity()
+				) {
+					clearTimeout(run.releaseActivitySettlementTimer);
+					run.releaseActivitySettlementTimer = undefined;
+					run.releaseDeferredUntilActivitySettles = true;
+				}
+				if (
 					run.releaseDeferredUntilActivitySettles &&
 					!run.runtime.hasPendingActivity()
 				) {
 					run.releaseDeferredUntilActivitySettles = false;
-					this.#projectionInputSettledHandler?.();
+					this.#scheduleReleaseAfterActivitySettlement(run);
 				}
 			}
 			if (event.type === "agent_end") {
@@ -1081,6 +1102,21 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 
 	#deferReleaseUntilRuntimeActivitySettles(run: BoundAgentRuntime): void {
 		run.releaseDeferredUntilActivitySettles = true;
+	}
+
+	#scheduleReleaseAfterActivitySettlement(run: BoundAgentRuntime): void {
+		if (run.releaseActivitySettlementTimer) return;
+		run.releaseActivitySettlementTimer = setTimeout(() => {
+			run.releaseActivitySettlementTimer = undefined;
+			if (this.#runtime !== run) return;
+			this.#projectionInputSettledHandler?.();
+		}, RUNTIME_ACTIVITY_SETTLEMENT_GRACE_MS);
+	}
+
+	#cancelReleaseAfterActivitySettlement(run: BoundAgentRuntime): void {
+		if (!run.releaseActivitySettlementTimer) return;
+		clearTimeout(run.releaseActivitySettlementTimer);
+		run.releaseActivitySettlementTimer = undefined;
 	}
 }
 

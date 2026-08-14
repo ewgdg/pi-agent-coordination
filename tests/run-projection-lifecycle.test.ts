@@ -32,6 +32,58 @@ test("clean release disposes the exact projection and session once", async () =>
 	assert.equal(host.observe().phase, "dormant");
 });
 
+test("public Runtime activity settlement receives a grace period before disposal", async () => {
+	const resource = createRunResource();
+	resource.setPendingActivity(true);
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "activity-grace-period-agent",
+		startSession: async () => resource.startedRun,
+	});
+	const handle = await host.lane.run(() => host.startInLane());
+	let releaseRechecks = 0;
+	let settleRelease!: () => void;
+	const released = new Promise<void>((resolve) => {
+		settleRelease = resolve;
+	});
+	host.setProjectionInputSettledHandler(() => {
+		releaseRechecks += 1;
+		void host.lane.run(async () => {
+			await host.releaseIfEligibleInLane(handle);
+			settleRelease();
+		});
+	});
+
+	assert.equal(
+		await host.lane.run(() => host.releaseIfEligibleInLane(handle)),
+		"retained",
+	);
+	resource.setPendingActivity(false);
+	resource.emitStateChanged();
+
+	assert.equal(releaseRechecks, 0);
+	assert.equal(resource.counts().sessionDisposals, 0);
+	assert.equal(
+		await host.lane.run(() => host.releaseIfEligibleInLane(handle)),
+		"retained",
+	);
+	let releaseTimeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		await Promise.race([
+			released,
+			new Promise<never>((_resolve, reject) => {
+				releaseTimeout = setTimeout(
+					() => reject(new Error("release grace period did not settle")),
+					1_000,
+				);
+			}),
+		]);
+	} finally {
+		if (releaseTimeout) clearTimeout(releaseTimeout);
+	}
+	assert.equal(releaseRechecks, 1);
+	assert.equal(resource.counts().sessionDisposals, 1);
+});
+
 test("selected clean Runs release inside one retained Runtime", async () => {
 	const resource = createRunResource();
 	let runtimePreparations = 0;
@@ -603,10 +655,14 @@ function createRunResource(options?: {
 		sessionDisposals: number;
 		unsubscriptions: number;
 	}>;
+	setPendingActivity(pending: boolean): void;
+	emitStateChanged(): void;
 } {
 	let projectionDisposals = 0;
 	let sessionDisposals = 0;
 	let unsubscriptions = 0;
+	let pendingActivity = false;
+	const sessionListeners = new Set<(event: unknown) => void>();
 	const component: Component = {
 		render: () => [],
 		invalidate() {},
@@ -648,12 +704,14 @@ function createRunResource(options?: {
 			if (name === "sequential_tool") return { executionMode: "sequential" };
 			return undefined;
 		},
-		subscribe() {
+		subscribe(listener: (event: unknown) => void) {
 			if (options?.subscribeError) throw options.subscribeError;
+			sessionListeners.add(listener);
 			let subscribed = true;
 			return () => {
 				if (!subscribed) return;
 				subscribed = false;
+				sessionListeners.delete(listener);
 				unsubscriptions += 1;
 			};
 		},
@@ -676,13 +734,15 @@ function createRunResource(options?: {
 		projectTrusted: true,
 		sessionId: "projected-run",
 	});
-	const startedRunWithProjection = (hostedProjection: HostedAgentProjection) => ({
-		runtime: new InProcessHostedRuntime({
+	const startedRunWithProjection = (hostedProjection: HostedAgentProjection) => {
+		const runtime = new InProcessHostedRuntime({
 			session,
 			projection: hostedProjection,
 			inspectSnapshot,
-		}),
-	});
+		});
+		runtime.hasPendingActivity = () => pendingActivity;
+		return { runtime };
+	};
 	return {
 		startedRun: startedRunWithProjection(projection),
 		startedRunWithProjection,
@@ -694,5 +754,13 @@ function createRunResource(options?: {
 			sessionDisposals,
 			unsubscriptions,
 		}),
+		setPendingActivity: (pending) => {
+			pendingActivity = pending;
+		},
+		emitStateChanged: () => {
+			for (const listener of sessionListeners) {
+				listener({ type: "queue_update", steering: [], followUp: [] });
+			}
+		},
 	};
 }

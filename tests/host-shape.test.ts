@@ -144,8 +144,6 @@ test("module preflight rejects every required host export and prototype seam", (
 		...[
 			"bindCurrentSessionExtensions",
 			"getUserInput",
-			"queueCompactionMessage",
-			"restoreQueuedMessagesToEditor",
 		].map((member) => ["InteractiveMode", "prototype", member]),
 		...["create", "open", "continueRecent", "inMemory"].map(
 			(member) => ["SessionManager", member],
@@ -336,8 +334,6 @@ test("preflight rejects read-only prototype seams that coordination mutates", ()
 		...[
 			"bindCurrentSessionExtensions",
 			"getUserInput",
-			"queueCompactionMessage",
-			"restoreQueuedMessagesToEditor",
 		].map((member) => [
 			["InteractiveMode", "prototype", member],
 			`InteractiveMode.prototype.${member}`,

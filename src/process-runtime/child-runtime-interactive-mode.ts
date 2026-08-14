@@ -7,20 +7,10 @@ type InputLifecycleObserver = Readonly<{
 
 type InteractiveModeWithInputLifecycle = InstanceType<typeof hostPi.InteractiveMode> & {
 	observeInputLifecycle?: InputLifecycleObserver;
-	observeCompactionQueuedInput?: (count: number) => void;
 };
 
 type InteractivePrototype = {
 	getUserInput(this: InteractiveModeWithInputLifecycle): Promise<string>;
-	queueCompactionMessage(
-		this: InteractiveModeWithInputLifecycle,
-		text: string,
-		mode: "steer" | "followUp",
-	): void;
-	restoreQueuedMessagesToEditor(
-		this: InteractiveModeWithInputLifecycle,
-		options?: { abort?: boolean; currentText?: string },
-	): number;
 };
 
 const PATCH_REGISTRY_KEY = "__piAgentCoordinationChildInteractiveInputPatch";
@@ -28,7 +18,7 @@ const globalPatchRegistry = globalThis as typeof globalThis & {
 	[PATCH_REGISTRY_KEY]?: WeakSet<object>;
 };
 const patchedPrototypes = globalPatchRegistry[PATCH_REGISTRY_KEY] ??= new WeakSet();
-const prototype = hostPi.InteractiveMode.prototype as unknown as InteractivePrototype;
+const prototype = hostPi.InteractiveMode.prototype as InteractivePrototype;
 
 if (!patchedPrototypes.has(prototype)) {
 	patchedPrototypes.add(prototype);
@@ -71,27 +61,5 @@ if (!patchedPrototypes.has(prototype)) {
 			return prompt;
 		};
 		return input;
-	};
-
-	const originalQueueCompactionMessage = prototype.queueCompactionMessage;
-	prototype.queueCompactionMessage = function queueObservedCompactionMessage(
-		this: InteractiveModeWithInputLifecycle,
-		text: string,
-		mode: "steer" | "followUp",
-	): void {
-		originalQueueCompactionMessage.call(this, text, mode);
-		const queued = (this as unknown as { compactionQueuedMessages: unknown[] })
-			.compactionQueuedMessages.length;
-		this.observeCompactionQueuedInput?.(queued);
-	};
-
-	const originalRestoreQueuedMessagesToEditor = prototype.restoreQueuedMessagesToEditor;
-	prototype.restoreQueuedMessagesToEditor = function restoreObservedQueuesToEditor(
-		this: InteractiveModeWithInputLifecycle,
-		options?: { abort?: boolean; currentText?: string },
-	): number {
-		const restored = originalRestoreQueuedMessagesToEditor.call(this, options);
-		if (restored > 0) this.observeCompactionQueuedInput?.(0);
-		return restored;
 	};
 }

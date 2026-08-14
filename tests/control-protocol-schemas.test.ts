@@ -94,7 +94,6 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		"runtime.input.completed",
 		"runtime.compaction.started",
 		"runtime.compaction.completed",
-		"runtime.nativeInput.queued",
 		"agent.start",
 		"agent.end",
 		"agent.settled",
@@ -117,7 +116,6 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.equal(Check(AgentControlEventSchema, "runtime.input.completed"), true);
 	assert.equal(Check(AgentControlEventSchema, "runtime.compaction.started"), true);
 	assert.equal(Check(AgentControlEventSchema, "runtime.compaction.completed"), true);
-	assert.equal(Check(AgentControlEventSchema, "runtime.nativeInput.queued"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.settled"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.unknown"), false);
 	for (const definition of Object.values(agentControlMethods)) {

@@ -24,7 +24,6 @@ export type InteractiveCapture = Readonly<{
 		started(): Promise<void>;
 		completed(): Promise<void>;
 	}>): void;
-	observeCompactionQueuedInput(observer: (count: number) => void): void;
 	reinitializePresentation(): void;
 }>;
 
@@ -113,7 +112,6 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 					started(): Promise<void>;
 					completed(): Promise<void>;
 				}>;
-				observeCompactionQueuedInput?: (count: number) => void;
 				ui: {
 					stop(options?: { preserveScreen?: boolean }): void;
 					start(): void;
@@ -127,9 +125,6 @@ function installRuntimeCapture(host: HostModule): BridgeState {
 					completed(): Promise<void>;
 				}>) {
 					interactive.observeInputLifecycle = observer;
-				},
-				observeCompactionQueuedInput(observer: (count: number) => void) {
-					interactive.observeCompactionQueuedInput = observer;
 				},
 				reinitializePresentation() {
 					// Restarting the exact child TUI makes Pi itself replay terminal modes

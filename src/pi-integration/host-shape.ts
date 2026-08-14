@@ -80,8 +80,6 @@ export function assertHostModuleShape(hostValue: unknown): void {
 	for (const member of [
 		"bindCurrentSessionExtensions",
 		"getUserInput",
-		"queueCompactionMessage",
-		"restoreQueuedMessagesToEditor",
 	] as const) {
 		requireFunction(
 			interactivePrototype,
@@ -93,8 +91,6 @@ export function assertHostModuleShape(hostValue: unknown): void {
 	for (const member of [
 		"bindCurrentSessionExtensions",
 		"getUserInput",
-		"queueCompactionMessage",
-		"restoreQueuedMessagesToEditor",
 	] as const) {
 		requireWritableMember(
 			interactivePrototype,

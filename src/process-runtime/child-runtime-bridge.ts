@@ -216,10 +216,6 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			completed: () => currentState.channel.sendEvent("runtime.input.completed", {}),
 		};
 		capture.observeInputLifecycle(inputLifecycle);
-		capture.observeCompactionQueuedInput((count) => {
-			void currentState.channel.sendEvent("runtime.nativeInput.queued", { count })
-				.catch(() => undefined);
-		});
 		const channel = currentState.channel;
 		try {
 			assertExpectedSession(binding.runtime, bootstrap);

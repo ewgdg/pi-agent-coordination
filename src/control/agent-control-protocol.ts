@@ -618,9 +618,6 @@ export const agentControlEvents = {
 	"runtime.input.completed": { payload: EmptySchema },
 	"runtime.compaction.started": { payload: EmptySchema },
 	"runtime.compaction.completed": { payload: EmptySchema },
-	"runtime.nativeInput.queued": {
-		payload: closed({ count: Type.Integer({ minimum: 0 }) }),
-	},
 	"agent.start": {
 		payload: closed({
 			runId: NonEmptyStringSchema,
