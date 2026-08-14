@@ -72,7 +72,12 @@ export function createCreationRequestDeliveryItem(options: {
 	const { requestId, fromAgentId, question, source } = options;
 	return {
 		source,
-		projection: { kind: "request", requestId, fromAgentId, question },
+		projection: {
+			kind: "request",
+			requestMessageId: requestId,
+			fromAgentId,
+			question,
+		},
 	};
 }
 
@@ -98,7 +103,7 @@ export function inspectCreationRequestDelivery(options: {
 		source,
 		expectedProjection: {
 			kind: "request",
-			requestId,
+			requestMessageId: requestId,
 			fromAgentId,
 			question,
 		},

@@ -82,6 +82,44 @@ test("each Message in one ordered batch has independent Delivery proof", () => {
 	});
 });
 
+test("Agent Request Delivery exposes requestMessageId as its correlation identity", () => {
+	const sessionManager = SessionManager.inMemory(process.cwd());
+	const recipientAgentId = sessionManager.getSessionId();
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
+		agentId: recipientAgentId,
+	});
+	const source = {
+		agentId: "requester-agent",
+		entryId: "requester-entry",
+		toolCallId: "requester-call",
+	};
+	const projection = {
+		kind: "request" as const,
+		requestMessageId: "request-message",
+		fromAgentId: "requester-agent",
+		question: "Which identity should the Answer correlate to?",
+	};
+	sessionManager.appendCustomMessageEntry(
+		"agent-coordination.message-delivery",
+		JSON.stringify({ messages: [projection] }),
+		true,
+		{ messages: [source] },
+	);
+	const delivery = sessionManager.getLeafEntry();
+	assert.ok(delivery);
+
+	assert.deepEqual(inspectStandaloneMessageDelivery({
+		recipientAgentId,
+		transcript: transcriptFromSessionManager(sessionManager).inspect(),
+		source,
+		expectedProjection: projection,
+		subject: "Request request-message",
+	}).deliveryEvidence, {
+		agentId: recipientAgentId,
+		entryId: delivery.id,
+	});
+});
+
 test("one Delivery batch cannot repeat a Message source", () => {
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = sessionManager.getSessionId();

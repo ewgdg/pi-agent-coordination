@@ -34,15 +34,15 @@ Use Steer only when the next model turn needs exceptional direction:
 
 At a safe boundary, all Steer Messages already pending for that recipient are frozen in admission order, deduplicated against transcript proof, and committed as one model-visible batch. A Message admitted after that freeze waits for the next safe boundary. Steer takes precedence over Deferred when both are pending.
 
-The initial receipt reports live scheduling only:
+The initial receipt reports live sending only:
 
-| Delivery | Meaning | Next action |
+| `messageStatus` | Meaning | Next action |
 | --- | --- | --- |
-| `pending` | The volatile recipient lane admitted the Message. Delivery may still fail later. | Poll when proof matters. |
-| `rejected` | This invocation was not admitted and cannot later deliver. The reason distinguishes target availability, shutdown, and capacity exhaustion. | Correct the reported problem or retry later. |
-| `indeterminate` | Admission may have happened, but confirmation was lost. | Poll before deciding whether to retry. |
+| `sent` | The recipient lane admitted the Message for asynchronous Delivery. It may still be queued and is not necessarily delivered. | Poll only when Delivery proof matters. |
+| `not_sent` | This invocation was not admitted. `reason` distinguishes target availability, shutdown, and capacity exhaustion. | Retry the same Message identity after correcting the problem. |
+| `unknown` | Admission may have happened, but confirmation was lost. | Poll the same Message identity before retrying. |
 
-The returned `messageId` is the source-derived protocol identity. A Request receipt also returns `requestId`; both fields contain that same identity.
+An ordinary Message receipt returns its source-derived `messageId`. An Agent Request receipt instead returns `requestMessageId`, the Request Message's source-derived identity.
 
 ## Request one Answer
 
@@ -63,7 +63,7 @@ Only the fixed responder may Answer, and only after valid Request Delivery:
 ```json
 {
   "operation": "answer",
-  "requestId": "source-derived-request-id",
+  "requestMessageId": "source-derived-request-id",
   "answer": "The model-visible Answer Delivery entry proves the handoff."
 }
 ```
@@ -77,8 +77,8 @@ Retrying a Request selects one authoritative outcome:
 - `answer_already_delivered` returns existing requester-side Delivery proof.
 - `answer_delivered` returns a committed undelivered Answer directly in the native retry result. That committed result is the Answer Delivery proof and preserves the responder's immutable authorship.
 - `request_delivered` reports a delivered unanswered Request without redelivery.
-- `request_pending` reschedules the same undelivered Request identity under its authored mode.
-- `indeterminate` reports that Request readmission may have happened but confirmation was lost; poll before retrying again.
+- `messageStatus: "sent"` reports that the same undelivered Request was readmitted under its authored mode.
+- `messageStatus: "unknown"` reports that Request readmission may have happened but confirmation was lost; poll before retrying again.
 
 Incomplete or contradictory evidence schedules nothing. A later explicit retry is required when a concurrent Answer commits just after inspection.
 
@@ -136,7 +136,7 @@ For an ordinary Message, retry returns existing Delivery proof when present. Oth
 
 Retry does not accept `deliveryMode`; it cannot turn Deferred into Steer or Steer into Deferred.
 
-If retry admission may have happened but its confirmation is lost, retry returns `indeterminate`; poll before deciding whether to retry again.
+If retry admission may have happened but its confirmation is lost, retry returns `messageStatus: "unknown"`; poll before deciding whether to retry again.
 
 If recipient evidence cannot be inspected, retry is rejected without scheduling. This prevents a new delivery from being admitted while the coordinator cannot establish whether proof already exists.
 
@@ -144,7 +144,7 @@ If recipient evidence cannot be inspected, retry is rejected without scheduling.
 
 Each recipient admits at most the current Workflow Policy's `maxPendingDeliveriesPerAgent` distinct pending Message identities across Deferred and Steer; the default is 256. A retry of an already-pending identity consumes no additional capacity. Admitted work is never evicted, including when Owner reload lowers the limit.
 
-When capacity is exhausted, the invocation returns `capacity_exhausted`. The canonical author Message remains in the sender transcript and can be retried explicitly after capacity becomes available; there is no hidden overflow or automatic retry.
+When capacity is exhausted, the invocation returns `messageStatus: "not_sent"` with reason `capacity_exhausted`. The canonical author Message remains in the sender transcript and can be retried explicitly after capacity becomes available; there is no hidden overflow or automatic retry.
 
 An exact [Interruption Hold](run-supervision.md) blocks every ordinary Message, Request, Answer, and Cancellation from committing Delivery or invoking the recipient model. Held items remain admitted and consume ordinary capacity. One Supervisory Resume Message uses a separate reserved slot and cannot evict ordinary work.
 

@@ -72,7 +72,7 @@ The Owner-scoped configuration snapshot governing new host admissions, limits, a
 _Avoid_: Workflow state, Workflow configuration lifecycle
 
 **Agent Request**:
-A Request targeting a known Agent in the same Workflow. Its Request identity is also the identity of its outbound Message.
+A Request targeting a known Agent in the same Workflow. Its Request Message identity, named `requestMessageId`, is its sole public correlation identity for Answer, Cancellation, retry, and retrieval.
 
 **Answer Obligation**:
 The responder's live duty created by Agent Request Delivery and ended by committing the correlated Agent Answer or receiving Request Cancellation. Automatic moderation protects only work with at least one unresolved Answer Obligation.

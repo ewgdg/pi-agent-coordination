@@ -283,7 +283,8 @@ async function spawnChild(
 		),
 	);
 	const receipt = await owner.spawn(toolCallId, input);
-	assert.equal(receipt.disposition, "pending");
+	assert.equal(receipt.spawnStatus, "created");
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, "sent");
 }
 
 async function waitForChildSessionFile(

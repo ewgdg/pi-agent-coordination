@@ -711,9 +711,10 @@ test("interactive /resume retains the compact historical agent_spawn renderer", 
 		label: "Resumed Spawn Widget",
 	};
 	const receipt = {
-		disposition: "pending" as const,
+		spawnStatus: "created" as const,
 		agentId: "resumed-spawn-agent",
-		requestId: "resumed-spawn-request",
+		requestMessageId: "resumed-spawn-request",
+		messageStatus: "sent" as const,
 		effectiveConfiguration: {
 			cwd: process.cwd(),
 			model: { provider: "openai", modelId: "gpt-4o-mini" },
@@ -866,7 +867,7 @@ function routeCliRepeatResponse(context: Context): AssistantMessage {
 		return fauxAssistantMessage(
 			fauxToolCall("agent_message", {
 				operation: "answer",
-				requestId,
+				requestMessageId: requestId,
 				answer: "CLI worker is ready for repeated attachment.",
 			}, { id: "cli-repeat-answer" }),
 			{ stopReason: "toolUse" },
@@ -898,8 +899,11 @@ function findCreationRequestId(value: unknown): string | undefined {
 	}
 	if (typeof value !== "object" || value === null) return undefined;
 	const record = value as Record<string, unknown>;
-	if (record.kind === "request" && typeof record.requestId === "string") {
-		return record.requestId;
+	if (
+		record.kind === "request" &&
+		typeof record.requestMessageId === "string"
+	) {
+		return record.requestMessageId;
 	}
 	for (const nested of Object.values(record)) {
 		const requestId = findCreationRequestId(nested);

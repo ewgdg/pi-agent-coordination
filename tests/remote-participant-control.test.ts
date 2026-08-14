@@ -37,9 +37,9 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 			case "runtime.humanInputMode": return { mode: "answer" };
 			case "runtime.guardHumanToolResult": return { result: null };
 			case "coordination.observe": return status;
-			case "coordination.message": return { messageId: "message-1", delivery: "pending" };
+			case "coordination.message": return { messageId: "message-1", messageStatus: "sent" };
 			case "coordination.control": return { agentId: "target", disposition: "held" };
-			case "coordination.spawn": return { disposition: "not_created", failedStage: "identity_commit" };
+			case "coordination.spawn": return { spawnStatus: "not_created", failedStage: "identity_commit" };
 			case "coordination.askHuman": return { requestId: "human-1", answer: "Proceed." };
 			default: return {};
 		}
@@ -62,7 +62,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 			targetAgentId: "target",
 			content: "hello",
 		}),
-		{ messageId: "message-1", delivery: "pending" },
+		{ messageId: "message-1", messageStatus: "sent" },
 	);
 	assert.deepEqual(
 		await proxies.coordination.askUserQuestion(
@@ -179,7 +179,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 			async observe(input) { calls.push(["observe", input]); return { children: [status] }; },
 			async message(toolCallId, input) {
 				calls.push(["message", toolCallId, input]);
-				return { messageId: "message-owner", delivery: "pending" };
+				return { messageId: "message-owner", messageStatus: "sent" };
 			},
 			async control(toolCallId, input) {
 				calls.push(["control", toolCallId, input]);
@@ -207,7 +207,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 
 	assert.deepEqual(await dispatchParticipantRequestToOwner(handlers, request), {
 		messageId: "message-owner",
-		delivery: "pending",
+		messageStatus: "sent",
 	});
 	assert.deepEqual(calls, [[
 		"message",

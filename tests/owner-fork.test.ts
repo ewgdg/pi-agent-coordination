@@ -220,7 +220,9 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 				question: "What source-only result should remain unresolved?",
 			},
 		);
-		const sourceRequestId = (request as { requestId: string }).requestId;
+		const sourceRequestId = (
+			request as { requestMessageId: string }
+		).requestMessageId;
 		await waitForMessageDelivery(host, directChildId, sourceRequestId);
 		host.model.setResponses([
 			fauxAssistantMessage("Copied conversation remains useful model context."),
@@ -547,7 +549,7 @@ async function assertSourceIdentityIsUnavailable(
 			tool: "agent_message" as const,
 			input: {
 				operation: "answer",
-				requestId: options.sourceRequestId,
+				requestMessageId: options.sourceRequestId,
 				answer: "Do not answer across Workflows.",
 			},
 		},

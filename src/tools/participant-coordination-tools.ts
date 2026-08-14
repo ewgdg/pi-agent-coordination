@@ -37,6 +37,16 @@ import {
 
 export type ParticipantCoordinationRole = "ordinary" | "moderator" | "owner";
 
+const AGENT_TOOLS_PROMPT_GUIDE = `<agent_tools>
+A successful asynchronous Message send returns messageStatus "sent". This includes ordinary Messages, Agent Requests, and the Creation Request sent by agent_spawn. A successful agent_spawn also returns spawnStatus "created".
+
+"sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
+
+After a receipt containing requestMessageId with messageStatus "sent", continue only independent work or end the turn. The correlated Agent Answer will be delivered automatically; do not poll merely to wait.
+
+agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
+</agent_tools>`;
+
 export type AgentObserveInput = Readonly<{
 	operation: "status" | "children";
 	agentId?: string;
@@ -120,7 +130,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("answer"),
-			requestId: Type.String({ minLength: 1 }),
+			requestMessageId: Type.String({ minLength: 1 }),
 			answer: Type.String({ minLength: 1 }),
 		},
 		{ additionalProperties: false },
@@ -329,6 +339,7 @@ export function registerParticipantCoordinationTools<
 		description:
 			"Send one immutable Message or correlated Request to a known Agent in this Workflow.",
 		promptSnippet: "Send, request, answer, cancel, poll, or retry direct Agent communication.",
+		promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentMessageParameters,
 		renderCall: renderAgentMessageCall,
@@ -344,6 +355,7 @@ export function registerParticipantCoordinationTools<
 			description:
 				"Create one fresh durable child Agent with inherited runtime configuration and deliver its initial Creation Request.",
 			promptSnippet: "Create one fresh child Agent and give it isolated initial work.",
+			promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
 			executionMode: "sequential",
 			parameters: agentSpawnParameters,
 			renderCall: renderAgentSpawnCall,

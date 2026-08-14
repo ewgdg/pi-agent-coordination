@@ -84,12 +84,12 @@ After child Identity commit, the Creation Request uses the ordinary [Request pro
 
 ## Receipts
 
-- `pending` — the child and Request exist, the first Run started, and Delivery was admitted.
-- `created_unscheduled` — the child and Request exist, but confirmed Run startup or Delivery admission failed.
-- `not_created` — validation failed before child Identity committed.
-- `indeterminate` — confirmation was lost at a boundary where effects may exist.
+- `spawnStatus: "created"` with `messageStatus: "sent"` — the child and Creation Request exist, the first Run started, and the Request was admitted for asynchronous Delivery. It may still be queued and is not necessarily delivered.
+- `spawnStatus: "created"` with `messageStatus: "not_sent"` — the child and Creation Request exist, but confirmed Run startup or Delivery admission failed. `failedStage` identifies that exact stage.
+- `spawnStatus: "not_created"` — validation failed before child Identity committed.
+- `spawnStatus: "unknown"` — confirmation was lost at a boundary where effects may exist. Candidate Agent and Request Message identities are returned when available.
 
-Confirmed and partial receipts include the effective runtime configuration only after it has resolved and passed resource validation. Collapsed native rendering shows the disposition, Agent identity, model, and thinking level. Expanded rendering shows the complete structured receipt and effective configuration.
+Created and uncertain receipts include the effective runtime configuration only after it has resolved and passed resource validation. A created receipt returns `agentId` and `requestMessageId`; an uncertain receipt names them as candidates. Collapsed native rendering shows the Spawn and Message statuses, Agent identity, model, and thinking level. Expanded rendering shows the complete structured receipt and effective configuration.
 
 Repeating `agent_spawn` creates a sibling. Direct children appear to their Spawner in canonical spawn-call order. Observation is passive and returns bounded identity and live Run state without exposing a Pi session or Run handle.
 

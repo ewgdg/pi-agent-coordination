@@ -185,9 +185,52 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		},
 	}), false);
 	assert.equal(Check(agentControlMethods["coordination.message"].response, {
+		messageId: "message",
+		messageStatus: "sent",
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.message"].response, {
+		requestMessageId: "request-message",
+		messageStatus: "sent",
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.message"].response, {
+		messageId: "message",
+		delivery: "pending",
+	}), false);
+	assert.equal(Check(agentControlMethods["coordination.message"].response, {
 		disposition: "already_cancelled",
 		cancellationMessageId: "cancellation-message",
 	}), true);
+	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
+		spawnStatus: "created",
+		agentId: "child",
+		requestMessageId: "creation-request",
+		messageStatus: "sent",
+		effectiveConfiguration: {
+			cwd: "/project",
+			model: { provider: "provider", modelId: "model" },
+			thinking: "high",
+			allowedTools: ["read"],
+			skills: [],
+			extensions: [],
+		},
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
+		spawnStatus: "not_created",
+		failedStage: "identity_commit",
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
+		disposition: "pending",
+		agentId: "child",
+		requestId: "creation-request",
+		effectiveConfiguration: {
+			cwd: "/project",
+			model: { provider: "provider", modelId: "model" },
+			thinking: "high",
+			allowedTools: ["read"],
+			skills: [],
+			extensions: [],
+		},
+	}), false);
 	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
 		children: [{
 			agentId: "child",

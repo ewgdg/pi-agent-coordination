@@ -894,7 +894,7 @@ test("Request Cancellation clears Run Failure without starting a successor Incid
 		harness.host.session,
 		harness.owner,
 		"cancel-run-failure-obligation",
-		affected.requestId,
+		affected.requestMessageId,
 	);
 	await waitForCondition(() =>
 		!harness.owner.status(moderator.id).run.retentionReasons.some(
@@ -1207,7 +1207,9 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 	);
 	assert.ok(requestResult.type === "message" && requestResult.message.role === "toolResult");
 	assert.equal(requestResult.message.isError, false);
-	const requestId = (requestResult.message.details as { requestId: string }).requestId;
+	const requestId = (
+		requestResult.message.details as { requestMessageId: string }
+	).requestMessageId;
 	const requestSource = SessionManager.open(moderator.path).getEntries().find(
 		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
 			entry.message.content.some(
@@ -1336,7 +1338,7 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 				"agent_message",
 				{
 					operation: "answer",
-					requestId,
+					requestMessageId: requestId,
 					answer: "The reminder restored enough context to answer.",
 				},
 				{ id: "answer-after-reminder" },
@@ -1561,7 +1563,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 		"spawn-progress-target",
 		"Remain dormant until another Agent requests progress.",
 	);
-	assert.equal(target.disposition, "created_unscheduled");
+assert.equal(target.messageStatus, "not_sent");
 	assert.equal(owner.status(target.agentId).run.phase, "dormant");
 
 	const routeExternalProgress = (context: Context) => {
@@ -1608,7 +1610,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 		"spawn-agent-with-external-progress",
 		"Delegate progress, then settle without answering this Creation Request.",
 	);
-	assert.equal(affected.disposition, "pending");
+	assert.equal(affected.messageStatus, "sent");
 	await executionGate.waitUntilStarted();
 	await waitForCondition(() => {
 		const run = owner.status(affected.agentId).run;
@@ -1662,8 +1664,8 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 			"spawn-second-deadlock-agent",
 			"Remain dormant until live dependency work arrives.",
 		);
-		assert.equal(first.disposition, "created_unscheduled");
-		assert.equal(second.disposition, "created_unscheduled");
+		assert.equal(first.messageStatus, "not_sent");
+		assert.equal(second.messageStatus, "not_sent");
 
 		const routeCycle = (context: Context) => {
 			if (context.tools?.some(({ name }) => name === "moderator_control")) {
@@ -1714,13 +1716,13 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 			host.session,
 			owner,
 			"cancel-first-deadlock-creation-request",
-			first.requestId,
+			first.requestMessageId,
 		);
 		await cancelRequestFromView(
 			host.session,
 			owner,
 			"cancel-second-deadlock-creation-request",
-			second.requestId,
+			second.requestMessageId,
 		);
 		await waitForCondition(() =>
 			owner.status(first.agentId).run.phase === "dormant" &&
@@ -1905,13 +1907,13 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 		host.session,
 		owner,
 		"cancel-first-active-cycle-creation",
-		first.requestId,
+		first.requestMessageId,
 	);
 	await cancelRequestFromView(
 		host.session,
 		owner,
 		"cancel-second-active-cycle-creation",
-		second.requestId,
+		second.requestMessageId,
 	);
 	await waitForCondition(() =>
 		owner.status(first.agentId).run.phase === "dormant" &&
@@ -1964,7 +1966,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 			"spawn-self-cycle-agent",
 			"Remain dormant until the self-cycle probe starts.",
 		);
-		assert.equal(participant.disposition, "created_unscheduled");
+		assert.equal(participant.messageStatus, "not_sent");
 		const routeSelfCycle = (context: Context) => {
 			if (context.tools?.some(({ name }) => name === "moderator_control")) {
 				return fauxAssistantMessage("I will inspect the settled self-cycle.");
@@ -2010,7 +2012,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 			host.session,
 			owner,
 			"cancel-self-cycle-creation-request",
-			participant.requestId,
+			participant.requestMessageId,
 		);
 		await waitForCondition(() => owner.status(participant.agentId).run.phase === "dormant");
 		await sendMessageFromView(
@@ -2388,7 +2390,7 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 		harness.host.session,
 		harness.owner,
 		"clear-exhausted-moderation-condition",
-		affected.requestId,
+		affected.requestMessageId,
 	);
 	await waitForCondition(() => harness.owner.operationalAttention().length === 0);
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
@@ -2628,9 +2630,9 @@ async function spawnFromView(
 	toolCallId: string,
 	request: string,
 ): Promise<{
-	disposition: "pending" | "created_unscheduled" | "indeterminate";
+	messageStatus: "sent" | "not_sent" | "unknown";
 	agentId: string;
-	requestId: string;
+	requestMessageId: string;
 }> {
 	const input = { request };
 	session.sessionManager.appendMessage(
@@ -2640,17 +2642,24 @@ async function spawnFromView(
 		),
 	);
 	const receipt = await view.spawn(toolCallId, input);
-	if (
-		!("agentId" in receipt) ||
-		typeof receipt.agentId !== "string" ||
-		typeof receipt.requestId !== "string"
-	) {
+	if (receipt.spawnStatus === "not_created") {
+		throw new Error(`Agent Spawn ${toolCallId} did not create an Agent identity`);
+	}
+	const agentId = receipt.spawnStatus === "unknown"
+		? receipt.candidateAgentId
+		: "agentId" in receipt ? receipt.agentId : undefined;
+	const requestMessageId = receipt.spawnStatus === "unknown"
+		? receipt.candidateRequestMessageId
+		: "requestMessageId" in receipt ? receipt.requestMessageId : undefined;
+	if (typeof agentId !== "string" || typeof requestMessageId !== "string") {
 		throw new Error(`Agent Spawn ${toolCallId} did not commit an Agent identity`);
 	}
 	return {
-		disposition: receipt.disposition,
-		agentId: receipt.agentId,
-		requestId: receipt.requestId,
+		messageStatus: receipt.spawnStatus === "unknown"
+			? "unknown"
+			: receipt.messageStatus,
+		agentId,
+		requestMessageId,
 	};
 }
 
@@ -2900,7 +2909,11 @@ async function answerAsOwner(
 	answer: string,
 	toolCallId: string,
 ): Promise<void> {
-	const input = { operation: "answer" as const, requestId, answer };
+	const input = {
+		operation: "answer" as const,
+		requestMessageId: requestId,
+		answer,
+	};
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", input, { id: toolCallId }),

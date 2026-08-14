@@ -271,7 +271,7 @@ export function inspectAgentMessageAuthorResult(options: {
 		: input.operation === "request"
 			? { kind: "request", messageId }
 			: input.operation === "answer"
-				? { kind: "answer", messageId, requestId: input.requestId }
+				? { kind: "answer", messageId, requestId: input.requestMessageId }
 				: {
 					kind: "request_cancellation",
 					messageId,
@@ -331,7 +331,7 @@ function isNonAuthoringRequestResult(
 	if (
 		(message.kind !== "answer" && message.kind !== "request_cancellation") ||
 		!isRecord(value) ||
-		(message.kind === "answer" && value.requestId !== message.requestId)
+		(message.kind === "answer" && value.requestMessageId !== message.requestId)
 	) {
 		return false;
 	}
@@ -352,7 +352,7 @@ function isNonAuthoringRequestResult(
 	if (value.disposition === "already_answered") {
 		return sameStringList(
 			keys,
-			["answerId", "disposition", "messageId", "requestId"],
+			["answerId", "disposition", "messageId", "requestMessageId"],
 		) &&
 			typeof value.answerId === "string" &&
 			value.answerId.length > 0 &&
@@ -361,7 +361,7 @@ function isNonAuthoringRequestResult(
 	if (value.disposition === "already_cancelled") {
 		return sameStringList(
 			keys,
-			["cancellationId", "disposition", "messageId", "requestId"],
+			["cancellationId", "disposition", "messageId", "requestMessageId"],
 		) &&
 			typeof value.cancellationId === "string" &&
 			value.cancellationId.length > 0 &&
@@ -381,27 +381,37 @@ function validateMessageAuthorResult(
 		);
 	}
 	const keys = Object.keys(value).sort();
-	const identityKey = "messageId";
+	const identityKey = message.kind === "request" ? "requestMessageId" : "messageId";
 	const correlationKeys = message.kind === "answer"
-		? ["requestId"]
-		: message.kind === "request"
-			? ["requestId"]
-			: [];
-	if (value.delivery === "pending" || value.delivery === "indeterminate") {
-		if (!sameStringList(keys, ["delivery", identityKey, ...correlationKeys].sort())) {
+		? ["requestMessageId"]
+		: [];
+	if (value.messageStatus === "sent") {
+		if (!sameStringList(keys, ["messageStatus", identityKey, ...correlationKeys].sort())) {
 			throw new Error(
 				`invariant_violation: Message ${messageId} author result has an invalid shape`,
 			);
 		}
-	} else if (value.delivery === "rejected") {
+	} else if (value.messageStatus === "unknown") {
 		if (
 			!sameStringList(
 				keys,
-				["delivery", identityKey, ...correlationKeys, "rejectionReason"].sort(),
+				["messageStatus", identityKey, ...correlationKeys, "reason"].sort(),
 			) ||
-			(value.rejectionReason !== "target_unavailable" &&
-				value.rejectionReason !== "host_shutting_down" &&
-				value.rejectionReason !== "capacity_exhausted")
+			value.reason !== "confirmation_lost"
+		) {
+			throw new Error(
+				`invariant_violation: Message ${messageId} author result has an invalid shape`,
+			);
+		}
+	} else if (value.messageStatus === "not_sent") {
+		if (
+			!sameStringList(
+				keys,
+				["messageStatus", identityKey, ...correlationKeys, "reason"].sort(),
+			) ||
+			(value.reason !== "target_unavailable" &&
+				value.reason !== "host_shutting_down" &&
+				value.reason !== "capacity_exhausted")
 		) {
 			throw new Error(
 				`invariant_violation: Message ${messageId} author result has an invalid shape`,
@@ -417,14 +427,9 @@ function validateMessageAuthorResult(
 			`invariant_violation: Message ${messageId} author result has the wrong identity`,
 		);
 	}
-	if (message.kind === "answer" && value.requestId !== message.requestId) {
+	if (message.kind === "answer" && value.requestMessageId !== message.requestId) {
 		throw new Error(
 			`invariant_violation: Answer ${messageId} author result has the wrong Request`,
-		);
-	}
-	if (message.kind === "request" && value.requestId !== message.messageId) {
-		throw new Error(
-			`invariant_violation: Request ${messageId} author result has the wrong identity`,
 		);
 	}
 }
@@ -513,17 +518,15 @@ export function inspectAnswerRetrievals(options: {
 			"answerSource",
 			"disposition",
 			"fromAgentId",
-			"messageId",
-			"requestId",
+			"requestMessageId",
 		];
 		if (
 			!sameStringList(Object.keys(details).sort(), expectedKeys) ||
 			!isToolCallPointer(details.answerSource) ||
 			typeof details.answerId !== "string" ||
-			typeof details.requestId !== "string" ||
+			typeof details.requestMessageId !== "string" ||
 			typeof details.fromAgentId !== "string" ||
 			typeof details.answer !== "string" ||
-			details.messageId !== details.requestId ||
 			details.answerId !== deriveMessageIdentity(details.answerSource) ||
 			details.fromAgentId !== details.answerSource.agentId
 		) {
@@ -531,7 +534,7 @@ export function inspectAnswerRetrievals(options: {
 		}
 		retrievals.push({
 			answerId: details.answerId,
-			requestId: details.requestId,
+			requestId: details.requestMessageId,
 			fromAgentId: details.fromAgentId,
 			answer: details.answer,
 			answerSource: details.answerSource,
@@ -560,7 +563,7 @@ function modelVisibleProjection(message: Message): ModelVisibleMessage {
 		case "request":
 			return {
 				kind: "request",
-				requestId: message.messageId,
+				requestMessageId: message.messageId,
 				fromAgentId: message.fromAgentId,
 				question: message.question,
 			};
@@ -568,7 +571,7 @@ function modelVisibleProjection(message: Message): ModelVisibleMessage {
 			return {
 				kind: "answer",
 				answerId: message.messageId,
-				requestId: message.requestId,
+				requestMessageId: message.requestId,
 				fromAgentId: message.fromAgentId,
 				answer: message.answer,
 			};
@@ -576,7 +579,7 @@ function modelVisibleProjection(message: Message): ModelVisibleMessage {
 			return {
 				kind: "request_cancellation",
 				cancellationId: message.messageId,
-				requestId: message.requestId,
+				requestMessageId: message.requestId,
 				fromAgentId: message.fromAgentId,
 				reason: message.reason,
 			};

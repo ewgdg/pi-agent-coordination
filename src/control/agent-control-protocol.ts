@@ -225,45 +225,71 @@ const EffectiveConfigurationSchema = closed({
 });
 const AgentSpawnReceiptSchema = Type.Union([
 	closed({
-		disposition: Type.Literal("pending"), agentId: NonEmptyStringSchema,
-		requestId: NonEmptyStringSchema, effectiveConfiguration: EffectiveConfigurationSchema,
+		spawnStatus: Type.Literal("created"), agentId: NonEmptyStringSchema,
+		requestMessageId: NonEmptyStringSchema, messageStatus: Type.Literal("sent"),
+		effectiveConfiguration: EffectiveConfigurationSchema,
 	}),
 	closed({
-		disposition: Type.Literal("created_unscheduled"), agentId: NonEmptyStringSchema,
-		requestId: NonEmptyStringSchema,
+		spawnStatus: Type.Literal("created"), agentId: NonEmptyStringSchema,
+		requestMessageId: NonEmptyStringSchema, messageStatus: Type.Literal("not_sent"),
 		failedStage: Type.Union([Type.Literal("run_start"), Type.Literal("delivery_admission")]),
 		effectiveConfiguration: EffectiveConfigurationSchema,
 	}),
-	closed({ disposition: Type.Literal("not_created"), failedStage: Type.Literal("identity_commit") }),
+	closed({ spawnStatus: Type.Literal("not_created"), failedStage: Type.Literal("identity_commit") }),
 	closed({
-		disposition: Type.Literal("indeterminate"),
-		agentId: Type.Optional(NonEmptyStringSchema), requestId: Type.Optional(NonEmptyStringSchema),
+		spawnStatus: Type.Literal("unknown"),
+		candidateAgentId: Type.Optional(NonEmptyStringSchema),
+		candidateRequestMessageId: Type.Optional(NonEmptyStringSchema),
 		lastConfirmedStage: Type.Optional(Type.Union([Type.Literal("identity"), Type.Literal("run_start")])),
 		effectiveConfiguration: Type.Optional(EffectiveConfigurationSchema),
 	}),
 ]);
-const DeliveryStateProperties = {
-	messageId: NonEmptyStringSchema,
-	delivery: Type.Union([Type.Literal("pending"), Type.Literal("indeterminate")]),
-} as const;
-const RejectedDeliveryProperties = {
-	messageId: NonEmptyStringSchema,
-	delivery: Type.Literal("rejected"),
-	rejectionReason: Type.Union([
-		Type.Literal("target_unavailable"), Type.Literal("host_shutting_down"),
-		Type.Literal("capacity_exhausted"),
-	]),
-} as const;
+const MessageNotSentReasonSchema = Type.Union([
+	Type.Literal("target_unavailable"), Type.Literal("host_shutting_down"),
+	Type.Literal("capacity_exhausted"), Type.Literal("evidence_unavailable"),
+	Type.Literal("policy_rejected"),
+]);
+const MessageUnknownReasonSchema = Type.Union([
+	Type.Literal("confirmation_lost"),
+	Type.Literal("inspection_incomplete"),
+]);
 const AgentMessageReceiptSchema = Type.Union([
-	closed(DeliveryStateProperties), closed(RejectedDeliveryProperties),
-	closed({ ...DeliveryStateProperties, requestId: NonEmptyStringSchema }),
-	closed({ ...RejectedDeliveryProperties, requestId: NonEmptyStringSchema }),
+	closed({ messageId: NonEmptyStringSchema, messageStatus: Type.Literal("sent") }),
 	closed({
-		messageId: NonEmptyStringSchema, requestId: NonEmptyStringSchema,
+		messageId: NonEmptyStringSchema, messageStatus: Type.Literal("not_sent"),
+		reason: MessageNotSentReasonSchema,
+	}),
+	closed({
+		messageId: NonEmptyStringSchema, messageStatus: Type.Literal("unknown"),
+		reason: MessageUnknownReasonSchema,
+	}),
+	closed({ requestMessageId: NonEmptyStringSchema, messageStatus: Type.Literal("sent") }),
+	closed({
+		requestMessageId: NonEmptyStringSchema, messageStatus: Type.Literal("not_sent"),
+		reason: MessageNotSentReasonSchema,
+	}),
+	closed({
+		requestMessageId: NonEmptyStringSchema, messageStatus: Type.Literal("unknown"),
+		reason: MessageUnknownReasonSchema,
+	}),
+	closed({
+		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
+		messageStatus: Type.Literal("sent"),
+	}),
+	closed({
+		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
+		messageStatus: Type.Literal("not_sent"), reason: MessageNotSentReasonSchema,
+	}),
+	closed({
+		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
+		messageStatus: Type.Literal("unknown"), reason: Type.Literal("confirmation_lost"),
+	}),
+	closed({
+		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
 		answerId: NonEmptyStringSchema, disposition: Type.Literal("already_answered"),
 	}),
 	closed({
-		messageId: NonEmptyStringSchema, requestId: NonEmptyStringSchema,
+		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
 		cancellationId: NonEmptyStringSchema, disposition: Type.Literal("already_cancelled"),
 	}),
 	closed({
@@ -284,34 +310,21 @@ const AgentMessageReceiptSchema = Type.Union([
 	}),
 	closed({
 		disposition: Type.Literal("indeterminate"), messageId: NonEmptyStringSchema,
-		reason: Type.Union([Type.Literal("inspection_incomplete"), Type.Literal("confirmation_lost")]),
-	}),
-	closed({ disposition: Type.Literal("pending"), messageId: NonEmptyStringSchema }),
-	closed({
-		disposition: Type.Literal("rejected"), messageId: NonEmptyStringSchema,
-		rejectionReason: Type.Union([
-			Type.Literal("target_unavailable"), Type.Literal("host_shutting_down"),
-			Type.Literal("evidence_unavailable"), Type.Literal("policy_rejected"),
-			Type.Literal("capacity_exhausted"),
-		]),
+		reason: Type.Literal("inspection_incomplete"),
 	}),
 	closed({
-		disposition: Type.Literal("answer_delivered"), messageId: NonEmptyStringSchema,
-		requestId: NonEmptyStringSchema, answerId: NonEmptyStringSchema,
+		disposition: Type.Literal("answer_delivered"), requestMessageId: NonEmptyStringSchema,
+		answerId: NonEmptyStringSchema,
 		fromAgentId: NonEmptyStringSchema, answer: Type.String(), answerSource: ToolCallPointerSchema,
 	}),
 	closed({
-		disposition: Type.Literal("answer_already_delivered"), messageId: NonEmptyStringSchema,
-		requestId: NonEmptyStringSchema, answerId: NonEmptyStringSchema,
+		disposition: Type.Literal("answer_already_delivered"), requestMessageId: NonEmptyStringSchema,
+		answerId: NonEmptyStringSchema,
 		deliveryEvidence: EntryPointerSchema,
 	}),
 	closed({
-		disposition: Type.Literal("request_delivered"), messageId: NonEmptyStringSchema,
-		requestId: NonEmptyStringSchema, deliveryEvidence: EntryPointerSchema,
-	}),
-	closed({
-		disposition: Type.Literal("request_pending"), messageId: NonEmptyStringSchema,
-		requestId: NonEmptyStringSchema,
+		disposition: Type.Literal("request_delivered"), requestMessageId: NonEmptyStringSchema,
+		deliveryEvidence: EntryPointerSchema,
 	}),
 ]);
 const RunControlReceiptSchema = Type.Union([

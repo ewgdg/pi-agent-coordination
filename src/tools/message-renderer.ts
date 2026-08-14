@@ -35,7 +35,10 @@ export function renderAgentMessageCall(
 	}
 	if (args.operation === "answer") {
 		text += theme.fg("accent", "answer");
-		text += theme.fg("dim", ` · ${args.requestId} · ${boundedToolPreview(args.answer)}`);
+		text += theme.fg(
+			"dim",
+			` · ${args.requestMessageId} · ${boundedToolPreview(args.answer)}`,
+		);
 		return new Text(text, 0, 0);
 	}
 	if (args.operation === "cancel") {
@@ -60,12 +63,14 @@ export function renderAgentMessageResult(
 		return new Text(theme.fg("warning", "scheduling…"), 0, 0);
 	}
 	const receipt = result.details;
-	const disposition = "delivery" in receipt
-		? receipt.delivery
+	const disposition = "messageStatus" in receipt
+		? receipt.messageStatus
 		: receipt.disposition;
 	let text = theme.fg(dispositionColor(disposition), disposition);
 	if ("messageId" in receipt) {
 		text += theme.fg("dim", ` · ${receipt.messageId}`);
+	} else if ("requestMessageId" in receipt) {
+		text += theme.fg("dim", ` · ${receipt.requestMessageId}`);
 	} else if ("answerMessageId" in receipt) {
 		text += theme.fg("dim", ` · ${receipt.answerMessageId}`);
 	} else {
@@ -80,10 +85,13 @@ export function renderAgentMessageResult(
 			` · ${receipt.answerId} · ${boundedToolPreview(receipt.answer)}`,
 		);
 	}
-	if ("rejectionReason" in receipt) {
-		text += theme.fg("error", ` · ${receipt.rejectionReason}`);
-	} else if ("reason" in receipt) {
-		text += theme.fg("warning", ` · ${receipt.reason}`);
+	if ("reason" in receipt) {
+		text += theme.fg(
+			"messageStatus" in receipt && receipt.messageStatus === "not_sent"
+				? "error"
+				: "warning",
+			` · ${receipt.reason}`,
+		);
 	}
 	if (options.expanded) {
 		if ("deliveryEvidence" in receipt) {
@@ -112,7 +120,11 @@ function dispositionColor(disposition: string): ThemeColor {
 			return "success";
 		case "rejected":
 			return "error";
-		case "pending":
+		case "sent":
+			return "success";
+		case "not_sent":
+			return "error";
+		case "unknown":
 		case "indeterminate":
 			return "warning";
 		default:

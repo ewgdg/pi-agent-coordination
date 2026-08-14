@@ -64,10 +64,10 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	ParticipantCoordinationToolHandlers<"moderator"> &
 	ParticipantCoordinationToolHandlers<"owner"> = {
 	async message() {
-		return { messageId: "message-1", delivery: "pending" };
+		return { messageId: "message-1", messageStatus: "sent" };
 	},
 	async spawn() {
-		return { disposition: "not_created", failedStage: "identity_commit" };
+		return { spawnStatus: "not_created", failedStage: "identity_commit" };
 	},
 	async availableTemplates() {
 		return {
@@ -112,6 +112,20 @@ test("participant registrar exposes the exact closed sequential role tool sets",
 			assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
 			await host.runtime.dispose();
 		});
+	}
+});
+
+test("Agent Message schema names Answer and Cancellation correlation requestMessageId", () => {
+	const variants = (participantCoordinationToolSchemas.agent_message as {
+		anyOf: Array<{ properties: Record<string, { const?: string }> }>;
+	}).anyOf;
+	for (const operation of ["answer", "cancel"] as const) {
+		const variant = variants.find(({ properties }) =>
+			properties.operation?.const === operation
+		);
+		assert.ok(variant);
+		assert.equal("requestMessageId" in variant.properties, true);
+		assert.equal("requestId" in variant.properties, false);
 	}
 });
 
@@ -199,6 +213,36 @@ test("Template catalogue is injected into the model prompt", async (t) => {
 	await host.runtime.dispose();
 });
 
+test("participant registrar contributes one shared asynchronous Agent tools guide", async (t) => {
+	const expectedGuide = `<agent_tools>
+A successful asynchronous Message send returns messageStatus "sent". This includes ordinary Messages, Agent Requests, and the Creation Request sent by agent_spawn. A successful agent_spawn also returns spawnStatus "created".
+
+"sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
+
+After a receipt containing requestMessageId with messageStatus "sent", continue only independent work or end the turn. The correlated Agent Answer will be delivered automatically; do not poll merely to wait.
+
+agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
+</agent_tools>`;
+	let observedSystemPrompt = "";
+	const host = await createRegistrarHost(t, "ordinary", handlers);
+	const message = host.session.getToolDefinition("agent_message");
+	const spawn = host.session.getToolDefinition("agent_spawn");
+	assert.ok(message);
+	assert.ok(spawn);
+	assert.deepEqual(message.promptGuidelines, [expectedGuide]);
+	assert.deepEqual(spawn.promptGuidelines, [expectedGuide]);
+	host.model.setResponses([(context) => {
+		observedSystemPrompt = context.systemPrompt ?? "";
+		return fauxAssistantMessage("Done.");
+	}]);
+
+	await host.session.prompt("Inspect the Agent tool guidance.");
+	assert.equal(observedSystemPrompt.split("<agent_tools>").length - 1, 1);
+	assert.equal(observedSystemPrompt.split("</agent_tools>").length - 1, 1);
+	assert.match(observedSystemPrompt, /continue only independent work or end the turn/);
+	await host.runtime.dispose();
+});
+
 test("participant registrar preserves role-specific tool presentation metadata", async (t) => {
 	const ordinary = await createRegistrarHost(t, "ordinary", handlers);
 	const moderator = await createRegistrarHost(t, "moderator", handlers);
@@ -273,9 +317,9 @@ test("participant registrar preserves role-specific tool presentation metadata",
 
 test("participant registrar routes intents and returns exact handler receipts", async (t) => {
 	const calls: unknown[] = [];
-	const messageReceipt = { messageId: "message-2", delivery: "pending" } as const;
+	const messageReceipt = { messageId: "message-2", messageStatus: "sent" } as const;
 	const spawnReceipt = {
-		disposition: "not_created",
+		spawnStatus: "not_created",
 		failedStage: "identity_commit",
 	} as const;
 	const observeReceipt = { children: [agentStatus] } as const;

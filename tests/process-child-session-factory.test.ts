@@ -240,7 +240,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		() => fauxAssistantMessage(
 			fauxToolCall("agent_message", {
 				operation: "answer",
-				requestId: creationRequestId,
+				requestMessageId: creationRequestId,
 				answer: "Process child answer crossed the Owner RPC boundary.",
 			}, { id: "proxied-child-message" }),
 			{ stopReason: "toolUse" },
@@ -273,7 +273,8 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		});
 
 		const receipt = await owner.spawn("spawn-real-process-child", input);
-		assert.equal(receipt.disposition, "pending");
+		assert.equal(receipt.spawnStatus, "created");
+		assert.equal("messageStatus" in receipt && receipt.messageStatus, "sent");
 		assert.ok("agentId" in receipt);
 		const child = owner.children()[0];
 		assert.equal(child?.agentId, receipt.agentId);
@@ -374,8 +375,10 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 		);
 
 		const receipt = await owner.spawn("spawn-post-identity-failure", input);
-		assert.equal(receipt.disposition, "created_unscheduled");
+		assert.equal(receipt.spawnStatus, "created");
+		assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
 		assert.ok("agentId" in receipt);
+		assert.ok("failedStage" in receipt);
 		assert.equal(receipt.failedStage, "run_start");
 		const status = owner.status(receipt.agentId);
 		assert.equal(status.run.phase, "dormant");
@@ -473,7 +476,8 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 			),
 		);
 		const spawned = await owner.spawn("spawn-moderated-process-failure", input);
-		assert.equal(spawned.disposition, "pending");
+		assert.equal(spawned.spawnStatus, "created");
+		assert.equal("messageStatus" in spawned && spawned.messageStatus, "sent");
 
 		await waitFor(() =>
 			moderatorStatuses(owner, identity.agentId).length === 2 &&

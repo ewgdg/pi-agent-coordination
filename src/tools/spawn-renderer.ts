@@ -32,9 +32,20 @@ export function renderAgentSpawnResult(
 		return new Text(theme.fg("warning", "resolving configuration…"), 0, 0);
 	}
 	const receipt = result.details;
-	let text = theme.fg(dispositionColor(receipt.disposition), receipt.disposition);
+	let text = theme.fg(spawnStatusColor(receipt.spawnStatus), receipt.spawnStatus);
+	if ("messageStatus" in receipt) {
+		text += theme.fg(
+			receipt.messageStatus === "sent" ? "success" : "warning",
+			` · ${receipt.messageStatus}`,
+		);
+	}
 	if ("agentId" in receipt && receipt.agentId !== undefined) {
 		text += theme.fg("dim", ` · ${shortIdentity(receipt.agentId)}`);
+	} else if (
+		"candidateAgentId" in receipt &&
+		receipt.candidateAgentId !== undefined
+	) {
+		text += theme.fg("dim", ` · ${shortIdentity(receipt.candidateAgentId)}`);
 	}
 	const configuration = "effectiveConfiguration" in receipt
 		? receipt.effectiveConfiguration
@@ -61,14 +72,13 @@ function shortIdentity(agentId: string): string {
 		: `${codePoints.slice(0, SHORT_ID_CODE_POINTS).join("")}…`;
 }
 
-function dispositionColor(disposition: AgentSpawnReceipt["disposition"]): ThemeColor {
-	switch (disposition) {
-		case "pending":
+function spawnStatusColor(status: AgentSpawnReceipt["spawnStatus"]): ThemeColor {
+	switch (status) {
+		case "created":
 			return "success";
 		case "not_created":
 			return "error";
-		case "created_unscheduled":
-		case "indeterminate":
+		case "unknown":
 			return "warning";
 	}
 }

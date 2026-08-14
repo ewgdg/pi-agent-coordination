@@ -175,13 +175,13 @@ export class MessageCoordinator {
 			throw new Error("wrong_workflow: Message recipient is outside the sender Workflow");
 		}
 		const identity = message.kind === "request"
-			? { messageId: message.messageId, requestId: message.messageId }
+			? { requestMessageId: message.messageId }
 			: { messageId: message.messageId };
 		if (this.#isShuttingDown()) {
 			return {
 				...identity,
-				delivery: "rejected",
-				rejectionReason: "host_shutting_down",
+				messageStatus: "not_sent",
+				reason: "host_shutting_down",
 			};
 		}
 		if (message.kind === "request") {
@@ -196,8 +196,8 @@ export class MessageCoordinator {
 		) {
 			return {
 				...identity,
-				delivery: "rejected",
-				rejectionReason: "target_unavailable",
+				messageStatus: "not_sent",
+				reason: "target_unavailable",
 			};
 		}
 		const delivery = this.#scheduleGeneralMessage(recipient, message);
@@ -208,13 +208,13 @@ export class MessageCoordinator {
 				messageId: message.messageId,
 				operation: "send",
 			}) === "confirmation_lost"
-				? { ...identity, delivery: "indeterminate" }
-				: { ...identity, delivery: "pending" };
+				? { ...identity, messageStatus: "unknown", reason: "confirmation_lost" }
+				: { ...identity, messageStatus: "sent" };
 		}
 		return {
 			...identity,
-			delivery: "rejected",
-			rejectionReason: admission,
+			messageStatus: "not_sent",
+			reason: admission,
 		};
 	}
 
@@ -338,7 +338,7 @@ export class MessageCoordinator {
 		input: AnswerInput,
 	): Promise<AgentAnswerReceipt> {
 		const admitted = await caller.host.lane.run(() => {
-			const request = this.#requestEvidence.requireRequest(input.requestId);
+			const request = this.#requestEvidence.requireRequest(input.requestMessageId);
 			if (request.targetAgentId !== caller.identity.agentId) {
 				throw new Error(
 					`wrong_participant: Agent ${caller.identity.agentId} is not the responder for Request ${request.messageId}`,
@@ -394,7 +394,7 @@ export class MessageCoordinator {
 		if (admitted.disposition === "existing") {
 			return {
 				messageId: admitted.answer.messageId,
-				requestId: admitted.request.messageId,
+				requestMessageId: admitted.request.messageId,
 				answerId: admitted.answer.messageId,
 				disposition: "already_answered",
 			};
@@ -402,7 +402,7 @@ export class MessageCoordinator {
 		if (admitted.disposition === "cancelled") {
 			return {
 				messageId: admitted.cancellation.messageId,
-				requestId: admitted.request.messageId,
+				requestMessageId: admitted.request.messageId,
 				cancellationId: admitted.cancellation.messageId,
 				disposition: "already_cancelled",
 			};
@@ -411,9 +411,9 @@ export class MessageCoordinator {
 		if (this.#isShuttingDown()) {
 			return {
 				messageId: answer.messageId,
-				requestId: request.messageId,
-				delivery: "rejected",
-				rejectionReason: "host_shutting_down",
+				requestMessageId: request.messageId,
+				messageStatus: "not_sent",
+				reason: "host_shutting_down",
 			};
 		}
 		if (
@@ -425,9 +425,9 @@ export class MessageCoordinator {
 		) {
 			return {
 				messageId: answer.messageId,
-				requestId: request.messageId,
-				delivery: "rejected",
-				rejectionReason: "target_unavailable",
+				requestMessageId: request.messageId,
+				messageStatus: "not_sent",
+				reason: "target_unavailable",
 			};
 		}
 		const admission = await this.#deliveryScheduler.admit(
@@ -442,20 +442,21 @@ export class MessageCoordinator {
 			}) === "confirmation_lost"
 				? {
 					messageId: answer.messageId,
-					requestId: request.messageId,
-					delivery: "indeterminate",
+					requestMessageId: request.messageId,
+					messageStatus: "unknown",
+					reason: "confirmation_lost",
 				}
 				: {
 					messageId: answer.messageId,
-					requestId: request.messageId,
-					delivery: "pending",
+					requestMessageId: request.messageId,
+					messageStatus: "sent",
 				};
 		}
 		return {
 			messageId: answer.messageId,
-			requestId: request.messageId,
-			delivery: "rejected",
-			rejectionReason: admission,
+			requestMessageId: request.messageId,
+			messageStatus: "not_sent",
+			reason: admission,
 		};
 	}
 
@@ -515,8 +516,8 @@ export class MessageCoordinator {
 		if (this.#isShuttingDown()) {
 			return {
 				...identity,
-				delivery: "rejected",
-				rejectionReason: "host_shutting_down",
+				messageStatus: "not_sent",
+				reason: "host_shutting_down",
 			};
 		}
 		if (
@@ -528,8 +529,8 @@ export class MessageCoordinator {
 		) {
 			return {
 				...identity,
-				delivery: "rejected",
-				rejectionReason: "target_unavailable",
+				messageStatus: "not_sent",
+				reason: "target_unavailable",
 			};
 		}
 		const admission = await this.#deliveryScheduler.admit(
@@ -542,10 +543,10 @@ export class MessageCoordinator {
 				messageId: cancellation.messageId,
 				operation: "cancel",
 			}) === "confirmation_lost"
-				? { ...identity, delivery: "indeterminate" }
-				: { ...identity, delivery: "pending" };
+				? { ...identity, messageStatus: "unknown", reason: "confirmation_lost" }
+				: { ...identity, messageStatus: "sent" };
 		}
-		return { ...identity, delivery: "rejected", rejectionReason: admission };
+		return { ...identity, messageStatus: "not_sent", reason: admission };
 	}
 
 	async #retry(
@@ -570,9 +571,9 @@ export class MessageCoordinator {
 				}) === "inspection_incomplete"
 			) {
 				return {
-					disposition: "rejected",
 					messageId: message.messageId,
-					rejectionReason: "evidence_unavailable",
+					messageStatus: "not_sent",
+					reason: "evidence_unavailable",
 				};
 			}
 			const delivery = inspectMessageDelivery({
@@ -590,8 +591,8 @@ export class MessageCoordinator {
 			}
 			if (canonical.state === "indeterminate") {
 				return {
-					disposition: "indeterminate",
 					messageId: message.messageId,
+					messageStatus: "unknown",
 					reason: "inspection_incomplete",
 				};
 			}
@@ -604,9 +605,9 @@ export class MessageCoordinator {
 			}
 			if (this.#isShuttingDown()) {
 				return {
-					disposition: "rejected",
 					messageId: message.messageId,
-					rejectionReason: "host_shutting_down",
+					messageStatus: "not_sent",
+					reason: "host_shutting_down",
 				};
 			}
 			const admission = await this.#deliveryScheduler.admitInLane(
@@ -620,16 +621,16 @@ export class MessageCoordinator {
 					operation: "retry",
 				}) === "confirmation_lost"
 					? {
-						disposition: "indeterminate",
 						messageId: message.messageId,
+						messageStatus: "unknown",
 						reason: "confirmation_lost",
 					}
-					: { disposition: "pending", messageId: message.messageId };
+					: { messageId: message.messageId, messageStatus: "sent" };
 			}
 			return {
-				disposition: "rejected",
 				messageId: message.messageId,
-				rejectionReason: admission,
+				messageStatus: "not_sent",
+				reason: admission,
 			};
 		});
 	}
@@ -637,13 +638,13 @@ export class MessageCoordinator {
 	async #retryRequest(
 		requester: AgentRecord,
 		request: Extract<Message, { kind: "request" }>,
-	): Promise<AgentMessageRetryReceipt | AgentRequestRetryReceipt> {
+	): Promise<AgentRequestRetryReceipt> {
 		const responder = this.#requireAgent(request.targetAgentId);
 		if (this.#requestEvidence.findCancellation(request)) {
 			return {
-				disposition: "rejected",
-				messageId: request.messageId,
-				rejectionReason: "policy_rejected",
+				requestMessageId: request.messageId,
+				messageStatus: "not_sent",
+				reason: "policy_rejected",
 			};
 		}
 		return responder.host.lane.run(async () => {
@@ -655,9 +656,9 @@ export class MessageCoordinator {
 				}) === "inspection_incomplete"
 			) {
 				return {
-					disposition: "rejected",
-					messageId: request.messageId,
-					rejectionReason: "evidence_unavailable",
+					requestMessageId: request.messageId,
+					messageStatus: "not_sent",
+					reason: "evidence_unavailable",
 				};
 			}
 			const requestDelivery = inspectMessageDelivery({
@@ -675,8 +676,8 @@ export class MessageCoordinator {
 			}
 			if (canonicalRequest.state === "indeterminate") {
 				return {
-					disposition: "indeterminate",
-					messageId: request.messageId,
+					requestMessageId: request.messageId,
+					messageStatus: "unknown",
 					reason: "inspection_incomplete",
 				};
 			}
@@ -694,23 +695,21 @@ export class MessageCoordinator {
 				});
 				if (canonicalAnswer.state !== "canonical") {
 					return {
-						disposition: "indeterminate",
-						messageId: request.messageId,
+						requestMessageId: request.messageId,
+						messageStatus: "unknown",
 						reason: "inspection_incomplete",
 					};
 				}
 				return answerDelivery.deliveryEvidence
 					? {
 						disposition: "answer_already_delivered",
-						messageId: request.messageId,
-						requestId: request.messageId,
+						requestMessageId: request.messageId,
 						answerId: answer.messageId,
 						deliveryEvidence: answerDelivery.deliveryEvidence,
 					}
 					: {
 						disposition: "answer_delivered",
-						messageId: request.messageId,
-						requestId: request.messageId,
+						requestMessageId: request.messageId,
 						answerId: answer.messageId,
 						fromAgentId: answer.fromAgentId,
 						answer: answer.answer,
@@ -720,16 +719,15 @@ export class MessageCoordinator {
 			if (requestDelivery.deliveryEvidence) {
 				return {
 					disposition: "request_delivered",
-					messageId: request.messageId,
-					requestId: request.messageId,
+					requestMessageId: request.messageId,
 					deliveryEvidence: requestDelivery.deliveryEvidence,
 				};
 			}
 			if (this.#isShuttingDown()) {
 				return {
-					disposition: "rejected",
-					messageId: request.messageId,
-					rejectionReason: "host_shutting_down",
+					requestMessageId: request.messageId,
+					messageStatus: "not_sent",
+					reason: "host_shutting_down",
 				};
 			}
 			const admission = await this.#deliveryScheduler.admitInLane(
@@ -743,20 +741,19 @@ export class MessageCoordinator {
 					operation: "retry",
 				}) === "confirmation_lost"
 					? {
-						disposition: "indeterminate",
-						messageId: request.messageId,
+						requestMessageId: request.messageId,
+						messageStatus: "unknown",
 						reason: "confirmation_lost",
 					}
 					: {
-						disposition: "request_pending",
-						messageId: request.messageId,
-						requestId: request.messageId,
+						requestMessageId: request.messageId,
+						messageStatus: "sent",
 					};
 			}
 			return {
-				disposition: "rejected",
-				messageId: request.messageId,
-				rejectionReason: admission,
+				requestMessageId: request.messageId,
+				messageStatus: "not_sent",
+				reason: admission,
 			};
 		});
 	}

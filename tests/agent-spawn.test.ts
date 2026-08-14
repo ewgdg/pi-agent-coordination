@@ -81,16 +81,22 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	assert.equal(spawnResult.message.isError, false);
 	assert.deepEqual(
 		Object.keys(spawnResult.message.details as Record<string, unknown>).sort(),
-		["agentId", "disposition", "effectiveConfiguration", "requestId"],
+		[
+			"agentId",
+			"effectiveConfiguration",
+			"messageStatus",
+			"requestMessageId",
+			"spawnStatus",
+		],
 	);
 	assert.equal(
-		(spawnResult.message.details as { disposition: string }).disposition,
-		"pending",
+		(spawnResult.message.details as { spawnStatus: string }).spawnStatus,
+		"created",
 	);
 	const effectiveConfiguration = (
 		spawnResult.message.details as Extract<
 			AgentSpawnReceipt,
-			{ disposition: "pending" }
+			{ spawnStatus: "created"; messageStatus: "sent" }
 		>
 	).effectiveConfiguration;
 	assert.equal(effectiveConfiguration.extensions.length, 1);
@@ -179,7 +185,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		)
 		.digest("base64url");
 	assert.equal(
-		(spawnResult.message.details as { requestId: string }).requestId,
+		(spawnResult.message.details as { requestMessageId: string }).requestMessageId,
 		expectedRequestId,
 	);
 
@@ -224,7 +230,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		messages: [
 			{
 				kind: "request",
-				requestId: expectedRequestId,
+				requestMessageId: expectedRequestId,
 				fromAgentId: host.session.sessionId,
 				question: "Inspect the coordination boundary and report what is observable.",
 			},
@@ -299,7 +305,9 @@ test("a successor Runtime re-resolves its current Template and project resources
 		),
 	);
 	const receipt = await view.spawn("spawn-configured-child", spawnInput);
-	assert.equal(receipt.disposition, "pending");
+	if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
+		throw new Error(`Configured child was not created: ${JSON.stringify(receipt)}`);
+	}
 	assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
 	assert.match(
 		receipt.effectiveConfiguration.extensions[0]!,
@@ -446,7 +454,7 @@ test("invalid default-child metadata fails before Agent Identity", async (t) => 
 	await host.session.waitForIdle();
 
 	assert.deepEqual(findSpawnReceipt(host.session.sessionManager), {
-		disposition: "not_created",
+		spawnStatus: "not_created",
 		failedStage: "identity_commit",
 	});
 	const observe = host.session.getToolDefinition("agent_observe");
@@ -497,7 +505,7 @@ test("ambiguous selected skills fail before Agent Identity", async (t) => {
 	await host.session.waitForIdle();
 
 	assert.deepEqual(findSpawnReceipt(host.session.sessionManager), {
-		disposition: "not_created",
+		spawnStatus: "not_created",
 		failedStage: "identity_commit",
 	});
 
@@ -530,7 +538,7 @@ test("an untrusted effective cwd cannot contribute selected project resources", 
 	});
 
 	assert.deepEqual(receipt, {
-		disposition: "not_created",
+		spawnStatus: "not_created",
 		failedStage: "identity_commit",
 	});
 	assert.deepEqual(harness.view.children(), []);
@@ -567,8 +575,10 @@ test("effective cwd honors Pi's default project-trust policy", async (t) => {
 		},
 	});
 
-	assert.equal(receipt.disposition, "pending");
-	assert.deepEqual(receipt.effectiveConfiguration?.skills, ["trusted-skill"]);
+	if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
+		throw new Error(`Trusted child was not created: ${JSON.stringify(receipt)}`);
+	}
+	assert.deepEqual(receipt.effectiveConfiguration.skills, ["trusted-skill"]);
 	assert.ok(receipt.agentId);
 
 	await harness.shutdown();
@@ -589,8 +599,9 @@ test("allowed tools need not be registered or active in the child Runtime", asyn
 	const harness = await createCoordinatorHarness(t, {}, ownerOnlyTool);
 	const receipt = await harness.spawn("spawn-missing-inherited-resource");
 
-	assert.equal(receipt.disposition, "pending");
-	assert.ok("agentId" in receipt);
+	if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
+		throw new Error(`Allowed-tools child was not created: ${JSON.stringify(receipt)}`);
+	}
 	assert.equal(harness.view.children()[0]?.run.phase, "live");
 	assert.ok(receipt.effectiveConfiguration.allowedTools.includes("owner_only_probe"));
 	assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
@@ -608,7 +619,9 @@ test("confirmed post-Identity Run startup failure keeps a visible dormant child"
 	});
 	const receipt = await harness.spawn("spawn-run-start-failure");
 
-	assert.equal(receipt.disposition, "created_unscheduled");
+	assert.equal(receipt.spawnStatus, "created");
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
+	assert.ok("failedStage" in receipt);
 	assert.equal(receipt.failedStage, "run_start");
 	assert.deepEqual(harness.view.children()[0]?.run, {
 		phase: "dormant",
@@ -630,7 +643,9 @@ test("shutdown after Agent Identity keeps the durable child dormant", async (t) 
 	const receipt = await harness.spawn("spawn-identity-before-shutdown");
 	await shutdownPromise;
 
-	assert.equal(receipt.disposition, "created_unscheduled");
+	assert.equal(receipt.spawnStatus, "created");
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
+	assert.ok("failedStage" in receipt);
 	assert.equal(receipt.failedStage, "run_start");
 	assert.deepEqual(harness.view.children()[0]?.run, {
 		phase: "dormant",
@@ -659,7 +674,9 @@ test("confirmed post-Identity Delivery admission failure keeps the child and Req
 	});
 	const receipt = await harness.spawn("spawn-delivery-admission-failure");
 
-	assert.equal(receipt.disposition, "created_unscheduled");
+	assert.equal(receipt.spawnStatus, "created");
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
+	assert.ok("failedStage" in receipt);
 	assert.equal(receipt.failedStage, "delivery_admission");
 	assert.deepEqual(harness.view.children()[0]?.run, {
 		phase: "dormant",
@@ -680,10 +697,11 @@ test("lost Run-start confirmation stays indeterminate after confirmed Identity",
 	try {
 		const receipt = await harness.spawn("spawn-run-start-confirmation-lost");
 
-		assert.equal(receipt.disposition, "indeterminate");
+		assert.equal(receipt.spawnStatus, "unknown");
+		assert.ok(receipt.spawnStatus === "unknown");
 		assert.equal(receipt.lastConfirmedStage, "identity");
-		assert.equal(typeof receipt.agentId, "string");
-		assert.equal(typeof receipt.requestId, "string");
+		assert.equal(typeof receipt.candidateAgentId, "string");
+		assert.equal(typeof receipt.candidateRequestMessageId, "string");
 		assert.equal(harness.view.children()[0]?.run.phase, "live");
 	} finally {
 		await shutdownAfterLostRunStart(harness);
@@ -696,10 +714,11 @@ test("lost Identity confirmation stays indeterminate with a canonical dormant ch
 	});
 	const receipt = await harness.spawn("spawn-identity-confirmation-lost");
 
-	assert.equal(receipt.disposition, "indeterminate");
+	assert.equal(receipt.spawnStatus, "unknown");
+	assert.ok(receipt.spawnStatus === "unknown");
 	assert.equal("lastConfirmedStage" in receipt, false);
-	assert.equal(typeof receipt.agentId, "string");
-	assert.equal(typeof receipt.requestId, "string");
+	assert.equal(typeof receipt.candidateAgentId, "string");
+	assert.equal(typeof receipt.candidateRequestMessageId, "string");
 	assert.deepEqual(harness.view.children()[0]?.run, {
 		phase: "dormant",
 		retentionReasons: [],
@@ -714,10 +733,11 @@ test("lost Delivery confirmation stays indeterminate after confirmed Run start",
 	});
 	const receipt = await harness.spawn("spawn-delivery-confirmation-lost");
 
-	assert.equal(receipt.disposition, "indeterminate");
+	assert.equal(receipt.spawnStatus, "unknown");
+	assert.ok(receipt.spawnStatus === "unknown");
 	assert.equal(receipt.lastConfirmedStage, "run_start");
-	assert.equal(typeof receipt.agentId, "string");
-	assert.equal(typeof receipt.requestId, "string");
+	assert.equal(typeof receipt.candidateAgentId, "string");
+	assert.equal(typeof receipt.candidateRequestMessageId, "string");
 	assert.equal(harness.view.children()[0]?.run.phase, "live");
 
 	await harness.shutdown();
@@ -754,7 +774,7 @@ test("forged Creation Request Delivery evidence is an invariant violation", asyn
 					messages: [
 						{
 							kind: "request",
-							requestId: "wrong-request",
+							requestMessageId: "wrong-request",
 							fromAgentId: identity.directSpawnerAgentId,
 							question: "This projection does not match its source.",
 						},

@@ -36,26 +36,28 @@ export type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 
 export type AgentSpawnReceipt =
 	| Readonly<{
-		disposition: "pending";
+		spawnStatus: "created";
 		agentId: string;
-		requestId: string;
+		requestMessageId: string;
+		messageStatus: "sent";
 		effectiveConfiguration: EffectiveAgentRunConfiguration;
 	}>
 	| Readonly<{
-		disposition: "created_unscheduled";
+		spawnStatus: "created";
 		agentId: string;
-		requestId: string;
+		requestMessageId: string;
+		messageStatus: "not_sent";
 		failedStage: "run_start" | "delivery_admission";
 		effectiveConfiguration: EffectiveAgentRunConfiguration;
 	}>
 	| Readonly<{
-		disposition: "not_created";
+		spawnStatus: "not_created";
 		failedStage: "identity_commit";
 	}>
 	| Readonly<{
-		disposition: "indeterminate";
-		agentId?: string;
-		requestId?: string;
+		spawnStatus: "unknown";
+		candidateAgentId?: string;
+		candidateRequestMessageId?: string;
 		lastConfirmedStage?: "identity" | "run_start";
 		effectiveConfiguration?: EffectiveAgentRunConfiguration;
 	}>;
@@ -144,10 +146,10 @@ export class DefaultChildSpawner {
 			sessionManager = this.#sessionFactory.createStagingSession(prepared);
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
-			return { disposition: "not_created", failedStage: "identity_commit" };
+			return { spawnStatus: "not_created", failedStage: "identity_commit" };
 		}
 		if (this.#isShuttingDown()) {
-			return { disposition: "not_created", failedStage: "identity_commit" };
+			return { spawnStatus: "not_created", failedStage: "identity_commit" };
 		}
 
 		const identity: ChildAgentIdentity = {
@@ -161,7 +163,7 @@ export class DefaultChildSpawner {
 			commitChildAgentIdentity(sessionManager, identity);
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
-			return { disposition: "not_created", failedStage: "identity_commit" };
+			return { spawnStatus: "not_created", failedStage: "identity_commit" };
 		}
 
 		let sessionPath: string;
@@ -175,7 +177,7 @@ export class DefaultChildSpawner {
 				candidatePath,
 				identity,
 			)) {
-				return { disposition: "not_created", failedStage: "identity_commit" };
+				return { spawnStatus: "not_created", failedStage: "identity_commit" };
 			}
 			sessionPath = candidatePath;
 			materializationUncertain = true;
@@ -200,9 +202,9 @@ export class DefaultChildSpawner {
 		this.#addRetentionReason(parent, "awaiting_answer", requestId);
 		if (materializationUncertain || identityConfirmation === "confirmation_lost") {
 			return {
-				disposition: "indeterminate",
-				agentId,
-				requestId,
+				spawnStatus: "unknown",
+				candidateAgentId: agentId,
+				candidateRequestMessageId: requestId,
 				effectiveConfiguration: prepared.configuration,
 			};
 		}
@@ -220,9 +222,10 @@ export class DefaultChildSpawner {
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
 			return {
-				disposition: "created_unscheduled",
+				spawnStatus: "created",
 				agentId,
-				requestId,
+				requestMessageId: requestId,
+				messageStatus: "not_sent",
 				failedStage: "run_start",
 				effectiveConfiguration: prepared.configuration,
 			};
@@ -238,9 +241,9 @@ export class DefaultChildSpawner {
 			}) === "confirmation_lost"
 		) {
 			return {
-				disposition: "indeterminate",
-				agentId,
-				requestId,
+				spawnStatus: "unknown",
+				candidateAgentId: agentId,
+				candidateRequestMessageId: requestId,
 				lastConfirmedStage: "identity",
 				effectiveConfiguration: prepared.configuration,
 			};
@@ -263,26 +266,28 @@ export class DefaultChildSpawner {
 			child.host.removeRetentionReason("pending_delivery");
 			await this.#messages.requestRelease(child);
 			return {
-				disposition: "created_unscheduled",
+				spawnStatus: "created",
 				agentId,
-				requestId,
+				requestMessageId: requestId,
+				messageStatus: "not_sent",
 				failedStage: "delivery_admission",
 				effectiveConfiguration: prepared.configuration,
 			};
 		}
 		if (this.#boundaryHooks.afterDeliveryAdmission?.() === "confirmation_lost") {
 			return {
-				disposition: "indeterminate",
-				agentId,
-				requestId,
+				spawnStatus: "unknown",
+				candidateAgentId: agentId,
+				candidateRequestMessageId: requestId,
 				lastConfirmedStage: "run_start",
 				effectiveConfiguration: prepared.configuration,
 			};
 		}
 		return {
-			disposition: "pending",
+			spawnStatus: "created",
 			agentId,
-			requestId,
+			requestMessageId: requestId,
+			messageStatus: "sent",
 			effectiveConfiguration: prepared.configuration,
 		};
 	}

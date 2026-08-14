@@ -50,9 +50,8 @@ test("Request commitment retains its requester and Delivery obligates its respon
 	]);
 	const receipt = await harness.view.message(toolCallId, input);
 	assert.deepEqual(receipt, {
-		messageId: requestId,
-		requestId,
-		delivery: "pending",
+		requestMessageId: requestId,
+		messageStatus: "sent",
 	});
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -87,7 +86,7 @@ test("Request commitment retains its requester and Delivery obligates its respon
 		messages: [
 			{
 				kind: "request",
-				requestId,
+				requestMessageId: requestId,
 				fromAgentId: harness.host.session.sessionId,
 				question: input.question,
 			},
@@ -106,8 +105,7 @@ test("Request commitment retains its requester and Delivery obligates its respon
 	);
 	assert.deepEqual(await harness.view.message(retryToolCallId, retryInput), {
 		disposition: "request_delivered",
-		messageId: requestId,
-		requestId,
+		requestMessageId: requestId,
 		deliveryEvidence: {
 			agentId: harness.childId,
 			entryId: delivery.id,
@@ -138,8 +136,8 @@ test("status reports exact Request retention multiplicity", async (t) => {
 			),
 		);
 		const receipt = await harness.view.message(toolCallId, input);
-		assert.ok("requestId" in receipt);
-		requestIds.push(receipt.requestId);
+		assert.ok("requestMessageId" in receipt);
+		requestIds.push(receipt.requestMessageId);
 		harness.host.session.sessionManager.appendMessage({
 			role: "toolResult",
 			toolCallId,
@@ -167,7 +165,7 @@ test("status reports exact Request retention multiplicity", async (t) => {
 		),
 	);
 	const cancellation = await harness.view.message(cancelToolCallId, cancelInput);
-	assert.ok("messageId" in cancellation && "delivery" in cancellation);
+	assert.ok("messageId" in cancellation && "messageStatus" in cancellation);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: cancelToolCallId,
@@ -217,7 +215,7 @@ test("Request retry reports indeterminate when admission confirmation is lost", 
 		),
 	);
 	const request = await harness.view.message(requestToolCallId, requestInput);
-	assert.ok("requestId" in request);
+	assert.ok("requestMessageId" in request);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: requestToolCallId,
@@ -234,7 +232,7 @@ test("Request retry reports indeterminate when admission confirmation is lost", 
 	const retryToolCallId = "retry-with-lost-admission-confirmation";
 	const retryInput = {
 		operation: "retry" as const,
-		messageId: request.requestId,
+		messageId: request.requestMessageId,
 	};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -243,8 +241,8 @@ test("Request retry reports indeterminate when admission confirmation is lost", 
 		),
 	);
 	assert.deepEqual(await harness.view.message(retryToolCallId, retryInput), {
-		disposition: "indeterminate",
-		messageId: request.requestId,
+		requestMessageId: request.requestMessageId,
+		messageStatus: "unknown",
 		reason: "confirmation_lost",
 	});
 
@@ -334,7 +332,7 @@ test("only the fixed responder may Answer and only the requester may cancel", as
 	const unauthorizedAnswerCallId = "requester-cannot-answer-own-request";
 	const unauthorizedAnswerInput = {
 		operation: "answer" as const,
-		requestId,
+		requestMessageId: requestId,
 		answer: "The requester cannot impersonate the responder.",
 	};
 	harness.host.session.sessionManager.appendMessage(
@@ -386,7 +384,7 @@ test("only the responder's first Answer becomes canonical and resolves its exact
 					"agent_message",
 					{
 						operation: "answer",
-						requestId,
+						requestMessageId: requestId,
 						answer: "The first committed Answer is authoritative.",
 					},
 					{ id: firstAnswerCallId },
@@ -395,7 +393,7 @@ test("only the responder's first Answer becomes canonical and resolves its exact
 					"agent_message",
 					{
 						operation: "answer",
-						requestId,
+						requestMessageId: requestId,
 						answer: "A racing Answer must not become another Message.",
 					},
 					{ id: secondAnswerCallId },
@@ -474,13 +472,14 @@ test("only the responder's first Answer becomes canonical and resolves its exact
 	}
 	assert.deepEqual(firstResult.message.details, {
 		messageId: answerId,
-		requestId,
-		delivery: "indeterminate",
+		requestMessageId: requestId,
+		messageStatus: "unknown",
+		reason: "confirmation_lost",
 	});
 	assert.deepEqual(secondResult.message.details, {
 		disposition: "already_answered",
 		messageId: answerId,
-		requestId,
+		requestMessageId: requestId,
 		answerId,
 	});
 	await waitForCondition(
@@ -561,7 +560,7 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 		fauxAssistantMessage(
 			fauxToolCall(
 				"agent_message",
-				{ operation: "answer", requestId, answer: answerText },
+				{ operation: "answer", requestMessageId: requestId, answer: answerText },
 				{ id: answerToolCallId },
 			),
 			{ stopReason: "toolUse" },
@@ -623,9 +622,9 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 	}
 	assert.deepEqual(answerResult.message.details, {
 		messageId: answerId,
-		requestId,
-		delivery: "rejected",
-		rejectionReason: "target_unavailable",
+		requestMessageId: requestId,
+		messageStatus: "not_sent",
+		reason: "target_unavailable",
 	});
 
 	const retryToolCallId = "retrieve-lost-answer";
@@ -639,8 +638,7 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 	const retrieval = await harness.view.message(retryToolCallId, retryInput);
 	assert.deepEqual(retrieval, {
 		disposition: "answer_delivered",
-		messageId: requestId,
-		requestId,
+		requestMessageId: requestId,
 		answerId,
 		fromAgentId: harness.childId,
 		answer: answerText,
@@ -669,8 +667,7 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 	const repeated = await harness.view.message(repeatedRetryCallId, retryInput);
 	assert.deepEqual(repeated, {
 		disposition: "answer_already_delivered",
-		messageId: requestId,
-		requestId,
+		requestMessageId: requestId,
 		answerId,
 		deliveryEvidence: {
 			agentId: harness.host.session.sessionId,
@@ -712,10 +709,9 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 		requestInput,
 	);
 	assert.deepEqual(requestReceipt, {
-		messageId: requestId,
-		requestId,
-		delivery: "rejected",
-		rejectionReason: "target_unavailable",
+		requestMessageId: requestId,
+		messageStatus: "not_sent",
+		reason: "target_unavailable",
 	});
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -753,7 +749,8 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 	const cancellation = await harness.view.message(cancelToolCallId, cancelInput);
 	assert.deepEqual(cancellation, {
 		messageId: cancellationId,
-		delivery: "indeterminate",
+		messageStatus: "unknown",
+		reason: "confirmation_lost",
 	});
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -790,7 +787,7 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 			{
 				kind: "request_cancellation",
 				cancellationId,
-				requestId,
+				requestMessageId: requestId,
 				fromAgentId: harness.host.session.sessionId,
 				reason: cancelInput.reason,
 			},
@@ -824,9 +821,9 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 		),
 	);
 	assert.deepEqual(await harness.view.message(retryToolCallId, retryInput), {
-		disposition: "rejected",
-		messageId: requestId,
-		rejectionReason: "policy_rejected",
+		requestMessageId: requestId,
+		messageStatus: "not_sent",
+		reason: "policy_rejected",
 	});
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
@@ -1033,7 +1030,7 @@ test("Cancellation Delivery wins the responder lane before a later Answer", asyn
 				"agent_message",
 				{
 					operation: "answer",
-					requestId,
+					requestMessageId: requestId,
 					answer: "This Answer must not become canonical.",
 				},
 				{ id: losingAnswerCallId },
@@ -1080,7 +1077,7 @@ test("Cancellation Delivery wins the responder lane before a later Answer", asyn
 	assert.deepEqual(losingAnswer.message.details, {
 		disposition: "already_cancelled",
 		messageId: cancellationId,
-		requestId,
+		requestMessageId: requestId,
 		cancellationId,
 	});
 	await waitForCondition(
@@ -1121,7 +1118,7 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 				"agent_message",
 				{
 					operation: "answer",
-					requestId,
+					requestMessageId: requestId,
 					answer: "The Answer committed before Cancellation Delivery.",
 				},
 				{ id: answerToolCallId },
@@ -1206,7 +1203,7 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 	const cancellation = await harness.view.message(cancelToolCallId, cancelInput);
 	assert.deepEqual(cancellation, {
 		messageId: cancellationId,
-		delivery: "pending",
+		messageStatus: "sent",
 	});
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -1262,9 +1259,9 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 	assert.deepEqual(
 		await harness.view.message(retryRequestCallId, retryRequestInput),
 		{
-			disposition: "rejected",
-			messageId: requestId,
-			rejectionReason: "policy_rejected",
+			requestMessageId: requestId,
+			messageStatus: "not_sent",
+			reason: "policy_rejected",
 		},
 	);
 
@@ -1280,7 +1277,7 @@ test("a created-unscheduled Creation Request uses ordinary retry and Answer beha
 				"agent_message",
 				{
 					operation: "answer",
-					requestId,
+					requestMessageId: requestId,
 					answer: "The Creation Request completed through the ordinary protocol.",
 				},
 				{ id: answerToolCallId },
@@ -1301,9 +1298,8 @@ test("a created-unscheduled Creation Request uses ordinary retry and Answer beha
 	);
 	const retry = await harness.view.message(retryToolCallId, retryInput);
 	assert.deepEqual(retry, {
-		disposition: "request_pending",
-		messageId: requestId,
-		requestId,
+		requestMessageId: requestId,
+		messageStatus: "sent",
 	});
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -1411,7 +1407,7 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 
 	const answerInput = {
 		operation: "answer" as const,
-		requestId,
+		requestMessageId: requestId,
 		answer: "This Answer starts the requester's successor Run.",
 	};
 	const answerCallId = "answer-dormant-requester";
@@ -1432,7 +1428,10 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 		fauxAssistantMessage("The successor requester Run received its Answer."),
 	]);
 	const answer = await harness.view.message(answerCallId, answerInput);
-	assert.equal("delivery" in answer ? answer.delivery : undefined, "pending");
+	assert.equal(
+		"messageStatus" in answer ? answer.messageStatus : undefined,
+		"sent",
+	);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: answerCallId,
@@ -1496,8 +1495,9 @@ async function createDormantChildHarness(
 		),
 	);
 	const spawn = await view.spawn(spawnToolCallId, spawnInput);
-	assert.equal(spawn.disposition, "created_unscheduled");
-	if (!("agentId" in spawn) || !("requestId" in spawn)) {
+	assert.equal(spawn.spawnStatus, "created");
+	assert.equal("messageStatus" in spawn && spawn.messageStatus, "not_sent");
+	if (!("agentId" in spawn) || !("requestMessageId" in spawn)) {
 		throw new Error("Spawn receipt has no child or Creation Request identity");
 	}
 	return {
@@ -1505,7 +1505,7 @@ async function createDormantChildHarness(
 		coordinator,
 		view,
 		childId: spawn.agentId,
-		creationRequestId: spawn.requestId,
+		creationRequestId: spawn.requestMessageId,
 	};
 }
 

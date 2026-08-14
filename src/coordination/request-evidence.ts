@@ -115,7 +115,8 @@ export class RequestEvidence {
 		this.#throwIfUnavailableDeliveryEvidence(
 			`Request ${requestId} depends on quarantined Agent proof`,
 			({ projection }) =>
-				projection.kind === "request" && projection.requestId === requestId,
+				projection.kind === "request" &&
+				projection.requestMessageId === requestId,
 		);
 		throw new Error(`unknown_identity: Request ${requestId}`);
 	}
@@ -168,7 +169,7 @@ export class RequestEvidence {
 					this.#agents.has(delivery.source.agentId)
 				) return [];
 				validateDeliveredMessageEvidence(delivery);
-				return [delivery.projection.requestId];
+				return [delivery.projection.requestMessageId];
 			}),
 			...inspectAnswerRetrievals({
 				requesterAgentId: agent.identity.agentId,
@@ -182,7 +183,7 @@ export class RequestEvidence {
 					this.#agents.has(delivery.source.agentId)
 				) return [];
 				validateDeliveredMessageEvidence(delivery);
-				return [delivery.projection.requestId];
+				return [delivery.projection.requestMessageId];
 			}),
 		);
 
@@ -316,7 +317,7 @@ export class RequestEvidence {
 		}).filter(({ source, input }) =>
 			((operation === "answer" &&
 				input.operation === "answer" &&
-				input.requestId === requestId) ||
+				input.requestMessageId === requestId) ||
 				(operation === "cancel" &&
 					input.operation === "cancel" &&
 					input.requestMessageId === requestId)) &&
@@ -392,11 +393,7 @@ export class RequestEvidence {
 				providedInput: authored.input,
 			});
 		}
-		const request = this.requireRequest(
-			authored.input.operation === "cancel"
-				? authored.input.requestMessageId
-				: authored.input.requestId,
-		);
+		const request = this.requireRequest(authored.input.requestMessageId);
 		return authored.input.operation === "answer"
 			? resolveCommittedAnswer({
 				responderAgentId: author.identity.agentId,

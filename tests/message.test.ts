@@ -102,7 +102,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 	);
 	assert.deepEqual(result.details, {
 		messageId: expectedMessageId,
-		delivery: "pending",
+		messageStatus: "sent",
 	});
 	host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -243,8 +243,8 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 		content: [{ type: "text", text: "Message scheduling was rejected." }],
 		details: {
 			messageId: absentMessageId,
-			delivery: "rejected",
-			rejectionReason: "target_unavailable",
+			messageStatus: "not_sent",
+			reason: "target_unavailable",
 		},
 		isError: false,
 		timestamp: Date.now(),
@@ -435,8 +435,8 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 	assert.deepEqual(
 		retryResults.map(({ details }) => details),
 		[
-			{ disposition: "pending", messageId },
-			{ disposition: "pending", messageId },
+			{ messageId, messageStatus: "sent" },
+			{ messageId, messageStatus: "sent" },
 		],
 	);
 
@@ -494,7 +494,8 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 	const spawn = await view.spawn(spawnToolCallId, {
 		request: "This Creation Request remains unscheduled.",
 	});
-	assert.equal(spawn.disposition, "created_unscheduled");
+	assert.equal(spawn.spawnStatus, "created");
+	assert.equal("messageStatus" in spawn && spawn.messageStatus, "not_sent");
 	if (!("agentId" in spawn)) throw new Error("Spawn receipt has no child identity");
 	assert.deepEqual(view.status(spawn.agentId).run, {
 		phase: "dormant",
@@ -724,7 +725,7 @@ test("poll rejects malformed normal author-result evidence", async (t) => {
 		content: [{ type: "text", text: "Malformed success." }],
 		details: {
 			messageId: sent.receipt.messageId,
-			delivery: "pending",
+			messageStatus: "sent",
 			unexpected: true,
 		},
 		isError: false,
@@ -1240,7 +1241,8 @@ test("send reports indeterminate when admission confirmation is lost without can
 
 	assert.deepEqual(sent.receipt, {
 		messageId: sent.receipt.messageId,
-		delivery: "indeterminate",
+		messageStatus: "unknown",
+		reason: "confirmation_lost",
 	});
 	await waitForDelivery(harness, sent.source);
 
@@ -1294,8 +1296,8 @@ test("retry reports indeterminate when admission confirmation is lost without ca
 
 	const receipt = await harness.view.message(retryToolCallId, retryInput);
 	assert.deepEqual(receipt, {
-		disposition: "indeterminate",
 		messageId: retried.receipt.messageId,
+		messageStatus: "unknown",
 		reason: "confirmation_lost",
 	});
 	releaseActiveDelivery();
@@ -1374,11 +1376,14 @@ test("recipient capacity counts distinct pending identities without evicting adm
 		"reject-over-recipient-capacity",
 		"Preserve this canonical Message for explicit retry.",
 	);
-	assert.equal("delivery" in admitted.receipt && admitted.receipt.delivery, "pending");
+	assert.equal(
+		"messageStatus" in admitted.receipt && admitted.receipt.messageStatus,
+		"sent",
+	);
 	assert.deepEqual(exhausted.receipt, {
 		messageId: exhausted.receipt.messageId,
-		delivery: "rejected",
-		rejectionReason: "capacity_exhausted",
+		messageStatus: "not_sent",
+		reason: "capacity_exhausted",
 	});
 
 	const coalescedRetryId = "retry-admitted-identity-at-capacity";
@@ -1396,7 +1401,7 @@ test("recipient capacity counts distinct pending identities without evicting adm
 	);
 	assert.deepEqual(
 		await harness.view.message(coalescedRetryId, coalescedRetryInput),
-		{ disposition: "pending", messageId: admitted.receipt.messageId },
+		{ messageId: admitted.receipt.messageId, messageStatus: "sent" },
 	);
 
 	releaseActiveWork();
@@ -1425,7 +1430,7 @@ test("recipient capacity counts distinct pending identities without evicting adm
 	);
 	assert.deepEqual(
 		await harness.view.message(retryExhaustedId, retryExhaustedInput),
-		{ disposition: "pending", messageId: exhausted.receipt.messageId },
+		{ messageId: exhausted.receipt.messageId, messageStatus: "sent" },
 	);
 	await waitForDelivery(harness, exhausted.source);
 
@@ -1479,7 +1484,7 @@ test("a lower delivery limit rejects new identities without evicting admitted Me
 		"Do not evict either previously admitted identity.",
 	);
 	assert.equal(
-		"rejectionReason" in rejected.receipt && rejected.receipt.rejectionReason,
+		"reason" in rejected.receipt && rejected.receipt.reason,
 		"capacity_exhausted",
 	);
 
@@ -1609,10 +1614,10 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 	admitAfterFreeze = () => {
 		admitAfterFreeze = undefined;
 		lateAdmission = harness.view.message(lateToolCallId, lateInput).then((receipt) => {
-			if (!("messageId" in receipt) || !("delivery" in receipt)) {
+			if (!("messageId" in receipt) || !("messageStatus" in receipt)) {
 				throw new Error("Message send returned a non-delivery receipt");
 			}
-			return receipt;
+			return receipt as AgentMessageSendReceipt;
 		});
 	};
 
@@ -1686,7 +1691,7 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 	assert.ok(lateReceipt);
 	assert.deepEqual(lateReceipt, {
 		messageId: lateReceipt.messageId,
-		delivery: "pending",
+		messageStatus: "sent",
 	});
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",

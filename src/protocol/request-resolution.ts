@@ -76,7 +76,7 @@ export function inspectCanonicalRequestResolution(options: {
 			input: Extract<AgentMessageInput, { operation: "answer" }>;
 		} =>
 			source.input.operation === "answer" &&
-			source.input.requestId === request.messageId
+			source.input.requestMessageId === request.messageId
 		)
 		.map(({ source, input }) => resolveCommittedAnswer({
 			responderAgentId: request.targetAgentId,

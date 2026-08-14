@@ -74,13 +74,13 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	const resultText = tool.renderResult(
 		{
 			content: [{ type: "text", text: "scheduling receipt" }],
-			details: { messageId, delivery: "pending" },
+			details: { messageId, messageStatus: "sent" },
 		},
 		{ expanded: false, isPartial: false },
 		plainTheme,
 		renderContext,
 	).render(160).join("\n");
-	assert.match(resultText, /pending/);
+	assert.match(resultText, /sent/);
 	assert.match(resultText, new RegExp(messageId));
 
 	const deferredText = tool.renderCall(
@@ -101,13 +101,13 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	const answerText = tool.renderCall(
 		{
 			operation: "answer",
-			requestId: "request-identity",
+			requestMessageId: "request-identity",
 			answer: "One canonical Answer.",
 		},
 		plainTheme,
 		{ ...renderContext, args: {
 			operation: "answer",
-			requestId: "request-identity",
+			requestMessageId: "request-identity",
 			answer: "One canonical Answer.",
 		} },
 	).render(160).join("\n");
@@ -148,8 +148,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 			content: [{ type: "text", text: "retrieved Answer" }],
 			details: {
 				disposition: "answer_delivered",
-				messageId: "request-identity",
-				requestId: "request-identity",
+				requestMessageId: "request-identity",
 				answerId: "answer-identity",
 				fromAgentId: "responder-agent",
 				answer: "Recovered immutable Answer.",
@@ -214,9 +213,10 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 		projectContext: { mode: "append" as const, body: "Configured context" },
 	};
 	const receipt = {
-		disposition: "pending" as const,
+		spawnStatus: "created" as const,
 		agentId: "agent-identity-1234567890",
-		requestId: "request-identity",
+		requestMessageId: "request-identity",
+		messageStatus: "sent" as const,
 		effectiveConfiguration,
 	};
 	const collapsedText = tool.renderResult(
@@ -225,7 +225,8 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 		plainTheme,
 		renderContext,
 	).render(160).join("\n");
-	assert.match(collapsedText, /pending/);
+	assert.match(collapsedText, /created/);
+	assert.match(collapsedText, /sent/);
 	assert.match(collapsedText, /provider\/model/);
 	assert.match(collapsedText, /high/);
 	assert.equal(collapsedText.includes(effectiveConfiguration.cwd), false);

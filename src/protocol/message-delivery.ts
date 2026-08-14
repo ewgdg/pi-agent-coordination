@@ -29,21 +29,21 @@ export type ModelVisibleMessage =
 	}>
 	| Readonly<{
 		kind: "request";
-		requestId: string;
+		requestMessageId: string;
 		fromAgentId: string;
 		question: string;
 	}>
 	| Readonly<{
 		kind: "answer";
 		answerId: string;
-		requestId: string;
+		requestMessageId: string;
 		fromAgentId: string;
 		answer: string;
 	}>
 	| Readonly<{
 		kind: "request_cancellation";
 		cancellationId: string;
-		requestId: string;
+		requestMessageId: string;
 		fromAgentId: string;
 		reason: string;
 	}>;
@@ -301,11 +301,11 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 	if (value.kind === "request") {
 		const request = requireExactRecord(
 			value,
-			["kind", "requestId", "fromAgentId", "question"],
+			["kind", "requestMessageId", "fromAgentId", "question"],
 			"Message Delivery projection",
 		);
 		if (
-			!isProtocolString(request.requestId) ||
+			!isProtocolString(request.requestMessageId) ||
 			!isProtocolString(request.fromAgentId) ||
 			!isProtocolString(request.question)
 		) {
@@ -313,7 +313,7 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 		}
 		return {
 			kind: "request",
-			requestId: request.requestId,
+			requestMessageId: request.requestMessageId,
 			fromAgentId: request.fromAgentId,
 			question: request.question,
 		};
@@ -321,12 +321,12 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 	if (value.kind === "answer") {
 		const answer = requireExactRecord(
 			value,
-			["kind", "answerId", "requestId", "fromAgentId", "answer"],
+			["kind", "answerId", "requestMessageId", "fromAgentId", "answer"],
 			"Message Delivery projection",
 		);
 		if (
 			!isProtocolString(answer.answerId) ||
-			!isProtocolString(answer.requestId) ||
+			!isProtocolString(answer.requestMessageId) ||
 			!isProtocolString(answer.fromAgentId) ||
 			!isProtocolString(answer.answer)
 		) {
@@ -335,7 +335,7 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 		return {
 			kind: "answer",
 			answerId: answer.answerId,
-			requestId: answer.requestId,
+			requestMessageId: answer.requestMessageId,
 			fromAgentId: answer.fromAgentId,
 			answer: answer.answer,
 		};
@@ -343,12 +343,12 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 	if (value.kind === "request_cancellation") {
 		const cancellation = requireExactRecord(
 			value,
-			["kind", "cancellationId", "requestId", "fromAgentId", "reason"],
+			["kind", "cancellationId", "requestMessageId", "fromAgentId", "reason"],
 			"Message Delivery projection",
 		);
 		if (
 			!isProtocolString(cancellation.cancellationId) ||
-			!isProtocolString(cancellation.requestId) ||
+			!isProtocolString(cancellation.requestMessageId) ||
 			!isProtocolString(cancellation.fromAgentId) ||
 			!isProtocolString(cancellation.reason)
 		) {
@@ -357,7 +357,7 @@ function parseDeliveryProjection(value: unknown): ModelVisibleMessage {
 		return {
 			kind: "request_cancellation",
 			cancellationId: cancellation.cancellationId,
-			requestId: cancellation.requestId,
+			requestMessageId: cancellation.requestMessageId,
 			fromAgentId: cancellation.fromAgentId,
 			reason: cancellation.reason,
 		};
@@ -370,7 +370,7 @@ function projectionIdentity(projection: ModelVisibleMessage): string {
 		case "message":
 			return projection.messageId;
 		case "request":
-			return projection.requestId;
+			return projection.requestMessageId;
 		case "answer":
 			return projection.answerId;
 		case "request_cancellation":

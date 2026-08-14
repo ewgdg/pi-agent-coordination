@@ -395,10 +395,11 @@ test("a selected Agent whose runtime initialization fails closes the invalid vie
 	);
 	assert.deepEqual(
 		{
-			disposition: (spawn.details as { disposition: string }).disposition,
+			spawnStatus: (spawn.details as { spawnStatus: string }).spawnStatus,
+			messageStatus: (spawn.details as { messageStatus: string }).messageStatus,
 			failedStage: (spawn.details as { failedStage?: string }).failedStage,
 		},
-		{ disposition: "created_unscheduled", failedStage: "run_start" },
+		{ spawnStatus: "created", messageStatus: "not_sent", failedStage: "run_start" },
 	);
 	const agentId = (spawn.details as { agentId: string }).agentId;
 
@@ -517,7 +518,7 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 			return fauxAssistantMessage(
 				fauxToolCall("agent_message", {
 					operation: "answer",
-					requestId: creationRequestId,
+					requestMessageId: creationRequestId,
 					answer: "The initial Agent turn settled.",
 				}, { id: "answer-preflight-retention-creation-request" }),
 				{ stopReason: "toolUse" },
@@ -1425,7 +1426,7 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 			return fauxAssistantMessage(
 				fauxToolCall("agent_message", {
 					operation: "answer",
-					requestId,
+					requestMessageId: requestId,
 					answer: "The viewed Agent accepted its Creation Request.",
 				}, { id: "answer-viewed-failure-creation-request" }),
 				{ stopReason: "toolUse" },
@@ -1956,7 +1957,7 @@ function creationAnswerResponses(
 			return fauxAssistantMessage(
 				fauxToolCall("agent_message", {
 					operation: "answer",
-					requestId,
+					requestMessageId: requestId,
 					answer: readyText,
 				}, { id: toolCallId }),
 				{ stopReason: "toolUse" },
@@ -1988,8 +1989,11 @@ function findCreationRequestId(value: unknown): string | undefined {
 	}
 	if (typeof value !== "object" || value === null) return undefined;
 	const record = value as Record<string, unknown>;
-	if (record.kind === "request" && typeof record.requestId === "string") {
-		return record.requestId;
+	if (
+		record.kind === "request" &&
+		typeof record.requestMessageId === "string"
+	) {
+		return record.requestMessageId;
 	}
 	for (const nested of Object.values(record)) {
 		const requestId = findCreationRequestId(nested);

@@ -668,7 +668,7 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 		},
 		run: { phase: "dormant", retentionReasons: [] },
 	} as const;
-	const messageReceipt = { messageId: "process-message-receipt", delivery: "pending" } as const;
+	const messageReceipt = { messageId: "process-message-receipt", messageStatus: "sent" } as const;
 	let runtime: PiChildProcessRuntime | undefined;
 	try {
 		runtime = await PiChildProcessRuntime.start({
@@ -906,13 +906,13 @@ function ordinaryOwnerHandlers(options: Readonly<{
 			},
 			async message(toolCallId, input) {
 				options.message?.(toolCallId, input);
-				return options.messageReceipt ?? { messageId: "unused-message", delivery: "pending" };
+				return options.messageReceipt ?? { messageId: "unused-message", messageStatus: "sent" };
 			},
 			async control(_toolCallId, input) {
 				return { agentId: input.agentId, disposition: "not_running" };
 			},
 			async spawn() {
-				return { disposition: "not_created", failedStage: "identity_commit" };
+				return { spawnStatus: "not_created", failedStage: "identity_commit" };
 			},
 			async askUserQuestion() {
 				return { requestId: "unused-human", answer: "unused" };

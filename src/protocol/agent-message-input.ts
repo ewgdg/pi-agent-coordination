@@ -26,7 +26,7 @@ export type MessageRetryInput = Readonly<{
 
 export type AnswerInput = Readonly<{
 	operation: "answer";
-	requestId: string;
+	requestMessageId: string;
 	answer: string;
 }>;
 
@@ -63,7 +63,7 @@ export function sameAgentMessageInput(
 					(right.deliveryMode ?? "deferred");
 		case "answer":
 			return right.operation === "answer" &&
-				left.requestId === right.requestId &&
+				left.requestMessageId === right.requestMessageId &&
 				left.answer === right.answer;
 		case "cancel":
 			return right.operation === "cancel" &&
@@ -83,18 +83,23 @@ export function validateAgentMessageInput(
 	if (value.operation === "request") return validateRequestSendInput(value);
 	if (value.operation === "answer") {
 		const keys = Object.keys(value).sort();
-		if (!sameStringList(keys, ["answer", "operation", "requestId"])) {
+		if (!sameStringList(keys, ["answer", "operation", "requestMessageId"])) {
 			throw new Error("invalid_input: Agent Answer input has an invalid shape");
 		}
-		if (typeof value.requestId !== "string" || value.requestId.length === 0) {
-			throw new Error("invalid_input: Agent Answer requestId must not be empty");
+		if (
+			typeof value.requestMessageId !== "string" ||
+			value.requestMessageId.length === 0
+		) {
+			throw new Error(
+				"invalid_input: Agent Answer requestMessageId must not be empty",
+			);
 		}
 		if (typeof value.answer !== "string" || value.answer.length === 0) {
 			throw new Error("invalid_input: Agent Answer answer must not be empty");
 		}
 		return {
 			operation: "answer",
-			requestId: value.requestId,
+			requestMessageId: value.requestMessageId,
 			answer: value.answer,
 		};
 	}

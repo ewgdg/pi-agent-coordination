@@ -349,7 +349,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 		targetAgentId: childAgentId,
 		content: "Occupy the initial policy capacity.",
 	});
-	assert.equal((first as { delivery: string }).delivery, "pending");
+	assert.equal((first as { messageStatus: string }).messageStatus, "sent");
 	const initiallyRejected = await executeOwnerTool(
 		host,
 		"agent_message",
@@ -361,7 +361,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 		},
 	);
 	assert.equal(
-		(initiallyRejected as { rejectionReason: string }).rejectionReason,
+		(initiallyRejected as { reason: string }).reason,
 		"capacity_exhausted",
 	);
 
@@ -379,7 +379,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 			content: "Use the newly published second slot.",
 		},
 	);
-	assert.equal((admittedAfterRaise as { delivery: string }).delivery, "pending");
+	assert.equal((admittedAfterRaise as { messageStatus: string }).messageStatus, "sent");
 
 	await writeFile(policyPath, '{"maxPendingDeliveriesPerAgent": 0}', "utf8");
 	await host.session.reload();
@@ -398,7 +398,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 		},
 	);
 	assert.equal(
-		(rejectedAfterInvalidReload as { rejectionReason: string }).rejectionReason,
+		(rejectedAfterInvalidReload as { reason: string }).reason,
 		"capacity_exhausted",
 	);
 

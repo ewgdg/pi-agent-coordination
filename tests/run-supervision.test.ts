@@ -260,7 +260,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 		"child-request-before-hold",
 		"Keep this outgoing Request unresolved for the held Answer.",
 	);
-	assert.ok("requestId" in outgoing);
+	assert.ok("requestMessageId" in outgoing);
 	await harness.host.session.waitForIdle();
 
 	harness.host.model.setResponses([
@@ -272,7 +272,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 		child.agentId,
 		"Keep this incoming Request unresolved for held Cancellation.",
 	);
-	assert.ok("requestId" in incoming);
+	assert.ok("requestMessageId" in incoming);
 	await child.waitForIdle();
 	await harness.control("interrupt-request-child", {
 		operation: "interrupt",
@@ -289,7 +289,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	});
 	const heldAnswer = await harness.messageAs(owner, "answer-admitted-while-held", {
 		operation: "answer",
-		requestId: outgoing.requestId,
+		requestMessageId: outgoing.requestMessageId,
 		answer: heldAnswerText,
 	});
 	const heldCancellation = await harness.messageAs(
@@ -297,13 +297,13 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 		"cancellation-admitted-while-held",
 		{
 			operation: "cancel",
-			requestMessageId: incoming.requestId,
+			requestMessageId: incoming.requestMessageId,
 			reason: heldCancellationText,
 		},
 	);
 	for (const receipt of [heldRequest, heldAnswer, heldCancellation]) {
-		assert.ok("delivery" in receipt);
-		assert.equal(receipt.delivery, "pending");
+		assert.ok("messageStatus" in receipt);
+		assert.equal(receipt.messageStatus, "sent");
 	}
 	await harness.ownerView.reachSafeBoundary();
 	await new Promise<void>((resolve) => setImmediate(resolve));
@@ -655,7 +655,7 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 		"child-request-before-termination",
 		"This outgoing Request must remain residual after termination.",
 	);
-	assert.ok("requestId" in outgoingRequest);
+	assert.ok("requestMessageId" in outgoingRequest);
 	await harness.host.session.waitForIdle();
 	await harness.control("interrupt-before-termination", {
 		operation: "interrupt",
@@ -806,18 +806,18 @@ test("the one resume reservation remains available when ordinary capacity is exh
 		child.agentId,
 		"This Message occupies the only ordinary pending slot.",
 	);
-	assert.ok("delivery" in first);
-	assert.equal(first.delivery, "pending");
+	assert.ok("messageStatus" in first);
+	assert.equal(first.messageStatus, "sent");
 	const exhausted = await harness.sendMessage(
 		"exceed-ordinary-held-capacity",
 		child.agentId,
 		"This Message cannot enter ordinary pending capacity.",
 	);
-	assert.ok("delivery" in exhausted);
+	assert.ok("messageId" in exhausted && "messageStatus" in exhausted);
 	assert.deepEqual(exhausted, {
 		messageId: exhausted.messageId,
-		delivery: "rejected",
-		rejectionReason: "capacity_exhausted",
+		messageStatus: "not_sent",
+		reason: "capacity_exhausted",
 	});
 
 	harness.host.model.setResponses([

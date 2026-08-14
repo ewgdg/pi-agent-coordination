@@ -537,11 +537,11 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 				};
 			},
 			async observe() { return { children: [] }; },
-			async message() { return { messageId: "unused-message", delivery: "pending" }; },
+			async message() { return { messageId: "unused-message", messageStatus: "sent" }; },
 			async control(_toolCallId, input) {
 				return { agentId: input.agentId, disposition: "not_running" };
 			},
-			async spawn() { return { disposition: "not_created", failedStage: "identity_commit" }; },
+			async spawn() { return { spawnStatus: "not_created", failedStage: "identity_commit" }; },
 			async askUserQuestion() { return { requestId: "unused-human", answer: "unused" }; },
 		},
 	};
