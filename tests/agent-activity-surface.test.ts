@@ -182,7 +182,10 @@ test("Owner activity renders Attention Inbox above direct children in creation o
 				agentIds: ["researcher", "builder"],
 				requests: { total: 1, sources: [] },
 			},
-			affectedAgentIds: ["researcher", "builder"],
+			affectedAgents: [
+				{ agentId: "researcher", label: "Researcher" },
+				{ agentId: "builder", label: "Builder" },
+			],
 			diagnostics: [],
 		}],
 	});
@@ -190,7 +193,7 @@ test("Owner activity renders Attention Inbox above direct children in creation o
 	const rendered = dock.render(200);
 	assert.match(rendered[0]!, /Attention Inbox/);
 	assert.match(rendered[1]!, /DECIDE.*Researcher.*Which boundary should remain authoritative/);
-	assert.match(rendered[2]!, /ATTENTION.*Dependency Deadlock/);
+	assert.match(rendered[2]!, /ATTENTION.*Dependency Deadlock.*Researcher, Builder/);
 	assert.match(rendered[3]!, /Agents/);
 	assert.match(rendered[4]!, /Researcher/);
 	assert.match(rendered[5]!, /Builder.*2 queued/);

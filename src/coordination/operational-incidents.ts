@@ -98,7 +98,10 @@ type OperationalIncidentHandling = {
 
 export type OperationalIncidentAttention = Readonly<{
 	trigger: ModeratorTrigger;
-	affectedAgentIds: readonly string[];
+	affectedAgents: readonly Readonly<{
+		agentId: string;
+		label: string;
+	}>[];
 	diagnostics: readonly EntryPointer[];
 }>;
 
@@ -561,7 +564,10 @@ export class OperationalIncidentCoordinator {
 	#attentionFor(handling: OperationalIncidentHandling): OperationalIncidentAttention {
 		return {
 			trigger: this.#triggerFor(handling.snapshot),
-			affectedAgentIds: [...handling.snapshot.affectedAgentIds],
+			affectedAgents: handling.snapshot.affectedAgentIds.map((agentId) => ({
+				agentId,
+				label: this.#requireAgent(agentId).identity.metadata.label,
+			})),
 			diagnostics: [...handling.diagnostics],
 		};
 	}

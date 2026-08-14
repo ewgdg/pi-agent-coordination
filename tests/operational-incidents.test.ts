@@ -2356,7 +2356,10 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 	assert.equal(moderators.length, 2);
 	const attention = harness.owner.operationalAttention()[0]!;
 	assert.equal(attention.trigger.kind, "obligation_stall");
-	assert.deepEqual(attention.affectedAgentIds, [affected.agentId]);
+	assert.deepEqual(attention.affectedAgents, [{
+		agentId: affected.agentId,
+		label: harness.owner.status(affected.agentId).label,
+	}]);
 	assert.equal(attention.diagnostics.length, 2);
 	for (const pointer of attention.diagnostics) {
 		const moderator = moderators.find(({ id }) => id === pointer.agentId);

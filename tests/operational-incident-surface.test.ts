@@ -17,7 +17,10 @@ test("exhausted handling remains a passive attention source without a duplicate 
 				],
 			},
 		},
-		affectedAgentIds: ["agent-alpha", "agent-bravo"],
+		affectedAgents: [
+			{ agentId: "agent-alpha", label: "Alpha" },
+			{ agentId: "agent-bravo", label: "Bravo" },
+		],
 		diagnostics: [
 			{ agentId: "moderator-first", entryId: "terminal-first" },
 			{ agentId: "moderator-second", entryId: "terminal-second" },

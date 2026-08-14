@@ -25,7 +25,8 @@ export function formatOperationalIncidentHeadline(
 	const run = attention.trigger.kind === "run_failure"
 		? ` · Run ${attention.trigger.runSequence}`
 		: "";
-	return `${formatOperationalIncidentKind(attention.trigger.kind)} · ${attention.affectedAgentIds.join(", ")}${run}`;
+	const affectedAgentLabels = attention.affectedAgents.map(({ label }) => label);
+	return `${formatOperationalIncidentKind(attention.trigger.kind)} · ${affectedAgentLabels.join(", ")}${run}`;
 }
 
 export function operationalIncidentRequestEvidence(

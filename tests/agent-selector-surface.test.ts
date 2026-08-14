@@ -512,7 +512,7 @@ test("single-Agent Operational ATTENTION opens the affected Agent", async () => 
 					}],
 				},
 			},
-			affectedAgentIds: ["affected-agent"],
+			affectedAgents: [{ agentId: "affected-agent", label: "Affected Agent" }],
 			diagnostics: [{ agentId: "moderator", entryId: "diagnostic-entry" }],
 		}],
 	});
@@ -520,7 +520,8 @@ test("single-Agent Operational ATTENTION opens the affected Agent", async () => 
 	assert.ok(harness.component);
 
 	const rendered = harness.component.render(80).join("\n");
-	assert.match(rendered, /→ ATTENTION 1 · Run Failure/);
+	assert.match(rendered, /→ ATTENTION 1 · Run Failure · Affected Agent/);
+	assert.match(rendered, /Affected Affected Agent/);
 	assert.match(rendered, /Request requester-agent\/request-entry\/request-call/);
 	harness.component.handleInput?.("\r");
 	assert.deepEqual(await selection, {
@@ -541,7 +542,10 @@ test("multi-Agent Operational ATTENTION keeps the overlay open when Enter has no
 				agentIds: ["first-agent", "second-agent"],
 				requests: { total: 0, sources: [] },
 			},
-			affectedAgentIds: ["first-agent", "second-agent"],
+			affectedAgents: [
+				{ agentId: "first-agent", label: "First Agent" },
+				{ agentId: "second-agent", label: "Second Agent" },
+			],
 			diagnostics: [],
 		}],
 	});

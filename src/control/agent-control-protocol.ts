@@ -458,9 +458,16 @@ const HumanAttentionItemSchema = closed({
 	agentLabel: NonEmptyStringSchema,
 	question: Type.String(),
 });
+const OperationalIncidentAgentSchema = closed({
+	agentId: NonEmptyStringSchema,
+	label: NonEmptyStringSchema,
+});
 const OperationalIncidentAttentionSchema = closed({
 	trigger: ModeratorTriggerSchema,
-	affectedAgentIds: Type.Array(NonEmptyStringSchema, { minItems: 1, uniqueItems: true }),
+	affectedAgents: Type.Array(OperationalIncidentAgentSchema, {
+		minItems: 1,
+		uniqueItems: true,
+	}),
 	diagnostics: Type.Array(EntryPointerSchema, { uniqueItems: true }),
 });
 export const AgentSelectorActionSchema = Type.Union([

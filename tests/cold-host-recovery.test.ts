@@ -915,7 +915,10 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 		host,
 		"agent_spawn",
 		"spawn-exhausted-attention-before-reopen",
-		{ request: "Settle while still owing this Creation Request." },
+		{
+			request: "Settle while still owing this Creation Request.",
+			label: "Affected Agent",
+		},
 	) as { agentId: string };
 	const directory = workflowSessionDirectory(host);
 	await waitForCondition(async () => {
@@ -969,7 +972,8 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 	);
 	const operationalAttention = attentionAgents.surface.render(80).join("\n");
 	assert.match(operationalAttention, /→ ATTENTION 1 · Obligation Stall/);
-	assert.match(operationalAttention, new RegExp(affected.agentId));
+	assert.match(operationalAttention, /Affected Agent/);
+	assert.doesNotMatch(operationalAttention, new RegExp(affected.agentId));
 	assert.match(operationalAttention, /Request .*\/.*\/.*/);
 	assert.equal((operationalAttention.match(/Diagnostic /g) ?? []).length, 2);
 	attentionAgents.surface.handleInput?.("\x1b");

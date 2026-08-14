@@ -281,7 +281,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 				toolCall: { agentId: "child", entryId: "entry", toolCallId: "tool" },
 				reviewIntervalMs: 1_000,
 			},
-			affectedAgentIds: ["child"],
+			affectedAgents: [{ agentId: "child", label: "Child" }],
 			diagnostics: [{ agentId: "moderator", entryId: "diagnostic" }],
 		}],
 	} as const;

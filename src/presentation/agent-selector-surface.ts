@@ -372,20 +372,19 @@ class AgentSelectorSurface implements Component {
 		const operational = (this.#options.operationalAttention ?? []).map(
 			(attention, index) => {
 				const requests = operationalIncidentRequestEvidence(attention);
-				const affectedAgentId = attention.affectedAgentIds.length === 1
-					? attention.affectedAgentIds[0]
+				const affectedAgentId = attention.affectedAgents.length === 1
+					? attention.affectedAgents[0]!.agentId
 					: undefined;
 				return {
 					value: `operational:${index}`,
 					label: `ATTENTION ${index + 1} · ${formatOperationalIncidentHeadline(attention)}`,
-					description: `Requests ${requests.total}`,
 					kind: "attention" as const,
 					action: affectedAgentId
 						? { kind: "select_agent" as const, agentId: affectedAgentId }
 						: undefined,
 					detailLines: [
 						"",
-						`Affected ${attention.affectedAgentIds.join(", ")}`,
+						`Affected ${attention.affectedAgents.map(({ label }) => label).join(", ")}`,
 						requests.sources.length === 0
 							? `Requests ${requests.total}`
 							: requests.sources.map(
