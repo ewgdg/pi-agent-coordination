@@ -134,7 +134,11 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 			operation: Type.Literal("answer"),
 			answer: Type.String({ minLength: 1 }),
 		},
-		{ additionalProperties: false },
+		{
+			additionalProperties: false,
+			description:
+				"After this operation returns, the Answer is the terminal response to that Request. Do not add an assistant-message recap or summary. Unless another obligation or independent task remains, end the turn immediately so the Agent Run settles.",
+		},
 	),
 	Type.Object(
 		{

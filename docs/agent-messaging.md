@@ -71,6 +71,8 @@ The responder Answers that sole active Request without supplying correlation ide
 
 Answer commitment correlates the immutable Answer to the active Request, ends that obligation even if return scheduling fails, and makes the next waiting Request eligible. Calling Answer without an active Request is rejected. More than one active Request is a protocol invariant violation. Answers use fixed Steer scheduling so they become actionable at the requester's next safe boundary without aborting generation or tools.
 
+The Answer tool call is the responder's terminal response to that Request. The responder does not add an assistant-message recap or summary after it. Unless another obligation or independent task remains, the responder ends the turn immediately so its Run settles.
+
 ## Retrieve an Answer
 
 Retrying a Request selects one authoritative outcome:
