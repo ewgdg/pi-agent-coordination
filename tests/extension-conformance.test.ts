@@ -14,6 +14,10 @@ import type {
 	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
 } from "../src/coordination/workflow-coordinator.ts";
+import {
+	renderAgentObserveCall,
+	renderAgentObserveResult,
+} from "../src/tools/coordination-renderers.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
 const ordinaryTools = [
@@ -99,7 +103,7 @@ test("role-bound extensions expose strict sequential tools with compact native r
 	}
 });
 
-test("coordination renderers keep collapsed receipts to one bounded line", async (t) => {
+test("coordination renderers keep routine receipts compact", async (t) => {
 	const unavailableView = () => {
 		throw new Error("Renderer conformance does not execute coordination behavior");
 	};
@@ -120,10 +124,17 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 			args: { operation: "status", agentId: "child-agent" },
 			details: {
 				agentId: "child-agent",
-				metadata: { label: "Researcher" },
-				run: { phase: "live", work: "settled" },
+				label: "Researcher",
+				run: {
+					phase: "live",
+					work: "settled",
+					attention: "none",
+					retentionReasons: [],
+				},
 			},
-			summary: /child-agent/,
+			callLines: 1,
+			collapsedLines: 2,
+			summary: /Researcher.*idle/s,
 			expandedDetail: /Researcher/,
 		},
 		{
@@ -131,6 +142,8 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 			toolName: "agent_control",
 			args: { operation: "interrupt", agentId: "child-agent" },
 			details: { agentId: "child-agent", disposition: "held" },
+			callLines: 1,
+			collapsedLines: 1,
 			summary: /held .* child-agent/,
 			expandedDetail: /disposition/,
 		},
@@ -143,6 +156,8 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 				rationale: "The blocked Run can continue.",
 			},
 			details: { disposition: "resolved" },
+			callLines: 1,
+			collapsedLines: 1,
 			summary: /resolved/,
 			expandedDetail: /disposition/,
 		},
@@ -167,7 +182,7 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 			executionStarted: true,
 		};
 		const call = tool.renderCall(sample.args, plainTheme, context).render(120);
-		assert.equal(call.length, 1, sample.toolName);
+		assert.equal(call.length, sample.callLines, sample.toolName);
 		const collapsed = tool.renderResult(
 			{
 				content: [{ type: "text", text: JSON.stringify(sample.details) }],
@@ -177,9 +192,9 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 			plainTheme,
 			context,
 		).render(120);
-		assert.equal(collapsed.length, 1, sample.toolName);
-		assert.match(collapsed[0]!, sample.summary, sample.toolName);
-		assert.equal(collapsed[0]!.includes("{"), false, sample.toolName);
+		assert.equal(collapsed.length, sample.collapsedLines, sample.toolName);
+		assert.match(collapsed.join("\n"), sample.summary, sample.toolName);
+		assert.equal(collapsed.join("\n").includes("{"), false, sample.toolName);
 
 		const expanded = tool.renderResult(
 			{
@@ -195,6 +210,53 @@ test("coordination renderers keep collapsed receipts to one bounded line", async
 
 	await ordinaryHost.runtime.dispose();
 	await moderatorHost.runtime.dispose();
+});
+
+test("Agent status rendering shows identity once while preserving self-observation identity", () => {
+	const dimmed: string[] = [];
+	const trackingTheme = {
+		fg(color: string, text: string) {
+			if (color === "dim") dimmed.push(text);
+			return text;
+		},
+		bold: (text: string) => text,
+	} as unknown as Theme;
+	const details = {
+		agentId: "child-agent",
+		label: "Researcher",
+		run: {
+			phase: "live" as const,
+			work: "settled" as const,
+			attention: "none" as const,
+			retentionReasons: [],
+		},
+	};
+	const explicitArgs = { operation: "status" as const, agentId: "child-agent" };
+	const call = renderAgentObserveCall(explicitArgs, trackingTheme)
+		.render(120)
+		.map((line) => line.trimEnd());
+	assert.deepEqual(call, ["observe status · child-agent"]);
+	assert.ok(dimmed.includes("child-agent"));
+
+	const result = {
+		content: [{ type: "text" as const, text: JSON.stringify(details) }],
+		details,
+	};
+	const explicitResult = renderAgentObserveResult(
+		result,
+		{ expanded: false, isPartial: false },
+		trackingTheme,
+		{ args: explicitArgs },
+	).render(120).map((line) => line.trimEnd());
+	assert.deepEqual(explicitResult, ["Researcher", "idle"]);
+
+	const selfResult = renderAgentObserveResult(
+		result,
+		{ expanded: false, isPartial: false },
+		trackingTheme,
+		{ args: { operation: "status" } },
+	).render(120).map((line) => line.trimEnd());
+	assert.deepEqual(selfResult, ["Researcher", "child-agent", "idle"]);
 });
 
 test("Human Request owns a transcript-native question and Answer shell", async (t) => {

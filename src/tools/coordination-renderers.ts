@@ -13,12 +13,18 @@ import {
 	type Component,
 } from "@earendil-works/pi-tui";
 
+import type { AgentStatus } from "../coordination/agent-record.ts";
+import {
+	formatAgentWorkStatus,
+	selectedAgentWorkStatus,
+} from "../presentation/selected-agent-status.ts";
 import type { HumanRequestInput, HumanAnswer } from "../protocol/human-request.ts";
 import type {
 	ModeratorControlInput,
 	ModeratorControlReceipt,
 } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
+import type { AgentRunState } from "../runtime/agent-runtime-host.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 
 type AgentObserveInput = Readonly<{
@@ -26,7 +32,10 @@ type AgentObserveInput = Readonly<{
 	agentId?: string;
 }>;
 
-export function renderAgentObserveCall(args: AgentObserveInput, theme: Theme): Text {
+export function renderAgentObserveCall(
+	args: AgentObserveInput,
+	theme: Theme,
+): Text {
 	return toolCall(theme, "observe", [args.operation, args.agentId]);
 }
 
@@ -34,16 +43,29 @@ export function renderAgentObserveResult(
 	result: AgentToolResult<unknown>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
+	context: Readonly<{ args: AgentObserveInput }>,
 ): Text {
 	if (options.isPartial) return pending(theme, "inspecting");
 	const details = asRecord(result.details);
 	const children = Array.isArray(details?.children) ? details.children : undefined;
-	const summary = children
-		? `${children.length} child${children.length === 1 ? "" : "ren"}`
-		: typeof details?.agentId === "string"
-			? details.agentId
-			: "observed";
-	return receipt(theme, summary, result.details, options);
+	if (children) {
+		return receipt(
+			theme,
+			`${children.length} child${children.length === 1 ? "" : "ren"}`,
+			result.details,
+			options,
+		);
+	}
+	const status = observedAgentStatus(details);
+	return status
+		? agentStatusReceipt(
+			theme,
+			status,
+			result.details,
+			options,
+			context.args.agentId === undefined,
+		)
+		: receipt(theme, "observed", result.details, options);
 }
 
 export function renderAgentControlCall(args: RunControlInput, theme: Theme): Text {
@@ -152,6 +174,50 @@ function receipt(
 	let text = theme.fg("success", summary);
 	if (options.expanded) text += theme.fg("dim", `\n${JSON.stringify(details, null, 2)}`);
 	return new Text(text, 0, 0);
+}
+
+function agentStatusReceipt(
+	theme: Theme,
+	status: Pick<AgentStatus, "agentId" | "label" | "run">,
+	details: unknown,
+	options: ToolRenderResultOptions,
+	showAgentId: boolean,
+): Text {
+	const label = theme.fg("toolTitle", theme.bold(status.label));
+	const agentId = showAgentId ? `\n${theme.fg("dim", status.agentId)}` : "";
+	const workStatus = formatAgentWorkStatus(
+		selectedAgentWorkStatus(status.run, false),
+		theme,
+	);
+	let text = `${label}${agentId}\n${workStatus}`;
+	if (options.expanded) text += theme.fg("dim", `\n${JSON.stringify(details, null, 2)}`);
+	return new Text(text, 0, 0);
+}
+
+function observedAgentStatus(
+	value: Record<string, unknown> | undefined,
+): Pick<AgentStatus, "agentId" | "label" | "run"> | undefined {
+	if (
+		typeof value?.agentId !== "string" ||
+		typeof value.label !== "string" ||
+		!isAgentRunState(value.run)
+	) return undefined;
+	return {
+		agentId: value.agentId,
+		label: value.label,
+		run: value.run,
+	};
+}
+
+function isAgentRunState(value: unknown): value is AgentRunState {
+	const run = asRecord(value);
+	if (!run || !Array.isArray(run.retentionReasons)) return false;
+	if (run.phase === "dormant") return true;
+	return (
+		(run.phase === "starting" || run.phase === "live" || run.phase === "ending") &&
+		(run.work === undefined || run.work === "active" || run.work === "settled") &&
+		(run.attention === "none" || run.attention === "input_required")
+	);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

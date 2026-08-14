@@ -31,6 +31,8 @@ Each status contains the durable Agent identity and structural relationship, the
 
 Retention categories are `owner_host_binding`, `pending_delivery`, `awaiting_answer`, `answer_owed`, `interactive_selection`, `interruption_hold`, and `moderator_handling`. Status never exposes Message payloads, prompts, history summaries, Run handles, or raw Pi objects.
 
+The native status call keeps the requested Agent identity in dimmed text. Its collapsed result then shows the Agent label and current semantic work status without repeating that identity. When `agentId` is omitted for self-observation, the resolved identity appears in the result instead. Expanding the result reveals the complete structured observation.
+
 ## Generation failure
 
 Coordination preserves Pi's user-configured compaction, retry, provider-retry, and transport behavior. It does not apply hidden Runtime overrides or add a separate model-generation recovery layer. If Pi's configured native behavior ultimately ends the exact Run with an unresolved Answer Obligation, ordinary Run Failure moderation applies rather than a separate generation-failure or Operation Review mechanism.
