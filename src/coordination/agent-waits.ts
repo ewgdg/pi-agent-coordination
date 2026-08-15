@@ -1,0 +1,326 @@
+import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
+import { isDeepStrictEqual } from "node:util";
+
+import type { AgentRecord } from "./agent-record.ts";
+import type { MessageCoordinator } from "./messages.ts";
+import {
+	inspectCommittedAgentWaitResult,
+	resolveCommittedAgentWaitInput,
+	type AgentWaitInput,
+	type AgentWaitResult,
+} from "../protocol/agent-wait.ts";
+import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
+
+const ANSWER_WAIT_RECONCILIATION_INTERVAL_MS = 5_000;
+const INTERRUPTED_MESSAGE = "Agent Wait interrupted before all Answers arrived.";
+const FENCED_MESSAGE = "Agent Wait ended because its Agent Run is no longer available.";
+
+export type AgentWaitClock = Readonly<{
+	schedule(delayMs: number, callback: () => void): () => void;
+}>;
+
+export const SYSTEM_AGENT_WAIT_CLOCK: AgentWaitClock = {
+	schedule(delayMs, callback) {
+		const timer = setTimeout(callback, delayMs);
+		timer.unref();
+		return () => clearTimeout(timer);
+	},
+};
+
+export type AgentWaitBoundaryHooks = Readonly<{
+	beforeResultCommit?(context: Readonly<{
+		agentId: string;
+		toolCallId: string;
+		failExactRun(): void;
+	}>): void;
+}>;
+
+export type GuardedAgentWaitToolResult = Readonly<{
+	message: MessageEndEvent["message"];
+}>;
+
+type PendingAgentWait = {
+	callerAgentId: string;
+	toolCallId: string;
+	input: AgentWaitInput;
+	record: AgentRecord;
+	handle: AgentRunHandle;
+	signal: AbortSignal;
+	phase: "waiting" | "resuming" | "result_pending" | "fenced";
+	candidate?: AgentWaitResult;
+	cancelTimer: (() => void) | undefined;
+	resolve(result: AgentWaitResult): void;
+	reject(error: Error): void;
+	removeAbortListener(): void;
+	removeEndedHandler(): void;
+};
+
+export class AgentWaitCoordinator {
+	readonly #agents: Map<string, AgentRecord>;
+	readonly #messages: MessageCoordinator;
+	readonly #boundaryHooks: AgentWaitBoundaryHooks;
+	readonly #clock: AgentWaitClock;
+	readonly #suspendExecution: (record: AgentRecord) => void;
+	readonly #resumeExecution: (record: AgentRecord) => Promise<void>;
+	readonly #pendingByKey = new Map<string, PendingAgentWait>();
+	#shuttingDown = false;
+
+	constructor(options: {
+		agents: Map<string, AgentRecord>;
+		messages: MessageCoordinator;
+		boundaryHooks?: AgentWaitBoundaryHooks;
+		clock?: AgentWaitClock;
+		suspendExecution(record: AgentRecord): void;
+		resumeExecution(record: AgentRecord): Promise<void>;
+	}) {
+		this.#agents = options.agents;
+		this.#messages = options.messages;
+		this.#boundaryHooks = options.boundaryHooks ?? {};
+		this.#clock = options.clock ?? SYSTEM_AGENT_WAIT_CLOCK;
+		this.#suspendExecution = options.suspendExecution;
+		this.#resumeExecution = options.resumeExecution;
+	}
+
+	async wait(
+		callerAgentId: string,
+		toolCallId: string,
+		providedInput: AgentWaitInput,
+		signal: AbortSignal | undefined,
+	): Promise<AgentWaitResult> {
+		if (!signal) {
+			throw new Error("invariant_violation: Agent Wait has no active Run signal");
+		}
+		if (signal.aborted) throw new Error(INTERRUPTED_MESSAGE);
+		if (this.#shuttingDown) {
+			throw new Error("host_shutting_down: Workflow is shutting down");
+		}
+		const caller = this.#requireAgent(callerAgentId);
+		const input = resolveCommittedAgentWaitInput({
+			agentId: callerAgentId,
+			transcript: caller.transcript.inspect(),
+			toolCallId,
+			providedInput,
+		});
+		const completed = this.#messages.waitAnswers(
+			callerAgentId,
+			input.requestMessageIds,
+		);
+		const handle = caller.host.currentHandle();
+		if (!handle) throw new Error("Agent Run is unavailable");
+		const key = waitKey(callerAgentId, toolCallId);
+		if (this.#pendingByKey.has(key)) {
+			throw new Error(`invariant_violation: Agent Wait ${toolCallId} is already pending`);
+		}
+
+		let resolveWait!: (result: AgentWaitResult) => void;
+		let rejectWait!: (error: Error) => void;
+		const result = new Promise<AgentWaitResult>((resolve, reject) => {
+			resolveWait = resolve;
+			rejectWait = reject;
+		});
+		const onAbort = () => this.#fence(callerAgentId, toolCallId, INTERRUPTED_MESSAGE);
+		signal.addEventListener("abort", onAbort, { once: true });
+		const pending: PendingAgentWait = {
+			callerAgentId,
+			toolCallId,
+			input,
+			record: caller,
+			handle,
+			signal,
+			phase: "waiting",
+			cancelTimer: undefined,
+			resolve: resolveWait,
+			reject: rejectWait,
+			removeAbortListener: () => signal.removeEventListener("abort", onAbort),
+			removeEndedHandler: () => undefined,
+		};
+		pending.removeEndedHandler = caller.host.addEndedHandler((endedHandle) => {
+			if (endedHandle !== handle) return;
+			this.#fence(callerAgentId, toolCallId, FENCED_MESSAGE);
+			this.#complete(pending);
+		});
+		this.#pendingByKey.set(key, pending);
+		if (completed) {
+			pending.phase = "result_pending";
+			pending.candidate = completed;
+			pending.resolve(completed);
+		} else {
+			try {
+				caller.host.beginAgentWait(handle, toolCallId);
+				this.#suspendExecution(caller);
+			} catch (error) {
+				this.#complete(pending);
+				throw error;
+			}
+			this.#scheduleReconciliation(pending);
+			void this.#reconcile(pending);
+		}
+		return result;
+	}
+
+	guardResultCommit(
+		callerAgentId: string,
+		message: MessageEndEvent["message"],
+	): GuardedAgentWaitToolResult | undefined {
+		if (
+			message.role !== "toolResult" ||
+			message.toolName !== "agent_wait"
+		) return undefined;
+		const pending = this.#pendingByKey.get(waitKey(callerAgentId, message.toolCallId));
+		if (!pending) return undefined;
+		if (message.isError) return undefined;
+		if (pending.phase === "result_pending") {
+			this.#boundaryHooks.beforeResultCommit?.({
+				agentId: callerAgentId,
+				toolCallId: pending.toolCallId,
+				failExactRun: () => pending.record.host.failExactRun(pending.handle),
+			});
+		}
+		if (
+			pending.phase === "result_pending" &&
+			pending.record.host.isCurrent(pending.handle) &&
+			!pending.record.host.currentRunFailed() &&
+			isDeepStrictEqual(message.details, pending.candidate)
+		) return undefined;
+		this.#fence(callerAgentId, pending.toolCallId, FENCED_MESSAGE);
+		return { message: interruptedToolResult(message, FENCED_MESSAGE) };
+	}
+
+	reconcileCommittedResults(callerAgentId: string): void {
+		const caller = this.#requireAgent(callerAgentId);
+		for (const pending of [...this.#pendingByKey.values()]) {
+			if (pending.callerAgentId !== callerAgentId) continue;
+			const inspection = inspectCommittedAgentWaitResult({
+				agentId: callerAgentId,
+				transcript: caller.transcript.inspect(),
+				toolCallId: pending.toolCallId,
+			});
+			if (inspection.state === "pending") continue;
+			if (
+				inspection.state === "completed" &&
+				!isDeepStrictEqual(inspection.result, pending.candidate)
+			) {
+				throw new Error(
+					`invariant_violation: Agent Wait ${pending.toolCallId} committed a different result`,
+				);
+			}
+			this.#complete(pending);
+		}
+	}
+
+	reconcileCommittedAnswers(): void {
+		for (const pending of this.#pendingByKey.values()) {
+			void this.#reconcile(pending);
+		}
+	}
+
+	shutdown(): void {
+		this.#shuttingDown = true;
+		for (const pending of [...this.#pendingByKey.values()]) {
+			this.#fence(
+				pending.callerAgentId,
+				pending.toolCallId,
+				"Agent Wait ended because the Workflow is shutting down.",
+			);
+			this.#complete(pending);
+		}
+	}
+
+	async #reconcile(pending: PendingAgentWait): Promise<void> {
+		if (pending.phase !== "waiting") return;
+		let completed: AgentWaitResult | undefined;
+		try {
+			completed = this.#messages.waitAnswers(
+				pending.callerAgentId,
+				pending.input.requestMessageIds,
+			);
+		} catch (error) {
+			this.#fence(
+				pending.callerAgentId,
+				pending.toolCallId,
+				error instanceof Error ? error.message : String(error),
+			);
+			return;
+		}
+		if (!completed) return;
+		pending.phase = "resuming";
+		this.#clearTimer(pending);
+		try {
+			pending.record.host.endAgentWait(pending.handle, pending.toolCallId);
+			await this.#resumeExecution(pending.record);
+			if (
+				pending.signal.aborted ||
+				!pending.record.host.isCurrent(pending.handle)
+			) {
+				this.#fence(pending.callerAgentId, pending.toolCallId, FENCED_MESSAGE);
+				return;
+			}
+			pending.phase = "result_pending";
+			pending.candidate = completed;
+			pending.resolve(completed);
+		} catch (error) {
+			this.#fence(
+				pending.callerAgentId,
+				pending.toolCallId,
+				error instanceof Error ? error.message : String(error),
+			);
+		}
+	}
+
+	#scheduleReconciliation(pending: PendingAgentWait): void {
+		pending.cancelTimer = this.#clock.schedule(
+			ANSWER_WAIT_RECONCILIATION_INTERVAL_MS,
+			() => {
+				pending.cancelTimer = undefined;
+				void this.#reconcile(pending).finally(() => {
+					if (pending.phase === "waiting" && !pending.cancelTimer) {
+						this.#scheduleReconciliation(pending);
+					}
+				});
+			},
+		);
+	}
+
+	#fence(callerAgentId: string, toolCallId: string, message: string): void {
+		const pending = this.#pendingByKey.get(waitKey(callerAgentId, toolCallId));
+		if (!pending || pending.phase === "fenced") return;
+		pending.phase = "fenced";
+		this.#clearTimer(pending);
+		pending.reject(new Error(message));
+	}
+
+	#complete(pending: PendingAgentWait): void {
+		pending.record.host.endAgentWait(pending.handle, pending.toolCallId);
+		this.#clearTimer(pending);
+		pending.removeAbortListener();
+		pending.removeEndedHandler();
+		this.#pendingByKey.delete(waitKey(pending.callerAgentId, pending.toolCallId));
+	}
+
+	#clearTimer(pending: PendingAgentWait): void {
+		pending.cancelTimer?.();
+		pending.cancelTimer = undefined;
+	}
+
+	#requireAgent(agentId: string): AgentRecord {
+		const record = this.#agents.get(agentId);
+		if (!record) throw new Error(`unknown_identity: ${agentId}`);
+		return record;
+	}
+}
+
+function waitKey(agentId: string, toolCallId: string): string {
+	return JSON.stringify([agentId, toolCallId]);
+}
+
+function interruptedToolResult(
+	message: Extract<MessageEndEvent["message"], { role: "toolResult" }>,
+	reason: string,
+): Extract<MessageEndEvent["message"], { role: "toolResult" }> {
+	return {
+		...message,
+		content: [{ type: "text", text: reason }],
+		details: undefined,
+		isError: true,
+	};
+}

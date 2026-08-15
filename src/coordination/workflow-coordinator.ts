@@ -36,6 +36,13 @@ import {
 	ProcessChildSessionFactory,
 } from "../runtime/process-child-session-factory.ts";
 import {
+	AgentWaitCoordinator,
+	type AgentWaitBoundaryHooks,
+	type AgentWaitClock,
+	type GuardedAgentWaitToolResult,
+} from "./agent-waits.ts";
+import type { AgentWaitInput, AgentWaitResult } from "../protocol/agent-wait.ts";
+import {
 	HumanRequestCoordinator,
 	type GuardedHumanToolResult,
 	type HumanAttentionItem,
@@ -112,6 +119,10 @@ export type {
 
 export type HumanInputDisposition = "continue" | "submitted" | "discarded";
 
+type GuardedCoordinationToolResult =
+	| GuardedHumanToolResult
+	| GuardedAgentWaitToolResult;
+
 export type HumanPresentationCoordinatorView = Readonly<{
 	status(agentId?: string): AgentStatus;
 	agentLabel(agentId: string): string | undefined;
@@ -153,15 +164,20 @@ type AgentViewTarget = Readonly<{
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	children(agentId?: string): readonly AgentStatus[];
 	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
+	wait(
+		toolCallId: string,
+		input: AgentWaitInput,
+		signal: AbortSignal | undefined,
+	): Promise<AgentWaitResult>;
 	control(toolCallId: string, input: RunControlInput): Promise<RunControlReceipt>;
 	askHuman(
 		toolCallId: string,
 		input: HumanRequestInput,
 		signal: AbortSignal | undefined,
 	): Promise<HumanAnswerCandidate>;
-	guardHumanToolResult(
+	guardToolResult(
 		message: MessageEndEvent["message"],
-	): GuardedHumanToolResult | undefined;
+	): GuardedCoordinationToolResult | undefined;
 	reconcileHumanToolResults(): void;
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(submissionSequence?: number): Promise<void>;
@@ -190,6 +206,7 @@ export class WorkflowCoordinator {
 	readonly #spawner: DefaultChildSpawner;
 	readonly #sessionFactory: ProcessChildSessionFactory;
 	readonly #messages: MessageCoordinator;
+	readonly #agentWaits: AgentWaitCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
 	readonly #runSupervisor: RunSupervisor;
 	readonly #operationalIncidents: OperationalIncidentCoordinator;
@@ -224,6 +241,8 @@ export class WorkflowCoordinator {
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
+			agentWaitBoundaryHooks?: AgentWaitBoundaryHooks;
+			agentWaitClock?: AgentWaitClock;
 		},
 	) {
 		this.#ownerDiagnostics = runtime.services.diagnostics;
@@ -312,6 +331,17 @@ export class WorkflowCoordinator {
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
 			workflowPolicy: this.#workflowPolicy,
+		});
+		this.#agentWaits = new AgentWaitCoordinator({
+			agents: this.#agents,
+			messages: this.#messages,
+			boundaryHooks: options.agentWaitBoundaryHooks,
+			clock: options.agentWaitClock,
+			suspendExecution: (record) => {
+				this.#releaseExecution(record.identity.agentId);
+			},
+			resumeExecution: (record) =>
+				this.#ensureExecution(record.identity.agentId),
 		});
 		this.#humanRequests = new HumanRequestCoordinator({
 			agents: this.#agents,
@@ -411,6 +441,10 @@ export class WorkflowCoordinator {
 			refreshAgentActivity: () => this.#notifyAgentActivityChanged(),
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
+			wait: (toolCallId, input, signal) => {
+				this.#assertAdmissionOpen();
+				return this.#agentWaits.wait(agentId, toolCallId, input, signal);
+			},
 			control: (toolCallId, input) => {
 				this.#assertAdmissionOpen();
 				return this.#runSupervisor.execute(agentId, toolCallId, input);
@@ -438,8 +472,9 @@ export class WorkflowCoordinator {
 				this.#assertAdmissionOpen();
 				return this.#humanRequests.ask(agentId, toolCallId, input, signal);
 			},
-			guardHumanToolResult: (message) =>
-				this.#humanRequests.guardResultCommit(agentId, message),
+			guardToolResult: (message) =>
+				this.#humanRequests.guardResultCommit(agentId, message) ??
+				this.#agentWaits.guardResultCommit(agentId, message),
 			reconcileHumanToolResults: () =>
 				this.#humanRequests.reconcileCommittedResults(agentId),
 			// These surfaces belong to the human Workflow Owner even while a child
@@ -450,6 +485,7 @@ export class WorkflowCoordinator {
 				this.#operationalIncidents.attentionItems(this.#ownerIdentity.agentId),
 			reachSafeBoundary: async () => {
 				this.#operationalIncidents.reconcileCommittedToolResults(agentId);
+				this.#agentWaits.reconcileCommittedAnswers();
 				await this.#messages.reachSafeBoundary(agentId);
 				await this.#operationalIncidents.reachSafeBoundary();
 			},
@@ -464,8 +500,11 @@ export class WorkflowCoordinator {
 					toolName,
 				);
 			},
-			reconcileCommittedToolResults: () =>
-				this.#operationalIncidents.reconcileCommittedToolResults(agentId),
+			reconcileCommittedToolResults: () => {
+				this.#operationalIncidents.reconcileCommittedToolResults(agentId);
+				this.#agentWaits.reconcileCommittedResults(agentId);
+				this.#agentWaits.reconcileCommittedAnswers();
+			},
 			endExecution: () => this.#releaseExecution(agentId),
 		};
 	}
@@ -1103,6 +1142,7 @@ export class WorkflowCoordinator {
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
 		const cleanupErrors: unknown[] = [];
+		this.#agentWaits.shutdown();
 		const children = [...this.#agents.values()].filter(
 			(record) => record.identity.agentId !== this.#ownerIdentity.agentId,
 		);

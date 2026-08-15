@@ -66,7 +66,7 @@ export type ChildNativeInputIdentity = Readonly<{
 
 type CommonChildCoordinationHandlers = Pick<
 	ParticipantCoordinationToolHandlers<"ordinary">,
-	"observe" | "message" | "control"
+	"observe" | "message" | "wait" | "control"
 >;
 
 export function createControlBackedChildPresentationHandlers(
@@ -115,8 +115,8 @@ export function createControlBackedChildParticipantHandlers(
 		async humanInputMode() {
 			return (await request("runtime.humanInputMode", {})).mode;
 		},
-		async humanToolResultCommitting(input) {
-			return (await request("runtime.guardHumanToolResult", input)).result ?? undefined;
+		async toolResultCommitting(input) {
+			return (await request("runtime.guardToolResult", input)).result ?? undefined;
 		},
 		async toolExecutionStarted(input) {
 			await request("runtime.toolExecutionStart", input);
@@ -132,6 +132,11 @@ export function createControlBackedChildParticipantHandlers(
 		observe: (input) => request("coordination.observe", input),
 		message: (toolCallId, input) =>
 			request("coordination.message", { toolCallId, input }),
+		wait: (toolCallId, input, signal) =>
+			request("coordination.wait", {
+				toolCallId,
+				input: { requestMessageIds: [...input.requestMessageIds] },
+			}, signal),
 		control: (toolCallId, input) =>
 			request("coordination.control", { toolCallId, input }),
 	};
@@ -184,9 +189,9 @@ export async function dispatchParticipantRequestToOwner(
 		case "runtime.humanInputMode":
 			response = { mode: await handlers.lifecycle.humanInputMode() };
 			break;
-		case "runtime.guardHumanToolResult":
+		case "runtime.guardToolResult":
 			response = {
-				result: await handlers.lifecycle.humanToolResultCommitting({
+				result: await handlers.lifecycle.toolResultCommitting({
 					message: request.payload.message,
 				}) ?? null,
 			};
@@ -210,6 +215,13 @@ export async function dispatchParticipantRequestToOwner(
 			response = await handlers.coordination.message(
 				request.payload.toolCallId,
 				request.payload.input,
+			);
+			break;
+		case "coordination.wait":
+			response = await handlers.coordination.wait(
+				request.payload.toolCallId,
+				request.payload.input,
+				request.signal,
 			);
 			break;
 		case "coordination.control":

@@ -110,6 +110,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 				"read",
 				"extension_tool",
 				"agent_message",
+				"agent_wait",
 				"agent_control",
 				"agent_observe",
 				"agent_spawn",
@@ -230,6 +231,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		allowedTools: [
 			"read",
 			"agent_message",
+			"agent_wait",
 			"agent_control",
 			"agent_observe",
 			"ask_user_question",
@@ -295,6 +297,7 @@ test("replaces inherited or configured coordination tools with the exact child r
 	assert.deepEqual(preparation.configuration.allowedTools, [
 		"read",
 		"agent_message",
+		"agent_wait",
 		"agent_control",
 		"agent_observe",
 		"agent_spawn",

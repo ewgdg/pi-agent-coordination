@@ -653,7 +653,9 @@ function formatDetailedRun(status: AgentRosterStatus): string {
 		: [
 			capitalize(run.phase),
 			run.work,
-			run.attention === "input_required" ? "input required" : undefined,
+			run.attention === "input_required"
+				? "input required"
+				: run.attention === "agent_wait" ? "agent answers" : undefined,
 		];
 	const retention = run.retentionReasons.length === 0
 		? undefined

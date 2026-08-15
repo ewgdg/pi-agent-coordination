@@ -29,6 +29,9 @@ export function selectedAgentWorkStatus(
 	if (run.attention === "input_required") {
 		return { kind: "waiting", reason: "human input" };
 	}
+	if (run.attention === "agent_wait") {
+		return { kind: "waiting", reason: "agent answer" };
+	}
 	if (run.retentionReasons.some(({ reason }) => reason === "interruption_hold")) {
 		return { kind: "waiting", reason: "resumption" };
 	}

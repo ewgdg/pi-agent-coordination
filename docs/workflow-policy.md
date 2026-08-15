@@ -24,7 +24,7 @@ Invalid initial policy prevents coordination from creating the Workflow runtime.
 
 `maxConcurrentAgentRuns` limits ordinary Workflow Owner and child execution across the complete Workflow. A Run consumes one slot only while Pi is generating or executing its tools. A ready Run that cannot enter waits in Workflow-wide FIFO order before generation starts.
 
-Queued, settled, held, input-required, ending, and dormant Runs consume no execution slot. Moderators are exempt. A reduced limit does not preempt active work: each ready execution keeps the complete policy snapshot captured at its admission and enters when current usage falls below that captured limit.
+Queued, settled, held, input-required, Agent-Answer-waiting, ending, and dormant Runs consume no execution slot. A pending `agent_wait` reacquires capacity before its aggregate tool result can commit. Moderators are exempt. A reduced limit does not preempt active work: each ready execution keeps the complete policy snapshot captured at its admission and enters when current usage falls below that captured limit.
 
 ## Pending Message delivery
 

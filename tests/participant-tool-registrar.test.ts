@@ -30,6 +30,7 @@ const roleToolNames = {
 		"agent_control",
 		"agent_message",
 		"agent_observe",
+		"agent_wait",
 		"agent_spawn",
 		"ask_user_question",
 	],
@@ -37,6 +38,7 @@ const roleToolNames = {
 		"agent_control",
 		"agent_message",
 		"agent_observe",
+		"agent_wait",
 		"ask_user_question",
 		"moderator_control",
 	],
@@ -44,6 +46,7 @@ const roleToolNames = {
 		"agent_control",
 		"agent_message",
 		"agent_observe",
+		"agent_wait",
 		"agent_spawn",
 	],
 } as const;
@@ -65,6 +68,9 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	ParticipantCoordinationToolHandlers<"owner"> = {
 	async message() {
 		return { messageId: "message-1", messageStatus: "sent" };
+	},
+	async wait() {
+		return { answers: [] };
 	},
 	async spawn() {
 		return { spawnStatus: "not_created", failedStage: "identity_commit" };
@@ -131,6 +137,20 @@ test("Agent Message schema correlates Answer implicitly and Cancellation explici
 	assert.ok(cancellation);
 	assert.equal("requestMessageId" in cancellation.properties, true);
 	assert.equal("requestId" in cancellation.properties, false);
+});
+
+test("Agent Wait schema requires explicit unique Request identities", () => {
+	const schema = participantCoordinationToolSchemas.agent_wait;
+	assert.equal(Value.Check(schema, {
+		requestMessageIds: ["request-a", "request-b"],
+	}), true);
+	assert.equal(Value.Check(schema, { requestMessageIds: [] }), false);
+	assert.equal(Value.Check(schema, {
+		requestMessageIds: ["request-a", "request-a"],
+	}), false);
+	assert.equal(Value.Check(schema, {
+		requestMessageIds: [""],
+	}), false);
 });
 
 test("Agent Spawn schema rejects extension path arrays", () => {
@@ -223,7 +243,7 @@ A successful asynchronous Message send returns messageStatus "sent". This includ
 
 "sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
 
-After a receipt containing requestMessageId with messageStatus "sent", continue only independent work or end the turn. The correlated Agent Answer will be delivered automatically; do not poll merely to wait.
+After a receipt containing requestMessageId with messageStatus "sent", continue independent work when possible. If the next action requires all selected Answers together, call agent_wait with their exact Request identities; otherwise end the turn and let correlated Answers arrive automatically. Do not poll merely to wait.
 
 A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
 
@@ -234,10 +254,13 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 	let observedSystemPrompt = "";
 	const host = await createRegistrarHost(t, "ordinary", handlers);
 	const message = host.session.getToolDefinition("agent_message");
+	const wait = host.session.getToolDefinition("agent_wait");
 	const spawn = host.session.getToolDefinition("agent_spawn");
 	assert.ok(message);
+	assert.ok(wait);
 	assert.ok(spawn);
 	assert.deepEqual(message.promptGuidelines, [expectedGuide]);
+	assert.deepEqual(wait.promptGuidelines, [expectedGuide]);
 	assert.deepEqual(spawn.promptGuidelines, [expectedGuide]);
 	host.model.setResponses([(context) => {
 		observedSystemPrompt = context.systemPrompt ?? "";
@@ -247,7 +270,7 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 	await host.session.prompt("Inspect the Agent tool guidance.");
 	assert.equal(observedSystemPrompt.split("<agent_control>").length - 1, 1);
 	assert.equal(observedSystemPrompt.split("</agent_control>").length - 1, 1);
-	assert.match(observedSystemPrompt, /continue only independent work or end the turn/);
+	assert.match(observedSystemPrompt, /call agent_wait with their exact Request identities/);
 	assert.match(observedSystemPrompt, /creates one Answer obligation for the recipient/);
 	assert.match(observedSystemPrompt, /terminal response to that Request/);
 	await host.runtime.dispose();
@@ -328,6 +351,7 @@ test("participant registrar preserves role-specific tool presentation metadata",
 test("participant registrar routes intents and returns exact handler receipts", async (t) => {
 	const calls: unknown[] = [];
 	const messageReceipt = { messageId: "message-2", messageStatus: "sent" } as const;
+	const waitReceipt = { answers: [] } as const;
 	const spawnReceipt = {
 		spawnStatus: "not_created",
 		failedStage: "identity_commit",
@@ -340,6 +364,10 @@ test("participant registrar routes intents and returns exact handler receipts", 
 		async message(toolCallId, input) {
 			calls.push(["message", toolCallId, input]);
 			return messageReceipt;
+		},
+		async wait(toolCallId, input, receivedSignal) {
+			calls.push(["wait", toolCallId, input, receivedSignal]);
+			return waitReceipt;
 		},
 		async spawn(toolCallId, input) {
 			calls.push(["spawn", toolCallId, input]);
@@ -364,6 +392,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 	const host = await createRegistrarHost(t, "ordinary", routedHandlers);
 	const samples = [
 		["agent_message", "call-message", { operation: "poll", messageId: "message-1" }, messageReceipt],
+		["agent_wait", "call-wait", { requestMessageIds: ["request-1"] }, waitReceipt],
 		["agent_spawn", "call-spawn", { request: "Investigate." }, spawnReceipt],
 		["agent_observe", "call-observe", { operation: "children" }, observeReceipt],
 		["agent_control", "call-control", { operation: "interrupt", agentId: "child-agent" }, controlReceipt],
@@ -378,10 +407,11 @@ test("participant registrar routes intents and returns exact handler receipts", 
 	}
 	assert.deepEqual(calls, [
 		["message", "call-message", samples[0][2]],
-		["spawn", "call-spawn", samples[1][2]],
-		["observe", samples[2][2]],
-		["control", "call-control", samples[3][2]],
-		["ask", "call-human", samples[4][2], signal],
+		["wait", "call-wait", samples[1][2], signal],
+		["spawn", "call-spawn", samples[2][2]],
+		["observe", samples[3][2]],
+		["control", "call-control", samples[4][2]],
+		["ask", "call-human", samples[5][2], signal],
 	]);
 	await host.runtime.dispose();
 });

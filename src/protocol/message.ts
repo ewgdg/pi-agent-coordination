@@ -1,6 +1,10 @@
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
+	inspectCommittedAgentWaitResult,
+	type AgentWaitAnswer,
+} from "./agent-wait.ts";
+import {
 	deriveMessageIdentity,
 	currentCoordinationScope,
 	ProtocolInvariantError,
@@ -508,44 +512,74 @@ export function inspectAnswerRetrievals(options: {
 		if (
 			entry.type !== "message" ||
 			entry.message.role !== "toolResult" ||
-			entry.message.toolName !== "agent_message" ||
 			entry.message.isError ||
-			!isRecord(entry.message.details) ||
-			entry.message.details.disposition !== "answer_delivered"
-		) {
-			continue;
+			!isRecord(entry.message.details)
+		) continue;
+		const candidates = entry.message.toolName === "agent_message" &&
+			entry.message.details.disposition === "answer_delivered"
+			? [entry.message.details]
+			: entry.message.toolName === "agent_wait"
+				? completedAgentWaitAnswers({
+					requesterAgentId,
+					transcript,
+					toolCallId: entry.message.toolCallId,
+				})
+				: [];
+		for (const details of candidates) {
+			const expectedKeys = [
+				"answer",
+				"answerId",
+				"answerSource",
+				"disposition",
+				"fromAgentId",
+				"requestMessageId",
+			];
+			if (
+				!sameStringList(Object.keys(details).sort(), expectedKeys) ||
+				!isToolCallPointer(details.answerSource) ||
+				typeof details.answerId !== "string" ||
+				typeof details.requestMessageId !== "string" ||
+				typeof details.fromAgentId !== "string" ||
+				typeof details.answer !== "string" ||
+				details.answerId !== deriveMessageIdentity(details.answerSource) ||
+				details.fromAgentId !== details.answerSource.agentId
+			) {
+				throw new ProtocolInvariantError("Answer Retrieval evidence is invalid");
+			}
+			retrievals.push({
+				answerId: details.answerId,
+				requestId: details.requestMessageId,
+				fromAgentId: details.fromAgentId,
+				answer: details.answer,
+				answerSource: details.answerSource,
+				deliveryEvidence: { agentId: requesterAgentId, entryId: entry.id },
+			});
 		}
-		const details = entry.message.details;
-		const expectedKeys = [
-			"answer",
-			"answerId",
-			"answerSource",
-			"disposition",
-			"fromAgentId",
-			"requestMessageId",
-		];
-		if (
-			!sameStringList(Object.keys(details).sort(), expectedKeys) ||
-			!isToolCallPointer(details.answerSource) ||
-			typeof details.answerId !== "string" ||
-			typeof details.requestMessageId !== "string" ||
-			typeof details.fromAgentId !== "string" ||
-			typeof details.answer !== "string" ||
-			details.answerId !== deriveMessageIdentity(details.answerSource) ||
-			details.fromAgentId !== details.answerSource.agentId
-		) {
-			throw new ProtocolInvariantError("Answer Retrieval evidence is invalid");
-		}
-		retrievals.push({
-			answerId: details.answerId,
-			requestId: details.requestMessageId,
-			fromAgentId: details.fromAgentId,
-			answer: details.answer,
-			answerSource: details.answerSource,
-			deliveryEvidence: { agentId: requesterAgentId, entryId: entry.id },
-		});
 	}
 	return retrievals;
+}
+
+function completedAgentWaitAnswers(options: {
+	requesterAgentId: string;
+	transcript: TranscriptInspection;
+	toolCallId: string;
+}): readonly Extract<AgentWaitAnswer, { disposition: "answer_delivered" }>[] {
+	const inspection = inspectCommittedAgentWaitResult({
+		agentId: options.requesterAgentId,
+		transcript: options.transcript,
+		toolCallId: options.toolCallId,
+	});
+	if (inspection.state !== "completed") {
+		throw new ProtocolInvariantError(
+			`Agent Wait ${options.toolCallId} successful result is not canonical`,
+		);
+	}
+	return inspection.result.answers.filter(
+		(answer): answer is Extract<
+			AgentWaitAnswer,
+			{ disposition: "answer_delivered" }
+		> => answer.disposition === "answer_delivered",
+	);
 }
 
 export function createMessageDeliveryItem(message: Message): MessageDeliveryItem {

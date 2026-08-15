@@ -89,6 +89,29 @@ Retrying a Request selects one authoritative outcome:
 
 Incomplete or contradictory evidence schedules nothing. A later explicit retry is required when a concurrent Answer commits just after inspection.
 
+## Wait for selected Answers
+
+Use `agent_wait` when the Agent's next action requires every selected outbound Request Answer together:
+
+```json
+{
+  "requestMessageIds": [
+    "first-request-message-id",
+    "second-request-message-id"
+  ]
+}
+```
+
+The list must be non-empty and contain unique Request identities authored by the caller. Already-cancelled selections reject the call rather than waiting for an impossible Answer. The tool is sequential. It parks the exact caller Run and releases its Workflow execution capacity until every selected Request has a canonical committed Answer. The wait does not retry Request Delivery, cancel Requests, or create durable Wait state.
+
+Results preserve the supplied Request order. A committed Answer not previously delivered to the requester returns `answer_delivered` with the immutable Answer and its source; the committed `agent_wait` tool result becomes that Answer's requester-side Delivery proof. An Answer with existing requester-side Delivery proof instead returns `answer_already_delivered` with the prior proof and does not duplicate the body.
+
+The wait registers before its final evidence inspection, responds to live Answer progress, and reconciles canonical transcript evidence every five seconds as an event-loss fallback. A successor Run may call `agent_wait` with the same Request identities to retrieve Answers committed while the earlier Run was unavailable. Unfinished Wait calls and their timers are volatile and are not reconstructed after host loss.
+
+Interruption, exact-Run fencing, termination, or shutdown ends the live wait without consuming undelivered Answers. A successful aggregate result becomes Delivery proof only when its native tool result commits. Ordinary Answer Delivery or explicit Request retry therefore remains available if result commitment loses a race.
+
+Continue independent work instead of parking when possible. When aggregate synchronization is unnecessary, end the turn and let Answers arrive through ordinary fixed-Steer Delivery.
+
 ## Cancel one Request
 
 Only the requester may abandon its exact Request:

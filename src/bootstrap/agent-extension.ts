@@ -164,8 +164,8 @@ export function participantLifecycleHandlers(
 		async humanInputMode() {
 			return resolveView().agentActivity().answerMode ? "answer" : "agent";
 		},
-		async humanToolResultCommitting(input) {
-			return resolveView().guardHumanToolResult(input.message);
+		async toolResultCommitting(input) {
+			return resolveView().guardToolResult(input.message);
 		},
 		// A previous sequential tool result is committed before Pi admits the next
 		// sibling. Reconcile here so input-required attention cannot cross that barrier.

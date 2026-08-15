@@ -21,6 +21,7 @@ import type { AgentTemplate } from "../templates/agent-templates.ts";
 const COORDINATION_TOOLS_BY_ROLE = {
 	ordinary: [
 		"agent_message",
+		"agent_wait",
 		"agent_control",
 		"agent_observe",
 		"agent_spawn",
@@ -28,6 +29,7 @@ const COORDINATION_TOOLS_BY_ROLE = {
 	],
 	moderator: [
 		"agent_message",
+		"agent_wait",
 		"agent_control",
 		"agent_observe",
 		"ask_user_question",

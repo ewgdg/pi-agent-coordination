@@ -83,7 +83,7 @@ const view = {
 		for (const handler of activityHandlers) handler();
 		return answerPromise;
 	},
-	guardHumanToolResult(message: MessageEndEvent["message"]) {
+	guardToolResult(message: MessageEndEvent["message"]) {
 		if (
 			message.role === "toolResult" &&
 			message.toolName === "ask_user_question" &&

@@ -116,6 +116,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 	#runStartedHandler: RunStartedHandler | undefined;
 	#runEndingHandler: RunEndingHandler | undefined;
 	#inputRequired: { handle: AgentRunHandle; requestId: string } | undefined;
+	#agentWait: { handle: AgentRunHandle; toolCallId: string } | undefined;
 	#interruptionHold: InterruptionHoldHandle | undefined;
 	#isolatedResumption:
 		| Readonly<{ handle: AgentRunHandle; hold: InterruptionHoldHandle }>
@@ -180,10 +181,14 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		if (!run?.admitted) return { phase: "dormant", retentionReasons: [] };
 		return {
 			phase: this.#ending ? "ending" : "live",
-			work: run.runtime.workState() === "active" ? "active" : "settled",
+			work: this.#agentWait?.handle === run.handle
+				? "settled"
+				: run.runtime.workState() === "active" ? "active" : "settled",
 			attention: this.#inputRequired?.handle === run.handle
 				? "input_required"
-				: "none",
+				: this.#agentWait?.handle === run.handle
+					? "agent_wait"
+					: "none",
 			retentionReasons,
 		};
 	}
@@ -513,6 +518,31 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#notifyStateChanged();
 	}
 
+	beginAgentWait(handle: AgentRunHandle, toolCallId: string): void {
+		const run = this.#runtime;
+		if (
+			!run || run.handle !== handle || this.#starting || this.#ending || run.failed
+		) throw new Error("stale_run: Agent Wait does not target the current Agent Run");
+		if (toolCallId.length === 0) {
+			throw new Error("invariant_violation: Agent Wait tool call identity must not be empty");
+		}
+		if (this.#agentWait) {
+			throw new Error("invariant_violation: Agent Run already has an active Agent Wait");
+		}
+		this.#agentWait = { handle, toolCallId };
+		this.#notifyStateChanged();
+	}
+
+	endAgentWait(handle: AgentRunHandle, toolCallId: string): void {
+		const wait = this.#agentWait;
+		if (!wait) return;
+		if (wait.handle !== handle || wait.toolCallId !== toolCallId) {
+			throw new Error("invariant_violation: Agent Wait does not match waiting attention");
+		}
+		this.#agentWait = undefined;
+		this.#notifyStateChanged();
+	}
+
 	#requireLiveRuntime(): HostedAgentRuntime {
 		const runtime = this.#runtime?.admitted ? this.#runtime.runtime : undefined;
 		if (!runtime) {
@@ -791,6 +821,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			runRetentionReasonCount > 0 ||
 			this.#requestRelationships.size > 0 ||
 			this.#inputRequired !== undefined ||
+			this.#agentWait !== undefined ||
 			this.#interruptionHold !== undefined
 		) {
 			return "retained";
@@ -981,6 +1012,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#startingCancellationRequested = false;
 		this.#passivePreparation = false;
 		this.#inputRequired = undefined;
+		this.#agentWait = undefined;
 		this.#interruptionHold = undefined;
 		this.#isolatedResumption = undefined;
 		this.#interrupting = false;

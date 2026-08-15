@@ -29,7 +29,7 @@ export type AgentRetention = Readonly<{
 export type LiveRunState = Readonly<{
 	phase: "starting" | "live" | "ending";
 	work?: "active" | "settled";
-	attention: "none" | "input_required";
+	attention: "none" | "input_required" | "agent_wait";
 	retentionReasons: readonly AgentRetention[];
 }>;
 export type DormantRunState = Readonly<{
@@ -158,6 +158,8 @@ export interface AgentRuntimeHost {
 	acceptsInputRequired(handle: AgentRunHandle, requestId: string): boolean;
 	failExactRun(handle: AgentRunHandle): void;
 	endInputRequired(handle: AgentRunHandle, requestId: string): void;
+	beginAgentWait(handle: AgentRunHandle, toolCallId: string): void;
+	endAgentWait(handle: AgentRunHandle, toolCallId: string): void;
 	addRetentionReason(reason: AgentRetentionReason, requestId?: string): void;
 	removeRetentionReason(reason: AgentRetentionReason, requestId?: string): void;
 	hasRetentionReason(reason: AgentRetentionReason, requestId?: string): boolean;

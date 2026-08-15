@@ -14,6 +14,10 @@ import {
 } from "@earendil-works/pi-tui";
 
 import type { AgentStatus } from "../coordination/agent-record.ts";
+import type {
+	AgentWaitInput,
+	AgentWaitResult,
+} from "../protocol/agent-wait.ts";
 import {
 	formatAgentIdentity,
 	formatKnownAgentIdentity,
@@ -36,6 +40,31 @@ type AgentObserveInput = Readonly<{
 	operation: "status" | "children";
 	agentId?: string;
 }>;
+
+export function renderAgentWaitCall(
+	args: AgentWaitInput,
+	theme: Theme,
+): Text {
+	const count = args.requestMessageIds.length;
+	return toolCall(theme, "wait", [
+		`${count} Answer${count === 1 ? "" : "s"}`,
+	]);
+}
+
+export function renderAgentWaitResult(
+	result: AgentToolResult<AgentWaitResult>,
+	options: ToolRenderResultOptions,
+	theme: Theme,
+): Text {
+	if (options.isPartial) return pending(theme, "waiting for Answers");
+	const count = result.details?.answers.length ?? 0;
+	return receipt(
+		theme,
+		`${count} Answer${count === 1 ? "" : "s"}`,
+		result.details,
+		options,
+	);
+}
 
 export function renderAgentObserveCall(
 	args: AgentObserveInput,
@@ -240,7 +269,11 @@ function isAgentRunState(value: unknown): value is AgentRunState {
 	return (
 		(run.phase === "starting" || run.phase === "live" || run.phase === "ending") &&
 		(run.work === undefined || run.work === "active" || run.work === "settled") &&
-		(run.attention === "none" || run.attention === "input_required")
+		(
+			run.attention === "none" ||
+			run.attention === "input_required" ||
+			run.attention === "agent_wait"
+		)
 	);
 }
 

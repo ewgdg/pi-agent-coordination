@@ -810,7 +810,7 @@ async function waitForInputRequired(
 function observedAttention(
 	view: ReturnType<WorkflowCoordinator["forAgent"]>,
 	agentId: string,
-): "none" | "input_required" | "dormant" {
+): "none" | "input_required" | "agent_wait" | "dormant" {
 	const run = view.status(agentId).run;
 	return "attention" in run ? run.attention : "dormant";
 }

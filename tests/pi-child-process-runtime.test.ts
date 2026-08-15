@@ -885,7 +885,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 					: "continue";
 			},
 			async humanInputMode() { return "agent"; },
-			async humanToolResultCommitting() { return undefined; },
+			async toolResultCommitting() { return undefined; },
 			async toolExecutionStarted() {},
 			async safeBoundaryReached() {},
 			async executionEnded() {},
@@ -910,6 +910,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 				options.message?.(toolCallId, input);
 				return options.messageReceipt ?? { messageId: "unused-message", messageStatus: "sent" };
 			},
+			async wait() { return { answers: [] }; },
 			async control(_toolCallId, input) {
 				return { agentId: input.agentId, disposition: "not_running" };
 			},

@@ -32,6 +32,7 @@ import {
 	findAuthoredRequestSources,
 	inspectCanonicalRequestResolution,
 } from "../protocol/request-resolution.ts";
+import type { AgentWaitAnswer } from "../protocol/agent-wait.ts";
 import type { ResidualRequestRelationships } from "../runtime/agent-runtime-host.ts";
 
 type Request = Extract<Message, { kind: "request" }>;
@@ -330,6 +331,42 @@ export class RequestEvidence {
 			awaitingAnswerRequestIds: uniqueRequestIds(awaitingAnswerRequestIds),
 			answerOwedRequestIds: uniqueAnswerOwedRequestIds,
 		};
+	}
+
+	callerWaitAnswer(
+		caller: AgentRecord,
+		requestId: string,
+	): AgentWaitAnswer | undefined {
+		const message = this.requireCallerAuthoredMessage(caller, requestId);
+		if (message.kind !== "request") {
+			throw new Error(`wrong_message_kind: Message ${requestId} is not a Request`);
+		}
+		const resolution = this.#inspectResolution(message);
+		if (resolution.cancellation) {
+			throw new Error(`invalid_state: Request ${requestId} was cancelled`);
+		}
+		const answer = resolution.answer;
+		if (!answer) return undefined;
+		const delivery = inspectAnswerDelivery({
+			requesterAgentId: caller.identity.agentId,
+			transcript: caller.transcript.inspect(),
+			answer,
+		});
+		return delivery.deliveryEvidence
+			? {
+				disposition: "answer_already_delivered",
+				requestMessageId: requestId,
+				answerId: answer.messageId,
+				deliveryEvidence: delivery.deliveryEvidence,
+			}
+			: {
+				disposition: "answer_delivered",
+				requestMessageId: requestId,
+				answerId: answer.messageId,
+				fromAgentId: answer.fromAgentId,
+				answer: answer.answer,
+				answerSource: answer.source,
+			};
 	}
 
 	requireCallerAuthoredMessage(caller: AgentRecord, messageId: string): Message {

@@ -6,6 +6,7 @@ import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
 import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
+import type { AgentWaitResult } from "../protocol/agent-wait.ts";
 import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
 import {
 	MODERATOR_ROUTINE_START_CUSTOM_TYPE,
@@ -178,7 +179,11 @@ const AgentRunStateSchema = Type.Union([
 	closed({
 		phase: Type.Union([Type.Literal("starting"), Type.Literal("live"), Type.Literal("ending")]),
 		work: Type.Optional(Type.Union([Type.Literal("active"), Type.Literal("settled")])),
-		attention: Type.Union([Type.Literal("none"), Type.Literal("input_required")]),
+		attention: Type.Union([
+			Type.Literal("none"),
+			Type.Literal("input_required"),
+			Type.Literal("agent_wait"),
+		]),
 		retentionReasons: Type.Array(RetentionSchema),
 	}),
 ]);
@@ -346,6 +351,25 @@ const RunControlReceiptSchema = Type.Union([
 		residualRequests: closed({ incoming: Type.Integer({ minimum: 0 }), outgoing: Type.Integer({ minimum: 0 }) }),
 	}),
 ]);
+const AgentWaitAnswerSchema = Type.Union([
+	closed({
+		disposition: Type.Literal("answer_delivered"),
+		requestMessageId: NonEmptyStringSchema,
+		answerId: NonEmptyStringSchema,
+		fromAgentId: NonEmptyStringSchema,
+		answer: Type.String(),
+		answerSource: ToolCallPointerSchema,
+	}),
+	closed({
+		disposition: Type.Literal("answer_already_delivered"),
+		requestMessageId: NonEmptyStringSchema,
+		answerId: NonEmptyStringSchema,
+		deliveryEvidence: EntryPointerSchema,
+	}),
+]);
+const AgentWaitResultSchema = closed({
+	answers: Type.Array(AgentWaitAnswerSchema, { minItems: 1 }),
+});
 const HumanAnswerSchema = closed({ requestId: NonEmptyStringSchema, answer: NonEmptyStringSchema });
 const ModeratorControlReceiptSchema = Type.Union([
 	closed({
@@ -559,7 +583,7 @@ export const agentControlMethods = {
 		request: EmptySchema,
 		response: closed({ mode: Type.Union([Type.Literal("agent"), Type.Literal("answer")]) }),
 	},
-	"runtime.guardHumanToolResult": {
+	"runtime.guardToolResult": {
 		request: closed({ message: AgentMessageSchema }),
 		response: closed({ result: Type.Union([GuardedHumanToolResultSchema, Type.Null()]) }),
 	},
@@ -576,6 +600,10 @@ export const agentControlMethods = {
 	"coordination.message": {
 		request: ToolIntention(AgentMessageInputSchema),
 		response: Type.Unsafe<AgentMessageReceipt>(AgentMessageReceiptSchema),
+	},
+	"coordination.wait": {
+		request: ToolIntention(participantCoordinationToolSchemas.agent_wait),
+		response: Type.Unsafe<AgentWaitResult>(AgentWaitResultSchema),
 	},
 	"coordination.control": {
 		request: ToolIntention(RunControlInputSchema),

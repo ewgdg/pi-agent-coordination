@@ -51,7 +51,7 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 			calls.push(["human-input", input]);
 			return "continue";
 		},
-		async humanToolResultCommitting(input) {
+		async toolResultCommitting(input) {
 			calls.push(["human-result", input]);
 		},
 		async toolExecutionStarted(input) {
@@ -231,7 +231,7 @@ test("participant lifecycle registrar preserves native Human Answer recovery", a
 		async humanInputMode() {
 			return "answer";
 		},
-		async humanToolResultCommitting() {
+		async toolResultCommitting() {
 			return {
 				rejectedAnswer: "Rejected answer",
 				reason: "the exact request ended",
@@ -278,7 +278,7 @@ test("participant lifecycle registrar preserves fail-fast handler errors", async
 		["agent_start", "executionStarted", { type: "agent_start" }],
 		[
 			"message_end",
-			"humanToolResultCommitting",
+			"toolResultCommitting",
 			{ type: "message_end", message: toolResultMessage },
 		],
 		[
@@ -360,7 +360,7 @@ function lifecycleHandlers(
 		async humanInputMode() {
 			return "agent";
 		},
-		async humanToolResultCommitting() {},
+		async toolResultCommitting() {},
 		async toolExecutionStarted() {},
 		async safeBoundaryReached() {},
 		async executionEnded() {},
@@ -380,7 +380,7 @@ function localLifecycleView(calls: unknown[]) {
 		async beginExecution() {
 			calls.push("begin-execution");
 		},
-		guardHumanToolResult(message: MessageEndEvent["message"]) {
+		guardToolResult(message: MessageEndEvent["message"]) {
 			calls.push(["guard-human-result", message]);
 		},
 		reconcileHumanToolResults() {

@@ -81,7 +81,11 @@ The responder's sole live duty created by Agent Request Delivery and ended by co
 An immutable responder-authored Message correlated by the coordinator to the responder's sole Answer Obligation. Its route follows from that Request, and its commit ends the obligation.
 
 **Answer Retrieval**:
-Requester-initiated delivery of an already-committed Agent Answer through the model-visible result of retrying its Request. The result is the Answer's recipient-side delivery proof and transports the responder's immutable Answer without impersonating the responder or authoring another Message.
+Requester-initiated delivery of an already-committed Agent Answer through the model-visible result of retrying its Request or waiting for selected Request Answers. The result is the Answer's recipient-side delivery proof and transports the responder's immutable Answer without impersonating the responder or authoring another Message.
+
+**Agent Wait**:
+One explicit join over a non-empty ordered selection of Agent Requests authored by the caller. Its sequential tool call parks the exact Run, releases Workflow execution capacity, and resumes only after every selected Request has a canonical Agent Answer. The committed aggregate result becomes requester-side Delivery proof for Answers not already delivered; proof-only slots identify prior Deliveries without repeating their bodies. Live notification, the pending Promise, and five-second transcript reconciliation are volatile machinery. A successor Run may issue a new Agent Wait to retrieve committed Answers, but unfinished Wait calls are not reconstructed and waiting never retries Request Delivery.
+_Avoid_: Answer cache, Request retry, durable Wait
 
 **Request Cancellation**:
 An immutable requester-authored Message withdrawing one exact Agent Request, named at the authoring boundary by that Request's Message identity. It ends the requester's wait when committed and the responder's Answer obligation when delivered, without retracting facts or stopping work. An undelivered Request is suppressed without waking its responder; cancellation of a delivered Request may start a dormant responder through ordinary Message delivery. Cancellation remains one hop and never grants authority over the responder's Requests.

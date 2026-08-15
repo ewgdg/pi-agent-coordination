@@ -14,7 +14,7 @@ export type ParticipantHumanInput = Readonly<{
 
 export type ParticipantHumanInputDisposition = "continue" | "submitted" | "discarded";
 
-export type ParticipantHumanToolResult = Readonly<{
+export type ParticipantToolResult = Readonly<{
 	message: MessageEndEvent["message"];
 }>;
 
@@ -23,7 +23,7 @@ export type ParticipantToolExecution = Readonly<{
 	toolName: string;
 }>;
 
-export type GuardedParticipantHumanToolResult = Readonly<{
+export type GuardedParticipantToolResult = Readonly<{
 	message?: MessageEndEvent["message"];
 	rejectedAnswer?: string;
 	reason?: string;
@@ -33,9 +33,9 @@ export type ParticipantLifecycleHandlers = Readonly<{
 	executionStarted(submissionSequence?: number): Promise<void>;
 	humanInputSubmitted(input: ParticipantHumanInput): Promise<ParticipantHumanInputDisposition>;
 	humanInputMode(): Promise<"agent" | "answer">;
-	humanToolResultCommitting(
-		input: ParticipantHumanToolResult,
-	): Promise<GuardedParticipantHumanToolResult | undefined>;
+	toolResultCommitting(
+		input: ParticipantToolResult,
+	): Promise<GuardedParticipantToolResult | undefined>;
 	toolExecutionStarted(input: ParticipantToolExecution): Promise<void>;
 	safeBoundaryReached(): Promise<void>;
 	executionEnded(): Promise<void>;
@@ -55,7 +55,7 @@ export function registerParticipantLifecycle(
 	// native result. A Run fence can still turn a submitted candidate into the one
 	// interruption result here; attention remains until later transcript proof.
 	pi.on("message_end", async (event, ctx) => {
-		const guarded = await handlers.humanToolResultCommitting({
+		const guarded = await handlers.toolResultCommitting({
 			message: event.message,
 		});
 		if (!guarded) return;

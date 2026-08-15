@@ -511,12 +511,13 @@ async function handleOwnerRequest(
 		case "runtime.executionBegin":
 		case "runtime.humanInput":
 		case "runtime.humanInputMode":
-		case "runtime.guardHumanToolResult":
+		case "runtime.guardToolResult":
 		case "runtime.toolExecutionStart":
 		case "runtime.safeBoundary":
 		case "runtime.executionEnd":
 		case "coordination.observe":
 		case "coordination.message":
+		case "coordination.wait":
 		case "coordination.control":
 		case "coordination.spawn":
 		case "coordination.templates":

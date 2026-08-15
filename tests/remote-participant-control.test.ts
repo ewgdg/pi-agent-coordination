@@ -35,9 +35,10 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		switch (method) {
 			case "runtime.humanInput": return { disposition: "submitted" };
 			case "runtime.humanInputMode": return { mode: "answer" };
-			case "runtime.guardHumanToolResult": return { result: null };
+			case "runtime.guardToolResult": return { result: null };
 			case "coordination.observe": return status;
 			case "coordination.message": return { messageId: "message-1", messageStatus: "sent" };
+			case "coordination.wait": return { answers: [] };
 			case "coordination.control": return { agentId: "target", disposition: "held" };
 			case "coordination.spawn": return { spawnStatus: "not_created", failedStage: "identity_commit" };
 			case "coordination.askHuman": return { requestId: "human-1", answer: "Proceed." };
@@ -56,7 +57,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		"submitted",
 	);
 	assert.equal(await proxies.lifecycle.humanInputMode(), "answer");
-	assert.equal(await proxies.lifecycle.humanToolResultCommitting({
+	assert.equal(await proxies.lifecycle.toolResultCommitting({
 		message: { role: "user", content: "candidate", timestamp: 1 },
 	}), undefined);
 	await proxies.lifecycle.toolExecutionStarted({ toolCallId: "tool-1", toolName: "read" });
@@ -72,6 +73,14 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		{ messageId: "message-1", messageStatus: "sent" },
 	);
 	assert.deepEqual(
+		await proxies.coordination.wait(
+			"wait-call",
+			{ requestMessageIds: ["request-1"] },
+			cancellation.signal,
+		),
+		{ answers: [] },
+	);
+	assert.deepEqual(
 		await proxies.coordination.askUserQuestion(
 			"human-call",
 			{ question: "Proceed?" },
@@ -84,7 +93,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		["runtime.executionBegin", {}, undefined],
 		["runtime.humanInput", { text: "resume", submissionSequence: 7 }, undefined],
 		["runtime.humanInputMode", {}, undefined],
-		["runtime.guardHumanToolResult", {
+		["runtime.guardToolResult", {
 			message: { role: "user", content: "candidate", timestamp: 1 },
 		}, undefined],
 		["runtime.toolExecutionStart", { toolCallId: "tool-1", toolName: "read" }, undefined],
@@ -95,6 +104,10 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 			toolCallId: "message-call",
 			input: { operation: "send", targetAgentId: "target", content: "hello" },
 		}, undefined],
+		["coordination.wait", {
+			toolCallId: "wait-call",
+			input: { requestMessageIds: ["request-1"] },
+		}, cancellation.signal],
 		["coordination.askHuman", {
 			toolCallId: "human-call",
 			input: { question: "Proceed?" },
@@ -177,7 +190,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 			async executionStarted() { calls.push(["begin"]); },
 			async humanInputSubmitted(input) { calls.push(["input", input]); return "submitted"; },
 			async humanInputMode() { calls.push(["mode"]); return "agent"; },
-			async humanToolResultCommitting(input) { calls.push(["guard", input]); return undefined; },
+			async toolResultCommitting(input) { calls.push(["guard", input]); return undefined; },
 			async toolExecutionStarted(input) { calls.push(["tool", input]); },
 			async safeBoundaryReached() { calls.push(["boundary"]); },
 			async executionEnded() { calls.push(["end"]); },
@@ -188,6 +201,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 				calls.push(["message", toolCallId, input]);
 				return { messageId: "message-owner", messageStatus: "sent" };
 			},
+			async wait() { return { answers: [] }; },
 			async control(toolCallId, input) {
 				calls.push(["control", toolCallId, input]);
 				return { agentId: input.agentId, disposition: "not_running" };

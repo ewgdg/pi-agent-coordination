@@ -27,12 +27,14 @@ const ordinaryTools = [
 	"agent_message",
 	"agent_observe",
 	"agent_spawn",
+	"agent_wait",
 	"ask_user_question",
 ] as const;
 const moderatorTools = [
 	"agent_control",
 	"agent_message",
 	"agent_observe",
+	"agent_wait",
 	"ask_user_question",
 	"moderator_control",
 ] as const;

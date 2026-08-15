@@ -10,6 +10,10 @@ import type { AgentLabelResolver } from "../presentation/agent-identity.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
 import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
+import type {
+	AgentWaitInput,
+	AgentWaitResult,
+} from "../protocol/agent-wait.ts";
 import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
 import type {
 	ModeratorControlInput,
@@ -22,6 +26,8 @@ import {
 	renderAgentControlResult,
 	renderAgentObserveCall,
 	renderAgentObserveResult,
+	renderAgentWaitCall,
+	renderAgentWaitResult,
 	renderHumanRequestCall,
 	renderHumanRequestResult,
 	renderModeratorControlCall,
@@ -43,7 +49,7 @@ A successful asynchronous Message send returns messageStatus "sent". This includ
 
 "sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
 
-After a receipt containing requestMessageId with messageStatus "sent", continue only independent work or end the turn. The correlated Agent Answer will be delivered automatically; do not poll merely to wait.
+After a receipt containing requestMessageId with messageStatus "sent", continue independent work when possible. If the next action requires all selected Answers together, call agent_wait with their exact Request identities; otherwise end the turn and let correlated Answers arrive automatically. Do not poll merely to wait.
 
 A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
 
@@ -66,6 +72,11 @@ type CommonParticipantCoordinationToolHandlers = Readonly<{
 		toolCallId: string,
 		input: AgentMessageInput,
 	): Promise<AgentMessageReceipt>;
+	wait(
+		toolCallId: string,
+		input: AgentWaitInput,
+		signal: AbortSignal | undefined,
+	): Promise<AgentWaitResult>;
 	observe(input: AgentObserveInput): Promise<AgentObserveResult>;
 	control(
 		toolCallId: string,
@@ -162,6 +173,16 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 		{ additionalProperties: false },
 	),
 ]));
+
+const agentWaitParameters = Type.Object(
+	{
+		requestMessageIds: Type.Array(Type.String({ minLength: 1 }), {
+			minItems: 1,
+			uniqueItems: true,
+		}),
+	},
+	{ additionalProperties: false },
+);
 
 const agentSpawnParameters = Type.Object(
 	{
@@ -317,6 +338,7 @@ const moderatorControlParameters = objectRootUnion(Type.Union([
 
 export const participantCoordinationToolSchemas = {
 	agent_message: agentMessageParameters,
+	agent_wait: agentWaitParameters,
 	agent_spawn: agentSpawnParameters,
 	agent_observe: agentObserveParameters,
 	agent_control: agentControlParameters,
@@ -352,6 +374,23 @@ export function registerParticipantCoordinationTools<
 		renderResult: renderAgentMessageResult,
 		async execute(toolCallId, parameters) {
 			return toolResult(await availableHandlers.message(toolCallId, parameters));
+		},
+	});
+	pi.registerTool<typeof agentWaitParameters, AgentWaitResult>({
+		name: "agent_wait",
+		label: "Wait for Answers",
+		description:
+			"Wait until every selected outbound Agent Request has a committed Answer, then return the Answers together.",
+		promptSnippet: "Park this Run until selected Agent Requests are answered.",
+		promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
+		executionMode: "sequential",
+		parameters: agentWaitParameters,
+		renderCall: renderAgentWaitCall,
+		renderResult: renderAgentWaitResult,
+		async execute(toolCallId, parameters, signal) {
+			return toolResult(
+				await availableHandlers.wait(toolCallId, parameters, signal),
+			);
 		},
 	});
 	if (role !== "moderator") {

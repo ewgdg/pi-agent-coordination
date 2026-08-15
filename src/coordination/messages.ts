@@ -42,6 +42,7 @@ import {
 	createCreationRequestDeliveryItem,
 	inspectCreationRequestDelivery,
 } from "../protocol/creation-request.ts";
+import type { AgentWaitResult } from "../protocol/agent-wait.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
 import type { InterruptionHoldHandle } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
@@ -134,6 +135,19 @@ export class MessageCoordinator {
 
 	requestQuestion(requestId: string): string {
 		return this.#requestEvidence.requireRequest(requestId).question;
+	}
+
+	waitAnswers(
+		callerAgentId: string,
+		requestMessageIds: readonly string[],
+	): AgentWaitResult | undefined {
+		const caller = this.#requireAgent(callerAgentId);
+		const answers = requestMessageIds.map((requestId) =>
+			this.#requestEvidence.callerWaitAnswer(caller, requestId)
+		);
+		return answers.every((answer) => answer !== undefined)
+			? { answers }
+			: undefined;
 	}
 
 	requestTargetAgentIds(requestIds: readonly string[]): readonly string[] {

@@ -225,6 +225,53 @@ test("native Answer Retrieval reconstructs result-less Answer correlation", () =
 	}), "retrieved-request");
 });
 
+test("Agent Wait result is requester-side Delivery proof for each returned Answer", () => {
+	const requesterAgentId = "wait-result-requester";
+	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
+	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
+		agentId: requesterAgentId,
+	});
+	const answerSource = {
+		agentId: "wait-result-responder",
+		entryId: "wait-answer-entry",
+		toolCallId: "wait-answer-call",
+	};
+	const waitToolCallId = "agent-wait-call";
+	requester.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_wait", {
+				requestMessageIds: ["waited-request"],
+			}, { id: waitToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const waitResult = {
+		answers: [{
+			disposition: "answer_delivered",
+			requestMessageId: "waited-request",
+			answerId: deriveMessageIdentity(answerSource),
+			fromAgentId: answerSource.agentId,
+			answer: "Recovered through the aggregate wait result.",
+			answerSource,
+		}],
+	};
+	requester.appendMessage({
+		role: "toolResult",
+		toolCallId: waitToolCallId,
+		toolName: "agent_wait",
+		content: [{ type: "text", text: JSON.stringify(waitResult) }],
+		details: waitResult,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	assert.equal(answerSourceDeliveryRequestId({
+		requesterAgentId,
+		transcript: transcriptFromSessionManager(requester).inspect(),
+		source: answerSource,
+	}), "waited-request");
+});
+
 test("a schema-rejected agent_message call is not authored protocol evidence", () => {
 	const agentId = "schema-rejected-message-author";
 	const rejectedToolCallId = "invalid-cancel-arguments";

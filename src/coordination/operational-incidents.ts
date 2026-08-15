@@ -252,6 +252,9 @@ export class OperationalIncidentCoordinator {
 			toolCallId,
 			toolName,
 		});
+		// Agent Wait is intentional coordination suspension. Dependency Deadlock
+		// observes its Request graph; Operation Review must not time the parked tool.
+		if (toolName === "agent_wait") return;
 		const entry = transcript.entries.find(({ id }) => id === source.entryId);
 		if (entry?.type !== "message" || entry.message.role !== "assistant") {
 			throw new Error("invariant_violation: root tool call source is unavailable");
@@ -774,7 +777,7 @@ export class OperationalIncidentCoordinator {
 		const run = record.host.observe();
 		return run.phase === "live" &&
 			run.work === "settled" &&
-			run.attention === "none" &&
+			(run.attention === "none" || run.attention === "agent_wait") &&
 			!record.host.currentRunFailed() &&
 			!this.#operationReviews.hasUnresolvedAsynchronousCall(
 				record.identity.agentId,

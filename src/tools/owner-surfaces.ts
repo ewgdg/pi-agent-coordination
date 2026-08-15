@@ -30,6 +30,7 @@ type ViewResolver = () => AgentCoordinatorView;
 
 const OWNER_AGENT_TOOL_NAMES = new Set([
 	"agent_message",
+	"agent_wait",
 	"agent_spawn",
 	"agent_observe",
 	"agent_control",
@@ -178,6 +179,11 @@ export function participantCoordinatorHandlers(
 	const common = {
 		message: (toolCallId: string, input: Parameters<AgentCoordinatorView["message"]>[1]) =>
 			resolveView().message(toolCallId, input),
+		wait: (
+			toolCallId: string,
+			input: Parameters<AgentCoordinatorView["wait"]>[1],
+			signal: AbortSignal | undefined,
+		) => resolveView().wait(toolCallId, input, signal),
 		async observe(input: { operation: "status" | "children"; agentId?: string }) {
 			const view = resolveView();
 			return input.operation === "children"

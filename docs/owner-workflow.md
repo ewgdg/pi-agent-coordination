@@ -24,6 +24,7 @@ The package registers the Owner tool definitions through Pi's `registerTool()` A
 
 - `agent_spawn` creates one fresh configured child, optionally resolving a named Agent Template, and delivers its initial Creation Request.
 - `agent_message` sends Messages, creates correlated Requests, Answers, retrieves, and cancels.
+- `agent_wait` parks the exact Run without consuming Workflow execution capacity until selected outbound Requests all have Answers.
 - `ask_user_question` blocks the caller's exact Run on one free-form question. Its matching successful native tool result is the sole Human Answer.
 - `agent_observe` returns an authorized Agent's durable identity, structural relationship, bounded primary transcript evidence, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
 - `agent_control` interrupts, explicitly resumes, or terminates one authorized exact child Run.
