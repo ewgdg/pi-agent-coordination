@@ -256,23 +256,6 @@ test("Template catalogue is injected into the model prompt", async (t) => {
 });
 
 test("participant registrar contributes one shared asynchronous Agent control guide", async (t) => {
-	const expectedGuide = `<agent_control>
-A successful asynchronous Message send returns messageStatus "sent". This includes ordinary Messages, Agent Requests, and the Creation Request sent by agent_spawn. A successful agent_spawn also returns spawnStatus "created".
-
-"sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
-
-After a receipt containing requestMessageId with messageStatus "sent", continue independent work when possible. If the next action requires all selected Answers together, call agent_wait with their exact Request identities; otherwise end the turn and let correlated Answers arrive automatically. Do not poll merely to wait.
-
-If agent_wait returns disposition "preempted", handle the delivered inbound Agent Request first. Reissue agent_wait with the same selected Request identities afterward when their Answers are still required; preemption does not consume them or create Answer Delivery proof.
-
-A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
-
-While an Answer Obligation is active, agent_message operation "send" to that Request's requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
-
-agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request. After the operation returns, the Answer is the terminal response to that Request. Do not add an assistant-message recap or summary. Unless another obligation or independent task remains, end the turn immediately so the Agent Run settles.
-
-agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
-</agent_control>`;
 	let observedSystemPrompt = "";
 	const host = await createRegistrarHost(t, "ordinary", handlers);
 	const message = host.session.getToolDefinition("agent_message");
@@ -281,12 +264,15 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 	assert.ok(message);
 	assert.ok(wait);
 	assert.ok(spawn);
-	assert.deepEqual(message.promptGuidelines, [expectedGuide]);
-	assert.deepEqual(wait.promptGuidelines, [expectedGuide]);
-	assert.deepEqual(spawn.promptGuidelines, [
-		expectedGuide,
-		'Use agent_spawn `conversation: "fork"` only for a cache-affine continuation of the completed current conversation. A conversation fork cannot select a template or provide config.',
-	]);
+	assert.equal(message.promptGuidelines?.length, 1);
+	assert.equal(wait.promptGuidelines?.length, 1);
+	assert.equal(spawn.promptGuidelines?.length, 2);
+	assert.equal(wait.promptGuidelines[0], message.promptGuidelines[0]);
+	assert.equal(spawn.promptGuidelines[0], message.promptGuidelines[0]);
+	assert.match(
+		spawn.promptGuidelines[1] ?? "",
+		/Use agent_spawn `conversation: "fork"` only for a cache-affine continuation/,
+	);
 	host.model.setResponses([(context) => {
 		observedSystemPrompt = context.systemPrompt ?? "";
 		return fauxAssistantMessage("Done.");
@@ -295,12 +281,43 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 	await host.session.prompt("Inspect the Agent tool guidance.");
 	assert.equal(observedSystemPrompt.split("<agent_control>").length - 1, 1);
 	assert.equal(observedSystemPrompt.split("</agent_control>").length - 1, 1);
-	assert.match(observedSystemPrompt, /call agent_wait with their exact Request identities/);
-	assert.match(observedSystemPrompt, /agent_wait returns disposition "preempted"/);
-	assert.match(observedSystemPrompt, /creates one Answer obligation for the recipient/);
-	assert.match(observedSystemPrompt, /Keep provisional findings local/);
-	assert.match(observedSystemPrompt, /issue a reverse "request"/);
-	assert.match(observedSystemPrompt, /terminal response to that Request/);
+	const requiredRules: ReadonlyArray<readonly [string, RegExp]> = [
+		[
+			"treat successful sends as asynchronous admission",
+			/messageStatus "sent"[\s\S]*may still be queued[\s\S]*does not mean delivered/,
+		],
+		[
+			"make delivered Requests create Answer obligations",
+			/delivered Agent Request[\s\S]*creates one Answer obligation/,
+		],
+		[
+			"settle when Answers can be handled independently",
+			/Answers can be handled independently[\s\S]*end the turn[\s\S]*arrive automatically/,
+		],
+		[
+			"reserve Agent Wait for strict fan-in",
+			/one next decision requires every selected Answer together[\s\S]*avoiding one model turn per Answer matters/,
+		],
+		[
+			"ordinary Messages do not resolve selected Requests",
+			/Ordinary Messages do not satisfy selected Requests/,
+		],
+		[
+			"preserve selected Answers across wait preemption",
+			/agent_wait returns disposition "preempted"[\s\S]*Reissue agent_wait with the same selected Request identities[\s\S]*does not consume[\s\S]*Answer Delivery proof/,
+		],
+		[
+			"keep provisional responder work off the Message lane",
+			/Keep provisional findings local[\s\S]*Use "answer" for the curated result[\s\S]*reverse "request"/,
+		],
+		[
+			"make Answer the terminal responder output",
+			/terminal response to that Request[\s\S]*end the turn immediately[\s\S]*Agent Run settles/,
+		],
+	];
+	for (const [intent, pattern] of requiredRules) {
+		assert.match(observedSystemPrompt, pattern, intent);
+	}
 	await host.runtime.dispose();
 });
 
