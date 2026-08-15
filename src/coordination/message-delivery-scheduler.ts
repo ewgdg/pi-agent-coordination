@@ -59,6 +59,22 @@ export type ResumeReservationHandler = (
 	}>,
 ) => void | "defer";
 
+export type ScheduledDeliveryKind =
+	| "message"
+	| "request"
+	| "answer"
+	| "request_cancellation"
+	| "custom";
+
+export type ScheduleDeliveryDispatch = (
+	context: Readonly<{
+		recipientAgentId: string;
+		messageId: string;
+		kind: ScheduledDeliveryKind;
+	}>,
+	dispatch: () => void,
+) => void;
+
 export type MessageDeliveryAdmission =
 	| "pending"
 	| "target_unavailable"
@@ -92,17 +108,20 @@ export class MessageDeliveryScheduler {
 	readonly #deferredResumeByAgent = new Set<string>();
 	readonly #integratedAgentIds = new Set<string>();
 	readonly #scheduleReleaseEvaluationHook: ScheduleReleaseEvaluation | undefined;
+	readonly #scheduleDeliveryDispatchHook: ScheduleDeliveryDispatch | undefined;
 	readonly #afterSteerFreeze: SteerFreezeHandler | undefined;
 	readonly #afterResumeReservation: ResumeReservationHandler | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
 
 	constructor(options: {
 		scheduleReleaseEvaluation?: ScheduleReleaseEvaluation;
+		scheduleDeliveryDispatch?: ScheduleDeliveryDispatch;
 		afterSteerFreeze?: SteerFreezeHandler;
 		afterResumeReservation?: ResumeReservationHandler;
 		workflowPolicy: WorkflowPolicyStore;
 	}) {
 		this.#scheduleReleaseEvaluationHook = options.scheduleReleaseEvaluation;
+		this.#scheduleDeliveryDispatchHook = options.scheduleDeliveryDispatch;
 		this.#afterSteerFreeze = options.afterSteerFreeze;
 		this.#afterResumeReservation = options.afterResumeReservation;
 		this.#workflowPolicy = options.workflowPolicy;
@@ -345,7 +364,10 @@ export class MessageDeliveryScheduler {
 		evaluate();
 	}
 
-	async #drainInLane(record: AgentRecord): Promise<void> {
+	async #drainInLane(
+		record: AgentRecord,
+		bypassDeliveryDispatchHook = false,
+	): Promise<void> {
 		this.#removeProvenDeliveriesInLane(record);
 		if (this.#activeResumeByAgent.has(record.identity.agentId)) return;
 		const reservedResume = this.#reservedResumeByAgent.get(record.identity.agentId);
@@ -376,12 +398,25 @@ export class MessageDeliveryScheduler {
 		if (!pending || pending.size === 0) return;
 		if (record.host.currentWorkState() !== "settled") return;
 		const eligible = this.#eligibleDeliveries(pending);
+		const delivery = eligible[0];
+		if (!delivery) return;
+		if (!bypassDeliveryDispatchHook && this.#scheduleDeliveryDispatchHook) {
+			this.#scheduleDeliveryDispatchHook(
+				{
+					recipientAgentId: record.identity.agentId,
+					messageId: delivery.messageId,
+					kind: scheduledDeliveryKind(delivery),
+				},
+				() => {
+					void record.host.lane.run(() => this.#drainInLane(record, true));
+				},
+			);
+			return;
+		}
 		if (eligible.some(({ deliveryMode }) => deliveryMode === "steer")) {
 			this.#freezeSteerInLane(record);
 			return;
 		}
-		const delivery = eligible[0];
-		if (!delivery) return;
 		// A settled Run may become active before Pi processes admission. followUp
 		// preserves Deferred ordering, while triggerTurn starts a standalone Idle turn.
 		const { completion } = record.host.deliverInLane({
@@ -534,4 +569,10 @@ export class MessageDeliveryScheduler {
 		if (this.#hasPendingScheduling(record)) return;
 		record.host.removeRetentionReason("pending_delivery");
 	}
+}
+
+function scheduledDeliveryKind(delivery: ScheduledDelivery): ScheduledDeliveryKind {
+	return "deliveryItem" in delivery
+		? delivery.deliveryItem.projection.kind
+		: "custom";
 }

@@ -7,6 +7,7 @@ import {
 	type ScheduledCustomDelivery,
 	type ScheduledMessageDelivery,
 	type ResumeReservationHandler,
+	type ScheduleDeliveryDispatch,
 	type ScheduleReleaseEvaluation,
 	type SteerFreezeHandler,
 } from "./message-delivery-scheduler.ts";
@@ -61,6 +62,7 @@ export type {
 } from "./message-receipts.ts";
 
 export type MessageBoundaryHooks = Readonly<{
+	scheduleDeliveryDispatch?: ScheduleDeliveryDispatch;
 	beforeDeliveryAdmission?(context: Readonly<{
 		recipientAgentId: string;
 		messageId: string;
@@ -106,6 +108,7 @@ export class MessageCoordinator {
 		);
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
+			scheduleDeliveryDispatch: this.#boundaryHooks.scheduleDeliveryDispatch,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
 			afterResumeReservation: this.#boundaryHooks.afterResumeReservation,
 			workflowPolicy: options.workflowPolicy,
@@ -856,8 +859,13 @@ export class MessageCoordinator {
 			messageId: message.messageId,
 			deliveryMode: message.deliveryMode,
 			deliveryItem: createMessageDeliveryItem(message),
-			inspectProof: () =>
-				inspectMessageDelivery({
+			inspectProof: () => message.kind === "answer"
+				? inspectAnswerDelivery({
+					requesterAgentId: recipient.identity.agentId,
+					transcript: recipient.transcript.inspect(),
+					answer: message,
+				}).deliveryEvidence
+				: inspectMessageDelivery({
 					recipientAgentId: recipient.identity.agentId,
 					transcript: recipient.transcript.inspect(),
 					message,
