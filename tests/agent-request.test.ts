@@ -1308,12 +1308,351 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 	);
 });
 
-test("Agent Wait reports proof-only when a direct Answer Delivery commits first", async (t) => {
+test("Request retry retrieval retires a queued direct Answer Delivery before it can commit", async (t) => {
 	let markAnswerDispatchHeld!: () => void;
 	const answerDispatchHeld = new Promise<void>((resolve) => {
 		markAnswerDispatchHeld = resolve;
 	});
 	let releaseAnswerDispatch!: () => void;
+	let commitRetryRetrieval: (() => void) | undefined;
+	const harness = await createDormantChildHarness(t, {
+		scheduleDeliveryDispatch: ({ kind }, dispatch) => {
+			if (kind !== "answer") {
+				dispatch();
+				return;
+			}
+			releaseAnswerDispatch = dispatch;
+			markAnswerDispatchHeld();
+		},
+		afterSteerFreeze: () => commitRetryRetrieval?.(),
+	});
+	const requestInput = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: "Commit an Answer while retry wins its direct Delivery freeze.",
+	};
+	const requestToolCallId = "request-before-retry-held-answer-delivery";
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", requestInput, { id: requestToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(requestEntry);
+	const requestId = deriveMessageId({
+		agentId: harness.host.session.sessionId,
+		entryId: requestEntry.id,
+		toolCallId: requestToolCallId,
+	});
+	const answerToolCallId = "answer-with-direct-delivery-held-for-retry";
+	const answerText = "Request retry retired the queued direct Delivery.";
+	harness.host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "answer", answer: answerText },
+				{ id: answerToolCallId },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The responder committed the Answer."),
+	]);
+	const requestReceipt = await harness.view.message(requestToolCallId, requestInput);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: requestToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(requestReceipt) }],
+		details: requestReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	await answerDispatchHeld;
+
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	const childEntries = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === answerToolCallId,
+	);
+	const answerSourceEntry = childEntries.find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "toolCall" && part.id === answerToolCallId,
+			),
+	);
+	assert.ok(answerSourceEntry);
+	const answerSource = {
+		agentId: harness.childId,
+		entryId: answerSourceEntry.id,
+		toolCallId: answerToolCallId,
+	};
+	const answerId = deriveMessageId(answerSource);
+
+	const retryToolCallId = "retry-before-held-answer-delivery";
+	const retryInput = { operation: "retry" as const, messageId: requestId };
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", retryInput, { id: retryToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const result = await harness.view.message(retryToolCallId, retryInput);
+	assert.deepEqual(result, {
+		disposition: "answer_delivered",
+		requestMessageId: requestId,
+		answerId,
+		fromAgentId: harness.childId,
+		answer: answerText,
+		answerSource,
+	});
+	commitRetryRetrieval = () => {
+		harness.host.session.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: retryToolCallId,
+			toolName: "agent_message",
+			content: [{ type: "text", text: JSON.stringify(result) }],
+			details: result,
+			isError: false,
+			timestamp: Date.now(),
+		});
+	};
+
+	releaseAnswerDispatch();
+	await harness.view.reachSafeBoundary();
+	assert.equal(
+		harness.host.session.sessionManager.getEntries().some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.message-delivery" &&
+				JSON.stringify(entry.details) ===
+					JSON.stringify({ messages: [answerSource] }),
+		),
+		false,
+	);
+	assert.equal(
+		answerSourceDeliveryRequestId({
+			requesterAgentId: harness.host.session.sessionId,
+			transcript: transcriptFromSessionManager(
+				harness.host.session.sessionManager,
+			).inspect(),
+			source: answerSource,
+		}),
+		requestId,
+	);
+
+	await harness.coordinator.shutdown(async () =>
+		harness.host.runtime.dispose(),
+	);
+});
+
+test("a retired Delivery dispatch callback cannot bypass a later queued Message", async (t) => {
+	type HeldDispatch = Readonly<{ messageId: string; dispatch(): void }>;
+	let ownerAgentId: string | undefined;
+	const heldOwnerDispatches: HeldDispatch[] = [];
+	let markTwoAnswerDispatchesHeld!: () => void;
+	const twoAnswerDispatchesHeld = new Promise<void>((resolve) => {
+		markTwoAnswerDispatchesHeld = resolve;
+	});
+	const harness = await createDormantChildHarness(t, {
+		scheduleDeliveryDispatch: ({ recipientAgentId, messageId }, dispatch) => {
+			if (recipientAgentId !== ownerAgentId) {
+				dispatch();
+				return;
+			}
+			heldOwnerDispatches.push({ messageId, dispatch });
+			if (heldOwnerDispatches.length === 2) markTwoAnswerDispatchesHeld();
+		},
+	});
+	ownerAgentId = harness.host.session.sessionId;
+	const requestInput = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: "Answer, then send a separate follow-up Message.",
+	};
+	const requestToolCallId = "request-before-stale-answer-dispatch";
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", requestInput, { id: requestToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(requestEntry);
+	const requestId = deriveMessageId({
+		agentId: ownerAgentId,
+		entryId: requestEntry.id,
+		toolCallId: requestToolCallId,
+	});
+	const answerToolCallId = "answer-before-stale-dispatch-release";
+	const followUpToolCallId = "message-queued-behind-held-answer";
+	const answerText = "The Answer will be retrieved before direct dispatch.";
+	const followUpContent = "This later Message must receive its own dispatch boundary.";
+	harness.host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "answer", answer: answerText },
+				{ id: answerToolCallId },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{
+					operation: "send",
+					targetAgentId: ownerAgentId,
+					content: followUpContent,
+				},
+				{ id: followUpToolCallId },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The separate follow-up Message was admitted."),
+	]);
+	const requestReceipt = await harness.view.message(requestToolCallId, requestInput);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: requestToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(requestReceipt) }],
+		details: requestReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	await twoAnswerDispatchesHeld;
+
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	const childEntries = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === followUpToolCallId,
+	);
+	const answerSourceEntry = childEntries.find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "toolCall" && part.id === answerToolCallId,
+			),
+	);
+	const followUpSourceEntry = childEntries.find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "toolCall" && part.id === followUpToolCallId,
+			),
+	);
+	assert.ok(answerSourceEntry);
+	assert.ok(followUpSourceEntry);
+	const answerSource = {
+		agentId: harness.childId,
+		entryId: answerSourceEntry.id,
+		toolCallId: answerToolCallId,
+	};
+	const answerId = deriveMessageId(answerSource);
+	const followUpSource = {
+		agentId: harness.childId,
+		entryId: followUpSourceEntry.id,
+		toolCallId: followUpToolCallId,
+	};
+	const followUpId = deriveMessageId(followUpSource);
+	assert.deepEqual(
+		heldOwnerDispatches.map(({ messageId }) => messageId),
+		[answerId, answerId],
+	);
+
+	const waitToolCallId = "wait-before-stale-answer-dispatch-release";
+	const waitInput = { requestMessageIds: [requestId] };
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const waitResult = await harness.view.wait(
+		waitToolCallId,
+		waitInput,
+		new AbortController().signal,
+	);
+	const waitResultMessage = {
+		role: "toolResult" as const,
+		toolCallId: waitToolCallId,
+		toolName: "agent_wait",
+		content: [{ type: "text" as const, text: JSON.stringify(waitResult) }],
+		details: waitResult,
+		isError: false,
+		timestamp: Date.now(),
+	};
+	assert.equal(harness.view.guardToolResult(waitResultMessage), undefined);
+	harness.host.session.sessionManager.appendMessage(waitResultMessage);
+	harness.view.reconcileCommittedToolResults();
+
+	heldOwnerDispatches[0]!.dispatch();
+	await harness.view.reachSafeBoundary();
+	assert.deepEqual(
+		heldOwnerDispatches.map(({ messageId }) => messageId),
+		[answerId, answerId, followUpId],
+	);
+	assert.equal(
+		harness.host.session.sessionManager.getEntries().some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.message-delivery" &&
+				JSON.stringify(entry.details) ===
+					JSON.stringify({ messages: [followUpSource] }),
+		),
+		false,
+	);
+
+	heldOwnerDispatches[2]!.dispatch();
+	await waitForCondition(() =>
+		harness.host.session.sessionManager.getEntries().some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.message-delivery" &&
+				JSON.stringify(entry.details) ===
+					JSON.stringify({ messages: [followUpSource] }),
+		),
+	);
+	heldOwnerDispatches[1]!.dispatch();
+	await harness.view.reachSafeBoundary();
+	assert.equal(
+		harness.host.session.sessionManager.getEntries().filter(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.message-delivery" &&
+				JSON.stringify(entry.details) ===
+					JSON.stringify({ messages: [followUpSource] }),
+		).length,
+		1,
+	);
+
+	await harness.coordinator.shutdown(async () =>
+		harness.host.runtime.dispose(),
+	);
+});
+
+test("Answer retrievals re-arbitrate when direct Answer Delivery commits first", async (t) => {
+	let markAnswerDispatchHeld!: () => void;
+	const answerDispatchHeld = new Promise<void>((resolve) => {
+		markAnswerDispatchHeld = resolve;
+	});
+	let releaseAnswerDispatch!: () => void;
+	let markAnswerFreezeHeld!: () => void;
+	const answerFreezeHeld = new Promise<void>((resolve) => {
+		markAnswerFreezeHeld = resolve;
+	});
+	let releaseAnswerFreeze!: () => Promise<void>;
 	const harness = await createDormantChildHarness(t, {
 		scheduleDeliveryDispatch: ({ kind }, dispatch) => {
 			if (kind !== "answer") {
@@ -1323,11 +1662,16 @@ test("Agent Wait reports proof-only when a direct Answer Delivery commits first"
 			releaseAnswerDispatch = () => dispatch();
 			markAnswerDispatchHeld();
 		},
+		afterSteerFreeze: ({ release }) => {
+			releaseAnswerFreeze = release;
+			markAnswerFreezeHeld();
+			return "defer";
+		},
 	});
 	const requestInput = {
 		operation: "request" as const,
 		targetAgentId: harness.childId,
-		question: "Let the direct Answer Delivery commit before Agent Wait.",
+		question: "Let the reserved direct Answer Delivery commit before Agent Wait.",
 	};
 	const requestToolCallId = "request-before-direct-answer-delivery";
 	harness.host.session.sessionManager.appendMessage(
@@ -1398,8 +1742,64 @@ test("Agent Wait reports proof-only when a direct Answer Delivery commits first"
 		toolCallId: answerToolCallId,
 	};
 	const answerId = deriveMessageId(answerSource);
+	const selectedRetryToolCallId = "retry-before-direct-answer-delivery-commits";
+	const selectedRetryInput = { operation: "retry" as const, messageId: requestId };
+	const waitToolCallId = "wait-before-direct-answer-delivery-commits";
+	const waitInput = { requestMessageIds: [requestId] };
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			[
+				fauxToolCall("agent_message", selectedRetryInput, {
+					id: selectedRetryToolCallId,
+				}),
+				fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
+			],
+			{ stopReason: "toolUse" },
+		),
+	);
+	const selectedRetryResult = await harness.view.message(
+		selectedRetryToolCallId,
+		selectedRetryInput,
+	);
+	assert.equal(
+		"disposition" in selectedRetryResult
+			? selectedRetryResult.disposition
+			: undefined,
+		"answer_delivered",
+	);
+	const selectedWaitResult = await harness.view.wait(
+		waitToolCallId,
+		waitInput,
+		new AbortController().signal,
+	);
+	assert.equal(selectedWaitResult.answers[0]?.disposition, "answer_delivered");
 
 	releaseAnswerDispatch();
+	await answerFreezeHeld;
+	const committedRetryResult = {
+		requestMessageId: requestId,
+		messageStatus: "unknown" as const,
+		reason: "inspection_incomplete" as const,
+	};
+	const selectedRetryResultMessage = {
+		role: "toolResult" as const,
+		toolCallId: selectedRetryToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text" as const, text: JSON.stringify(selectedRetryResult) }],
+		details: selectedRetryResult,
+		isError: false,
+		timestamp: Date.now(),
+	};
+	const guardedRetry = harness.view.guardToolResult(selectedRetryResultMessage);
+	assert.deepEqual(guardedRetry?.message, {
+		...selectedRetryResultMessage,
+		content: [{ type: "text", text: JSON.stringify(committedRetryResult) }],
+		details: committedRetryResult,
+	});
+	if (!guardedRetry) throw new Error("Request retry did not yield to direct Delivery");
+	harness.host.session.sessionManager.appendMessage(guardedRetry.message);
+
+	await releaseAnswerFreeze();
 	await waitForCondition(() =>
 		harness.host.session.sessionManager
 			.getEntries()
@@ -1432,34 +1832,37 @@ test("Agent Wait reports proof-only when a direct Answer Delivery commits first"
 		requestId,
 	);
 
-	const waitToolCallId = "wait-after-direct-answer-delivery";
-	const waitInput = { requestMessageIds: [requestId] };
-	harness.host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	assert.deepEqual(
-		await harness.view.wait(
-			waitToolCallId,
-			waitInput,
-			new AbortController().signal,
-		),
-		{
-			answers: [
-				{
-					disposition: "answer_already_delivered",
-					requestMessageId: requestId,
-					answerId,
-					deliveryEvidence: {
-						agentId: harness.host.session.sessionId,
-						entryId: directDeliveryEntry.id,
-					},
+	const committedWaitResult = {
+		answers: [
+			{
+				disposition: "answer_already_delivered" as const,
+				requestMessageId: requestId,
+				answerId,
+				deliveryEvidence: {
+					agentId: harness.host.session.sessionId,
+					entryId: directDeliveryEntry.id,
 				},
-			],
-		},
-	);
+			},
+		],
+	};
+	const selectedWaitResultMessage = {
+		role: "toolResult" as const,
+		toolCallId: waitToolCallId,
+		toolName: "agent_wait",
+		content: [{ type: "text" as const, text: JSON.stringify(selectedWaitResult) }],
+		details: selectedWaitResult,
+		isError: false,
+		timestamp: Date.now(),
+	};
+	const guarded = harness.view.guardToolResult(selectedWaitResultMessage);
+	assert.deepEqual(guarded?.message, {
+		...selectedWaitResultMessage,
+		content: [{ type: "text", text: JSON.stringify(committedWaitResult) }],
+		details: committedWaitResult,
+	});
+	if (!guarded) throw new Error("Agent Wait did not arbitrate direct Delivery proof");
+	harness.host.session.sessionManager.appendMessage(guarded.message);
+	harness.view.reconcileCommittedToolResults();
 
 	await harness.coordinator.shutdown(async () =>
 		harness.host.runtime.dispose(),

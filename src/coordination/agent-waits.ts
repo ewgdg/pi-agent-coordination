@@ -181,7 +181,18 @@ export class AgentWaitCoordinator {
 			pending.record.host.isCurrent(pending.handle) &&
 			!pending.record.host.currentRunFailed() &&
 			isDeepStrictEqual(message.details, pending.candidate)
-		) return undefined;
+		) {
+			// The candidate may have lost to direct Delivery before Pi commits it.
+			const current = this.#messages.waitAnswers(
+				callerAgentId,
+				pending.input.requestMessageIds,
+			);
+			if (current) {
+				if (isDeepStrictEqual(current, pending.candidate)) return undefined;
+				pending.candidate = current;
+				return { message: completedToolResult(message, current) };
+			}
+		}
 		this.#fence(callerAgentId, pending.toolCallId, FENCED_MESSAGE);
 		return { message: interruptedToolResult(message, FENCED_MESSAGE) };
 	}
@@ -311,6 +322,17 @@ export class AgentWaitCoordinator {
 
 function waitKey(agentId: string, toolCallId: string): string {
 	return JSON.stringify([agentId, toolCallId]);
+}
+
+function completedToolResult(
+	message: Extract<MessageEndEvent["message"], { role: "toolResult" }>,
+	result: AgentWaitResult,
+): Extract<MessageEndEvent["message"], { role: "toolResult" }> {
+	return {
+		...message,
+		content: [{ type: "text", text: JSON.stringify(result) }],
+		details: result,
+	};
 }
 
 function interruptedToolResult(

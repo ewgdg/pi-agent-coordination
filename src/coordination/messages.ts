@@ -1,3 +1,6 @@
+import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
+import { isDeepStrictEqual } from "node:util";
+
 import {
 	requireAgentRecord,
 	type AgentRecord,
@@ -140,14 +143,91 @@ export class MessageCoordinator {
 		return this.#requestEvidence.requireRequest(requestId).question;
 	}
 
+	// Re-arbitrate retrieval at the native commit edge so a direct Delivery that
+	// won after tool execution cannot leave a second requester-side proof.
+	guardResultCommit(
+		callerAgentId: string,
+		message: MessageEndEvent["message"],
+	): Readonly<{ message: MessageEndEvent["message"] }> | undefined {
+		if (
+			message.role !== "toolResult" ||
+			message.toolName !== "agent_message" ||
+			message.isError ||
+			typeof message.details !== "object" ||
+			message.details === null ||
+			!("disposition" in message.details) ||
+			message.details.disposition !== "answer_delivered"
+		) return undefined;
+		const caller = this.#requireAgent(callerAgentId);
+		const input = resolveCommittedAgentMessageInput({
+			agentId: callerAgentId,
+			transcript: caller.transcript.inspect(),
+			toolCallId: message.toolCallId,
+		});
+		if (input.operation !== "retry") return undefined;
+		const request = this.#requestEvidence.requireCallerAuthoredMessage(
+			caller,
+			input.messageId,
+		);
+		if (request.kind !== "request") return undefined;
+		const answer = this.#requestEvidence.findAnswer(request);
+		if (!answer) return undefined;
+		const expected = {
+			disposition: "answer_delivered" as const,
+			requestMessageId: request.messageId,
+			answerId: answer.messageId,
+			fromAgentId: answer.fromAgentId,
+			answer: answer.answer,
+			answerSource: answer.source,
+		};
+		if (!isDeepStrictEqual(message.details, expected)) return undefined;
+		const deliveryEvidence = inspectAnswerDelivery({
+			requesterAgentId: callerAgentId,
+			transcript: caller.transcript.inspect(),
+			answer,
+		}).deliveryEvidence;
+		const result = deliveryEvidence
+			? {
+				disposition: "answer_already_delivered" as const,
+				requestMessageId: request.messageId,
+				answerId: answer.messageId,
+				deliveryEvidence,
+			}
+			: this.#deliveryScheduler.hasDispatchReservation(
+				callerAgentId,
+				answer.messageId,
+			)
+				? {
+					requestMessageId: request.messageId,
+					messageStatus: "unknown" as const,
+					reason: "inspection_incomplete" as const,
+				}
+				: undefined;
+		if (!result) return undefined;
+		return {
+			message: {
+				...message,
+				content: [{ type: "text", text: JSON.stringify(result) }],
+				details: result,
+			},
+		};
+	}
+
 	waitAnswers(
 		callerAgentId: string,
 		requestMessageIds: readonly string[],
 	): AgentWaitResult | undefined {
 		const caller = this.#requireAgent(callerAgentId);
-		const answers = requestMessageIds.map((requestId) =>
-			this.#requestEvidence.callerWaitAnswer(caller, requestId)
-		);
+		const answers = requestMessageIds.map((requestId) => {
+			const answer = this.#requestEvidence.callerWaitAnswer(caller, requestId);
+			return answer?.disposition === "answer_delivered" &&
+				this.#deliveryScheduler.hasDispatchReservation(
+					callerAgentId,
+					answer.answerId,
+				)
+				? undefined
+				: answer;
+		});
 		return answers.every((answer) => answer !== undefined)
 			? { answers }
 			: undefined;
@@ -729,6 +809,19 @@ export class MessageCoordinator {
 					deliveryEvidence: answerDelivery.deliveryEvidence,
 				});
 				if (canonicalAnswer.state !== "canonical") {
+					return {
+						requestMessageId: request.messageId,
+						messageStatus: "unknown",
+						reason: "inspection_incomplete",
+					};
+				}
+				if (
+					!answerDelivery.deliveryEvidence &&
+					this.#deliveryScheduler.hasDispatchReservation(
+						requester.identity.agentId,
+						answer.messageId,
+					)
+				) {
 					return {
 						requestMessageId: request.messageId,
 						messageStatus: "unknown",

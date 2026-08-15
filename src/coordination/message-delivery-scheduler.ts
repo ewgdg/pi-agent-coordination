@@ -48,8 +48,9 @@ export type SteerFreezeHandler = (
 	context: Readonly<{
 		recipientAgentId: string;
 		messageIds: readonly string[];
+		release(): Promise<void>;
 	}>,
-) => void;
+) => void | "defer";
 
 export type ResumeReservationHandler = (
 	context: Readonly<{
@@ -86,9 +87,10 @@ type ActiveDeferredDelivery = {
 	deliveryCommitted: boolean;
 };
 
-type FrozenSteerBatch = Readonly<{
-	messageIds: readonly string[];
-}>;
+type FrozenSteerBatch = {
+	deliveries: readonly ScheduledMessageDelivery[];
+	dispatched: boolean;
+};
 
 type ReservedResume = Readonly<{
 	delivery: ScheduledMessageDelivery;
@@ -234,6 +236,15 @@ export class MessageDeliveryScheduler {
 
 	requestQueueAdvancedInLane(record: AgentRecord): Promise<void> {
 		return this.#drainInLane(record);
+	}
+
+	hasDispatchReservation(recipientAgentId: string, messageId: string): boolean {
+		return this.#activeDeferredByAgent.get(recipientAgentId)?.delivery.messageId ===
+			messageId ||
+			this.#frozenSteerByAgent.get(recipientAgentId)?.deliveries.some(
+				(delivery) => delivery.messageId === messageId,
+			) === true ||
+			this.#activeResumeByAgent.get(recipientAgentId)?.delivery.messageId === messageId;
 	}
 
 	prepareInterruptionInLane(record: AgentRecord): void {
@@ -398,7 +409,9 @@ export class MessageDeliveryScheduler {
 		if (!pending || pending.size === 0) return;
 		if (record.host.currentWorkState() !== "settled") return;
 		const eligible = this.#eligibleDeliveries(pending);
-		const delivery = eligible[0];
+		const steer = this.#eligibleSteerDeliveries(eligible);
+		const selected = steer.length > 0 ? steer : eligible.slice(0, 1);
+		const delivery = selected[0];
 		if (!delivery) return;
 		if (!bypassDeliveryDispatchHook && this.#scheduleDeliveryDispatchHook) {
 			this.#scheduleDeliveryDispatchHook(
@@ -408,13 +421,15 @@ export class MessageDeliveryScheduler {
 					kind: scheduledDeliveryKind(delivery),
 				},
 				() => {
-					void record.host.lane.run(() => this.#drainInLane(record, true));
+					void record.host.lane.run(() =>
+						this.#continueDeliveryDispatchInLane(record, selected)
+					);
 				},
 			);
 			return;
 		}
-		if (eligible.some(({ deliveryMode }) => deliveryMode === "steer")) {
-			this.#freezeSteerInLane(record);
+		if (steer.length > 0) {
+			this.#freezeSteerInLane(record, steer);
 			return;
 		}
 		// A settled Run may become active before Pi processes admission. followUp
@@ -432,6 +447,21 @@ export class MessageDeliveryScheduler {
 			completion,
 			deliveryCommitted: false,
 		});
+	}
+
+	#continueDeliveryDispatchInLane(
+		record: AgentRecord,
+		selected: readonly ScheduledDelivery[],
+	): Promise<void> {
+		this.#removeProvenDeliveriesInLane(record);
+		const pending = this.#pendingByAgent.get(record.identity.agentId);
+		if (!pending) return this.#drainInLane(record);
+		const eligible = this.#eligibleDeliveries(pending);
+		const steer = this.#eligibleSteerDeliveries(eligible);
+		const current = steer.length > 0 ? steer : eligible.slice(0, 1);
+		const stillSelected = current.length === selected.length &&
+			current.every((delivery, index) => delivery === selected[index]);
+		return this.#drainInLane(record, stillSelected);
 	}
 
 	async #startResumeInLane(record: AgentRecord, reserved: ReservedResume): Promise<void> {
@@ -472,36 +502,55 @@ export class MessageDeliveryScheduler {
 		this.#removePendingDeliveryReason(record);
 	}
 
-	#freezeSteerInLane(record: AgentRecord): void {
+	#freezeSteerInLane(
+		record: AgentRecord,
+		steer: readonly ScheduledMessageDelivery[] = [],
+	): void {
 		if (this.#hasUnprovenFrozenBatch(record)) return;
-		const pending = this.#pendingByAgent.get(record.identity.agentId);
-		if (!pending) return;
-		const steerCandidates = this.#eligibleDeliveries(pending).filter(
-			(delivery): delivery is ScheduledMessageDelivery =>
-				delivery.deliveryMode === "steer" && "deliveryItem" in delivery,
-		);
-		const suppressedAfterBatch = new Set(
-			steerCandidates.flatMap(({ suppressesAfterCommitMessageId }) =>
-				suppressesAfterCommitMessageId
-					? [suppressesAfterCommitMessageId]
-					: []
-			),
-		);
-		// Deliver a Cancellation before its still-waiting Request. Batching both
-		// would wake the responder with work that the same batch withdraws.
-		const steer = steerCandidates.filter(
-			({ messageId }) => !suppressedAfterBatch.has(messageId),
-		);
+		if (steer.length === 0) {
+			const pending = this.#pendingByAgent.get(record.identity.agentId);
+			if (!pending) return;
+			steer = this.#eligibleSteerDeliveries(this.#eligibleDeliveries(pending));
+		}
 		if (steer.length === 0) return;
-		const messageIds = steer.map(({ messageId }) => messageId);
-		this.#frozenSteerByAgent.set(record.identity.agentId, { messageIds });
-		this.#afterSteerFreeze?.({
-			recipientAgentId: record.identity.agentId,
-			messageIds,
-		});
+		const frozen: FrozenSteerBatch = { deliveries: steer, dispatched: false };
+		this.#frozenSteerByAgent.set(record.identity.agentId, frozen);
+		const release = () => record.host.lane.run(() =>
+			this.#dispatchFrozenSteerInLane(record, frozen)
+		);
+		if (
+			this.#afterSteerFreeze?.({
+				recipientAgentId: record.identity.agentId,
+				messageIds: steer.map(({ messageId }) => messageId),
+				release,
+			}) === "defer"
+		) return;
+		this.#dispatchFrozenSteerInLane(record, frozen);
+	}
+
+	#dispatchFrozenSteerInLane(
+		record: AgentRecord,
+		frozen: FrozenSteerBatch,
+	): void {
+		if (
+			this.#frozenSteerByAgent.get(record.identity.agentId) !== frozen ||
+			frozen.dispatched
+		) return;
+		// Retrieval can commit at the freeze boundary. Revalidate before handing the
+		// immutable batch to Pi, where an individual queued Delivery cannot be recalled.
+		this.#removeProvenDeliveriesInLane(record);
+		if (this.#frozenSteerByAgent.get(record.identity.agentId) !== frozen) return;
+		const pending = this.#pendingByAgent.get(record.identity.agentId);
+		const unprovenSteer = frozen.deliveries.filter(
+			(delivery) => pending?.get(delivery.messageId) === delivery,
+		);
+		if (unprovenSteer.length === 0) return;
+		frozen.dispatched = true;
 		record.host.deliverInLane({
 			kind: "custom",
-			message: createMessageDelivery(steer.map(({ deliveryItem }) => deliveryItem)),
+			message: createMessageDelivery(
+				unprovenSteer.map(({ deliveryItem }) => deliveryItem),
+			),
 			triggerTurn: true,
 			deliverAs: "steer",
 		});
@@ -524,9 +573,10 @@ export class MessageDeliveryScheduler {
 		}
 		if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);
 		const frozen = this.#frozenSteerByAgent.get(record.identity.agentId);
-		if (frozen && frozen.messageIds.every((messageId) => !pending.has(messageId))) {
-			this.#frozenSteerByAgent.delete(record.identity.agentId);
-		}
+		if (
+			frozen &&
+			frozen.deliveries.every(({ messageId }) => !pending.has(messageId))
+		) this.#frozenSteerByAgent.delete(record.identity.agentId);
 		this.#removePendingDeliveryReason(record);
 	}
 
@@ -546,11 +596,30 @@ export class MessageDeliveryScheduler {
 		);
 	}
 
+	#eligibleSteerDeliveries(
+		eligible: readonly ScheduledDelivery[],
+	): ScheduledMessageDelivery[] {
+		const steer = eligible.filter(
+			(delivery): delivery is ScheduledMessageDelivery =>
+				delivery.deliveryMode === "steer" && "deliveryItem" in delivery,
+		);
+		const suppressedAfterBatch = new Set(
+			steer.flatMap(({ suppressesAfterCommitMessageId }) =>
+				suppressesAfterCommitMessageId
+					? [suppressesAfterCommitMessageId]
+					: []
+			),
+		);
+		// Deliver a Cancellation before its still-waiting Request. Batching both
+		// would wake the responder with work that the same batch withdraws.
+		return steer.filter(({ messageId }) => !suppressedAfterBatch.has(messageId));
+	}
+
 	#hasUnprovenFrozenBatch(record: AgentRecord): boolean {
 		const frozen = this.#frozenSteerByAgent.get(record.identity.agentId);
 		if (!frozen) return false;
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
-		return frozen.messageIds.some((messageId) => pending?.has(messageId));
+		return frozen.deliveries.some(({ messageId }) => pending?.has(messageId));
 	}
 
 	#hasPendingScheduling(record: AgentRecord): boolean {

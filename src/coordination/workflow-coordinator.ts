@@ -474,6 +474,7 @@ export class WorkflowCoordinator {
 			},
 			guardToolResult: (message) =>
 				this.#humanRequests.guardResultCommit(agentId, message) ??
+				this.#messages.guardResultCommit(agentId, message) ??
 				this.#agentWaits.guardResultCommit(agentId, message),
 			reconcileHumanToolResults: () =>
 				this.#humanRequests.reconcileCommittedResults(agentId),

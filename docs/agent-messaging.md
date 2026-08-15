@@ -87,7 +87,7 @@ Retrying a Request selects one authoritative outcome:
 - `messageStatus: "sent"` reports that the same undelivered Request was readmitted under its authored mode.
 - `messageStatus: "unknown"` reports that Request readmission may have happened but confirmation was lost; poll before retrying again.
 
-Incomplete or contradictory evidence schedules nothing. A later explicit retry is required when a concurrent Answer commits just after inspection.
+Incomplete or contradictory evidence schedules nothing. If direct Answer Delivery already owns a frozen or dispatched scheduling reservation but has not committed proof yet, retry reports `messageStatus: "unknown"` with `reason: "inspection_incomplete"` rather than competing with that Delivery. The native retry result is re-arbitrated immediately before commitment: a newly reserved direct Delivery changes a selected retrieval to that same indeterminate outcome, while newly committed direct proof changes it to `answer_already_delivered`. A later explicit retry is required after an indeterminate result.
 
 ## Wait for selected Answers
 
@@ -104,7 +104,7 @@ Use `agent_wait` when the Agent's next action requires every selected outbound R
 
 The list must be non-empty and contain unique Request identities authored by the caller. Already-cancelled selections reject the call rather than waiting for an impossible Answer. The tool is sequential. It parks the exact caller Run and releases its Workflow execution capacity until every selected Request has a canonical committed Answer. The wait does not retry Request Delivery, cancel Requests, or create durable Wait state.
 
-Results preserve the supplied Request order. A committed Answer not previously delivered to the requester returns `answer_delivered` with the immutable Answer and its source; the committed `agent_wait` tool result becomes that Answer's requester-side Delivery proof. An Answer with existing requester-side Delivery proof instead returns `answer_already_delivered` with the prior proof and does not duplicate the body.
+Results preserve the supplied Request order. A committed Answer not previously delivered to the requester returns `answer_delivered` with the immutable Answer and its source; the committed `agent_wait` tool result becomes that Answer's requester-side Delivery proof. An Answer with existing requester-side Delivery proof instead returns `answer_already_delivered` with the prior proof and does not duplicate the body. If direct Answer Delivery already owns its frozen or dispatched scheduling reservation, the Wait remains parked until that direct Delivery commits and then returns proof-only. Pi re-arbitrates the selected aggregate at its native result-commit edge, replacing stale Answer bodies with proof-only slots when direct Delivery won meanwhile.
 
 The wait registers before its final evidence inspection, responds to live Answer progress, and reconciles canonical transcript evidence every five seconds as an event-loss fallback. A successor Run may call `agent_wait` with the same Request identities to retrieve Answers committed while the earlier Run was unavailable. Unfinished Wait calls and their timers are volatile and are not reconstructed after host loss.
 
