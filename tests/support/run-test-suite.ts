@@ -1,10 +1,13 @@
 import { readdirSync } from "node:fs";
 import { basename, join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+import { runTestProcess } from "./test-process-supervisor.ts";
 
 const FAST_TEST_CONCURRENCY = 4;
 const PROCESS_TEST_CONCURRENCY = 1;
+const FAST_TEST_TIMEOUT_MS = 5_000;
+const PROCESS_TEST_TIMEOUT_MS = 30_000;
 
 // These files launch real Pi processes, PTYs, sockets, or process-visible model
 // brokers. Keeping the boundary explicit prevents machine CPU count from turning
@@ -51,10 +54,19 @@ if (missingProcessFiles.length > 0) {
 	throw new Error(`Configured process tests do not exist: ${missingProcessFiles.join(", ")}`);
 }
 
-const selectedFiles = allTestFiles
-	.filter((file) => PROCESS_TEST_FILES.has(file) === (suite === "process"))
+const suiteFiles = allTestFiles
+	.filter((file) => PROCESS_TEST_FILES.has(file) === (suite === "process"));
+const fileSelectors = process.argv.slice(3)
+	.filter((argument) => argument.startsWith("--file="));
+if (fileSelectors.length > 1) throw new Error("Select at most one test file");
+const selectedFile = fileSelectors[0]?.slice("--file=".length);
+if (selectedFile && !suiteFiles.includes(selectedFile)) {
+	throw new Error(`Test file is not in the ${suite} suite: ${selectedFile}`);
+}
+const selectedFiles = (selectedFile ? [selectedFile] : suiteFiles)
 	.map((file) => join(testsDirectory, file));
-const forwardedArguments = process.argv.slice(3);
+const forwardedArguments = process.argv.slice(3)
+	.filter((argument) => !argument.startsWith("--file="));
 if (forwardedArguments.includes("--list")) {
 	for (const file of selectedFiles) console.log(basename(file));
 	process.exit(0);
@@ -63,14 +75,14 @@ if (forwardedArguments.includes("--list")) {
 const concurrency = suite === "fast"
 	? FAST_TEST_CONCURRENCY
 	: PROCESS_TEST_CONCURRENCY;
-const result = spawnSync(process.execPath, [
+const timeoutMs = suite === "fast"
+	? FAST_TEST_TIMEOUT_MS
+	: PROCESS_TEST_TIMEOUT_MS;
+process.exitCode = await runTestProcess([
 	"--test",
 	`--test-concurrency=${concurrency}`,
+	`--test-timeout=${timeoutMs}`,
 	"--test-reporter=dot",
 	...forwardedArguments,
 	...selectedFiles,
-], { stdio: "inherit" });
-
-if (result.error) throw result.error;
-if (result.signal) process.kill(process.pid, result.signal);
-process.exitCode = result.status ?? 1;
+]);

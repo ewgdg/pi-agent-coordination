@@ -1,0 +1,460 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmdirSync,
+	writeFileSync,
+} from "node:fs";
+import { constants as osConstants } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+
+const PROCESS_SCAN_INTERVAL_MS = 10;
+const TERMINATION_GRACE_MS = 100;
+const SUPERVISED_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
+
+export async function runTestProcess(arguments_: readonly string[]): Promise<number> {
+	const cgroup = LinuxCgroupOwner.tryCreate();
+	try {
+		await cgroup?.startGuardian();
+	} catch (error) {
+		await cgroup?.dispose();
+		throw error;
+	}
+	const childEnvironment = cgroup?.testEnvironment() ?? process.env;
+	// Isolate the test runner from terminal/CI group signals. The supervisor must
+	// remain alive long enough to clean descendants in separate PTY process groups.
+	const child = cgroup
+		? spawn("/bin/sh", [
+			"-c",
+			'kill -STOP "$$"; exec "$@"',
+			"pi-test-runner",
+			process.execPath,
+			...arguments_,
+		], { stdio: "inherit", detached: true, env: childEnvironment })
+		: spawn(process.execPath, [...arguments_], {
+			stdio: "inherit",
+			detached: process.platform !== "win32",
+			env: childEnvironment,
+		});
+	const processTree: ProcessOwner = cgroup ?? new ProcessTreeOwner(child.pid!);
+	const childExit = new Promise<Readonly<{
+		code: number | null;
+		signal: NodeJS.Signals | null;
+	}>>((resolve, reject) => {
+		child.once("error", reject);
+		child.once("exit", (code, signal) => resolve({ code, signal }));
+	});
+	let requestTermination!: (signal: NodeJS.Signals) => void;
+	const terminationRequested = new Promise<NodeJS.Signals>((resolve) => {
+		requestTermination = resolve;
+	});
+	const handlers = new Map<NodeJS.Signals, () => void>();
+	for (const signal of SUPERVISED_SIGNALS) {
+		const handler = () => requestTermination(signal);
+		handlers.set(signal, handler);
+		process.on(signal, handler);
+	}
+
+	try {
+		await cgroup?.admitStoppedRoot(child.pid!);
+		const outcome = await Promise.race([
+			childExit.then((exit) => ({ kind: "exit" as const, exit })),
+			terminationRequested.then((signal) => ({ kind: "termination" as const, signal })),
+			...(cgroup ? [cgroup.guardianFailure] : []),
+		]);
+		if (outcome.kind === "exit") {
+			processTree.killSurvivors();
+			return outcome.exit.signal
+				? 128 + signalNumber(outcome.exit.signal)
+				: outcome.exit.code ?? 1;
+		}
+		await processTree.terminate(outcome.signal, childExit);
+		return 128 + signalNumber(outcome.signal);
+	} finally {
+		await processTree.dispose();
+		for (const [signal, handler] of handlers) process.off(signal, handler);
+	}
+}
+
+type ProcessIdentity = Readonly<{
+	pid: number;
+	startTime: string;
+}>;
+
+type ProcessObservation = ProcessIdentity & Readonly<{ ppid: number }>;
+
+type ProcessOwner = Readonly<{
+	terminate(signal: NodeJS.Signals, rootExit: Promise<unknown>): Promise<void>;
+	killSurvivors(): void;
+	dispose(): Promise<void>;
+}>;
+
+class LinuxCgroupOwner implements ProcessOwner {
+	readonly #path: string;
+	#root: ProcessIdentity | undefined;
+	#guardian: ChildProcess | undefined;
+	#guardianFailure: Promise<never> | undefined;
+	#guardianStopping = false;
+
+	private constructor(path: string) {
+		this.#path = path;
+	}
+
+	testEnvironment(): NodeJS.ProcessEnv {
+		if (!this.#guardian?.pid) {
+			throw new Error("Test process guardian has no process identity");
+		}
+		return { ...process.env, PI_TEST_GUARDIAN_PID: String(this.#guardian.pid) };
+	}
+
+	get guardianFailure(): Promise<never> {
+		if (!this.#guardianFailure) {
+			throw new Error("Test process guardian has not started");
+		}
+		return this.#guardianFailure;
+	}
+
+	static tryCreate(): LinuxCgroupOwner | undefined {
+		if (process.platform !== "linux") return undefined;
+		const membership = readFileSync("/proc/self/cgroup", "utf8")
+			.split("\n")
+			.find((line) => line.startsWith("0::"));
+		if (!membership) return undefined;
+		const parent = join("/sys/fs/cgroup", membership.slice("0::".length));
+		if (!existsSync(join(parent, "cgroup.kill"))) return undefined;
+		reapEmptyTestCgroups(parent);
+		const path = join(parent, `pi-test-${process.pid}-${randomUUID()}`);
+		try {
+			mkdirSync(path);
+			return new LinuxCgroupOwner(path);
+		} catch (error) {
+			if (["EACCES", "ENOENT", "EPERM", "EROFS"].includes(
+				(error as NodeJS.ErrnoException).code ?? "",
+			)) return undefined;
+			throw error;
+		}
+	}
+
+	async startGuardian(): Promise<void> {
+		const guardian = spawn(process.execPath, [
+			new URL("./test-process-guardian.ts", import.meta.url).pathname,
+		], {
+			detached: true,
+			env: {
+				...process.env,
+				PI_TEST_SUPERVISOR_PID: String(process.pid),
+				PI_TEST_SUPERVISOR_START_TIME: statFields(process.pid)[19]!,
+				PI_TEST_CGROUP_PATH: this.#path,
+			},
+			stdio: ["ignore", "ignore", "ignore", "ipc"],
+		});
+		this.#guardian = guardian;
+		this.#guardianFailure = new Promise<never>((_resolve, reject) => {
+			guardian.on("error", (error) => {
+				if (!this.#guardianStopping) reject(error);
+			});
+			guardian.on("exit", (code, signal) => {
+				if (!this.#guardianStopping) reject(new Error(
+					`Test process guardian exited unexpectedly: ${code ?? signal}`,
+				));
+			});
+		});
+		void this.#guardianFailure.catch(() => undefined);
+		await waitForGuardianReady(guardian);
+	}
+
+	async admitStoppedRoot(pid: number): Promise<void> {
+		const deadline = Date.now() + 1_000;
+		while (Date.now() < deadline) {
+			if (processState(pid) === "T") {
+				try {
+					writeFileSync(join(this.#path, "cgroup.procs"), String(pid));
+					this.#root = { pid, startTime: statFields(pid)[19]! };
+					process.kill(pid, "SIGCONT");
+					return;
+				} catch (error) {
+					signalPid(pid, "SIGKILL");
+					throw error;
+				}
+			}
+			await new Promise<void>((resolve) => setTimeout(resolve, 1));
+		}
+		signalPid(pid, "SIGKILL");
+		throw new Error("Test runner did not stop for cgroup admission");
+	}
+
+	async terminate(signal: NodeJS.Signals, rootExit: Promise<unknown>): Promise<void> {
+		if (this.#root) signalIdentity(this.#root, signal);
+		await Promise.race([
+			rootExit,
+			new Promise<void>((resolve) => setTimeout(resolve, TERMINATION_GRACE_MS)),
+		]);
+		this.killSurvivors();
+		await rootExit;
+	}
+
+	killSurvivors(): void {
+		try {
+			writeFileSync(join(this.#path, "cgroup.kill"), "1");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+
+	async dispose(): Promise<void> {
+		this.killSurvivors();
+		const deadline = Date.now() + 1_000;
+		while (Date.now() < deadline && this.#isPopulated()) {
+			await new Promise<void>((resolve) => setTimeout(resolve, 1));
+		}
+		try {
+			rmdirSync(this.#path);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		} finally {
+			this.#guardianStopping = true;
+			await stopGuardian(this.#guardian);
+			this.#guardian = undefined;
+		}
+	}
+
+	#isPopulated(): boolean {
+		try {
+			return readFileSync(join(this.#path, "cgroup.events"), "utf8")
+				.split("\n")
+				.some((line) => line === "populated 1");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+			throw error;
+		}
+	}
+}
+
+class ProcessTreeOwner implements ProcessOwner {
+	readonly #rootPid: number;
+	readonly #owned = new Map<number, ProcessIdentity>();
+	readonly #scanTimer: NodeJS.Timeout | undefined;
+
+	constructor(rootPid: number) {
+		this.#rootPid = rootPid;
+		if (process.platform === "linux") {
+			this.#refresh();
+			this.#scanTimer = setInterval(
+				() => this.#refresh(),
+				PROCESS_SCAN_INTERVAL_MS,
+			);
+			this.#scanTimer.unref();
+		}
+	}
+
+	async terminate(signal: NodeJS.Signals, rootExit: Promise<unknown>): Promise<void> {
+		this.#refresh();
+		this.#signalRoot(signal);
+		await Promise.race([
+			rootExit,
+			new Promise<void>((resolve) => setTimeout(resolve, TERMINATION_GRACE_MS)),
+		]);
+		this.killSurvivors();
+		await rootExit;
+	}
+
+	killSurvivors(): void {
+		this.#refresh();
+		if (process.platform === "linux") {
+			for (const identity of [...this.#owned.values()].reverse()) {
+				signalIdentity(identity, "SIGKILL");
+			}
+			return;
+		}
+		if (process.platform !== "win32") {
+			try {
+				process.kill(-this.#rootPid, "SIGKILL");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+			}
+			return;
+		}
+		try {
+			process.kill(this.#rootPid, "SIGKILL");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		}
+	}
+
+	dispose(): Promise<void> {
+		if (this.#scanTimer) clearInterval(this.#scanTimer);
+		return Promise.resolve();
+	}
+
+	#signalRoot(signal: NodeJS.Signals): void {
+		const root = this.#owned.get(this.#rootPid);
+		if (root) signalIdentity(root, signal);
+	}
+
+	#refresh(): void {
+		if (process.platform !== "linux") return;
+		const observed = observeProcesses();
+		const root = observed.get(this.#rootPid);
+		const ownedRoot = this.#owned.get(this.#rootPid);
+		if (root && (!ownedRoot || observationMatches(ownedRoot, root))) {
+			this.#owned.set(this.#rootPid, identityOf(root));
+		}
+		let added = true;
+		while (added) {
+			added = false;
+			for (const process_ of observed.values()) {
+				if (this.#owned.has(process_.pid)) continue;
+				const parent = this.#owned.get(process_.ppid);
+				if (!parent || !observationMatches(parent, observed.get(parent.pid))) continue;
+				this.#owned.set(process_.pid, identityOf(process_));
+				added = true;
+			}
+		}
+	}
+}
+
+function observeProcesses(): Map<number, ProcessObservation> {
+	const processes = new Map<number, ProcessObservation>();
+	for (const entry of readdirSync("/proc", { withFileTypes: true })) {
+		if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+		const pid = Number(entry.name);
+		try {
+			const fields = statFields(pid);
+			processes.set(pid, {
+				pid,
+				ppid: Number(fields[1]),
+				startTime: fields[19]!,
+			});
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	}
+	return processes;
+}
+
+function identityOf(observation: ProcessObservation): ProcessIdentity {
+	return { pid: observation.pid, startTime: observation.startTime };
+}
+
+function observationMatches(
+	identity: ProcessIdentity,
+	observation: ProcessObservation | undefined,
+): boolean {
+	return observation?.startTime === identity.startTime;
+}
+
+function waitForGuardianReady(guardian: ChildProcess): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			cleanup();
+			reject(new Error("Test process guardian readiness timed out"));
+		}, 1_000);
+		const onMessage = (message: unknown) => {
+			cleanup();
+			if (message === "ready") resolve();
+			else reject(new Error("Test process guardian sent an invalid handshake"));
+		};
+		const onError = (error: Error) => {
+			cleanup();
+			reject(error);
+		};
+		const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+			cleanup();
+			reject(new Error(
+				`Test process guardian exited before readiness: ${code ?? signal}`,
+			));
+		};
+		const cleanup = () => {
+			clearTimeout(timeout);
+			guardian.off("message", onMessage);
+			guardian.off("error", onError);
+			guardian.off("exit", onExit);
+		};
+		guardian.on("message", onMessage);
+		guardian.on("error", onError);
+		guardian.on("exit", onExit);
+	});
+}
+
+async function stopGuardian(guardian: ChildProcess | undefined): Promise<void> {
+	if (!guardian || guardian.exitCode !== null || guardian.signalCode !== null) return;
+	const exit = new Promise<void>((resolve) => guardian.once("exit", () => resolve()));
+	guardian.send?.("release");
+	await Promise.race([
+		exit,
+		new Promise<void>((resolve) => setTimeout(resolve, 100)),
+	]);
+	if (guardian.exitCode === null && guardian.signalCode === null) {
+		guardian.kill("SIGKILL");
+		await exit;
+	}
+}
+
+function reapEmptyTestCgroups(parent: string): void {
+	for (const entry of readdirSync(parent, { withFileTypes: true })) {
+		if (!entry.isDirectory() || !entry.name.startsWith("pi-test-")) continue;
+		const ownerPid = Number(/^pi-test-(\d+)-/.exec(entry.name)?.[1]);
+		const ownerState = Number.isSafeInteger(ownerPid)
+			? processState(ownerPid)
+			: undefined;
+		if (ownerState && ownerState !== "Z") continue;
+		const path = join(parent, entry.name);
+		try {
+			const populated = readFileSync(join(path, "cgroup.events"), "utf8")
+				.split("\n")
+				.some((line) => line === "populated 1");
+			if (!populated) rmdirSync(path);
+		} catch (error) {
+			if (!["EBUSY", "ENOENT", "ENOTEMPTY"].includes(
+				(error as NodeJS.ErrnoException).code ?? "",
+			)) throw error;
+		}
+	}
+}
+
+function processState(pid: number): string | undefined {
+	try {
+		return statFields(pid)[0];
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+function signalPid(pid: number, signal: NodeJS.Signals): void {
+	try {
+		process.kill(pid, signal);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+	}
+}
+
+function signalIdentity(identity: ProcessIdentity, signal: NodeJS.Signals): void {
+	if (!sameProcess(identity)) return;
+	try {
+		process.kill(identity.pid, signal);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+	}
+}
+
+function sameProcess(identity: ProcessIdentity): boolean {
+	try {
+		return statFields(identity.pid)[19] === identity.startTime;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw error;
+	}
+}
+
+function statFields(pid: number): string[] {
+	const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+	return stat.slice(stat.lastIndexOf(")") + 2).trim().split(" ");
+}
+
+function signalNumber(signal: NodeJS.Signals): number {
+	return osConstants.signals[signal] ?? 1;
+}

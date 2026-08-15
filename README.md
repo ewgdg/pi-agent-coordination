@@ -43,7 +43,11 @@ Maintainers can run the focused compatibility gate with:
 npm run test:conformance
 ```
 
-`npm test` remains the complete regression suite. During development, `npm run test:fast` runs in-memory tests with bounded parallelism, while `npm run test:process` runs real process, PTY, socket, and process-visible-model tests serially.
+`npm test` remains the complete regression suite. During development, `npm run test:fast` runs in-memory tests with bounded parallelism, while `npm run test:process` runs real process, PTY, socket, and process-visible-model tests serially. Both runners impose per-test deadlines. On Linux, the supervisor contains the complete Node/PTY descendant tree in a dedicated cgroup so an interrupted run cannot leave hot workers behind. Run one process-heavy file without bypassing that supervision:
+
+```bash
+npm run test:process -- --file=agent-request.test.ts
+```
 
 ## Trust and persistence
 
