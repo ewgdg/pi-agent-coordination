@@ -445,6 +445,72 @@ test("shutdown fenced before projection binding observes accepted startup cancel
 	assert.equal(host.observe().phase, "dormant");
 });
 
+test("starting-Run termination fences its projection and queued successor admission", async () => {
+	const resource = createRunResource();
+	const successorResource = createRunResource();
+	let rejectReady!: (error: unknown) => void;
+	const ready = new Promise<void>((_resolve, reject) => {
+		rejectReady = reject;
+	});
+	let inputFenced = false;
+	let disposal: Promise<void> | undefined;
+	const nativeProjection = resource.projection;
+	const projection: HostedAgentProjection = {
+		...nativeProjection,
+		ready: () => ready,
+		fenceInputSubmissions() {
+			inputFenced = true;
+		},
+		inputSubmissionIsFenced: () => inputFenced,
+		cancelInitialization(error) {
+			rejectReady(error);
+			disposal ??= nativeProjection.dispose();
+			return disposal;
+		},
+		dispose() {
+			disposal ??= nativeProjection.dispose();
+			return disposal;
+		},
+	};
+	let runtimeStarts = 0;
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "starting-termination-fence-agent",
+		startSession: async () => {
+			runtimeStarts += 1;
+			return runtimeStarts === 1
+				? { ...resource.startedRunWithProjection(projection), ready }
+				: successorResource.startedRun;
+		},
+	});
+	const startup = host.lane.run(() => host.startInLane());
+	void startup.catch(() => undefined);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(host.currentProjection(), projection);
+	const inputSubmission = host.captureProjectionInputSubmission(1);
+	assert.ok(inputSubmission);
+	const terminationError = new Error("terminate exact starting Run");
+	const termination = host.requestRuntimeInitializationTermination(
+		projection,
+		terminationError,
+	);
+	assert.ok(termination);
+	const queuedSuccessor = host.lane.run(() => host.startInLane());
+
+	assert.equal(await termination.cancellation, true);
+	await assert.rejects(startup, terminationError);
+	await assert.rejects(queuedSuccessor, /run_termination_pending/);
+	assert.equal(host.projectionInputSubmissionIsFenced(inputSubmission), true);
+	assert.equal(
+		host.completeRuntimeInitializationTerminationInLane(termination),
+		true,
+	);
+	assert.equal(host.observe().phase, "dormant");
+
+	const successor = await host.lane.run(() => host.startInLane());
+	assert.equal(successor.sequence, 2);
+	assert.equal(runtimeStarts, 2);
+});
+
 test("a naturally rejected startup remains Run Failure after a pre-binding shutdown fence", async () => {
 	const resource = createRunResource();
 	let markPreparationStarted!: () => void;

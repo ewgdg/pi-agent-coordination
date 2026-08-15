@@ -13,7 +13,9 @@ import type {
 	AgentRuntimeWorkState,
 	EffectiveRuntimeSnapshot,
 	InterruptionHoldHandle,
+	ProjectionInputSubmission,
 	ResidualRequestRelationships,
+	RuntimeInitializationTermination,
 	ToolBatchClassification,
 	TranscriptCommitConfirmation,
 } from "./agent-runtime-host.ts";
@@ -91,10 +93,15 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		Set<string>
 	>();
 	readonly #trackedOperations = new Set<Promise<void>>();
+	readonly #inputSubmissionProjections = new WeakMap<
+		ProjectionInputSubmission,
+		NonNullable<HostedAgentRuntime["projection"]>
+	>();
 	#runtime: BoundAgentRuntime | undefined;
 	#starting = false;
 	#passivePreparation = false;
 	#startingCancellationRequested = false;
+	#pendingInitializationTermination: RuntimeInitializationTermination | undefined;
 	#runStartsClosed = false;
 	#ending = false;
 	#interrupting = false;
@@ -231,8 +238,19 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		return this.#runtime?.runtime.projection;
 	}
 
-	projectionInputSubmissionIsFenced(sequence: number): boolean {
-		return this.#runtime?.runtime.projection?.inputSubmissionIsFenced(sequence) ?? false;
+	captureProjectionInputSubmission(
+		sequence: number,
+	): ProjectionInputSubmission | undefined {
+		const projection = this.#runtime?.runtime.projection;
+		if (!projection) return undefined;
+		const submission = Object.freeze({ sequence });
+		this.#inputSubmissionProjections.set(submission, projection);
+		return submission;
+	}
+
+	projectionInputSubmissionIsFenced(submission: ProjectionInputSubmission): boolean {
+		const projection = this.#inputSubmissionProjections.get(submission);
+		return projection?.inputSubmissionIsFenced(submission.sequence) ?? true;
 	}
 
 	effectiveRuntimeSnapshot(): EffectiveRuntimeSnapshot | undefined {
@@ -293,6 +311,40 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		if (!cancellation) return false;
 		this.#startingCancellationRequested = true;
 		await cancellation;
+		return true;
+	}
+
+	requestRuntimeInitializationTermination(
+		projection: TerminalProjection,
+		error: unknown,
+	): RuntimeInitializationTermination | undefined {
+		const run = this.#runtime;
+		if (
+			this.#pendingInitializationTermination ||
+			!this.#starting ||
+			!run ||
+			run.runtime.projection !== projection
+		) return undefined;
+		// Fence the exact projection before cancellation can release its occupied
+		// startup lane. Late continuations retain this projection identity even
+		// after initialization cleanup disposes it.
+		run.runtime.projection.fenceInputSubmissions();
+		const cancellation = run.runtime.projection.cancelInitialization(error);
+		if (cancellation) this.#startingCancellationRequested = true;
+		const request = Object.freeze({
+			cancellation: cancellation
+				? cancellation.then(() => true)
+				: Promise.resolve(false),
+		});
+		this.#pendingInitializationTermination = request;
+		return request;
+	}
+
+	completeRuntimeInitializationTerminationInLane(
+		request: RuntimeInitializationTermination,
+	): boolean {
+		if (this.#pendingInitializationTermination !== request) return false;
+		this.#pendingInitializationTermination = undefined;
 		return true;
 	}
 
@@ -490,6 +542,11 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		admitRun: boolean,
 		initialRetentionReasons: readonly AgentRetentionReason[],
 	): Promise<HostedAgentRuntime> {
+		if (this.#pendingInitializationTermination) {
+			// Cancellation releases the occupied startup lane before its termination
+			// receipt can run. Earlier lane waiters must not fill that gap with Run B.
+			throw new Error("run_termination_pending: Agent Run startup is fenced");
+		}
 		const existing = this.#runtime;
 		if (existing) {
 			if (admitRun && !existing.admitted && this.#runStartsClosed) {

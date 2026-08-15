@@ -30,6 +30,7 @@ import {
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import { AgentRuntimeSupervisor } from "../runtime/agent-runtime-supervisor.ts";
+import type { ProjectionInputSubmission } from "../runtime/agent-runtime-host.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
 	ProcessChildSessionFactory,
@@ -654,7 +655,7 @@ export class WorkflowCoordinator {
 			await this.#bindViewedRunInLane(record, handle);
 		});
 		record.host.setRunEndingHandler(async (handle, cause) => {
-			await this.#markViewedFailedRunInLane(record, handle, cause);
+			await this.#handleViewedRunEndingInLane(record, handle, cause);
 		});
 		this.#messages.integrate(record);
 		this.#operationalIncidents.integrate(record);
@@ -911,25 +912,27 @@ export class WorkflowCoordinator {
 		this.#notifyAgentActivityChanged();
 	}
 
-	async #markViewedFailedRunInLane(
+	async #handleViewedRunEndingInLane(
 		record: AgentRecord,
 		handle: Readonly<{ sequence: number }>,
 		cause: "failure" | "termination" | "shutdown",
 	): Promise<void> {
 		const active = this.#activeAgentView;
 		if (
-			cause !== "failure" ||
 			!active ||
 			active.record !== record ||
 			!record.host.isCurrent(handle) ||
 			record.host.currentProjection() !== active.attachment.projection()
 		) return;
 		if (record.host.observe().phase === "starting") {
+			// Initialization cancellation disposes this not-yet-usable projection;
+			// unlike an admitted Run, it cannot remain as a Dormant attached view.
 			this.#activeAgentView = undefined;
 			active.attachment.settleClosed();
 			this.#notifyAgentActivityChanged();
 			return;
 		}
+		if (cause !== "failure") return;
 		active.failed = true;
 		this.#notifyAgentActivityChanged();
 	}
@@ -969,10 +972,11 @@ export class WorkflowCoordinator {
 	): Promise<void> {
 		this.#assertAdmissionOpen();
 		const record = this.#requireAgent(agentId);
-		this.#assertInputSubmissionAdmissible(record, submissionSequence);
+		const inputSubmission = this.#captureInputSubmission(record, submissionSequence);
+		this.#assertInputSubmissionAdmissible(record, inputSubmission);
 		const currentHandle = record.host.currentHandle();
 		const handle = currentHandle ?? await record.host.lane.run(async () => {
-			this.#assertInputSubmissionAdmissible(record, submissionSequence);
+			this.#assertInputSubmissionAdmissible(record, inputSubmission);
 			return record.host.currentHandle() ?? await record.host.startInLane();
 		});
 		if (this.#executionPermits.has(agentId)) {
@@ -983,7 +987,7 @@ export class WorkflowCoordinator {
 		await this.#ensureExecution(agentId);
 		// No await may separate these final checks from the successful lifecycle
 		// response: termination can fence the submission and replace the exact Run.
-		this.#assertInputSubmissionAdmissible(record, submissionSequence);
+		this.#assertInputSubmissionAdmissible(record, inputSubmission);
 		if (!record.host.isCurrent(handle)) {
 			throw new Error("stale_run: execution admission lost its exact Agent Run");
 		}
@@ -991,13 +995,25 @@ export class WorkflowCoordinator {
 		this.#operationalIncidents.beginExecution(agentId);
 	}
 
-	#assertInputSubmissionAdmissible(
+	#captureInputSubmission(
 		record: AgentRecord,
 		submissionSequence: number | undefined,
+	): ProjectionInputSubmission | undefined {
+		if (submissionSequence === undefined) return undefined;
+		const submission = record.host.captureProjectionInputSubmission(submissionSequence);
+		if (!submission) {
+			throw new Error("stale_native_input: submission has no exact Runtime projection");
+		}
+		return submission;
+	}
+
+	#assertInputSubmissionAdmissible(
+		record: AgentRecord,
+		submission: ProjectionInputSubmission | undefined,
 	): void {
 		if (
-			submissionSequence !== undefined &&
-			record.host.projectionInputSubmissionIsFenced(submissionSequence)
+			submission !== undefined &&
+			record.host.projectionInputSubmissionIsFenced(submission)
 		) {
 			throw new Error("stale_native_input: submission preceded exact-Run termination");
 		}
@@ -1036,6 +1052,14 @@ export class WorkflowCoordinator {
 		images: readonly ImageContent[] | undefined,
 		submissionSequence?: number,
 	): Promise<HumanInputDisposition> {
+		const record = this.#requireAgent(agentId);
+		let inputSubmission: ProjectionInputSubmission | undefined;
+		try {
+			inputSubmission = this.#captureInputSubmission(record, submissionSequence);
+			this.#assertInputSubmissionAdmissible(record, inputSubmission);
+		} catch {
+			return Promise.resolve("discarded");
+		}
 		if (this.#humanRequests.submitAnswer(agentId, text, (images?.length ?? 0) > 0)) {
 			return Promise.resolve("submitted");
 		}
@@ -1049,9 +1073,8 @@ export class WorkflowCoordinator {
 			return active.record.host.lane.run(async () => {
 				if (this.#activeAgentView !== active) return "discarded";
 				if (
-					submissionSequence !== undefined &&
-					active.attachment.projection() === active.record.host.currentProjection() &&
-					active.record.host.projectionInputSubmissionIsFenced(submissionSequence)
+					inputSubmission !== undefined &&
+					active.record.host.projectionInputSubmissionIsFenced(inputSubmission)
 				) return "discarded";
 				const currentHandle = active.record.host.currentHandle();
 				if (

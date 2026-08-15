@@ -45,23 +45,55 @@ export class RunSupervisor {
 		});
 		const control = committed.input;
 		const target = this.#requireControllableTarget(callerAgentId, control.agentId);
+		const residualRequestsBeforeCancellation = target.host.residualRequestCounts();
+		const startingProjection = control.operation === "terminate" &&
+			target.host.observe().phase === "starting"
+			? target.host.currentProjection()
+			: undefined;
+		const initializationTermination = startingProjection
+			? target.host.requestRuntimeInitializationTermination(
+				startingProjection,
+				new Error("Agent Run terminated during Runtime initialization"),
+			)
+			: undefined;
 		return target.host.lane.run(async () => {
 			if (control.operation === "terminate") {
-				const residualRequests = target.host.residualRequestCounts();
-				if (!target.host.currentHandle()) {
+				try {
+					const initializationCancelled = initializationTermination
+						? await initializationTermination.cancellation
+						: false;
+					const residualRequests = initializationCancelled
+						? residualRequestsBeforeCancellation
+						: target.host.residualRequestCounts();
+					if (initializationCancelled) {
+						this.#messages.discardSchedulingInLane(target);
+						return {
+							agentId: target.identity.agentId,
+							disposition: "terminated",
+							residualRequests,
+						};
+					}
+					if (!target.host.currentHandle()) {
+						return {
+							agentId: target.identity.agentId,
+							disposition: "not_running",
+							residualRequests,
+						};
+					}
+					this.#messages.discardSchedulingInLane(target);
+					await target.host.discardAndEndInLane("termination");
 					return {
 						agentId: target.identity.agentId,
-						disposition: "not_running",
+						disposition: "terminated",
 						residualRequests,
 					};
+				} finally {
+					if (initializationTermination) {
+						target.host.completeRuntimeInitializationTerminationInLane(
+							initializationTermination,
+						);
+					}
 				}
-				this.#messages.discardSchedulingInLane(target);
-				await target.host.discardAndEndInLane("termination");
-				return {
-					agentId: target.identity.agentId,
-					disposition: "terminated",
-					residualRequests,
-				};
 			}
 			if (control.operation === "resume") {
 				const message = createSupervisoryResumeMessage({

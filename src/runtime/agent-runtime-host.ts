@@ -38,6 +38,10 @@ export type DormantRunState = Readonly<{
 }>;
 export type AgentRunState = LiveRunState | DormantRunState;
 export type AgentRunHandle = Readonly<{ sequence: number }>;
+export type ProjectionInputSubmission = Readonly<{ sequence: number }>;
+export type RuntimeInitializationTermination = Readonly<{
+	cancellation: Promise<boolean>;
+}>;
 export type InterruptionHoldHandle = Readonly<{
 	run: AgentRunHandle;
 	sequence: number;
@@ -95,7 +99,8 @@ export interface AgentRuntimeHost {
 	observe(): AgentRunState;
 	currentHandle(): AgentRunHandle | undefined;
 	currentProjection(): TerminalProjection | undefined;
-	projectionInputSubmissionIsFenced(sequence: number): boolean;
+	captureProjectionInputSubmission(sequence: number): ProjectionInputSubmission | undefined;
+	projectionInputSubmissionIsFenced(submission: ProjectionInputSubmission): boolean;
 	effectiveRuntimeSnapshot(): EffectiveRuntimeSnapshot | undefined;
 	synchronizeRuntimeState(): Promise<EffectiveRuntimeSnapshot>;
 	currentWorkState(): AgentRuntimeWorkState;
@@ -109,6 +114,13 @@ export interface AgentRuntimeHost {
 	prepareInLane(reasons?: readonly AgentRetentionReason[]): Promise<void>;
 	beginShutdown(): Promise<boolean>;
 	cancelRuntimeInitialization(projection: TerminalProjection, error: unknown): Promise<boolean>;
+	requestRuntimeInitializationTermination(
+		projection: TerminalProjection,
+		error: unknown,
+	): RuntimeInitializationTermination | undefined;
+	completeRuntimeInitializationTerminationInLane(
+		request: RuntimeInitializationTermination,
+	): boolean;
 	addSettledHandler(
 		handler: (handle: AgentRunHandle, settlement: AgentRunSettlement) => void,
 	): () => void;
