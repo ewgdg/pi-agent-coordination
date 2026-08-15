@@ -16,6 +16,28 @@ const TERMINATION_GRACE_MS = 100;
 const SUPERVISED_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
 
 export async function runTestProcess(arguments_: readonly string[]): Promise<number> {
+	let requestTermination!: (signal: NodeJS.Signals) => void;
+	const terminationRequested = new Promise<NodeJS.Signals>((resolve) => {
+		requestTermination = resolve;
+	});
+	const handlers = new Map<NodeJS.Signals, () => void>();
+	for (const signal of SUPERVISED_SIGNALS) {
+		const handler = () => requestTermination(signal);
+		handlers.set(signal, handler);
+		process.on(signal, handler);
+	}
+
+	try {
+		return await runOwnedTestProcess(arguments_, terminationRequested);
+	} finally {
+		for (const [signal, handler] of handlers) process.off(signal, handler);
+	}
+}
+
+async function runOwnedTestProcess(
+	arguments_: readonly string[],
+	terminationRequested: Promise<NodeJS.Signals>,
+): Promise<number> {
 	const cgroup = LinuxCgroupOwner.tryCreate();
 	try {
 		await cgroup?.startGuardian();
@@ -47,17 +69,6 @@ export async function runTestProcess(arguments_: readonly string[]): Promise<num
 		child.once("error", reject);
 		child.once("exit", (code, signal) => resolve({ code, signal }));
 	});
-	let requestTermination!: (signal: NodeJS.Signals) => void;
-	const terminationRequested = new Promise<NodeJS.Signals>((resolve) => {
-		requestTermination = resolve;
-	});
-	const handlers = new Map<NodeJS.Signals, () => void>();
-	for (const signal of SUPERVISED_SIGNALS) {
-		const handler = () => requestTermination(signal);
-		handlers.set(signal, handler);
-		process.on(signal, handler);
-	}
-
 	try {
 		await cgroup?.admitStoppedRoot(child.pid!);
 		const outcome = await Promise.race([
@@ -75,7 +86,6 @@ export async function runTestProcess(arguments_: readonly string[]): Promise<num
 		return 128 + signalNumber(outcome.signal);
 	} finally {
 		await processTree.dispose();
-		for (const [signal, handler] of handlers) process.off(signal, handler);
 	}
 }
 

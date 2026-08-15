@@ -44,6 +44,7 @@ Put the safety boundary above per-test cleanup. Every suite run gets a bounded N
 - Fast tests default to 5 seconds; process tests default to 30 seconds. Explicit per-test timeouts remain available for justified longer scenarios.
 - Start the test runner through a stopped shell, move that exact root into a dedicated cgroup-v2 subtree, then continue into Node. Workers and detached PTYs inherit ownership before they can fork.
 - On wrapper termination, signal the Node test runner first, allow a short cleanup grace period, then use `cgroup.kill` for every survivor. Ordinary success, failure, and Node test timeout also empty the cgroup before returning.
+- Install catchable-signal handlers before any cgroup, guardian, or child setup, so SIGTERM/SIGINT cannot land in a post-spawn pre-admission gap.
 - Start a detached guardian outside the test cgroup before admitting work. It binds the supervisor PID and `/proc` start time, then empties the cgroup if the supervisor is directly SIGKILLed, even when a test worker is CPU-blocked.
 - The `/proc` fallback continuously captures descendants and includes process start time so a recycled PID cannot receive cleanup signals.
 
