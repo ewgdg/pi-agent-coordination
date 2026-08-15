@@ -14,7 +14,6 @@ import {
 	inspectAgentMessageAuthorResult,
 	type Message,
 } from "../src/protocol/message.ts";
-import { ANSWER_REQUIRED_GUIDANCE } from "../src/protocol/agent-message-input.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
 import {
 	answerSourceDeliveryRequestId,
@@ -379,7 +378,6 @@ test("an answer-required rejection does not author a retryable Message", () => {
 			disposition: "rejected",
 			reason: "answer_required",
 			requestMessageId: "active-request",
-			guidance: ANSWER_REQUIRED_GUIDANCE,
 		},
 		isError: false,
 		timestamp: Date.now(),

@@ -1,5 +1,4 @@
 import type { ToolCallPointer } from "../protocol/identities.ts";
-import { ANSWER_REQUIRED_GUIDANCE } from "../protocol/agent-message-input.ts";
 
 export type MessageStatus = "sent" | "not_sent" | "unknown";
 
@@ -28,7 +27,6 @@ export type AgentMessageSendReceipt =
 		disposition: "rejected";
 		reason: "answer_required";
 		requestMessageId: string;
-		guidance: typeof ANSWER_REQUIRED_GUIDANCE;
 	}>;
 
 export type AgentRequestReceipt =

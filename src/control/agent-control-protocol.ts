@@ -4,10 +4,7 @@ import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import type { AgentControlProtocol } from "./agent-control-channel.ts";
 import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
-import {
-	ANSWER_REQUIRED_GUIDANCE,
-	type AgentMessageInput,
-} from "../protocol/agent-message-input.ts";
+import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { AgentWaitResult } from "../protocol/agent-wait.ts";
 import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
@@ -267,7 +264,6 @@ const AgentMessageReceiptSchema = Type.Union([
 		disposition: Type.Literal("rejected"),
 		reason: Type.Literal("answer_required"),
 		requestMessageId: NonEmptyStringSchema,
-		guidance: Type.Literal(ANSWER_REQUIRED_GUIDANCE),
 	}),
 	closed({ messageId: NonEmptyStringSchema, messageStatus: Type.Literal("sent") }),
 	closed({

@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Check } from "typebox/value";
 
-import { ANSWER_REQUIRED_GUIDANCE } from "../src/protocol/agent-message-input.ts";
-
 import {
 	AgentControlEventSchema,
 	agentControlEvents,
@@ -201,7 +199,6 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		disposition: "rejected",
 		reason: "answer_required",
 		requestMessageId: "request-message",
-		guidance: ANSWER_REQUIRED_GUIDANCE,
 	}), true);
 	assert.equal(Check(agentControlMethods["coordination.message"].response, {
 		messageId: "message",

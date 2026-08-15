@@ -22,7 +22,6 @@ import {
 import {
 	sameAgentMessageInput,
 	validateAgentMessageInput,
-	ANSWER_REQUIRED_GUIDANCE,
 	type AgentMessageInput,
 	type AnswerInput,
 	type CancellationInput,
@@ -345,15 +344,13 @@ function isNonAuthoringMessageResult(
 	if (message.kind === "message" && isRecord(value)) {
 		return sameStringList(Object.keys(value).sort(), [
 			"disposition",
-			"guidance",
 			"reason",
 			"requestMessageId",
 		]) &&
 			value.disposition === "rejected" &&
 			value.reason === "answer_required" &&
 			typeof value.requestMessageId === "string" &&
-			value.requestMessageId.length > 0 &&
-			value.guidance === ANSWER_REQUIRED_GUIDANCE;
+			value.requestMessageId.length > 0;
 	}
 	if (
 		(message.kind !== "answer" && message.kind !== "request_cancellation") ||

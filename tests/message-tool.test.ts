@@ -164,8 +164,6 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 				disposition: "rejected",
 				reason: "answer_required",
 				requestMessageId: "active-request-identity",
-				guidance:
-					'Use operation "answer" for the curated result, or operation "request" back to the requester when their input or decision is needed.',
 			},
 		},
 		{ expanded: false, isPartial: false },

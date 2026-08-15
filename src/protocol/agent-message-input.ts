@@ -1,8 +1,5 @@
 export type MessageDeliveryMode = "deferred" | "steer";
 
-export const ANSWER_REQUIRED_GUIDANCE =
-	'Use operation "answer" for the curated result, or operation "request" back to the requester when their input or decision is needed.';
-
 export type MessageSendInput = Readonly<{
 	operation: "send";
 	targetAgentId: string;

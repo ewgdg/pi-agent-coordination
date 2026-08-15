@@ -43,7 +43,6 @@ import {
 	type MessagePollInput,
 	type MessageRetryInput,
 } from "../protocol/message.ts";
-import { ANSWER_REQUIRED_GUIDANCE } from "../protocol/agent-message-input.ts";
 import {
 	createCreationRequestDeliveryItem,
 	inspectCreationRequestDelivery,
@@ -295,7 +294,6 @@ export class MessageCoordinator {
 						disposition: "rejected",
 						reason: "answer_required",
 						requestMessageId: activeRequest.messageId,
-						guidance: ANSWER_REQUIRED_GUIDANCE,
 					};
 				}
 			}

@@ -18,7 +18,6 @@ import type {
 	AgentWaitClock,
 } from "../src/coordination/agent-waits.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
-import { ANSWER_REQUIRED_GUIDANCE } from "../src/protocol/agent-message-input.ts";
 import { answerSourceDeliveryRequestId } from "../src/protocol/request-resolution.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -176,7 +175,6 @@ test("an active responder rejects ordinary Message authorship to its requester w
 		disposition: "rejected",
 		reason: "answer_required",
 		requestMessageId: requestReceipt.requestMessageId,
-		guidance: ANSWER_REQUIRED_GUIDANCE,
 	});
 	assert.equal(rejectedResult.message.isError, false);
 	assert.equal(
