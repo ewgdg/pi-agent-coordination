@@ -111,6 +111,7 @@ export type {
 
 export type HumanPresentationCoordinatorView = Readonly<{
 	status(agentId?: string): AgentStatus;
+	agentLabel(agentId: string): string | undefined;
 	agentActivity(): AgentActivitySnapshot;
 	addAgentActivityChangeHandler(handler: () => void): () => void;
 	refreshAgentActivity(): void;
@@ -396,6 +397,8 @@ export class WorkflowCoordinator {
 	#agentView(agentId: string): AgentCoordinatorView {
 		return {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
+			agentLabel: (targetAgentId) =>
+				this.#agents.get(targetAgentId)?.identity.metadata.label,
 			agentActivity: () => this.#agentActivity(agentId),
 			addAgentActivityChangeHandler: (handler) => {
 				this.#agentActivityChangeHandlers.add(handler);

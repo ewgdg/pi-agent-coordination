@@ -95,10 +95,12 @@ const childControls = (
 );
 
 const childRuntimeBridge: ExtensionFactory = async (pi) => {
-	registerMessageDeliveryRenderer(pi);
+	let state: ChildControlState | undefined;
+	const resolveAgentLabel = (agentId: string) =>
+		state?.currentBinding?.activity.agentLabel(agentId);
+	registerMessageDeliveryRenderer(pi, resolveAgentLabel);
 	const bootstrap = await readBootstrapDescriptor();
 	const interactiveBridge = installInteractiveHostBridge(hostPi);
-	let state: ChildControlState | undefined;
 	const participantRequest: ChildParticipantControlRequester = (method, payload, signal) => {
 		if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
 		return state.channel.request(method, payload, signal);
@@ -112,7 +114,12 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		const participant = createControlBackedChildParticipantHandlers("ordinary", participantRequest);
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
-		registerParticipantCoordinationTools(pi, "ordinary", participant.coordination);
+		registerParticipantCoordinationTools(
+			pi,
+			"ordinary",
+			participant.coordination,
+			resolveAgentLabel,
+		);
 		registerAgentTemplateCataloguePrompt(
 			pi,
 			() => participant.coordination.availableTemplates(),
@@ -121,7 +128,12 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		const participant = createControlBackedChildParticipantHandlers("moderator", participantRequest);
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
-		registerParticipantCoordinationTools(pi, "moderator", participant.coordination);
+		registerParticipantCoordinationTools(
+			pi,
+			"moderator",
+			participant.coordination,
+			resolveAgentLabel,
+		);
 	}
 	registerParticipantNativeSessionPolicy(pi);
 	const publishCurrentRuntimeSnapshot = async () => {
@@ -791,6 +803,14 @@ class RemoteAgentActivitySource implements AgentActivitySource {
 		if (this.#scopeFailed === failed) return;
 		this.#scopeFailed = failed;
 		this.#notifyChanged();
+	}
+
+	agentLabel(agentId: string): string | undefined {
+		const selector = this.#selector;
+		return selector
+			? [...selector.live, ...selector.dormant]
+				.find((agent) => agent.agentId === agentId)?.label
+			: undefined;
 	}
 
 	snapshot(): AgentActivitySnapshot {

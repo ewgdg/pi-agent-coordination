@@ -15,6 +15,8 @@ import type {
 	OrdinaryAgentCoordinatorView,
 } from "../src/coordination/workflow-coordinator.ts";
 import {
+	renderAgentControlCall,
+	renderAgentControlResult,
 	renderAgentObserveCall,
 	renderAgentObserveResult,
 } from "../src/tools/coordination-renderers.ts";
@@ -104,17 +106,18 @@ test("role-bound extensions expose strict sequential tools with compact native r
 });
 
 test("coordination renderers keep routine receipts compact", async (t) => {
-	const unavailableView = () => {
-		throw new Error("Renderer conformance does not execute coordination behavior");
+	const rendererView = {
+		agentLabel: (agentId: string) =>
+			agentId === "child-agent" ? "Researcher" : undefined,
 	};
 	const ordinaryHost = await createTestOwnerHost(t,
 		createAgentBoundExtension(
-			unavailableView as () => OrdinaryAgentCoordinatorView,
+			() => rendererView as unknown as OrdinaryAgentCoordinatorView,
 		),
 	);
 	const moderatorHost = await createTestOwnerHost(t,
 		createModeratorBoundExtension(
-			unavailableView as () => ModeratorAgentCoordinatorView,
+			() => rendererView as unknown as ModeratorAgentCoordinatorView,
 		),
 	);
 	const cases = [
@@ -134,7 +137,7 @@ test("coordination renderers keep routine receipts compact", async (t) => {
 			},
 			callLines: 1,
 			collapsedLines: 2,
-			summary: /Researcher.*idle/s,
+			summary: /Researcher · ld-agent.*idle/s,
 			expandedDetail: /Researcher/,
 		},
 		{
@@ -144,7 +147,7 @@ test("coordination renderers keep routine receipts compact", async (t) => {
 			details: { agentId: "child-agent", disposition: "held" },
 			callLines: 1,
 			collapsedLines: 1,
-			summary: /held .* child-agent/,
+			summary: /held .* Researcher · ld-agent/,
 			expandedDetail: /disposition/,
 		},
 		{
@@ -212,7 +215,7 @@ test("coordination renderers keep routine receipts compact", async (t) => {
 	await moderatorHost.runtime.dispose();
 });
 
-test("Agent status rendering shows identity once while preserving self-observation identity", () => {
+test("Agent Observe rendering consistently shows labels with compact identities", () => {
 	const dimmed: string[] = [];
 	const trackingTheme = {
 		fg(color: string, text: string) {
@@ -221,8 +224,11 @@ test("Agent status rendering shows identity once while preserving self-observati
 		},
 		bold: (text: string) => text,
 	} as unknown as Theme;
+	const agentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+	const resolveAgentLabel = (candidateAgentId: string) =>
+		candidateAgentId === agentId ? "Researcher" : undefined;
 	const details = {
-		agentId: "child-agent",
+		agentId,
 		label: "Researcher",
 		run: {
 			phase: "live" as const,
@@ -231,12 +237,16 @@ test("Agent status rendering shows identity once while preserving self-observati
 			retentionReasons: [],
 		},
 	};
-	const explicitArgs = { operation: "status" as const, agentId: "child-agent" };
-	const call = renderAgentObserveCall(explicitArgs, trackingTheme)
+	const explicitArgs = { operation: "status" as const, agentId };
+	const call = renderAgentObserveCall(
+		explicitArgs,
+		trackingTheme,
+		resolveAgentLabel,
+	)
 		.render(120)
 		.map((line) => line.trimEnd());
-	assert.deepEqual(call, ["observe status · child-agent"]);
-	assert.ok(dimmed.includes("child-agent"));
+	assert.deepEqual(call, ["observe status · Researcher · 983c81e3"]);
+	assert.ok(dimmed.includes("Researcher · 983c81e3"));
 
 	const result = {
 		content: [{ type: "text" as const, text: JSON.stringify(details) }],
@@ -248,7 +258,14 @@ test("Agent status rendering shows identity once while preserving self-observati
 		trackingTheme,
 		{ args: explicitArgs },
 	).render(120).map((line) => line.trimEnd());
-	assert.deepEqual(explicitResult, ["Researcher", "idle"]);
+	assert.deepEqual(explicitResult, ["Researcher · 983c81e3", "idle"]);
+	const expandedResult = renderAgentObserveResult(
+		result,
+		{ expanded: true, isPartial: false },
+		trackingTheme,
+		{ args: explicitArgs },
+	).render(160).join("\n");
+	assert.match(expandedResult, new RegExp(`Researcher · ${agentId}`));
 
 	const selfResult = renderAgentObserveResult(
 		result,
@@ -256,7 +273,42 @@ test("Agent status rendering shows identity once while preserving self-observati
 		trackingTheme,
 		{ args: { operation: "status" } },
 	).render(120).map((line) => line.trimEnd());
-	assert.deepEqual(selfResult, ["Researcher", "child-agent", "idle"]);
+	assert.deepEqual(selfResult, ["Researcher · 983c81e3", "idle"]);
+});
+
+test("Agent Control rendering consistently shows labels with compact identities", () => {
+	const agentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+	const resolveAgentLabel = (candidateAgentId: string) =>
+		candidateAgentId === agentId ? "Researcher" : undefined;
+	const args = { operation: "interrupt" as const, agentId };
+	const call = renderAgentControlCall(args, plainTheme, resolveAgentLabel)
+		.render(120)
+		.join("\n");
+	assert.match(call, /control interrupt · Researcher · 983c81e3/);
+	assert.doesNotMatch(call, new RegExp(agentId));
+
+	const result = renderAgentControlResult(
+		{
+			content: [{ type: "text", text: "held" }],
+			details: { agentId, disposition: "held" },
+		},
+		{ expanded: false, isPartial: false },
+		plainTheme,
+		resolveAgentLabel,
+	).render(120).join("\n");
+	assert.match(result, /held · Researcher · 983c81e3/);
+	assert.doesNotMatch(result, new RegExp(agentId));
+
+	const expandedResult = renderAgentControlResult(
+		{
+			content: [{ type: "text", text: "held" }],
+			details: { agentId, disposition: "held" },
+		},
+		{ expanded: true, isPartial: false },
+		plainTheme,
+		resolveAgentLabel,
+	).render(160).join("\n");
+	assert.match(expandedResult, new RegExp(`held · Researcher · ${agentId}`));
 });
 
 test("Human Request owns a transcript-native question and Answer shell", async (t) => {

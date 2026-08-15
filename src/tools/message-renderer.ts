@@ -10,15 +10,23 @@ import type {
 	AgentMessageInput,
 	AgentMessageReceipt,
 } from "../coordination/workflow-coordinator.ts";
+import {
+	formatAgentIdentity,
+	type AgentLabelResolver,
+} from "../presentation/agent-identity.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 
 export function renderAgentMessageCall(
 	args: AgentMessageInput,
 	theme: Theme,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Text {
 	let text = theme.fg("toolTitle", theme.bold("message "));
 	if (args.operation === "send") {
-		text += theme.fg("accent", args.targetAgentId);
+		text += theme.fg(
+			"accent",
+			formatAgentIdentity(args.targetAgentId, resolveAgentLabel),
+		);
 		if (args.deliveryMode === "steer") {
 			text += theme.fg("warning", " · steer");
 		}
@@ -26,7 +34,10 @@ export function renderAgentMessageCall(
 		return new Text(text, 0, 0);
 	}
 	if (args.operation === "request") {
-		text += theme.fg("accent", args.targetAgentId);
+		text += theme.fg(
+			"accent",
+			formatAgentIdentity(args.targetAgentId, resolveAgentLabel),
+		);
 		if (args.deliveryMode === "steer") {
 			text += theme.fg("warning", " · steer");
 		}

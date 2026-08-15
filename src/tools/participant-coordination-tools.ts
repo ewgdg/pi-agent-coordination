@@ -6,6 +6,7 @@ import { Type, type TSchema } from "typebox";
 
 import type { AgentStatus } from "../coordination/agent-record.ts";
 import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
+import type { AgentLabelResolver } from "../presentation/agent-identity.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
 import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
@@ -334,6 +335,7 @@ export function registerParticipantCoordinationTools<
 	pi: ExtensionAPI,
 	role: Role,
 	handlers: ParticipantCoordinationToolHandlers<Role>,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): void {
 	const availableHandlers = handlers as AvailableHandlers;
 	pi.registerTool<typeof agentMessageParameters, AgentMessageReceipt>({
@@ -345,7 +347,8 @@ export function registerParticipantCoordinationTools<
 		promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentMessageParameters,
-		renderCall: renderAgentMessageCall,
+		renderCall: (args, theme) =>
+			renderAgentMessageCall(args, theme, resolveAgentLabel),
 		renderResult: renderAgentMessageResult,
 		async execute(toolCallId, parameters) {
 			return toolResult(await availableHandlers.message(toolCallId, parameters));
@@ -380,7 +383,8 @@ export function registerParticipantCoordinationTools<
 			: "Observe authorized Agents and their bounded live Run state.",
 		executionMode: "sequential",
 		parameters: agentObserveParameters,
-		renderCall: renderAgentObserveCall,
+		renderCall: (args, theme) =>
+			renderAgentObserveCall(args, theme, resolveAgentLabel),
 		renderResult: renderAgentObserveResult,
 		async execute(_toolCallId, parameters) {
 			return toolResult(await availableHandlers.observe(parameters));
@@ -396,8 +400,10 @@ export function registerParticipantCoordinationTools<
 			: "Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
 		executionMode: "sequential",
 		parameters: agentControlParameters,
-		renderCall: renderAgentControlCall,
-		renderResult: renderAgentControlResult,
+		renderCall: (args, theme) =>
+			renderAgentControlCall(args, theme, resolveAgentLabel),
+		renderResult: (result, options, theme) =>
+			renderAgentControlResult(result, options, theme, resolveAgentLabel),
 		async execute(toolCallId, parameters) {
 			return toolResult(await availableHandlers.control(toolCallId, parameters));
 		},

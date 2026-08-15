@@ -424,7 +424,7 @@ test("participant registrar preserves handler errors and Moderator control routi
 	await host.runtime.dispose();
 });
 
-test("ordinary surface composes the participant registrar with /agents without changing renderers", async (t) => {
+test("ordinary surface composes the participant registrar with /agents while preserving tool contracts", async (t) => {
 	const direct = await createRegistrarHost(t, "ordinary", handlers);
 	const unavailableView = () => {
 		throw new Error("Surface composition does not resolve CoordinatorView");
@@ -447,8 +447,8 @@ test("ordinary surface composes the participant registrar with /agents without c
 		assert.ok(directTool, toolName);
 		assert.ok(composedTool, toolName);
 		assert.equal(composedTool.parameters, directTool.parameters, toolName);
-		assert.equal(composedTool.renderCall, directTool.renderCall, toolName);
-		assert.equal(composedTool.renderResult, directTool.renderResult, toolName);
+		assert.equal(typeof composedTool.renderCall, typeof directTool.renderCall, toolName);
+		assert.equal(typeof composedTool.renderResult, typeof directTool.renderResult, toolName);
 	}
 
 	await Promise.all([direct.runtime.dispose(), composed.runtime.dispose()]);

@@ -10,12 +10,11 @@ import type {
 	AgentSpawnInput,
 	AgentSpawnReceipt,
 } from "../coordination/workflow-coordinator.ts";
+import { formatKnownAgentIdentity } from "../presentation/agent-identity.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 
-const SHORT_ID_CODE_POINTS = 12;
-
 export function renderAgentSpawnCall(args: AgentSpawnInput, theme: Theme): Text {
-	const label = args.label ?? args.template ?? "agent";
+	const label = spawnLabel(args);
 	const detail = args.description ?? args.request;
 	let text = theme.fg("toolTitle", theme.bold("spawn "));
 	text += theme.fg("accent", label);
@@ -27,6 +26,7 @@ export function renderAgentSpawnResult(
 	result: AgentToolResult<AgentSpawnReceipt>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
+	context: Readonly<{ args: AgentSpawnInput }>,
 ): Text {
 	if (options.isPartial || result.details === undefined) {
 		return new Text(theme.fg("warning", "resolving configuration…"), 0, 0);
@@ -39,13 +39,20 @@ export function renderAgentSpawnResult(
 			` · ${receipt.messageStatus}`,
 		);
 	}
-	if ("agentId" in receipt && receipt.agentId !== undefined) {
-		text += theme.fg("dim", ` · ${shortIdentity(receipt.agentId)}`);
-	} else if (
-		"candidateAgentId" in receipt &&
-		receipt.candidateAgentId !== undefined
-	) {
-		text += theme.fg("dim", ` · ${shortIdentity(receipt.candidateAgentId)}`);
+	const agentId = "agentId" in receipt
+		? receipt.agentId
+		: "candidateAgentId" in receipt
+			? receipt.candidateAgentId
+			: undefined;
+	if (agentId !== undefined) {
+		text += theme.fg(
+			"dim",
+			` · ${formatKnownAgentIdentity(
+				agentId,
+				spawnLabel(context.args),
+				options.expanded ? "full" : "compact",
+			)}`,
+		);
 	}
 	const configuration = "effectiveConfiguration" in receipt
 		? receipt.effectiveConfiguration
@@ -65,11 +72,8 @@ export function renderAgentSpawnResult(
 	return new Text(text, 0, 0);
 }
 
-function shortIdentity(agentId: string): string {
-	const codePoints = [...agentId];
-	return codePoints.length <= SHORT_ID_CODE_POINTS
-		? agentId
-		: `${codePoints.slice(0, SHORT_ID_CODE_POINTS).join("")}…`;
+function spawnLabel(args: AgentSpawnInput): string {
+	return args.label ?? args.template ?? "agent";
 }
 
 function spawnStatusColor(status: AgentSpawnReceipt["spawnStatus"]): ThemeColor {

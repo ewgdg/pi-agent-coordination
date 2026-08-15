@@ -127,6 +127,7 @@ export function registerOrdinaryAgentSurfaces(
 		pi,
 		"ordinary",
 		participantCoordinatorHandlers("ordinary", resolveView),
+		(agentId) => resolveView().agentLabel(agentId),
 	);
 	registerAgentTemplateCataloguePrompt(pi, () => resolveView().availableTemplates());
 	registerAgentsCommand(pi, resolveView);
@@ -140,6 +141,7 @@ export function registerOwnerAgentTools(
 		pi,
 		"owner",
 		participantCoordinatorHandlers("owner", resolveView),
+		(agentId) => resolveView().agentLabel(agentId),
 	);
 	registerAgentTemplateCataloguePrompt(pi, () => resolveView().availableTemplates());
 }
@@ -152,6 +154,7 @@ export function registerModeratorAgentSurfaces(
 		pi,
 		"moderator",
 		participantCoordinatorHandlers("moderator", resolveView),
+		(agentId) => resolveView().agentLabel(agentId),
 	);
 	registerAgentsCommand(pi, resolveView);
 }

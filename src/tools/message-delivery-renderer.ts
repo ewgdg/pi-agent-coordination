@@ -16,6 +16,11 @@ import {
 } from "@earendil-works/pi-tui";
 
 import {
+	formatAgentIdentity,
+	type AgentIdentityDetail,
+	type AgentLabelResolver,
+} from "../presentation/agent-identity.ts";
+import {
 	MESSAGE_DELIVERY_CUSTOM_TYPE,
 	parseMessageDeliveryContent,
 	type ModelVisibleMessage,
@@ -23,10 +28,14 @@ import {
 
 const COLLAPSED_BODY_LINES = 2;
 
-export function registerMessageDeliveryRenderer(pi: ExtensionAPI): void {
+export function registerMessageDeliveryRenderer(
+	pi: ExtensionAPI,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
+): void {
 	pi.registerMessageRenderer(
 		MESSAGE_DELIVERY_CUSTOM_TYPE,
-		renderMessageDelivery,
+		(message, options, theme) =>
+			renderMessageDelivery(message, options, theme, resolveAgentLabel),
 	);
 }
 
@@ -34,6 +43,7 @@ export function renderMessageDelivery(
 	message: Readonly<{ content: unknown }>,
 	options: MessageRenderOptions,
 	theme: Theme,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Component {
 	const projections = parseMessageDeliveryContent(message.content);
 	const box = new Box(
@@ -44,7 +54,16 @@ export function renderMessageDelivery(
 
 	for (const [index, projection] of projections.entries()) {
 		if (index > 0) box.addChild(new Spacer(1));
-		box.addChild(new Text(renderHeader(projection, theme), 0, 0));
+		box.addChild(new Text(
+			renderHeader(
+				projection,
+				theme,
+				resolveAgentLabel,
+				options.expanded ? "full" : "compact",
+			),
+			0,
+			0,
+		));
 		if (options.expanded) {
 			box.addChild(new Spacer(1));
 			box.addChild(new Markdown(
@@ -96,13 +115,25 @@ class CollapsedBodyPreview implements Component {
 	invalidate(): void {}
 }
 
-function renderHeader(projection: ModelVisibleMessage, theme: Theme): string {
+function renderHeader(
+	projection: ModelVisibleMessage,
+	theme: Theme,
+	resolveAgentLabel: AgentLabelResolver,
+	identityDetail: AgentIdentityDetail,
+): string {
 	return [
 		theme.fg(
 			"customMessageLabel",
 			theme.bold(`[${messageTypeLabel(projection.kind)}]`),
 		),
-		theme.fg("muted", ` from ${projection.fromAgentId}`),
+		theme.fg(
+			"muted",
+			` from ${formatAgentIdentity(
+				projection.fromAgentId,
+				resolveAgentLabel,
+				identityDetail,
+			)}`,
+		),
 	].join("");
 }
 

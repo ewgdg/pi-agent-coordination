@@ -28,15 +28,18 @@ import {
 const ENTRY_MODULE_PATH = import.meta.filename;
 
 const piAgentCoordination: ExtensionFactory = (pi) => {
+	let resolveOwnerView: (() => OrdinaryAgentCoordinatorView) | undefined;
 	assertExtensionApiShape(pi);
 	assertHostModuleShape(hostPi);
 	assertPiAiModuleShape(hostAi, hostPi.VERSION);
 	assertTuiModuleShape(hostTui, hostPi.VERSION);
 	assertTypeboxModuleShape(hostTypebox, hostPi.VERSION);
-	registerMessageDeliveryRenderer(pi);
+	registerMessageDeliveryRenderer(
+		pi,
+		(agentId) => resolveOwnerView?.().agentLabel(agentId),
+	);
 	const bridge = installInteractiveHostBridge(hostPi);
 	let currentWorkflowOwnerAdmitted = false;
-	let resolveOwnerView: (() => OrdinaryAgentCoordinatorView) | undefined;
 	let settleOwnerAdmission: () => void = () => {};
 	const ownerAdmissionSettled = new Promise<void>((resolve) => {
 		settleOwnerAdmission = resolve;

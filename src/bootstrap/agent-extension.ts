@@ -59,7 +59,10 @@ function createParticipantBoundExtension<
 	registerSurfaces: (pi: ExtensionAPI, resolveView: () => View) => void,
 ): ExtensionFactory {
 	return (pi) => {
-		registerMessageDeliveryRenderer(pi);
+		registerMessageDeliveryRenderer(
+			pi,
+			(agentId) => resolveView().agentLabel(agentId),
+		);
 		registerParticipantNativeSessionPolicy(pi);
 		registerSurfaces(pi, resolveView);
 		registerParticipantLifecycle(

@@ -44,9 +44,10 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		"requestMessageId",
 	]);
 	const longContent = "Direction ".repeat(20).trim();
+	const receiverAgentId = host.session.sessionId;
 	const args = {
 		operation: "send" as const,
-		targetAgentId: "recipient-agent",
+		targetAgentId: receiverAgentId,
 		content: longContent,
 		deliveryMode: "steer" as const,
 	};
@@ -65,7 +66,8 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		executionStarted: true,
 	};
 	const callText = tool.renderCall(args, plainTheme, renderContext).render(160).join("\n");
-	assert.match(callText, /recipient-agent/);
+	assert.match(callText, new RegExp(`Owner · ${receiverAgentId.slice(-8)}`));
+	assert.doesNotMatch(callText, new RegExp(receiverAgentId));
 	assert.match(callText, /steer/);
 	assert.equal(callText.includes(longContent), false);
 	assert.match(callText, /…/);
@@ -97,6 +99,21 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		} },
 	).render(160).join("\n");
 	assert.equal(deferredText.includes("deferred"), false);
+
+	const requestText = tool.renderCall(
+		{
+			operation: "request",
+			targetAgentId: receiverAgentId,
+			question: "Which boundary owns this result?",
+		},
+		plainTheme,
+		{ ...renderContext, args: {
+			operation: "request",
+			targetAgentId: receiverAgentId,
+			question: "Which boundary owns this result?",
+		} },
+	).render(160).join("\n");
+	assert.match(requestText, new RegExp(`Owner · ${receiverAgentId.slice(-8)}`));
 
 	const answerText = tool.renderCall(
 		{
@@ -224,6 +241,8 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 	).render(160).join("\n");
 	assert.match(collapsedText, /created/);
 	assert.match(collapsedText, /sent/);
+	assert.match(collapsedText, /Researcher · 34567890/);
+	assert.doesNotMatch(collapsedText, new RegExp(receipt.agentId));
 	assert.match(collapsedText, /provider\/model/);
 	assert.match(collapsedText, /high/);
 	assert.equal(collapsedText.includes(effectiveConfiguration.cwd), false);
@@ -235,6 +254,7 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 		renderContext,
 	).render(160).join("\n");
 	assert.match(expandedText, /\/work\/subproject/);
+	assert.match(expandedText, new RegExp(`Researcher · ${receipt.agentId}`));
 	assert.match(expandedText, /agent_message/);
 	assert.match(expandedText, /Configured context/);
 

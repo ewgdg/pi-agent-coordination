@@ -89,7 +89,7 @@ After child Identity commit, the Creation Request uses the ordinary [Request pro
 - `spawnStatus: "not_created"` — validation failed before child Identity committed.
 - `spawnStatus: "unknown"` — confirmation was lost at a boundary where effects may exist. Candidate Agent and Request Message identities are returned when available.
 
-Created and uncertain receipts include the effective runtime configuration only after it has resolved and passed resource validation. A created receipt returns `agentId` and `requestMessageId`; an uncertain receipt names them as candidates. Collapsed native rendering shows the Spawn and Message statuses, Agent identity, model, and thinking level. Expanded rendering shows the complete structured receipt and effective configuration.
+Created and uncertain receipts include the effective runtime configuration only after it has resolved and passed resource validation. A created receipt returns `agentId` and `requestMessageId`; an uncertain receipt names them as candidates. Collapsed native rendering shows the Spawn and Message statuses, the Agent as `label · compact identity` using the final eight identity characters, model, and thinking level. Expanded rendering identifies the Agent as `label · full identity`, followed by the exact structured receipt and effective configuration.
 
 Repeating `agent_spawn` creates a sibling. Direct children appear to their Spawner in canonical spawn-call order. Observation is passive and returns bounded identity and live Run state without exposing a Pi session or Run handle.
 

@@ -22,8 +22,9 @@ const plainTheme = {
 	bold: (text: string) => text,
 } as unknown as Theme;
 
-test("collapsed Message Delivery shows type, sender, and a two-line body snippet", () => {
+test("collapsed Message Delivery shows type, sender label, compact identity, and a two-line body snippet", () => {
 	initTheme("dark");
+	const senderAgentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
 	const fullBody = [
 		"Context ".repeat(10),
 		"second-line evidence. ",
@@ -34,15 +35,17 @@ test("collapsed Message Delivery shows type, sender, and a two-line body snippet
 		customDelivery([{
 			kind: "message",
 			messageId: "message-one",
-			fromAgentId: "sender-agent",
+			fromAgentId: senderAgentId,
 			content: fullBody,
 		}]),
 		{ expanded: false, outputPad: 1 },
 		plainTheme,
+		(agentId) => agentId === senderAgentId ? "Researcher" : undefined,
 	).render(60).join("\n");
 
 	assert.match(rendered, /Message/);
-	assert.match(rendered, /from sender-agent/);
+	assert.match(rendered, /from Researcher · 983c81e3/);
+	assert.doesNotMatch(rendered, new RegExp(senderAgentId));
 	assert.match(rendered, /second-line evidence/);
 	assert.match(rendered, /…/);
 	assert.doesNotMatch(rendered, /Distinctive ending/);
@@ -55,11 +58,12 @@ test("collapsed Message Delivery shows type, sender, and a two-line body snippet
 
 test("expanded Message Delivery shows each human-readable type and complete body", () => {
 	initTheme("dark");
+	const requesterAgentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
 	const projections: ModelVisibleMessage[] = [
 		{
 			kind: "request",
 			requestMessageId: "request-one",
-			fromAgentId: "requester-agent",
+			fromAgentId: requesterAgentId,
 			question: "Review the complete request body, including this final clause.",
 		},
 		{
@@ -81,9 +85,10 @@ test("expanded Message Delivery shows each human-readable type and complete body
 		customDelivery(projections),
 		{ expanded: true, outputPad: 1 },
 		plainTheme,
+		(agentId) => agentId === requesterAgentId ? "Requester" : undefined,
 	).render(120).join("\n");
 
-	assert.match(rendered, /Request.*from requester-agent/s);
+	assert.match(rendered, new RegExp(`Request.*from Requester · ${requesterAgentId}`, "s"));
 	assert.match(rendered, /Answer.*from responder-agent/s);
 	assert.match(rendered, /Request cancellation.*from cancelling-agent/s);
 	assert.match(rendered, /complete request body, including this final clause/);
@@ -96,8 +101,9 @@ test("Owner and participant extensions register the Message Delivery renderer", 
 	const unavailableView = () => {
 		throw new Error("Renderer registration does not execute coordination behavior");
 	};
+	const ownerHost = await createTestOwnerHost(t, piAgentCoordination);
 	const hosts = [
-		await createTestOwnerHost(t, piAgentCoordination),
+		ownerHost,
 		await createTestOwnerHost(
 			t,
 			createAgentBoundExtension(
@@ -105,6 +111,24 @@ test("Owner and participant extensions register the Message Delivery renderer", 
 			),
 		),
 	];
+	const ownerRenderer = ownerHost.session.extensionRunner.getMessageRenderer(
+		MESSAGE_DELIVERY_CUSTOM_TYPE,
+	);
+	if (!ownerRenderer) throw new Error("Owner Message Delivery renderer is unavailable");
+	const ownerAgentId = ownerHost.session.sessionId;
+	const ownerComponent = ownerRenderer(
+		customDelivery([{
+			kind: "message",
+			messageId: "owner-message",
+			fromAgentId: ownerAgentId,
+			content: "Owner-authored direction.",
+		}]),
+		{ expanded: false, outputPad: 1 },
+		plainTheme,
+	);
+	if (!ownerComponent) throw new Error("Owner Message Delivery did not render");
+	const ownerDelivery = ownerComponent.render(80).join("\n");
+	assert.match(ownerDelivery, new RegExp(`from Owner · ${ownerAgentId.slice(-8)}`));
 
 	for (const host of hosts) {
 		assert.equal(

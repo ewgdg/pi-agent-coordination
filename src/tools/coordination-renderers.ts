@@ -15,6 +15,11 @@ import {
 
 import type { AgentStatus } from "../coordination/agent-record.ts";
 import {
+	formatAgentIdentity,
+	formatKnownAgentIdentity,
+	type AgentLabelResolver,
+} from "../presentation/agent-identity.ts";
+import {
 	formatAgentWorkStatus,
 	selectedAgentWorkStatus,
 } from "../presentation/selected-agent-status.ts";
@@ -35,15 +40,21 @@ type AgentObserveInput = Readonly<{
 export function renderAgentObserveCall(
 	args: AgentObserveInput,
 	theme: Theme,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Text {
-	return toolCall(theme, "observe", [args.operation, args.agentId]);
+	return toolCall(theme, "observe", [
+		args.operation,
+		args.agentId
+			? formatAgentIdentity(args.agentId, resolveAgentLabel)
+			: undefined,
+	]);
 }
 
 export function renderAgentObserveResult(
 	result: AgentToolResult<unknown>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-	context: Readonly<{ args: AgentObserveInput }>,
+	_context: Readonly<{ args: AgentObserveInput }>,
 ): Text {
 	if (options.isPartial) return pending(theme, "inspecting");
 	const details = asRecord(result.details);
@@ -58,20 +69,18 @@ export function renderAgentObserveResult(
 	}
 	const status = observedAgentStatus(details);
 	return status
-		? agentStatusReceipt(
-			theme,
-			status,
-			result.details,
-			options,
-			context.args.agentId === undefined,
-		)
+		? agentStatusReceipt(theme, status, result.details, options)
 		: receipt(theme, "observed", result.details, options);
 }
 
-export function renderAgentControlCall(args: RunControlInput, theme: Theme): Text {
+export function renderAgentControlCall(
+	args: RunControlInput,
+	theme: Theme,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
+): Text {
 	return toolCall(theme, "control", [
 		args.operation,
-		args.agentId,
+		formatAgentIdentity(args.agentId, resolveAgentLabel),
 		args.operation === "resume" ? boundedToolPreview(args.content) : undefined,
 	]);
 }
@@ -80,11 +89,21 @@ export function renderAgentControlResult(
 	result: AgentToolResult<RunControlReceipt>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Text {
 	if (options.isPartial || result.details === undefined) return pending(theme, "controlling");
 	const details = result.details;
 	const disposition = "disposition" in details ? details.disposition : details.delivery;
-	return receipt(theme, `${disposition} · ${details.agentId}`, details, options);
+	return receipt(
+		theme,
+		`${disposition} · ${formatAgentIdentity(
+			details.agentId,
+			resolveAgentLabel,
+			options.expanded ? "full" : "compact",
+		)}`,
+		details,
+		options,
+	);
 }
 
 export function renderHumanRequestCall(
@@ -181,15 +200,20 @@ function agentStatusReceipt(
 	status: Pick<AgentStatus, "agentId" | "label" | "run">,
 	details: unknown,
 	options: ToolRenderResultOptions,
-	showAgentId: boolean,
 ): Text {
-	const label = theme.fg("toolTitle", theme.bold(status.label));
-	const agentId = showAgentId ? `\n${theme.fg("dim", status.agentId)}` : "";
+	const identity = theme.fg(
+		"toolTitle",
+		theme.bold(formatKnownAgentIdentity(
+			status.agentId,
+			status.label,
+			options.expanded ? "full" : "compact",
+		)),
+	);
 	const workStatus = formatAgentWorkStatus(
 		selectedAgentWorkStatus(status.run, false),
 		theme,
 	);
-	let text = `${label}${agentId}\n${workStatus}`;
+	let text = `${identity}\n${workStatus}`;
 	if (options.expanded) text += theme.fg("dim", `\n${JSON.stringify(details, null, 2)}`);
 	return new Text(text, 0, 0);
 }
