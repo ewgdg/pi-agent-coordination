@@ -176,6 +176,123 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 	await reopenedAgain.runtime.dispose();
 });
 
+test("a fresh Owner host rediscovers a conversation-fork child without copied obligations", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	await bindTestOwnerHost(host, "tui");
+	const historicalSource = {
+		agentId: "historical-requester",
+		entryId: "historical-request-entry",
+		toolCallId: "historical-inbound-request",
+	};
+	const historicalRequestId = deriveMessageIdentity(historicalSource);
+	const historicalDelivery = createMessageDelivery([{
+		source: historicalSource,
+		projection: {
+			kind: "request",
+			requestMessageId: historicalRequestId,
+			fromAgentId: historicalSource.agentId,
+			question: "Remain an obligation of the parent only.",
+		},
+	}]);
+	host.session.sessionManager.appendCustomMessageEntry(
+		historicalDelivery.customType,
+		historicalDelivery.content,
+		historicalDelivery.display,
+		historicalDelivery.details,
+	);
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "answer",
+				answer: "The conversation-fork child completed its own Creation Request.",
+			}, { id: "answer-fork-before-host-loss" }),
+			{ stopReason: "toolUse" },
+		),
+	]);
+	const spawned = await executeTool(host, "agent_spawn", "spawn-fork-before-host-loss", {
+		request: "Continue with inherited conversation before host loss.",
+		conversation: "fork",
+		label: "recovered-fork",
+	}) as { agentId: string };
+	const childSessionFile = await waitForSessionFile(
+		workflowSessionDirectory(host),
+		spawned.agentId,
+	);
+	await waitForTranscriptEntry(
+		childSessionFile,
+		(entry) => entry.type === "message" && entry.message.role === "toolResult" &&
+			entry.message.toolName === "agent_message",
+	);
+	const forkSource = host.session.sessionManager.getEntries().find(
+		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "toolCall" && part.id === "spawn-fork-before-host-loss",
+			),
+	);
+	assert.ok(forkSource?.parentId);
+	host.session.sessionManager.branch(forkSource.parentId);
+	host.session.sessionManager.appendMessage({
+		role: "user",
+		content: [{ type: "text", text: "Continue the parent on an alternate branch." }],
+		timestamp: Date.now(),
+	});
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage("The alternate parent branch does not revoke the child fork."),
+	);
+	const ownerSessionFile = host.session.sessionManager.getSessionFile();
+	assert.ok(ownerSessionFile);
+	await host.runtime.dispose();
+
+	const reopened = await reopenOwner(t, host, ownerSessionFile);
+	const observe = reopened.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const children = await observe.execute(
+		"observe-recovered-conversation-fork",
+		{ operation: "children" },
+		undefined,
+		undefined,
+		reopened.session.extensionRunner.createContext(),
+	);
+	assert.deepEqual(
+		(children.details as { children: Array<{ agentId: string; label: string }> }).children
+			.map(({ agentId, label }) => ({ agentId, label })),
+		[{ agentId: spawned.agentId, label: "recovered-fork" }],
+	);
+	const parentStatus = await observe.execute(
+		"observe-parent-historical-obligation",
+		{ operation: "status" },
+		undefined,
+		undefined,
+		reopened.session.extensionRunner.createContext(),
+	);
+	assert.equal(
+		retentionCount(
+			(parentStatus.details as {
+				run: { retentionReasons: Array<{ reason: string; count: number }> };
+			}).run,
+			"answer_owed",
+		),
+		1,
+	);
+	const childStatus = await observe.execute(
+		"observe-fork-without-historical-obligation",
+		{ operation: "status", agentId: spawned.agentId },
+		undefined,
+		undefined,
+		reopened.session.extensionRunner.createContext(),
+	);
+	assert.equal(
+		retentionCount(
+			(childStatus.details as {
+				run: { retentionReasons: Array<{ reason: string; count: number }> };
+			}).run,
+			"answer_owed",
+		),
+		0,
+	);
+	await reopened.runtime.dispose();
+});
+
 test("duplicate spawn claims quarantine only their dependent authority subtree", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");

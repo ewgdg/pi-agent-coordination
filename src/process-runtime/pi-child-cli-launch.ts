@@ -12,6 +12,7 @@ export function buildPiChildCliLaunch(options: {
 	cliPath: string;
 	sessionPath: string;
 	configuration: EffectiveAgentRunConfiguration;
+	initialTools?: readonly string[];
 	skillPaths: readonly string[];
 	bridgeExtensionPath: string;
 	inputExtensionPath: string;
@@ -22,6 +23,7 @@ export function buildPiChildCliLaunch(options: {
 		cliPath,
 		sessionPath,
 		configuration,
+		initialTools = configuration.allowedTools,
 		skillPaths,
 		bridgeExtensionPath,
 		inputExtensionPath,
@@ -68,9 +70,18 @@ export function buildPiChildCliLaunch(options: {
 	if (inputExtensionPath === bridgeExtensionPath) {
 		throw new Error("invalid_child_launch: bridge and input extensions must be distinct");
 	}
-	for (const toolName of configuration.allowedTools) {
+	const allowedToolNames = new Set(configuration.allowedTools);
+	if (new Set(initialTools).size !== initialTools.length) {
+		throw new Error("invalid_child_launch: initial tools contain duplicates");
+	}
+	for (const toolName of initialTools) {
 		if (toolName.includes(",")) {
 			throw new Error(`invalid_child_launch: tool name cannot contain a comma: ${toolName}`);
+		}
+		if (!allowedToolNames.has(toolName)) {
+			throw new Error(
+				`invalid_child_launch: initial tool exceeds the capability ceiling: ${toolName}`,
+			);
 		}
 	}
 
@@ -82,9 +93,9 @@ export function buildPiChildCliLaunch(options: {
 		`${configuration.model.provider}/${configuration.model.modelId}`,
 		"--thinking",
 		configuration.thinking,
-		...(configuration.allowedTools.length === 0
+		...(initialTools.length === 0
 			? ["--no-tools"]
-			: ["--tools", configuration.allowedTools.join(",")]),
+			: ["--tools", initialTools.join(",")]),
 		"--no-extensions",
 		// Control must be connected before inherited session_start handlers run: an
 		// inherited extension may synchronously open UI or initiate Agent work.

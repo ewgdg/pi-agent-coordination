@@ -48,7 +48,10 @@ An Agent-authored question that creates exactly one Answer obligation. A Request
 The immutable Agent that created a child Agent. It may passively observe, interrupt, or terminate Runs of that immediate child across Run incarnations, but gains no authority over transitive descendants.
 
 **Agent Spawn**:
-One operation available to each authenticated ordinary Agent—a Workflow Owner or spawned ordinary Agent—in a Workflow. It creates a fresh, context-isolated durable child Agent, makes the caller its immutable Direct Spawner, and starts the child's first Run immediately without approval. Its committed invocation also authors the child's Creation Request. The child Agent and Creation Request become canonical together when the child Agent Identity commits and references that invocation; later result, startup, or delivery failure never rolls either fact back. Ordinary Agents may use it for voluntary diagnostic delegation; Moderators do not create Agents.
+One operation available to each authenticated ordinary Agent—a Workflow Owner or spawned ordinary Agent—in a Workflow. It creates one fresh durable child Agent, makes the caller its immutable Direct Spawner, and starts the child's first Run immediately without approval. The child is context-isolated unless the caller selects a Conversation Fork. The committed invocation also authors the child's Creation Request. The child Agent and Creation Request become canonical together when the child Agent Identity commits and references that invocation; later result, startup, or delivery failure never rolls either fact back. Ordinary Agents may use it for voluntary diagnostic delegation; Moderators do not create Agents.
+
+**Conversation Fork**:
+An Agent Spawn mode that copies the Direct Spawner's active conversation only through the completed context immediately before the assistant entry containing the canonical Spawn call. It creates a new child in the same Workflow rather than a new Workflow. The fresh matching child Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no authority, Message visibility, child relationship, or Answer obligation. One model-visible handoff after that cutoff identifies inherited authorship before the ordinary Creation Request. A Conversation Fork cannot select an Agent Template or provide Agent Spawn Configuration, and its first provider request preserves the parent's prompt lineage for cache affinity without claiming a cache hit.
 
 **Creation Request**:
 The ordinary Agent Request authored by an Agent Spawn invocation as its child's initial work. Its identity derives from that invocation as a Message, while the matching child Agent Identity supplies its recipient and makes it canonical. It then uses ordinary fixed-mode delivery, retry, cancellation, Answer, and Answer Retrieval semantics without becoming an Agent lifecycle result.
@@ -58,7 +61,7 @@ A user-authored named partial Agent Runtime configuration selected by name durin
 _Avoid_: Agent profile, Agent role
 
 **Agent Spawn Configuration**:
-The optional caller-authored `config` object in the canonical Agent Spawn tool call. It is the only durable child Runtime configuration input and may override model, thinking, working directory, the ordinary-tool allowlist, skills, extension inheritance, and Project Context. The allowlist is a capability ceiling; Pi and extensions own the active subset and its order. It is never expanded into durable effective configuration.
+The optional caller-authored `config` object in a context-isolated canonical Agent Spawn tool call. It is the only durable child Runtime configuration input and may override model, thinking, working directory, the ordinary-tool allowlist, skills, extension inheritance, and Project Context. The allowlist is a capability ceiling; Pi and extensions own the active subset and its order. It is never expanded into durable effective configuration. A Conversation Fork rejects Agent Spawn Configuration.
 _Avoid_: Agent settings, runtime state, inheritance snapshot
 
 **Runtime Preparation**:

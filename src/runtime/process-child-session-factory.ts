@@ -110,6 +110,7 @@ export class ProcessChildSessionFactory {
 		agentId: string;
 		parent: AgentRecord;
 		spawnInput: AgentSpawnInput;
+		preserveParentPromptSurface?: boolean;
 	}): Promise<ProcessChildRunPreparation> {
 		return this.#prepareOrdinaryRun(options, new Set());
 	}
@@ -262,6 +263,7 @@ export class ProcessChildSessionFactory {
 			agentId: string;
 			parent: AgentRecord;
 			spawnInput: AgentSpawnInput;
+			preserveParentPromptSurface?: boolean;
 		},
 		resolving: Set<string>,
 	): Promise<PreparedChildRuntime> {
@@ -270,7 +272,7 @@ export class ProcessChildSessionFactory {
 			parentRuntime,
 			options.spawnInput.template,
 		);
-		return prepareChildRuntime({
+		const prepared = await prepareChildRuntime({
 			agentId: options.agentId,
 			role: "ordinary",
 			agentDir: this.#ownerRuntime.services.agentDir,
@@ -281,6 +283,13 @@ export class ProcessChildSessionFactory {
 				? {}
 				: { overrides: options.spawnInput.config }),
 		});
+		if (!options.preserveParentPromptSurface) return prepared;
+		if (!parentRuntime.activeTools) {
+			throw new Error(
+				"conversation_fork_unavailable: parent active tool surface is unavailable",
+			);
+		}
+		return { ...prepared, initialTools: [...parentRuntime.activeTools] };
 	}
 
 	async #resolveCurrentRuntime(
@@ -306,6 +315,7 @@ export class ProcessChildSessionFactory {
 						(path) => !this.#isCoordinationExtension(path),
 					),
 				},
+				activeTools: [...snapshot.tools],
 				projectTrusted: snapshot.projectTrusted,
 				skillSources: snapshot.skillSources.map(({ name, filePath }) => ({
 					name,
@@ -366,6 +376,7 @@ export class ProcessChildSessionFactory {
 					.extensions.map(({ resolvedPath }) => resolvedPath)
 					.filter((path) => !this.#isCoordinationExtension(path)),
 			},
+			activeTools: [...session.getActiveToolNames()],
 			projectTrusted: this.#ownerRuntime.services.settingsManager.isProjectTrusted(),
 			skillSources: skills.map(({ name, filePath }) => ({ name, filePath })),
 		};
@@ -390,6 +401,9 @@ export class ProcessChildSessionFactory {
 			expectedSessionId: identity.agentId,
 			sessionPath,
 			configuration: prepared.configuration,
+			...(prepared.initialTools === undefined
+				? {}
+				: { initialTools: prepared.initialTools }),
 			skillPaths: prepared.skillSources.map(({ path }) => path),
 			projectTrusted: prepared.projectTrusted,
 			agentDir: this.#ownerRuntime.services.agentDir,

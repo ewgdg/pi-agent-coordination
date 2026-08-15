@@ -5,7 +5,7 @@ Durable Pi agents that collaborate asynchronously under explicit Owner and Spawn
 ## Features
 
 - **Owner-directed Workflows:** the current interactive Pi session becomes the durable Workflow Owner. The Owner can fork or clone copied conversation into a fresh, independent Workflow.
-- **Durable child Agents:** ordinary Agents can create context-isolated children with `agent_spawn`.
+- **Durable child Agents:** ordinary Agents can create configurable context-isolated children or cache-affine conversation forks with `agent_spawn`.
 - **Messaging and Requests:** `agent_message` supports immutable Deferred and Steer Messages, one active incoming Request per Agent, automatically correlated Answers, retrieval, and cancellation. `agent_wait` parks a Run without consuming Workflow execution capacity when its next action requires selected outbound Answers together.
 - **Human decisions for spawned Agents:** `ask_user_question` lets a spawned Agent block its exact Run on one free-form Human Answer. The full request stays in the Agent transcript, while background requests appear as passive `DECIDE` attention.
 - **Run supervision:** Workflow Owners and Direct Spawners can inspect authorized Agents with `agent_observe`, then interrupt, explicitly resume, or terminate exact Runs with `agent_control`.

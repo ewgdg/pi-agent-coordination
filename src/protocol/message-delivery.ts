@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
+	CONVERSATION_FORK_CUSTOM_TYPE,
 	MODERATOR_ROUTINE_START_CUSTOM_TYPE,
 	OBLIGATION_REMINDER_CUSTOM_TYPE,
 	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
@@ -175,6 +176,7 @@ function readMessageDeliveries(options: {
 		if (!entry.customType.startsWith("agent-coordination.")) continue;
 		// Host-authored reminder, routine, and recovery entries are not Agent Messages.
 		if (
+			entry.customType === CONVERSATION_FORK_CUSTOM_TYPE ||
 			entry.customType === MODERATOR_ROUTINE_START_CUSTOM_TYPE ||
 			entry.customType === OBLIGATION_REMINDER_CUSTOM_TYPE ||
 			entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE

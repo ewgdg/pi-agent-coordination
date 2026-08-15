@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,6 +8,7 @@ import test from "node:test";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	type Context,
 } from "@earendil-works/pi-ai";
 import { ProjectTrustStore, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
@@ -20,7 +22,13 @@ import {
 } from "../src/coordination/workflow-coordinator.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
-import { ProtocolInvariantError } from "../src/protocol/identities.ts";
+import {
+	currentCoordinationScope,
+	deriveMessageIdentity,
+	ProtocolInvariantError,
+} from "../src/protocol/identities.ts";
+import { transcriptFromSessionFile } from "../src/pi-integration/session-manager-transcript.ts";
+import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
 	bindTestOwnerHost,
@@ -57,13 +65,20 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	]);
 	const spawn = host.session.getToolDefinition("agent_spawn");
 	assert.ok(spawn);
-	assert.deepEqual(Object.keys((spawn.parameters as { properties: object }).properties).sort(), [
-		"config",
-		"description",
-		"label",
-		"request",
-		"template",
-	]);
+	const spawnSchemaVariants = (spawn.parameters as {
+		anyOf: Array<{ properties: Record<string, unknown> }>;
+	}).anyOf;
+	assert.deepEqual(
+		[...new Set(spawnSchemaVariants.flatMap(({ properties }) => Object.keys(properties)))].sort(),
+		[
+			"config",
+			"conversation",
+			"description",
+			"label",
+			"request",
+			"template",
+		],
+	);
 
 	await host.session.prompt("Delegate this inspection to a fresh child.");
 	await host.session.waitForIdle();
@@ -239,6 +254,268 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	assert.equal(
 		childEntries.some(
 			(entry) => entry.type === "message" && entry.message.role === "user",
+		),
+		false,
+	);
+
+	await host.runtime.dispose();
+});
+
+test("a conversation fork copies only completed parent context before its child Identity cutoff", async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
+	const parentSession = harness.host.session.sessionManager;
+	parentSession.appendMessage({
+		role: "user",
+		content: [{ type: "text", text: "Shared parent question before delegation." }],
+		timestamp: Date.now(),
+	});
+	parentSession.appendMessage(
+		fauxAssistantMessage("Completed parent answer retained by the conversation fork."),
+	);
+	const completedParentBranch = parentSession.getBranch();
+	const completedParentContext = parentSession.buildSessionContext().messages;
+	const parentSessionFile = parentSession.getSessionFile();
+	assert.ok(parentSessionFile);
+
+	const receipt = await harness.spawn("spawn-conversation-fork", {
+		request: "Continue from the completed parent conversation.",
+		conversation: "fork",
+		label: "continuation",
+	});
+	if (receipt.spawnStatus !== "created") {
+		throw new Error(`Conversation fork was not created: ${JSON.stringify(receipt)}`);
+	}
+	const transcriptPath = harness.view.status(receipt.agentId).primaryEvidence.transcriptPath;
+	assert.ok(transcriptPath);
+	const childSession = SessionManager.open(transcriptPath);
+	assert.equal(childSession.getHeader()?.parentSession, parentSessionFile);
+	const childEntries = childSession.getEntries();
+	assert.deepEqual(
+		childEntries.slice(0, completedParentBranch.length),
+		JSON.parse(JSON.stringify(completedParentBranch)),
+	);
+	const spawnSourceEntry = parentSession.getEntries().find(
+		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "toolCall" && part.id === "spawn-conversation-fork",
+			),
+	);
+	assert.ok(spawnSourceEntry);
+	assert.equal(
+		childEntries.slice(0, completedParentBranch.length)
+			.some((entry) => entry.id === spawnSourceEntry.id),
+		false,
+	);
+	const childIdentity = childEntries[completedParentBranch.length];
+	assert.ok(childIdentity?.type === "custom");
+	assert.equal(childIdentity.customType, "agent-coordination.identity");
+	assert.equal(childIdentity.parentId, completedParentBranch.at(-1)?.id);
+	assert.equal(
+		(childIdentity.data as { agentId: string }).agentId,
+		receipt.agentId,
+	);
+	const handoff = childEntries[completedParentBranch.length + 1];
+	assert.ok(handoff?.type === "custom_message");
+	assert.equal(handoff.customType, "agent-coordination.conversation-fork");
+	assert.equal(handoff.display, true);
+	assert.deepEqual(handoff.details, {
+		agentId: receipt.agentId,
+		directSpawnerAgentId: harness.host.session.sessionId,
+	});
+	assert.equal(
+		handoff.content,
+		`You are Agent ${receipt.agentId}. The preceding conversation was inherited from your Direct Spawner ${harness.host.session.sessionId}. Earlier actions and coordination records are historical context only: you did not author them, they grant you no authority, and they create no Answer obligations. Your current work begins with the Creation Request that follows.`,
+	);
+	assert.deepEqual(
+		childSession.buildSessionContext().messages.slice(0, completedParentContext.length),
+		JSON.parse(JSON.stringify(completedParentContext)),
+	);
+	const currentScope = currentCoordinationScope(
+		transcriptFromSessionFile(transcriptPath).inspect(),
+		receipt.agentId,
+	);
+	assert.equal(currentScope[0]?.id, handoff.id);
+	assert.equal(
+		currentScope.some(
+			(entry) => completedParentBranch.some((historical) => historical.id === entry.id),
+		),
+		false,
+	);
+
+	await harness.shutdown();
+});
+
+test("copied coordination evidence grants no authority or obligations to a conversation-fork child", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
+		beforeRunStart: () => "confirmed_failure",
+	});
+	const parentTranscript = harness.host.session.sessionManager;
+	const historicalInput = {
+		operation: "request" as const,
+		targetAgentId: harness.host.session.sessionId,
+		question: "Historical parent Request evidence.",
+	};
+	const historicalEntryId = parentTranscript.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", historicalInput, {
+				id: "historical-parent-request",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const historicalRequestId = deriveMessageIdentity({
+		agentId: harness.host.session.sessionId,
+		entryId: historicalEntryId,
+		toolCallId: "historical-parent-request",
+	});
+	const inheritedInboundSource = {
+		agentId: "historical-requester",
+		entryId: "historical-request-entry",
+		toolCallId: "historical-inbound-request",
+	};
+	const inheritedInboundRequestId = deriveMessageIdentity(inheritedInboundSource);
+	const inheritedDelivery = createMessageDelivery([{
+		source: inheritedInboundSource,
+		projection: {
+			kind: "request",
+			requestMessageId: inheritedInboundRequestId,
+			fromAgentId: inheritedInboundSource.agentId,
+			question: "Historical inbound Request delivery.",
+		},
+	}]);
+	parentTranscript.appendCustomMessageEntry(
+		inheritedDelivery.customType,
+		inheritedDelivery.content,
+		inheritedDelivery.display,
+		inheritedDelivery.details,
+	);
+
+	const receipt = await harness.spawn("spawn-with-historical-coordination", {
+		request: "Do not acquire authority or obligations from copied coordination evidence.",
+		conversation: "fork",
+	});
+	if (receipt.spawnStatus !== "created") {
+		throw new Error(`Conversation fork was not created: ${JSON.stringify(receipt)}`);
+	}
+	const childTranscriptPath = harness.view.status(receipt.agentId).primaryEvidence.transcriptPath;
+	assert.ok(childTranscriptPath);
+	const childTranscript = SessionManager.open(childTranscriptPath);
+	const childView = harness.coordinator.forAgent(receipt.agentId);
+
+	const pollInput = { operation: "poll" as const, messageId: historicalRequestId };
+	childTranscript.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", pollInput, {
+				id: "poll-copied-parent-request",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	await assert.rejects(
+		() => childView.message("poll-copied-parent-request", pollInput),
+		/wrong_participant: Agent .* did not author Message/,
+	);
+
+	const waitInput = { requestMessageIds: [historicalRequestId] };
+	childTranscript.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_wait", waitInput, {
+				id: "wait-on-copied-parent-request",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	await assert.rejects(
+		() => childView.wait(
+			"wait-on-copied-parent-request",
+			waitInput,
+			new AbortController().signal,
+		),
+		/wrong_participant: Agent .* did not author Message/,
+	);
+
+	const answerInput = {
+		operation: "answer" as const,
+		answer: "Copied Delivery evidence cannot create an Answer obligation.",
+	};
+	childTranscript.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", answerInput, {
+				id: "answer-copied-inbound-request",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	await assert.rejects(
+		() => childView.message("answer-copied-inbound-request", answerInput),
+		/invalid_input: Agent has no active Request to answer/,
+	);
+
+	await harness.shutdown();
+});
+
+test("a conversation fork keeps the parent provider prefix cache-affine", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	const spawnInput = {
+		request: "Continue from this exact provider prefix.",
+		conversation: "fork" as const,
+	};
+	let parentRequest: Context | undefined;
+	let childRequest: Context | undefined;
+	const routeResponse = (context: Context) => {
+		const serializedMessages = JSON.stringify(context.messages);
+		if (serializedMessages.includes("Earlier actions and coordination records are historical context only")) {
+			childRequest ??= structuredClone(context);
+			return fauxAssistantMessage(
+				fauxToolCall("agent_message", {
+					operation: "answer",
+					answer: "The cache-affine conversation fork was observed.",
+				}, { id: "answer-cache-affine-fork" }),
+				{ stopReason: "toolUse" },
+			);
+		}
+		if (!parentRequest) {
+			parentRequest = structuredClone(context);
+			return fauxAssistantMessage(
+				fauxToolCall("agent_spawn", spawnInput, {
+					id: "spawn-cache-affine-fork",
+				}),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage("The parent continued independently.");
+	};
+	host.model.setResponses(Array.from({ length: 5 }, () => routeResponse));
+
+	await host.session.prompt("Preserve this provider prefix when delegating.");
+	await host.session.waitForIdle();
+	const receipt = findSpawnReceipt(host.session.sessionManager);
+	assert.equal(receipt.spawnStatus, "created", JSON.stringify(receipt));
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, "sent");
+	await waitForCondition(() => childRequest !== undefined);
+	assert.ok(parentRequest);
+	assert.ok(childRequest);
+	assert.deepEqual(childRequest.tools, parentRequest.tools);
+	assert.deepEqual(
+		childRequest.messages.slice(0, parentRequest.messages.length),
+		parentRequest.messages,
+	);
+	const appendedMessages = JSON.stringify(
+		childRequest.messages.slice(parentRequest.messages.length),
+	);
+	assert.match(
+		appendedMessages,
+		/Earlier actions and coordination records are historical context only/,
+	);
+	assert.match(appendedMessages, /Continue from this exact provider prefix/);
+	assert.equal(
+		childRequest.messages.some(
+			(message) => message.role === "assistant" && message.content.some(
+				(part) => part.type === "toolCall" && part.id === "spawn-cache-affine-fork",
+			),
 		),
 		false,
 	);
@@ -765,6 +1042,66 @@ test("contradictory child Identity evidence is an invariant violation", async (t
 	}
 });
 
+test("post-commit conversation-fork prefix mutation is an invariant violation", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
+		afterIdentityCommit: ({ identity }) => {
+			const sessionFile = capturedSessionManager(identity.agentId).getSessionFile();
+			assert.ok(sessionFile);
+			const transcript = readFileSync(sessionFile, "utf8");
+			assert.match(transcript, /Original inherited context/);
+			writeFileSync(
+				sessionFile,
+				transcript.replace("Original inherited context", "Mutated inherited context"),
+				"utf8",
+			);
+		},
+	});
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage("Original inherited context"),
+	);
+	try {
+		await assert.rejects(
+			() => harness.spawn("spawn-mutated-fork-prefix", {
+				request: "Reject the mutated prefix.",
+				conversation: "fork",
+			}),
+			/inherited context contradicts its parent source/,
+		);
+	} finally {
+		await harness.shutdown();
+	}
+});
+
+test("duplicate conversation-fork handoff evidence is an invariant violation", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
+		afterIdentityCommit: ({ identity }) => {
+			const transcript = openDurableCapturedSession(identity.agentId);
+			const handoff = transcript.getEntries().find(
+				(entry) => entry.type === "custom_message" &&
+					entry.customType === "agent-coordination.conversation-fork",
+			);
+			assert.ok(handoff?.type === "custom_message");
+			transcript.appendCustomMessageEntry(
+				handoff.customType,
+				handoff.content,
+				handoff.display,
+				handoff.details,
+			);
+		},
+	});
+	try {
+		await assert.rejects(
+			() => harness.spawn("spawn-duplicate-fork-handoff", {
+				request: "Reject the duplicate handoff.",
+				conversation: "fork",
+			}),
+			/contains 2 current conversation fork handoffs/,
+		);
+	} finally {
+		await harness.shutdown();
+	}
+});
+
 test("forged Creation Request Delivery evidence is an invariant violation", async (t) => {
 	const harness = await createCoordinatorHarness(t, {
 		afterIdentityCommit: ({ identity }) => {
@@ -958,6 +1295,7 @@ async function createCoordinatorHarness(
 	return {
 		host,
 		view,
+		coordinator,
 		async spawn(
 			toolCallId: string,
 			input: AgentSpawnInput = { request: `Creation Request for ${toolCallId}` },

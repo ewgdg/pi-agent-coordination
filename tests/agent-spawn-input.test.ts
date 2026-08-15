@@ -3,6 +3,37 @@ import test from "node:test";
 
 import { validateAgentSpawnInput } from "../src/protocol/agent-spawn-input.ts";
 
+test("Agent Spawn accepts an unconfigured conversation fork", () => {
+	assert.deepEqual(validateAgentSpawnInput({
+		request: "Continue from the spawning conversation.",
+		conversation: "fork",
+		label: "continuation",
+	}), {
+		request: "Continue from the spawning conversation.",
+		conversation: "fork",
+		label: "continuation",
+	});
+});
+
+test("conversation fork rejects Template and Runtime configuration inputs", () => {
+	assert.throws(
+		() => validateAgentSpawnInput({
+			request: "Do not change the forked prompt lineage.",
+			conversation: "fork",
+			template: "reviewer",
+		}),
+		/conversation fork cannot select an Agent Template/,
+	);
+	assert.throws(
+		() => validateAgentSpawnInput({
+			request: "Do not change the forked prompt lineage.",
+			conversation: "fork",
+			config: { allowed_tools: ["read"] },
+		}),
+		/conversation fork cannot provide Runtime configuration/,
+	);
+});
+
 test("Agent Spawn accepts allowed_tools as the tool capability ceiling", () => {
 	assert.deepEqual(validateAgentSpawnInput({
 		request: "Inspect the child Runtime.",

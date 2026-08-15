@@ -8,6 +8,7 @@ import {
 
 export type AgentSpawnInput = Readonly<{
 	request: string;
+	conversation?: "fork";
 	template?: string;
 	label?: string;
 	description?: string;
@@ -17,6 +18,7 @@ export type AgentSpawnInput = Readonly<{
 export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSpawnInput {
 	requireExactKeys(value, [
 		"request",
+		...(value.conversation === undefined ? [] : ["conversation"]),
 		...(value.template === undefined ? [] : ["template"]),
 		...(value.label === undefined ? [] : ["label"]),
 		...(value.description === undefined ? [] : ["description"]),
@@ -24,6 +26,17 @@ export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSp
 	]);
 	if (typeof value.request !== "string" || value.request.length === 0) {
 		throw new Error("invalid_input: Agent Spawn request must not be empty");
+	}
+	const conversation = validateConversation(value.conversation);
+	if (conversation === "fork" && value.template !== undefined) {
+		throw new Error(
+			"invalid_input: Agent Spawn conversation fork cannot select an Agent Template",
+		);
+	}
+	if (conversation === "fork" && value.config !== undefined) {
+		throw new Error(
+			"invalid_input: Agent Spawn conversation fork cannot provide Runtime configuration",
+		);
 	}
 	const template = optionalString(value.template, "template");
 	if (template !== undefined) {
@@ -39,11 +52,17 @@ export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSp
 	const config = value.config === undefined ? undefined : validateConfiguration(value.config);
 	return {
 		request: value.request,
+		...(conversation === undefined ? {} : { conversation }),
 		...(template === undefined ? {} : { template }),
 		...(label === undefined ? {} : { label }),
 		...(description === undefined ? {} : { description }),
 		...(config === undefined ? {} : { config }),
 	};
+}
+
+function validateConversation(value: unknown): "fork" | undefined {
+	if (value === undefined || value === "fork") return value;
+	throw new Error('invalid_input: Agent Spawn conversation must be "fork"');
 }
 
 function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {

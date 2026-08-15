@@ -153,8 +153,26 @@ test("Agent Wait schema requires explicit unique Request identities", () => {
 	}), false);
 });
 
-test("Agent Spawn schema rejects extension path arrays", () => {
+test("Agent Spawn schema accepts conversation forks and rejects extension path arrays", () => {
 	const schema = participantCoordinationToolSchemas.agent_spawn;
+	assert.equal(Value.Check(schema, {
+		request: "Continue the completed conversation.",
+		conversation: "fork",
+	}), true);
+	assert.equal(Value.Check(schema, {
+		request: "Do not accept unknown conversation modes.",
+		conversation: "copy",
+	}), false);
+	assert.equal(Value.Check(schema, {
+		request: "Do not configure a conversation fork.",
+		conversation: "fork",
+		config: { allowed_tools: ["read"] },
+	}), false);
+	assert.equal(Value.Check(schema, {
+		request: "Do not select a Template for a conversation fork.",
+		conversation: "fork",
+		template: "reviewer",
+	}), false);
 	assert.equal(Value.Check(schema, {
 		request: "Inspect the child Runtime.",
 		config: { extensions: "inherit" },
@@ -261,7 +279,10 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 	assert.ok(spawn);
 	assert.deepEqual(message.promptGuidelines, [expectedGuide]);
 	assert.deepEqual(wait.promptGuidelines, [expectedGuide]);
-	assert.deepEqual(spawn.promptGuidelines, [expectedGuide]);
+	assert.deepEqual(spawn.promptGuidelines, [
+		expectedGuide,
+		'Use agent_spawn `conversation: "fork"` only for a cache-affine continuation of the completed current conversation. A conversation fork cannot select a template or provide config.',
+	]);
 	host.model.setResponses([(context) => {
 		observedSystemPrompt = context.systemPrompt ?? "";
 		return fauxAssistantMessage("Done.");
@@ -291,8 +312,9 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	assert.deepEqual(toolMetadata(ordinary, "agent_spawn"), {
 		label: "Spawn Agent",
 		description:
-			"Create one fresh durable child Agent with inherited runtime configuration and deliver its initial Creation Request.",
-		promptSnippet: "Create one fresh child Agent and give it isolated initial work.",
+			"Create one fresh durable child Agent with isolated context or a cache-affine conversation fork, then deliver its initial Creation Request.",
+		promptSnippet:
+			"Create a fresh child Agent with isolated work or a cache-affine conversation fork.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(ordinary, "agent_observe"), {

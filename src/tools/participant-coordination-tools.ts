@@ -58,6 +58,9 @@ agent_message operation "answer" supplies Answer text only. The coordinator bind
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
 </agent_control>`;
 
+const AGENT_SPAWN_PROMPT_GUIDE =
+	'Use agent_spawn `conversation: "fork"` only for a cache-affine continuation of the completed current conversation. A conversation fork cannot select a template or provide config.';
+
 export type AgentObserveInput = Readonly<{
 	operation: "status" | "children";
 	agentId?: string;
@@ -184,62 +187,73 @@ const agentWaitParameters = Type.Object(
 	{ additionalProperties: false },
 );
 
-const agentSpawnParameters = Type.Object(
+const agentSpawnConfigurationParameters = Type.Object(
 	{
-		request: Type.String({ minLength: 1 }),
-		template: Type.Optional(
-			Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
-		),
-		label: Type.Optional(Type.String({ minLength: 1 })),
-		description: Type.Optional(Type.String({ minLength: 1 })),
-		config: Type.Optional(
+		model: Type.Optional(
 			Type.Object(
 				{
-					model: Type.Optional(
-						Type.Object(
-							{
-								id: Type.Union([
-									Type.String({ pattern: "^[^/]+/.+$" }),
-									Type.Literal("inherit"),
-								]),
-								thinking: Type.Union([
-									Type.Literal("off"),
-									Type.Literal("minimal"),
-									Type.Literal("low"),
-									Type.Literal("medium"),
-									Type.Literal("high"),
-									Type.Literal("xhigh"),
-									Type.Literal("max"),
-									Type.Literal("inherit"),
-								]),
-							},
-							{ additionalProperties: false },
-						),
-					),
-					cwd: Type.Optional(Type.String({ minLength: 1 })),
-					allowed_tools: Type.Optional(
-						Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
-					),
-					skills: Type.Optional(
-						Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
-					),
-					extensions: Type.Optional(
-						Type.Union([
-							Type.Literal("inherit"),
-							Type.Literal("none"),
-						]),
-					),
-					projectContext: Type.Optional(Type.String()),
-					projectContextMode: Type.Optional(
-						Type.Union([Type.Literal("append"), Type.Literal("replace")]),
-					),
+					id: Type.Union([
+						Type.String({ pattern: "^[^/]+/.+$" }),
+						Type.Literal("inherit"),
+					]),
+					thinking: Type.Union([
+						Type.Literal("off"),
+						Type.Literal("minimal"),
+						Type.Literal("low"),
+						Type.Literal("medium"),
+						Type.Literal("high"),
+						Type.Literal("xhigh"),
+						Type.Literal("max"),
+						Type.Literal("inherit"),
+					]),
 				},
 				{ additionalProperties: false },
 			),
 		),
+		cwd: Type.Optional(Type.String({ minLength: 1 })),
+		allowed_tools: Type.Optional(
+			Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
+		),
+		skills: Type.Optional(
+			Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
+		),
+		extensions: Type.Optional(
+			Type.Union([
+				Type.Literal("inherit"),
+				Type.Literal("none"),
+			]),
+		),
+		projectContext: Type.Optional(Type.String()),
+		projectContextMode: Type.Optional(
+			Type.Union([Type.Literal("append"), Type.Literal("replace")]),
+		),
 	},
 	{ additionalProperties: false },
 );
+
+const agentSpawnParameters = objectRootUnion(Type.Union([
+	Type.Object(
+		{
+			request: Type.String({ minLength: 1 }),
+			conversation: Type.Literal("fork"),
+			label: Type.Optional(Type.String({ minLength: 1 })),
+			description: Type.Optional(Type.String({ minLength: 1 })),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			request: Type.String({ minLength: 1 }),
+			template: Type.Optional(
+				Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
+			),
+			label: Type.Optional(Type.String({ minLength: 1 })),
+			description: Type.Optional(Type.String({ minLength: 1 })),
+			config: Type.Optional(agentSpawnConfigurationParameters),
+		},
+		{ additionalProperties: false },
+	),
+]));
 
 const agentObserveParameters = objectRootUnion(Type.Union([
 	Type.Object(
@@ -398,9 +412,9 @@ export function registerParticipantCoordinationTools<
 			name: "agent_spawn",
 			label: "Spawn Agent",
 			description:
-				"Create one fresh durable child Agent with inherited runtime configuration and deliver its initial Creation Request.",
-			promptSnippet: "Create one fresh child Agent and give it isolated initial work.",
-			promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
+				"Create one fresh durable child Agent with isolated context or a cache-affine conversation fork, then deliver its initial Creation Request.",
+			promptSnippet: "Create a fresh child Agent with isolated work or a cache-affine conversation fork.",
+			promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE, AGENT_SPAWN_PROMPT_GUIDE],
 			executionMode: "sequential",
 			parameters: agentSpawnParameters,
 			renderCall: renderAgentSpawnCall,

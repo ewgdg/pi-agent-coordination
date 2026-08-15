@@ -7,11 +7,22 @@ import {
 	type SessionEntry,
 	type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { rename, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 
-import { validateColdChildIdentity } from "../protocol/child-identity.ts";
+import {
+	commitChildAgentIdentity,
+	type ChildAgentIdentity,
+	validateColdChildConversationMode,
+	validateColdChildIdentity,
+	validateCommittedChildIdentity,
+} from "../protocol/child-identity.ts";
+import {
+	completedConversationForkPrefix,
+	createConversationForkHandoff,
+} from "../protocol/conversation-fork.ts";
 import {
 	MODERATOR_INPUT_CUSTOM_TYPE,
 	validateColdModeratorInput,
@@ -105,6 +116,79 @@ export function transcriptFromSessionFile(sessionFile: string): AgentTranscript 
 }
 
 /** Persists pre-launch evidence before a fresh Pi process becomes transcript authority. */
+export async function materializeForkedAgentTranscript(options: {
+	sessionManager: SessionManager;
+	parentTranscript: TranscriptInspection;
+	identity: ChildAgentIdentity;
+}): Promise<string> {
+	const { sessionManager, parentTranscript, identity } = options;
+	const sessionFile = sessionManager.getSessionFile();
+	const header = sessionManager.getHeader();
+	if (!sessionFile || !header) {
+		throw new Error("transcript_materialization_failed: persisted session header is unavailable");
+	}
+	if (parentTranscript.transcriptPath === null) {
+		throw new Error(
+			"transcript_materialization_failed: conversation fork parent transcript is not durable",
+		);
+	}
+	const inheritedEntries = completedConversationForkPrefix({
+		parentTranscript,
+		source: identity.spawnSource,
+	});
+	const forkHeader: SessionHeader = {
+		...header,
+		parentSession: parentTranscript.transcriptPath,
+	};
+	// Stage outside discovery so the inherited prefix, child Identity, and handoff
+	// become visible together at one atomic rename.
+	const stagingFile = `${sessionFile}.staging-${randomUUID()}`;
+	try {
+		await writeFile(
+			stagingFile,
+			`${[forkHeader, ...inheritedEntries]
+				.map((entry) => JSON.stringify(entry))
+				.join("\n")}\n`,
+			{ encoding: "utf8", flag: "wx", mode: 0o600 },
+		);
+		const stagedSession = SessionManager.open(stagingFile, sessionManager.getSessionDir());
+		commitChildAgentIdentity(stagedSession, identity, { inheritedConversation: true });
+		const handoff = createConversationForkHandoff({
+			agentId: identity.agentId,
+			directSpawnerAgentId: identity.directSpawnerAgentId,
+		});
+		stagedSession.appendCustomMessageEntry(
+			handoff.customType,
+			handoff.content,
+			handoff.display,
+			handoff.details,
+		);
+		await writeFile(
+			stagingFile,
+			`${[forkHeader, ...stagedSession.getEntries()]
+				.map((entry) => JSON.stringify(entry))
+				.join("\n")}\n`,
+			{ encoding: "utf8", mode: 0o600 },
+		);
+		const stagedInspection = transcriptFromSessionFile(stagingFile).inspect();
+		validateCommittedChildIdentity(
+			stagedInspection,
+			identity,
+			{ inheritedConversation: true },
+		);
+		validateColdChildConversationMode({
+			entries: stagedInspection.entries,
+			identity,
+			inheritedConversation: true,
+		});
+		await rename(stagingFile, sessionFile);
+		return sessionFile;
+	} catch (error) {
+		await unlink(stagingFile).catch(() => undefined);
+		throw error;
+	}
+}
+
 export async function materializeNewAgentTranscript(
 	sessionManager: SessionManager,
 ): Promise<string> {
@@ -132,7 +216,12 @@ export async function materializeNewAgentTranscript(
 	) {
 		validateColdModeratorInput(coldIdentityOptions);
 	} else {
-		validateColdChildIdentity(coldIdentityOptions);
+		const identity = validateColdChildIdentity(coldIdentityOptions);
+		validateColdChildConversationMode({
+			entries,
+			identity,
+			inheritedConversation: false,
+		});
 	}
 	const body = `${[header, ...entries]
 		.map((entry) => JSON.stringify(entry))

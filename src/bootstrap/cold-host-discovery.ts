@@ -9,11 +9,13 @@ import { isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { resolveOrdinaryAgentMetadata } from "../protocol/agent-metadata.ts";
+import { validateConversationForkTranscript } from "../protocol/conversation-fork.ts";
 import {
 	type AgentSpawnInput,
 	validateAgentSpawnInput,
 } from "../protocol/agent-spawn-input.ts";
 import {
+	validateColdChildConversationMode,
 	validateColdChildIdentity,
 	type ChildAgentIdentity,
 } from "../protocol/child-identity.ts";
@@ -180,6 +182,19 @@ export async function discoverColdWorkflow(options: {
 				throw new Error("spawn pointer entry does not match");
 			}
 			const input = validateAgentSpawnInput(committed.input);
+			const childInspection = transcriptFromSessionFile(candidate.path).inspect();
+			validateColdChildConversationMode({
+				entries: childInspection.entries,
+				identity: candidate.identity,
+				inheritedConversation: input.conversation === "fork",
+			});
+			if (input.conversation === "fork") {
+				validateConversationForkTranscript({
+					parentTranscript: parentInspection,
+					childTranscript: childInspection,
+					identity: candidate.identity,
+				});
+			}
 			const metadata = resolveOrdinaryAgentMetadata({
 				explicitLabel: input.label,
 				explicitDescription: input.description,
@@ -349,7 +364,8 @@ async function readCandidate(path: string): Promise<Candidate> {
 	try {
 		if (
 			entries.some((entry) => entry.type === "custom_message" &&
-				entry.customType === MODERATOR_INPUT_CUSTOM_TYPE)
+				entry.customType === MODERATOR_INPUT_CUSTOM_TYPE &&
+				isRecord(entry.details) && entry.details.agentId === header.id)
 		) {
 			candidateIdentity = {
 				role: "moderator",
