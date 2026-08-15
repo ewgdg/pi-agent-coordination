@@ -59,6 +59,11 @@ export type ControlBackedChildParticipantHandlers<Role extends RemoteParticipant
 	coordination: ParticipantCoordinationToolHandlers<Role>;
 }>;
 
+export type ChildNativeInputIdentity = Readonly<{
+	current(): number | undefined;
+	take(): number | undefined;
+}>;
+
 type CommonChildCoordinationHandlers = Pick<
 	ParticipantCoordinationToolHandlers<"ordinary">,
 	"observe" | "message" | "control"
@@ -77,23 +82,34 @@ export function createControlBackedChildPresentationHandlers(
 export function createControlBackedChildParticipantHandlers(
 	role: "ordinary",
 	request: ChildParticipantControlRequester,
+	nativeInputIdentity?: ChildNativeInputIdentity,
 ): ControlBackedChildParticipantHandlers<"ordinary">;
 export function createControlBackedChildParticipantHandlers(
 	role: "moderator",
 	request: ChildParticipantControlRequester,
+	nativeInputIdentity?: ChildNativeInputIdentity,
 ): ControlBackedChildParticipantHandlers<"moderator">;
 export function createControlBackedChildParticipantHandlers(
 	role: RemoteParticipantRole,
 	request: ChildParticipantControlRequester,
+	nativeInputIdentity?: ChildNativeInputIdentity,
 ): ControlBackedChildParticipantHandlers<"ordinary"> | ControlBackedChildParticipantHandlers<"moderator"> {
 	const lifecycle: ParticipantLifecycleHandlers = {
 		async executionStarted() {
-			await request("runtime.executionBegin", {});
+			const submissionSequence = nativeInputIdentity?.take();
+			await request("runtime.executionBegin", {
+				...(submissionSequence === undefined ? {} : { submissionSequence }),
+			});
 		},
 		async humanInputSubmitted(input) {
+			const submissionSequence = nativeInputIdentity?.current();
+			if (submissionSequence === undefined) {
+				throw new Error("child_runtime_active_input_identity_unavailable");
+			}
 			return (await request("runtime.humanInput", {
 				text: input.text,
 				...(input.images === undefined ? {} : { images: input.images }),
+				submissionSequence,
 			})).disposition;
 		},
 		async humanInputMode() {
@@ -153,7 +169,7 @@ export async function dispatchParticipantRequestToOwner(
 	let response: unknown;
 	switch (request.method) {
 		case "runtime.executionBegin":
-			await handlers.lifecycle.executionStarted();
+			await handlers.lifecycle.executionStarted(request.payload.submissionSequence);
 			response = {};
 			break;
 		case "runtime.humanInput":
@@ -161,6 +177,7 @@ export async function dispatchParticipantRequestToOwner(
 				disposition: await handlers.lifecycle.humanInputSubmitted({
 					text: request.payload.text,
 					images: request.payload.images,
+					submissionSequence: request.payload.submissionSequence,
 				}),
 			};
 			break;

@@ -159,9 +159,11 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.equal(Check(agentControlMethods["runtime.humanInput"].request, {
 		text: "continue",
 		images: [{ type: "image", data: "base64", mimeType: "image/png" }],
+		submissionSequence: 3,
 	}), true);
 	assert.equal(Check(agentControlMethods["runtime.humanInput"].request, {
 		text: "continue",
+		submissionSequence: 3,
 		extra: true,
 	}), false);
 	assert.equal(Check(agentControlMethods["coordination.message"].request, {

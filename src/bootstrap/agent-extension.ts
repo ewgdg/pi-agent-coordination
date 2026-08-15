@@ -153,10 +153,14 @@ export function participantLifecycleHandlers(
 	resolveView: () => OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView,
 ): ParticipantLifecycleHandlers {
 	return {
-		executionStarted: () => resolveView().beginExecution(),
-		async humanInputSubmitted(input) {
-			return resolveView().resumeFromHuman(input.text, input.images);
-		},
+		executionStarted: (submissionSequence) =>
+			resolveView().beginExecution(submissionSequence),
+		humanInputSubmitted: (input) =>
+			resolveView().resumeFromHuman(
+				input.text,
+				input.images,
+				input.submissionSequence,
+			),
 		async humanInputMode() {
 			return resolveView().agentActivity().answerMode ? "answer" : "agent";
 		},

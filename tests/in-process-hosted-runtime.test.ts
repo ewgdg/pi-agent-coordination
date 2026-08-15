@@ -68,6 +68,8 @@ test("InProcessHostedRuntime translates Pi lifecycle and owns Pi intentions", as
 		addFailureHandler: () => () => undefined,
 		addExitRequestHandler: () => () => undefined,
 		isProcessingInput: () => false,
+		fenceInputSubmissions() {},
+		inputSubmissionIsFenced: () => false,
 		whenInputIdle: async () => undefined,
 		ready: async () => undefined,
 		cancelInitialization: () => undefined,

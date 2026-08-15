@@ -535,10 +535,25 @@ export const RuntimeSnapshotSchema = closed({
 /** Bridge-proven version-one method payload/result map. */
 export const agentControlMethods = {
 	"runtime.snapshot": { request: EmptySchema, response: RuntimeSnapshotSchema },
-	"runtime.executionBegin": { request: EmptySchema, response: EmptyResponseSchema },
+	"runtime.executionBegin": {
+		request: closed({
+			submissionSequence: Type.Optional(Type.Integer({ minimum: 1 })),
+		}),
+		response: EmptyResponseSchema,
+	},
 	"runtime.humanInput": {
-		request: closed({ text: Type.String(), images: Type.Optional(ImageListSchema) }),
-		response: closed({ resumed: Type.Boolean() }),
+		request: closed({
+			text: Type.String(),
+			images: Type.Optional(ImageListSchema),
+			submissionSequence: Type.Integer({ minimum: 1 }),
+		}),
+		response: closed({
+			disposition: Type.Union([
+				Type.Literal("continue"),
+				Type.Literal("submitted"),
+				Type.Literal("discarded"),
+			]),
+		}),
 	},
 	"runtime.humanInputMode": {
 		request: EmptySchema,
@@ -641,8 +656,12 @@ export const agentControlEvents = {
 	"runtime.input.submissionAcknowledged": {
 		payload: closed({ sequence: Type.Integer({ minimum: 1 }) }),
 	},
-	"runtime.input.started": { payload: EmptySchema },
-	"runtime.input.completed": { payload: EmptySchema },
+	"runtime.input.started": {
+		payload: closed({ sequence: Type.Integer({ minimum: 1 }) }),
+	},
+	"runtime.input.completed": {
+		payload: closed({ sequence: Type.Integer({ minimum: 1 }) }),
+	},
 	"runtime.compaction.started": { payload: EmptySchema },
 	"runtime.compaction.completed": { payload: EmptySchema },
 	"agent.start": {

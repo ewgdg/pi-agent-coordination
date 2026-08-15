@@ -49,7 +49,7 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		},
 		async humanInputSubmitted(input) {
 			calls.push(["human-input", input]);
-			return false;
+			return "continue";
 		},
 		async humanToolResultCommitting(input) {
 			calls.push(["human-result", input]);
@@ -203,7 +203,7 @@ test("participant input registration can follow inherited extension preflights",
 	const handlers = lifecycleHandlers({
 		async humanInputSubmitted() {
 			submitted += 1;
-			return false;
+			return "continue";
 		},
 	});
 	const pi = new CapturedExtensionApi();
@@ -355,7 +355,7 @@ function lifecycleHandlers(
 	return {
 		async executionStarted() {},
 		async humanInputSubmitted() {
-			return false;
+			return "continue";
 		},
 		async humanInputMode() {
 			return "agent";
@@ -372,7 +372,7 @@ function localLifecycleView(calls: unknown[]) {
 	return {
 		async resumeFromHuman(text: string, images: readonly unknown[] | undefined) {
 			calls.push(["resume-human", text, images]);
-			return false;
+			return "continue" as const;
 		},
 		agentActivity() {
 			return { answerMode: false };

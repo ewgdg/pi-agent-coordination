@@ -880,7 +880,9 @@ function ordinaryOwnerHandlers(options: Readonly<{
 		lifecycle: {
 			async executionStarted() { options.executionStarted?.(); },
 			async humanInputSubmitted(input) {
-				return await options.humanInputSubmitted?.(input.text) ?? false;
+				return await options.humanInputSubmitted?.(input.text)
+					? "submitted"
+					: "continue";
 			},
 			async humanInputMode() { return "agent"; },
 			async humanToolResultCommitting() { return undefined; },

@@ -95,6 +95,7 @@ export interface AgentRuntimeHost {
 	observe(): AgentRunState;
 	currentHandle(): AgentRunHandle | undefined;
 	currentProjection(): TerminalProjection | undefined;
+	projectionInputSubmissionIsFenced(sequence: number): boolean;
 	effectiveRuntimeSnapshot(): EffectiveRuntimeSnapshot | undefined;
 	synchronizeRuntimeState(): Promise<EffectiveRuntimeSnapshot>;
 	currentWorkState(): AgentRuntimeWorkState;

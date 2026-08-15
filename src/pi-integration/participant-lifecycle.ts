@@ -9,7 +9,10 @@ import type {
 export type ParticipantHumanInput = Readonly<{
 	text: string;
 	images: InputEvent["images"];
+	submissionSequence?: number;
 }>;
+
+export type ParticipantHumanInputDisposition = "continue" | "submitted" | "discarded";
 
 export type ParticipantHumanToolResult = Readonly<{
 	message: MessageEndEvent["message"];
@@ -27,8 +30,8 @@ export type GuardedParticipantHumanToolResult = Readonly<{
 }>;
 
 export type ParticipantLifecycleHandlers = Readonly<{
-	executionStarted(): Promise<void>;
-	humanInputSubmitted(input: ParticipantHumanInput): Promise<boolean>;
+	executionStarted(submissionSequence?: number): Promise<void>;
+	humanInputSubmitted(input: ParticipantHumanInput): Promise<ParticipantHumanInputDisposition>;
 	humanInputMode(): Promise<"agent" | "answer">;
 	humanToolResultCommitting(
 		input: ParticipantHumanToolResult,
@@ -95,16 +98,20 @@ export function registerParticipantInputLifecycle(
 
 export function createParticipantInputHandler(
 	handlers: ParticipantLifecycleHandlers,
+	onDiscarded: () => Promise<void> = () => Promise.resolve(),
 ): (event: InputEvent, ctx: ExtensionContext) => Promise<InputEventResult> {
 	return async (event, ctx) => {
 		if (event.source !== "interactive") return { action: "continue" };
 		if (event.streamingBehavior === "followUp") return { action: "continue" };
 		try {
-			const resumed = await handlers.humanInputSubmitted({
+			const disposition = await handlers.humanInputSubmitted({
 				text: event.text,
 				images: event.images,
 			});
-			return resumed ? { action: "handled" } : { action: "continue" };
+			if (disposition === "discarded") await onDiscarded();
+			return disposition === "continue"
+				? { action: "continue" }
+				: { action: "handled" };
 		} catch (error) {
 			const answeringHumanRequest = await handlers.humanInputMode() === "answer";
 			if (answeringHumanRequest) ctx.ui.setEditorText(event.text);

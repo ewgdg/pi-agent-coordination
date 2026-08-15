@@ -683,6 +683,8 @@ function createRunResource(options?: {
 		addFailureHandler: () => () => undefined,
 		addExitRequestHandler: () => () => undefined,
 		isProcessingInput: () => false,
+		fenceInputSubmissions() {},
+		inputSubmissionIsFenced: () => false,
 		whenInputIdle: async () => undefined,
 		async ready() {},
 		cancelInitialization() {

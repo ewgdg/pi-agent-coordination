@@ -258,7 +258,7 @@ test("hosted child launch keeps submitted PTY input active until Agent Run admis
 	assert.equal(projection.isProcessingInput(), true);
 	launch.notifyEvent({
 		event: "runtime.input.started",
-		payload: {},
+		payload: { sequence: 1 },
 		sequence: 1,
 	});
 	launch.notifyEvent({
@@ -287,7 +287,7 @@ test("hosted child launch settles handled input without an Agent Run", async () 
 	const inputIdle = projection.whenInputIdle();
 	launch.notifyEvent({
 		event: "runtime.input.started",
-		payload: {},
+		payload: { sequence: 1 },
 		sequence: 1,
 	});
 	launch.notifyEvent({
@@ -298,7 +298,7 @@ test("hosted child launch settles handled input without an Agent Run", async () 
 	assert.equal(projection.isProcessingInput(), true);
 	launch.notifyEvent({
 		event: "runtime.input.completed",
-		payload: {},
+		payload: { sequence: 1 },
 		sequence: 3,
 	});
 	await inputIdle;
@@ -324,8 +324,16 @@ test("hosted child launch ignores late input lifecycle events after release", as
 	const inputIdle = projection.whenInputIdle();
 	await projection.dispose();
 	await inputIdle;
-	launch.notifyEvent({ event: "runtime.input.started", payload: {}, sequence: 1 });
-	launch.notifyEvent({ event: "runtime.input.completed", payload: {}, sequence: 2 });
+	launch.notifyEvent({
+		event: "runtime.input.started",
+		payload: { sequence: 1 },
+		sequence: 1,
+	});
+	launch.notifyEvent({
+		event: "runtime.input.completed",
+		payload: { sequence: 1 },
+		sequence: 2,
+	});
 	launch.notifyEvent({
 		event: "runtime.input.submissionAcknowledged",
 		payload: { sequence: 1 },

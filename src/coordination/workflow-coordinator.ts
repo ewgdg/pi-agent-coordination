@@ -109,6 +109,8 @@ export type {
 	MessageBoundaryHooks,
 } from "./messages.ts";
 
+export type HumanInputDisposition = "continue" | "submitted" | "discarded";
+
 export type HumanPresentationCoordinatorView = Readonly<{
 	status(agentId?: string): AgentStatus;
 	agentLabel(agentId: string): string | undefined;
@@ -118,7 +120,8 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	resumeFromHuman(
 		text: string,
 		images: readonly ImageContent[] | undefined,
-	): Promise<boolean>;
+		submissionSequence?: number,
+	): Promise<HumanInputDisposition>;
 	selectionRoster(): Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
@@ -160,7 +163,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	): GuardedHumanToolResult | undefined;
 	reconcileHumanToolResults(): void;
 	reachSafeBoundary(): Promise<void>;
-	beginExecution(): Promise<void>;
+	beginExecution(submissionSequence?: number): Promise<void>;
 	ensureExecution(): Promise<void>;
 	beginToolExecution(toolCallId: string, toolName: string): void;
 	reconcileCommittedToolResults(): void;
@@ -411,9 +414,9 @@ export class WorkflowCoordinator {
 				this.#assertAdmissionOpen();
 				return this.#runSupervisor.execute(agentId, toolCallId, input);
 			},
-			resumeFromHuman: (text, images) => {
+			resumeFromHuman: (text, images, submissionSequence) => {
 				this.#assertAdmissionOpen();
-				return this.#handleHumanInput(agentId, text, images);
+				return this.#handleHumanInput(agentId, text, images, submissionSequence);
 			},
 			selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
@@ -449,7 +452,8 @@ export class WorkflowCoordinator {
 				await this.#messages.reachSafeBoundary(agentId);
 				await this.#operationalIncidents.reachSafeBoundary();
 			},
-			beginExecution: () => this.#beginExecution(agentId),
+			beginExecution: (submissionSequence) =>
+				this.#beginExecution(agentId, submissionSequence),
 			ensureExecution: () => this.#ensureExecution(agentId),
 			beginToolExecution: (toolCallId, toolName) => {
 				this.#assertAdmissionOpen();
@@ -959,20 +963,44 @@ export class WorkflowCoordinator {
 		});
 	}
 
-	async #beginExecution(agentId: string): Promise<void> {
+	async #beginExecution(
+		agentId: string,
+		submissionSequence?: number,
+	): Promise<void> {
 		this.#assertAdmissionOpen();
+		const record = this.#requireAgent(agentId);
+		this.#assertInputSubmissionAdmissible(record, submissionSequence);
+		const currentHandle = record.host.currentHandle();
+		const handle = currentHandle ?? await record.host.lane.run(async () => {
+			this.#assertInputSubmissionAdmissible(record, submissionSequence);
+			return record.host.currentHandle() ?? await record.host.startInLane();
+		});
 		if (this.#executionPermits.has(agentId)) {
 			throw new Error(
 				`invariant_violation: Agent ${agentId} execution already holds Workflow capacity`,
 			);
 		}
-		const record = this.#requireAgent(agentId);
-		if (!record.host.currentHandle()) {
-			await record.host.lane.run(() => record.host.startInLane());
-		}
 		await this.#ensureExecution(agentId);
+		// No await may separate these final checks from the successful lifecycle
+		// response: termination can fence the submission and replace the exact Run.
+		this.#assertInputSubmissionAdmissible(record, submissionSequence);
+		if (!record.host.isCurrent(handle)) {
+			throw new Error("stale_run: execution admission lost its exact Agent Run");
+		}
 		this.#assertAdmissionOpen();
 		this.#operationalIncidents.beginExecution(agentId);
+	}
+
+	#assertInputSubmissionAdmissible(
+		record: AgentRecord,
+		submissionSequence: number | undefined,
+	): void {
+		if (
+			submissionSequence !== undefined &&
+			record.host.projectionInputSubmissionIsFenced(submissionSequence)
+		) {
+			throw new Error("stale_native_input: submission preceded exact-Run termination");
+		}
 	}
 
 	async #ensureExecution(agentId: string): Promise<void> {
@@ -1006,36 +1034,46 @@ export class WorkflowCoordinator {
 		agentId: string,
 		text: string,
 		images: readonly ImageContent[] | undefined,
-	): Promise<boolean> {
+		submissionSequence?: number,
+	): Promise<HumanInputDisposition> {
 		if (this.#humanRequests.submitAnswer(agentId, text, (images?.length ?? 0) > 0)) {
-			return Promise.resolve(true);
+			return Promise.resolve("submitted");
 		}
 		return this.#agentViewLane.run(async () => {
 			const active = this.#activeAgentView;
 			if (!active || active.record.identity.agentId !== agentId) {
-				return this.#runSupervisor.resumeFromHuman(agentId, text, images);
+				return await this.#runSupervisor.resumeFromHuman(agentId, text, images)
+					? "submitted"
+					: "continue";
 			}
 			return active.record.host.lane.run(async () => {
-				if (this.#activeAgentView !== active) return true;
+				if (this.#activeAgentView !== active) return "discarded";
+				if (
+					submissionSequence !== undefined &&
+					active.attachment.projection() === active.record.host.currentProjection() &&
+					active.record.host.projectionInputSubmissionIsFenced(submissionSequence)
+				) return "discarded";
 				const currentHandle = active.record.host.currentHandle();
 				if (
 					currentHandle &&
 					active.attachment.projection() === active.record.host.currentProjection()
 				) {
 					if (active.record.host.currentInterruptionHold()) {
-						return this.#runSupervisor.resumeFromHumanInLane(
+						return await this.#runSupervisor.resumeFromHumanInLane(
 							active.record,
 							text,
 							images,
-						);
+						)
+							? "submitted"
+							: "continue";
 					}
-					return false;
+					return "continue";
 				}
 				if (!currentHandle) {
 					await active.record.host.startInLane(["interactive_selection"]);
 				}
 				await this.#runSupervisor.submitFromHumanInLane(active.record, text, images);
-				return true;
+				return "submitted";
 			});
 		});
 	}

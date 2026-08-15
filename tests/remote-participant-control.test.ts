@@ -33,7 +33,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 	) => {
 		calls.push([method, payload, signal]);
 		switch (method) {
-			case "runtime.humanInput": return { resumed: true };
+			case "runtime.humanInput": return { disposition: "submitted" };
 			case "runtime.humanInputMode": return { mode: "answer" };
 			case "runtime.guardHumanToolResult": return { result: null };
 			case "coordination.observe": return status;
@@ -44,10 +44,17 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 			default: return {};
 		}
 	}) as ChildParticipantControlRequester;
-	const proxies = createControlBackedChildParticipantHandlers("ordinary", request);
+	const proxies = createControlBackedChildParticipantHandlers(
+		"ordinary",
+		request,
+		{ current: () => 7, take: () => undefined },
+	);
 
 	await proxies.lifecycle.executionStarted();
-	assert.equal(await proxies.lifecycle.humanInputSubmitted({ text: "resume", images: undefined }), true);
+	assert.equal(
+		await proxies.lifecycle.humanInputSubmitted({ text: "resume", images: undefined }),
+		"submitted",
+	);
 	assert.equal(await proxies.lifecycle.humanInputMode(), "answer");
 	assert.equal(await proxies.lifecycle.humanToolResultCommitting({
 		message: { role: "user", content: "candidate", timestamp: 1 },
@@ -75,7 +82,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 
 	assert.deepEqual(calls, [
 		["runtime.executionBegin", {}, undefined],
-		["runtime.humanInput", { text: "resume" }, undefined],
+		["runtime.humanInput", { text: "resume", submissionSequence: 7 }, undefined],
 		["runtime.humanInputMode", {}, undefined],
 		["runtime.guardHumanToolResult", {
 			message: { role: "user", content: "candidate", timestamp: 1 },
@@ -168,7 +175,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 		},
 		lifecycle: {
 			async executionStarted() { calls.push(["begin"]); },
-			async humanInputSubmitted(input) { calls.push(["input", input]); return true; },
+			async humanInputSubmitted(input) { calls.push(["input", input]); return "submitted"; },
 			async humanInputMode() { calls.push(["mode"]); return "agent"; },
 			async humanToolResultCommitting(input) { calls.push(["guard", input]); return undefined; },
 			async toolExecutionStarted(input) { calls.push(["tool", input]); },

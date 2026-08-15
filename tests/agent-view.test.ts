@@ -574,6 +574,176 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
 });
 
+test("termination discards selected native input already in prompt preflight", {
+	timeout: 10_000,
+}, async (t) => {
+	const discardedInput = "Continue after the Owner leaves this Agent view.";
+	const successorInput = "Start only from input submitted after termination.";
+	const probe = configureProcessAgentViewProbe(t, "prompt-preflight");
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
+	});
+	host.deferCleanup(async () => {
+		await releaseProcessAgentViewProbe(probe.releasePath);
+	});
+	let discardedInputExecutions = 0;
+	let successorInputExecutions = 0;
+	const routeInputResponse = (context: Context): AssistantMessage => {
+		const transcript = JSON.stringify(context.messages);
+		if (transcript.includes(discardedInput)) discardedInputExecutions += 1;
+		if (transcript.includes(successorInput)) successorInputExecutions += 1;
+		return fauxAssistantMessage(
+			transcript.includes(successorInput)
+				? "Only the post-termination input started a successor."
+				: "Input submitted before termination incorrectly survived.",
+		);
+	};
+	host.model.setResponses([
+		fauxAssistantMessage("Remain live while selected input enters preflight."),
+		routeInputResponse,
+		routeInputResponse,
+	]);
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-preflight-termination-worker",
+		{ request: "Remain live for selected termination.", label: "Termination Fence Worker" },
+	);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "live"));
+	const opened = await openSelectedAgentView(host, agentId);
+	const childRuntime = childProcessSessionStarts(
+		await readProcessAgentViewEvidence(probe.evidencePath),
+		agentId,
+	).at(-1);
+	assert.ok(childRuntime);
+
+	// Built-in commands consume terminal submissions without entering model input.
+	// The later fence must therefore use the terminal's exact sequence, not a count
+	// inferred only from participant input callbacks.
+	opened.view.handleInput?.("/name termination-sequence-probe");
+	opened.view.handleInput?.("\r");
+
+	for (const character of discardedInput) opened.view.handleInput?.(character);
+	opened.view.handleInput?.("\r");
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "input_preflight_started" && entry.sessionId === agentId,
+	));
+	const termination = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-during-selected-input-preflight",
+		{ operation: "terminate", agentId },
+	);
+	assert.equal((termination.details as { disposition: string }).disposition, "terminated");
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
+
+	await releaseProcessAgentViewProbe(probe.releasePath);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "input_preflight_finished",
+	));
+	await new Promise<void>((resolve) => setTimeout(resolve, 100));
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
+	assert.equal(discardedInputExecutions, 0);
+	assert.equal(
+		(await childEntries(host, agentId)).some(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "user" &&
+				JSON.stringify(entry.message.content).includes(discardedInput),
+		),
+		false,
+	);
+	assert.doesNotThrow(() => process.kill(childRuntime.pid, 0));
+
+	for (const character of successorInput) opened.view.handleInput?.(character);
+	opened.view.handleInput?.("\r");
+	await waitForCondition(() => successorInputExecutions === 1);
+	assert.equal(discardedInputExecutions, 0);
+	assert.equal(await currentRunPhase(host, agentId), "live");
+	assert.equal(
+		childProcessSessionStarts(
+			await readProcessAgentViewEvidence(probe.evidencePath),
+			agentId,
+		).length,
+		1,
+	);
+	await returnAgentViewToOwner(host, opened.view, opened.command);
+});
+
+test("termination fences selected input between participant handling and Agent admission", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = createTestWorkflowCoordinator(host, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+	});
+	await bindTestOwnerHost(host, "tui");
+	const owner = coordinator.forAgent(identity.agentId);
+	host.model.setResponses([
+		fauxAssistantMessage("Remain live before the admission fence."),
+	]);
+	const spawnInput = {
+		request: "Remain live for admission fencing.",
+		label: "Admission Fence Worker",
+	};
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, {
+				id: "spawn-agent-start-termination-worker",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const spawn = await owner.spawn("spawn-agent-start-termination-worker", spawnInput);
+	assert.ok("agentId" in spawn && spawn.agentId);
+	const agentId = spawn.agentId;
+	await waitForCondition(() => {
+		const transcriptPath = owner.status(agentId).primaryEvidence.transcriptPath;
+		return transcriptPath !== null && SessionManager.open(transcriptPath).getEntries().some(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "assistant" &&
+				JSON.stringify(entry.message.content).includes(
+					"Remain live before the admission fence.",
+				),
+		);
+	});
+	const activeView = await owner.openAgentView(agentId);
+	assert.ok(activeView);
+
+	// Establish one exact native submission identity without initiating model work.
+	activeView.projection().dispatchInput("/name admission-fence-probe");
+	activeView.projection().dispatchInput("\r");
+	const terminateInput = { operation: "terminate" as const, agentId };
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_control", terminateInput, {
+				id: "terminate-before-selected-agent-admission",
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const termination = await owner.control(
+		"terminate-before-selected-agent-admission",
+		terminateInput,
+	);
+	assert.ok("disposition" in termination);
+	assert.equal(termination.disposition, "terminated");
+	assert.equal(owner.status(agentId).run.phase, "dormant");
+
+	await assert.rejects(
+		coordinator.forAgent(agentId).beginExecution(1),
+		/stale_native_input: submission preceded exact-Run termination/,
+	);
+	assert.equal(owner.status(agentId).run.phase, "dormant");
+	await activeView.close();
+});
+
 test("a handled Dormant Agent input can return to Owner after prompt preflight", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "handled-prompt-preflight");
 	const host = await createTestOwnerHost(t, piAgentCoordination, {

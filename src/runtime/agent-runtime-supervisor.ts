@@ -231,6 +231,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		return this.#runtime?.runtime.projection;
 	}
 
+	projectionInputSubmissionIsFenced(sequence: number): boolean {
+		return this.#runtime?.runtime.projection?.inputSubmissionIsFenced(sequence) ?? false;
+	}
+
 	effectiveRuntimeSnapshot(): EffectiveRuntimeSnapshot | undefined {
 		return this.#runtime?.admitted ? this.#runtime.runtime.snapshot() : undefined;
 	}
@@ -829,6 +833,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			return;
 		}
 		this.#cancelReleaseAfterActivitySettlement(run);
+		if (cause === "termination") run.runtime.projection?.fenceInputSubmissions();
 		// Pi owns the native Owner Runtime across coordination Runs. A selected child
 		// is supervisor-owned but temporarily retained to preserve its attached view
 		// when its exact Run ends in a terminal event that bypasses Run Retention.

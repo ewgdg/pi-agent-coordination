@@ -42,6 +42,7 @@ import { registerMessageDeliveryRenderer } from "../tools/message-delivery-rende
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
 import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
+import { NativeInputSubmissionIdentity } from "./native-input-submission-identity.ts";
 import {
 	TerminalInputSubmissionAcknowledger,
 	type TerminalInputSubmissionAcknowledgmentBinding,
@@ -82,6 +83,7 @@ type ChildControlState = {
 	queueIntentionTail: Promise<void>;
 	shutdownStarted: boolean;
 	inputSubmissionAcknowledger: TerminalInputSubmissionAcknowledger;
+	nativeInputIdentity: NativeInputSubmissionIdentity;
 };
 
 const CHILD_CONTROL_REGISTRY_KEY = "__piAgentCoordinationChildControls";
@@ -105,13 +107,33 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
 		return state.channel.request(method, payload, signal);
 	};
+	const nativeInputIdentity = {
+		current: () => state?.nativeInputIdentity.current(),
+		take: () => state?.nativeInputIdentity.take(),
+	};
+	// The bridge extension loads before inherited extensions. Capture the exact
+	// terminal submission before any inherited input preflight can yield while
+	// later PTY submissions continue advancing the terminal high-water mark.
+	pi.on("input", (event) => {
+		if (event.source !== "interactive" || event.streamingBehavior === "followUp") {
+			return { action: "continue" };
+		}
+		const current = state;
+		if (!current) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
+		current.nativeInputIdentity.beginInput();
+		return { action: "continue" };
+	});
 	registerRemoteAgentsCommand(
 		pi,
 		createControlBackedChildPresentationHandlers(participantRequest),
 	);
 	let participantLifecycle: ParticipantLifecycleHandlers;
 	if (bootstrap.role === "ordinary") {
-		const participant = createControlBackedChildParticipantHandlers("ordinary", participantRequest);
+		const participant = createControlBackedChildParticipantHandlers(
+			"ordinary",
+			participantRequest,
+			nativeInputIdentity,
+		);
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
 		registerParticipantCoordinationTools(
@@ -125,7 +147,11 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			() => participant.coordination.availableTemplates(),
 		);
 	} else {
-		const participant = createControlBackedChildParticipantHandlers("moderator", participantRequest);
+		const participant = createControlBackedChildParticipantHandlers(
+			"moderator",
+			participantRequest,
+			nativeInputIdentity,
+		);
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
 		registerParticipantCoordinationTools(
@@ -179,8 +205,10 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				protocol: agentControlProtocol,
 				transport,
 			});
+			const exactNativeInputIdentity = new NativeInputSubmissionIdentity();
 			const inputSubmissionAcknowledger = new TerminalInputSubmissionAcknowledger(
 				(sequence) => {
+					exactNativeInputIdentity.observeTerminalSubmission(sequence);
 					// Pi resolves getUserInput() in this same input turn. Delay only to
 					// the check phase so runtime.input.started enters ordered Control first.
 					setImmediate(() => void channel.sendEvent(
@@ -196,6 +224,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				queueIntentionTail: Promise.resolve(),
 				shutdownStarted: false,
 				inputSubmissionAcknowledger,
+				nativeInputIdentity: exactNativeInputIdentity,
 			};
 			childControls.set(runtime.session, state);
 			channel.onRequest((request) => requireCurrentBinding(state as ChildControlState)
@@ -212,8 +241,22 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			return undefined;
 		});
 		const inputLifecycle = {
-			started: () => currentState.channel.sendEvent("runtime.input.started", {}),
-			completed: () => currentState.channel.sendEvent("runtime.input.completed", {}),
+			async started() {
+				const sequence = currentState.nativeInputIdentity.beginInput();
+				await currentState.channel.sendEvent("runtime.input.started", { sequence });
+				return sequence;
+			},
+			async completed(sequence: number) {
+				if (!currentState.nativeInputIdentity.complete(sequence)) return;
+				await currentState.channel.sendEvent("runtime.input.completed", { sequence });
+			},
+		};
+		const completeDiscardedInput = async () => {
+			const sequence = currentState.nativeInputIdentity.current();
+			if (sequence === undefined) {
+				throw new Error("child_runtime_active_input_identity_unavailable");
+			}
+			await inputLifecycle.completed(sequence);
 		};
 		const binding = createChildRuntimeBinding(
 			currentState,
@@ -229,10 +272,20 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		currentState.shutdownStarted = false;
 		// The input-only extension is last in Pi load order. Replace its delegate on
 		// every bridge generation while keeping lifecycle and Control available first.
-		childRuntimeInputs.set(
-			ctx.sessionManager,
-			createParticipantInputHandler(participantLifecycle),
+		const participantInput = createParticipantInputHandler(
+			participantLifecycle,
+			completeDiscardedInput,
 		);
+		childRuntimeInputs.set(ctx.sessionManager, async (input, context) => {
+			const result = await participantInput(input, context);
+			// Pi queues a direct streaming steer inside the current model cycle. It
+			// produces no successor agent_start to consume this submission identity.
+			if (input.streamingBehavior === "steer") {
+				const sequence = currentState.nativeInputIdentity.current();
+				if (sequence !== undefined) await inputLifecycle.completed(sequence);
+			}
+			return result;
+		});
 		const channel = currentState.channel;
 		try {
 			assertExpectedSession(binding.runtime, bootstrap);

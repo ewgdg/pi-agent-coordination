@@ -121,7 +121,7 @@ An authorized supervisor's free-form Message requesting that one exact held Agen
 The live decision that permits an exact child Agent Run to end only when no Run Retention Reason remains. A separately retained Agent Runtime may remain prepared after Run release.
 
 **Run Termination**:
-An authorized controlled end of one exact current Agent Run that deliberately bypasses its Run Retention Reasons. It may end the exact Run of a selected Agent while retaining that Agent's Runtime and open view, leaving the Agent Dormant. It settles an exact pending Human Request through interruption but does not cancel Agent Requests, affect descendants, or create Agent lifecycle state. A later Message or native input may start a successor Run in the same retained Runtime.
+An authorized controlled end of one exact current Agent Run that deliberately bypasses its Run Retention Reasons. It may end the exact Run of a selected Agent while retaining that Agent's Runtime and open view, leaving the Agent Dormant. Every native editor submission observed before the termination fence is discarded even if its asynchronous preflight reaches Run admission later; only a later submission may start a successor. Termination settles an exact pending Human Request through interruption but does not cancel Agent Requests, affect descendants, or create Agent lifecycle state. A later Message or native input may start a successor Run in the same retained Runtime.
 _Avoid_: Agent termination
 
 **Run Failure**:

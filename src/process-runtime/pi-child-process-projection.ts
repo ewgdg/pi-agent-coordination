@@ -30,10 +30,17 @@ export function createPiChildProcessProjection(
 	let childInputActive = false;
 	let latestSubmissionSequence = 0;
 	let acknowledgedSubmissionSequence = 0;
+	let activeSubmissionSequence: number | undefined;
+	let fencedThroughSubmissionSequence = 0;
 	let disposed = false;
 	const hasPendingSubmission = () => acknowledgedSubmissionSequence < latestSubmissionSequence;
-	const finishInput = () => {
+	const finishInput = (submissionSequence = activeSubmissionSequence) => {
+		if (
+			submissionSequence !== undefined &&
+			activeSubmissionSequence !== submissionSequence
+		) return;
 		childInputActive = false;
+		activeSubmissionSequence = undefined;
 		processingInput = hasPendingSubmission();
 		if (processingInput) return;
 		const settle = settleInputIdle;
@@ -52,6 +59,11 @@ export function createPiChildProcessProjection(
 		}
 		if (event.event === "runtime.input.started") {
 			childInputActive = true;
+			activeSubmissionSequence = event.payload.sequence;
+			latestSubmissionSequence = Math.max(
+				latestSubmissionSequence,
+				event.payload.sequence,
+			);
 			processingInput = true;
 			if (!settleInputIdle) {
 				inputIdle = new Promise<void>((resolve) => {
@@ -61,7 +73,7 @@ export function createPiChildProcessProjection(
 			return;
 		}
 		if (event.event === "runtime.input.completed") {
-			finishInput();
+			finishInput(event.payload.sequence);
 			return;
 		}
 		if (childInputActive && event.event === "agent.start") finishInput();
@@ -87,6 +99,14 @@ export function createPiChildProcessProjection(
 		addFailureHandler: terminal.addFailureHandler,
 		addExitRequestHandler: terminal.addExitRequestHandler,
 		isProcessingInput: () => processingInput,
+		fenceInputSubmissions() {
+			fencedThroughSubmissionSequence = Math.max(
+				fencedThroughSubmissionSequence,
+				latestSubmissionSequence,
+			);
+		},
+		inputSubmissionIsFenced: (sequence) =>
+			sequence <= fencedThroughSubmissionSequence,
 		whenInputIdle: () => inputIdle,
 		ready: () => readiness,
 		cancelInitialization: (error) => launch.cancelInitialization(error),

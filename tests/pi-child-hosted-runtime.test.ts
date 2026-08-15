@@ -519,7 +519,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 		},
 		lifecycle: {
 			async executionStarted() {},
-			async humanInputSubmitted() { return false; },
+			async humanInputSubmitted() { return "continue"; },
 			async humanInputMode() { return "agent"; },
 			async humanToolResultCommitting() { return undefined; },
 			async toolExecutionStarted() {},

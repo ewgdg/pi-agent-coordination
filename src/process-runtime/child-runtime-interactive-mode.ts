@@ -1,8 +1,8 @@
 import * as hostPi from "@earendil-works/pi-coding-agent";
 
 type InputLifecycleObserver = Readonly<{
-	started(): Promise<void>;
-	completed(): Promise<void>;
+	started(): Promise<number>;
+	completed(submissionSequence: number): Promise<void>;
 }>;
 
 type InteractivePrototype = {
@@ -56,7 +56,7 @@ function installInputLifecyclePatch(
 		if (!binding) return input;
 
 		// Admit the input lifecycle before Pi can enter an inherited async preflight.
-		await binding.observer.started();
+		const submissionSequence = await binding.observer.started();
 		const { session, observer } = binding;
 		const originalPrompt = session.prompt;
 		let invoked = false;
@@ -64,7 +64,7 @@ function installInputLifecyclePatch(
 		const completeInput = () => {
 			if (inputCompleted) return Promise.resolve();
 			inputCompleted = true;
-			return observer.completed();
+			return observer.completed(submissionSequence);
 		};
 		session.prompt = (text, options) => {
 			if (!invoked) {
