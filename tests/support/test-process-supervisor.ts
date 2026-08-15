@@ -70,7 +70,10 @@ async function runOwnedTestProcess(
 		child.once("exit", (code, signal) => resolve({ code, signal }));
 	});
 	try {
-		await cgroup?.admitStoppedRoot(child.pid!);
+		const rootIdentity = cgroup
+			? { pid: child.pid!, startTime: statFields(child.pid!)[19]! }
+			: undefined;
+		if (cgroup && rootIdentity) await cgroup.admitStoppedRoot(rootIdentity);
 		const outcome = await Promise.race([
 			childExit.then((exit) => ({ kind: "exit" as const, exit })),
 			terminationRequested.then((signal) => ({ kind: "termination" as const, signal })),
@@ -176,23 +179,26 @@ class LinuxCgroupOwner implements ProcessOwner {
 		await waitForGuardianReady(guardian);
 	}
 
-	async admitStoppedRoot(pid: number): Promise<void> {
+	async admitStoppedRoot(root: ProcessIdentity): Promise<void> {
 		const deadline = Date.now() + 1_000;
 		while (Date.now() < deadline) {
-			if (processState(pid) === "T") {
+			if (!sameProcess(root)) {
+				throw new Error("Test runner exited before cgroup admission");
+			}
+			if (processState(root.pid) === "T") {
 				try {
-					writeFileSync(join(this.#path, "cgroup.procs"), String(pid));
-					this.#root = { pid, startTime: statFields(pid)[19]! };
-					process.kill(pid, "SIGCONT");
+					writeFileSync(join(this.#path, "cgroup.procs"), String(root.pid));
+					this.#root = root;
+					signalIdentity(root, "SIGCONT");
 					return;
 				} catch (error) {
-					signalPid(pid, "SIGKILL");
+					signalIdentity(root, "SIGKILL");
 					throw error;
 				}
 			}
 			await new Promise<void>((resolve) => setTimeout(resolve, 1));
 		}
-		signalPid(pid, "SIGKILL");
+		signalIdentity(root, "SIGKILL");
 		throw new Error("Test runner did not stop for cgroup admission");
 	}
 
@@ -431,14 +437,6 @@ function processState(pid: number): string | undefined {
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
 		throw error;
-	}
-}
-
-function signalPid(pid: number, signal: NodeJS.Signals): void {
-	try {
-		process.kill(pid, signal);
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
 	}
 }
 
