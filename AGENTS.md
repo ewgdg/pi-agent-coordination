@@ -5,4 +5,4 @@ Complicated security boundaries are out of the scope.
 
 ## Testing
 
-Integration tests takes very long, avoid running the full test suite.
+Integration tests can be slow, avoid running the full test suite.

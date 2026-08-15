@@ -94,7 +94,7 @@ export function createControlBackedChildParticipantHandlers(
 			return (await request("runtime.humanInput", {
 				text: input.text,
 				...(input.images === undefined ? {} : { images: input.images }),
-			})).resumed;
+			})).disposition;
 		},
 		async humanInputMode() {
 			return (await request("runtime.humanInputMode", {})).mode;
@@ -158,7 +158,7 @@ export async function dispatchParticipantRequestToOwner(
 			break;
 		case "runtime.humanInput":
 			response = {
-				resumed: await handlers.lifecycle.humanInputSubmitted({
+				disposition: await handlers.lifecycle.humanInputSubmitted({
 					text: request.payload.text,
 					images: request.payload.images,
 				}),
