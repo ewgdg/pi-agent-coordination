@@ -133,10 +133,7 @@ export function createControlBackedChildParticipantHandlers(
 		message: (toolCallId, input) =>
 			request("coordination.message", { toolCallId, input }),
 		wait: (toolCallId, input, signal) =>
-			request("coordination.wait", {
-				toolCallId,
-				input: { requestMessageIds: [...input.requestMessageIds] },
-			}, signal),
+			request("coordination.wait", { toolCallId, input }, signal),
 		control: (toolCallId, input) =>
 			request("coordination.control", { toolCallId, input }),
 	};

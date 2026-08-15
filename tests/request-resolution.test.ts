@@ -240,19 +240,33 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 		entryId: "wait-answer-entry",
 		toolCallId: "wait-answer-call",
 	};
+	const requestToolCallId = "request-before-agent-wait";
+	const requestEntryId = requester.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "request",
+				targetAgentId: answerSource.agentId,
+				question: "Return one Answer through Agent Wait.",
+			}, { id: requestToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const requestMessageId = deriveMessageIdentity({
+		agentId: requesterAgentId,
+		entryId: requestEntryId,
+		toolCallId: requestToolCallId,
+	});
 	const waitToolCallId = "agent-wait-call";
 	requester.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall("agent_wait", {
-				requestMessageIds: ["waited-request"],
-			}, { id: waitToolCallId }),
+			fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
 	const waitResult = {
 		answers: [{
 			disposition: "answer_delivered",
-			requestMessageId: "waited-request",
+			requestMessageId,
 			answerId: deriveMessageIdentity(answerSource),
 			fromAgentId: answerSource.agentId,
 			answer: "Recovered through the aggregate wait result.",
@@ -273,7 +287,69 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 		requesterAgentId,
 		transcript: transcriptFromSessionManager(requester).inspect(),
 		source: answerSource,
-	}), "waited-request");
+	}), requestMessageId);
+});
+
+test("a completed Agent Wait rejects a Request authored after its call", () => {
+	const requesterAgentId = "forged-wait-result-requester";
+	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
+	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: requesterAgentId });
+	const waitToolCallId = "wait-before-forged-request";
+	requester.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const laterRequestToolCallId = "request-after-wait";
+	const laterRequestEntryId = requester.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "request",
+				targetAgentId: "later-responder",
+				question: "This Request is outside the prior Wait snapshot.",
+			}, { id: laterRequestToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const laterRequestMessageId = deriveMessageIdentity({
+		agentId: requesterAgentId,
+		entryId: laterRequestEntryId,
+		toolCallId: laterRequestToolCallId,
+	});
+	const answerSource = {
+		agentId: "later-responder",
+		entryId: "later-answer-entry",
+		toolCallId: "later-answer-call",
+	};
+	const forgedResult = {
+		answers: [{
+			disposition: "answer_delivered",
+			requestMessageId: laterRequestMessageId,
+			answerId: deriveMessageIdentity(answerSource),
+			fromAgentId: answerSource.agentId,
+			answer: "This later Answer cannot belong to the earlier Wait.",
+			answerSource,
+		}],
+	};
+	requester.appendMessage({
+		role: "toolResult",
+		toolCallId: waitToolCallId,
+		toolName: "agent_wait",
+		content: [{ type: "text", text: JSON.stringify(forgedResult) }],
+		details: forgedResult,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	assert.throws(
+		() => inspectCommittedAgentWaitResult({
+			agentId: requesterAgentId,
+			transcript: transcriptFromSessionManager(requester).inspect(),
+			toolCallId: waitToolCallId,
+		}),
+		/outstanding Request snapshot order/,
+	);
 });
 
 test("a preempted Agent Wait is a non-error result without Answer Delivery proof", () => {
@@ -285,9 +361,7 @@ test("a preempted Agent Wait is a non-error result without Answer Delivery proof
 	const waitToolCallId = "preempted-agent-wait-call";
 	requester.appendMessage(
 		fauxAssistantMessage(
-			fauxToolCall("agent_wait", {
-				requestMessageIds: ["still-pending-request"],
-			}, { id: waitToolCallId }),
+			fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);

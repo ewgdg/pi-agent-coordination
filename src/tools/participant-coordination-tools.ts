@@ -49,9 +49,9 @@ A successful asynchronous Message send returns messageStatus "sent". This includ
 
 "sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
 
-After a receipt containing requestMessageId with messageStatus "sent", continue independent work when possible. If the next action requires all selected Answers together, call agent_wait with their exact Request identities; otherwise end the turn and let correlated Answers arrive automatically. Do not poll merely to wait.
+After a receipt containing requestMessageId with messageStatus "sent", remember that agent_wait is designed to join Answers, not to monitor ordinary progress. When Answers can be handled independently or a responder may need clarification, continue independent work when possible; otherwise end the turn and let correlated Answers arrive automatically. Prefer agent_wait only when one next decision requires every outstanding Answer together and avoiding one model turn per Answer matters. Ordinary Messages do not satisfy Agent Requests. Do not poll merely to wait.
 
-If agent_wait returns disposition "preempted", handle the delivered inbound Agent Request first. Reissue agent_wait with the same selected Request identities afterward when their Answers are still required; preemption does not consume them or create Answer Delivery proof.
+If agent_wait returns disposition "preempted", handle the delivered inbound Agent Request first. If one decision still requires every outstanding Answer, call agent_wait again afterward; preemption does not consume Answers or create Answer Delivery proof.
 
 A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
 
@@ -181,15 +181,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	),
 ]));
 
-const agentWaitParameters = Type.Object(
-	{
-		requestMessageIds: Type.Array(Type.String({ minLength: 1 }), {
-			minItems: 1,
-			uniqueItems: true,
-		}),
-	},
-	{ additionalProperties: false },
-);
+const agentWaitParameters = Type.Object({}, { additionalProperties: false });
 
 const agentSpawnConfigurationParameters = Type.Object(
 	{
@@ -398,9 +390,9 @@ export function registerParticipantCoordinationTools<
 		name: "agent_wait",
 		label: "Wait for Answers",
 		description:
-			"Wait until every selected outbound Agent Request has a committed Answer, unless an inbound Agent Request preempts the wait for attention.",
+			"Wait until every outstanding outbound Agent Request has a committed Answer, unless an inbound Agent Request preempts the wait for attention.",
 		promptSnippet:
-			"Park this Run until selected Agent Requests are answered or an inbound Agent Request preempts it.",
+			"Join all outstanding Agent Request Answers unless an inbound Agent Request preempts the wait.",
 		promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentWaitParameters,

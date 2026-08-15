@@ -68,6 +68,36 @@ export function resolveCommittedToolCall(options: {
 	};
 }
 
+export function compareCommittedToolCallOrder(
+	transcript: TranscriptInspection,
+	left: ToolCallPointer,
+	right: ToolCallPointer,
+): number {
+	if (left.agentId !== right.agentId || left.agentId !== transcript.sessionId) {
+		throw new ProtocolInvariantError("tool call order comparison crosses Agent identities");
+	}
+	const leftEntry = transcript.entries.findIndex((entry) => entry.id === left.entryId);
+	const rightEntry = transcript.entries.findIndex((entry) => entry.id === right.entryId);
+	if (leftEntry < 0 || rightEntry < 0) {
+		throw new ProtocolInvariantError("tool call order comparison has unavailable evidence");
+	}
+	if (leftEntry !== rightEntry) return leftEntry - rightEntry;
+	const entry = transcript.entries[leftEntry];
+	if (!entry || entry.type !== "message" || entry.message.role !== "assistant") {
+		throw new ProtocolInvariantError("tool call order comparison has no assistant source");
+	}
+	const message = entry.message;
+	const callIndex = (toolCallId: string) => message.content.findIndex(
+		(part) => part.type === "toolCall" && part.id === toolCallId,
+	);
+	const leftCall = callIndex(left.toolCallId);
+	const rightCall = callIndex(right.toolCallId);
+	if (leftCall < 0 || rightCall < 0) {
+		throw new ProtocolInvariantError("tool call order comparison has unavailable calls");
+	}
+	return leftCall - rightCall;
+}
+
 export function deriveMessageIdentity(source: ToolCallPointer): string {
 	return deriveProtocolIdentity("message", source);
 }

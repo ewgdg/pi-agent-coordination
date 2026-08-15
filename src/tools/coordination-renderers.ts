@@ -42,13 +42,10 @@ type AgentObserveInput = Readonly<{
 }>;
 
 export function renderAgentWaitCall(
-	args: AgentWaitInput,
+	_args: AgentWaitInput,
 	theme: Theme,
 ): Text {
-	const count = args.requestMessageIds.length;
-	return toolCall(theme, "wait", [
-		`${count} Answer${count === 1 ? "" : "s"}`,
-	]);
+	return toolCall(theme, "wait", ["all outstanding Answers"]);
 }
 
 export function renderAgentWaitResult(

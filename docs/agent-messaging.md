@@ -93,30 +93,51 @@ Retrying a Request selects one authoritative outcome:
 
 Incomplete or contradictory evidence schedules nothing. If direct Answer Delivery already owns a frozen or dispatched scheduling reservation but has not committed proof yet, retry reports `messageStatus: "unknown"` with `reason: "inspection_incomplete"` rather than competing with that Delivery. The native retry result is re-arbitrated immediately before commitment: a newly reserved direct Delivery changes a selected retrieval to that same indeterminate outcome, while newly committed direct proof changes it to `answer_already_delivered`. A later explicit retry is required after an indeterminate result.
 
-## Wait for selected Answers
+## Join outstanding Answers
 
-Use `agent_wait` when the Agent's next action requires every selected outbound Request Answer together:
+`agent_wait` is designed to join Answers. Prefer it only when one next decision requires every outstanding outbound Agent Request Answer together and avoiding one model turn per Answer matters:
 
 ```json
-{
-  "requestMessageIds": [
-    "first-request-message-id",
-    "second-request-message-id"
-  ]
-}
+{}
 ```
 
-The list must be non-empty and contain unique Request identities authored by the caller. Already-cancelled selections reject the call rather than waiting for an impossible Answer. The tool is sequential. It parks the exact caller Run and releases its Workflow execution capacity until every selected Request has a canonical committed Answer. The wait does not retry Request Delivery, cancel Requests, or create durable Wait state.
+When Answers can be handled independently or a responder may need clarification, continue independent work when possible, then end the turn and let ordinary Answer Delivery reactivate the Agent. Do not poll merely to wait. Ordinary Messages do not satisfy Agent Requests.
 
-Results preserve the supplied Request order. A committed Answer not previously delivered to the requester returns `answer_delivered` with the immutable Answer and its source; the committed `agent_wait` tool result becomes that Answer's requester-side Delivery proof. An Answer with existing requester-side Delivery proof instead returns `answer_already_delivered` with the prior proof and does not duplicate the body. If direct Answer Delivery already owns its frozen or dispatched scheduling reservation, the Wait remains parked until that direct Delivery commits and then returns proof-only. Pi re-arbitrates the selected aggregate at its native result-commit edge, replacing stale Answer bodies with proof-only slots when direct Delivery won meanwhile.
+When the committed sequential `agent_wait` call begins execution, it takes one fixed snapshot of every outstanding Request authored by the caller. The snapshot preserves canonical Request authoring order, includes unanswered Requests and committed Answers that lack requester-side Delivery proof, and excludes cancelled Requests and Answers already delivered to the requester. A Request authored after the Wait call is outside that snapshot, including a later Request in the same assistant tool batch. A call with no outstanding Requests is rejected.
 
-The wait registers before its final evidence inspection, responds to live Answer progress, and reconciles canonical transcript evidence every five seconds as an event-loss fallback. A successor Run may call `agent_wait` with the same Request identities to retrieve Answers committed while the earlier Run was unavailable. Unfinished Wait calls and their timers are volatile and are not reconstructed after host loss.
+The tool is sequential. It parks the exact caller Run and releases its Workflow execution capacity until every Request in the snapshot has a canonical committed Answer. It does not retry Request Delivery, cancel Requests, or create durable Wait state. Before waiting, resolve `not_sent` and `unknown` Request receipts through explicit retry or polling when Delivery proof matters.
 
-An eligible inbound Agent Request preempts the parked Wait so the recipient can answer or otherwise act on that Request. The Request may come from any Agent; it does not need to come from a selected responder. Its Delivery is reserved and committed before the next model generation, and the Wait returns the deterministic non-error result `{ "disposition": "preempted" }`. This result consumes no selected Answer and creates no requester-side Answer Delivery proof, so the Agent may issue `agent_wait` again with the same Request identities after handling the inbound Request. If every selected Answer is already committed when the inbound Request reaches the preemption boundary, the completed aggregate wins instead. Ordinary Deferred Messages remain queued, and ordinary Steer Message preemption is outside this behavior.
+Results preserve snapshot order. A committed Answer not previously delivered to the requester returns `answer_delivered` with the immutable Answer and its source; the committed `agent_wait` tool result becomes that Answer's requester-side Delivery proof. An Answer with existing requester-side Delivery proof instead returns `answer_already_delivered` with the prior proof and does not duplicate the body. If direct Answer Delivery already owns its frozen or dispatched scheduling reservation, the Wait remains parked until that Delivery commits and then returns proof-only. Pi re-arbitrates the aggregate at its native result-commit edge, replacing stale Answer bodies with proof-only slots when direct Delivery won meanwhile.
+
+The wait registers before its final evidence inspection, responds to live Answer progress, and reconciles canonical transcript evidence every five seconds as an event-loss fallback. A successor Run may call `agent_wait` to snapshot and retrieve its still-outstanding Answers. Unfinished Wait calls and their timers are volatile and are not reconstructed after host loss.
+
+An eligible inbound Agent Request preempts the parked Wait so the recipient can answer or otherwise act on that Request. The Request may come from any Agent. Its Delivery is reserved and committed before the next model generation, and the Wait returns the deterministic non-error result `{ "disposition": "preempted" }`. Preemption consumes no Answer and creates no requester-side Answer Delivery proof. After handling the inbound Request, call `agent_wait` again only if one decision still requires every then-outstanding Answer; the new call takes a fresh snapshot. If the complete prior snapshot is already answered at the preemption boundary, the aggregate wins instead. Ordinary Deferred Messages remain queued, and ordinary Steer Message preemption is outside this behavior.
 
 Interruption, exact-Run fencing, termination, or shutdown ends the live wait without consuming undelivered Answers. A successful aggregate result becomes Delivery proof only when its native tool result commits. Ordinary Answer Delivery or explicit Request retry therefore remains available if result commitment loses a race.
 
-Continue independent work instead of parking when possible. When aggregate synchronization is unnecessary, end the turn and let Answers arrive through ordinary fixed-Steer Delivery.
+### Fan-out and strict fan-in
+
+An Agent may send two Requests, continue its own inspection, and join only when its next decision needs both Answers:
+
+```json
+{ "operation": "request", "targetAgentId": "design-agent", "question": "Which invariant should the interface preserve?" }
+```
+
+```json
+{ "operation": "request", "targetAgentId": "test-agent", "question": "Which observable regression must the test cover?" }
+```
+
+After completing independent work, call `agent_wait` with `{}` if the implementation decision requires both outstanding Answers. If either Answer can be handled independently, settle instead and let each Answer activate an ordinary model turn.
+
+### Interactive reverse Request
+
+Suppose the requester calls `agent_wait`, but the responder needs a decision before it can produce its curated Answer. The responder keeps provisional findings local and authors a reverse Request instead of sending an ordinary Message:
+
+```json
+{ "operation": "request", "targetAgentId": "original-requester", "question": "Should the interface fail or skip unavailable evidence?" }
+```
+
+The reverse Request preempts the original requester's Wait. The original requester handles its new Answer obligation with `agent_message` operation `answer`, then calls `agent_wait` again only if its next decision still needs every outstanding Answer. The fresh Wait includes the unresolved original Request; the preempted Wait consumed no Answer Delivery.
 
 ## Cancel one Request
 

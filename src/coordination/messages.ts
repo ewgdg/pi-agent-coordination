@@ -216,6 +216,23 @@ export class MessageCoordinator {
 		};
 	}
 
+	outstandingRequestIds(
+		callerAgentId: string,
+		waitSource: ToolCallPointer,
+	): readonly string[] {
+		const caller = this.#requireAgent(callerAgentId);
+		const requestMessageIds = this.#requestEvidence.outstandingRequestIdsAt(
+			caller,
+			waitSource,
+		);
+		if (requestMessageIds.length === 0) {
+			throw new Error(
+				"invalid_input: Agent Wait requires at least one outstanding outbound Agent Request",
+			);
+		}
+		return requestMessageIds;
+	}
+
 	waitAnswers(
 		callerAgentId: string,
 		requestMessageIds: readonly string[],

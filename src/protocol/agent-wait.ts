@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
+	compareCommittedToolCallOrder,
 	currentCoordinationScope,
 	deriveMessageIdentity,
 	ProtocolInvariantError,
@@ -9,9 +10,7 @@ import {
 	type ToolCallPointer,
 } from "./identities.ts";
 
-export type AgentWaitInput = Readonly<{
-	requestMessageIds: readonly string[];
-}>;
+export type AgentWaitInput = Readonly<Record<never, never>>;
 
 export type AgentWaitAnswer =
 	| Readonly<{
@@ -47,18 +46,19 @@ export type AgentWaitResultInspection =
 		resultEntryId: string;
 	}>;
 
-export function resolveCommittedAgentWaitInput(options: {
+export function resolveCommittedAgentWaitCall(options: {
 	agentId: string;
 	transcript: TranscriptInspection;
 	toolCallId: string;
 	providedInput: AgentWaitInput;
-}): AgentWaitInput {
-	const input = committedAgentWaitInput(options);
+}): Readonly<{ source: ToolCallPointer; input: AgentWaitInput }> {
+	const committed = committedAgentWaitCall(options);
+	const input = committed.input;
 	const provided = validateAgentWaitInput(options.providedInput);
 	if (!isDeepStrictEqual(input, provided)) {
 		throw new Error("invariant_violation: Agent Wait input differs from its committed call");
 	}
-	return input;
+	return { source: committed.source, input };
 }
 
 export function inspectCommittedAgentWaitResult(options: {
@@ -105,17 +105,34 @@ export function inspectCommittedAgentWaitResult(options: {
 	if (!isDeepStrictEqual(content, result)) {
 		throw new ProtocolInvariantError("Agent Wait result content differs from its details");
 	}
-	const input = committedAgentWaitInput(options);
+	const call = committedAgentWaitCall(options);
 	if ("disposition" in result) {
 		return { state: "preempted", resultEntryId: match.id };
 	}
-	if (!isDeepStrictEqual(
-		result.answers.map(({ requestMessageId }) => requestMessageId),
-		input.requestMessageIds,
-	)) {
-		throw new ProtocolInvariantError(
-			"Agent Wait result does not preserve its selected Request identities",
-		);
+	// The parameterless call carries no identities. Its native result durably
+	// materializes the coordinator's live snapshot, so reinspection verifies that
+	// every slot is caller-authored before the Wait and remains in source order.
+	const requestSources = result.answers.map(({ requestMessageId }) =>
+		findCallerRequestSource({
+			agentId: options.agentId,
+			transcript: options.transcript,
+			requestMessageId,
+		})
+	);
+	for (let index = 0; index < requestSources.length; index += 1) {
+		const source = requestSources[index]!;
+		if (
+			compareCommittedToolCallOrder(options.transcript, source, call.source) >= 0 ||
+			(index > 0 && compareCommittedToolCallOrder(
+				options.transcript,
+				requestSources[index - 1]!,
+				source,
+			) >= 0)
+		) {
+			throw new ProtocolInvariantError(
+				"Agent Wait result does not preserve its outstanding Request snapshot order",
+			);
+		}
 	}
 	return { state: "completed", result, resultEntryId: match.id };
 }
@@ -174,32 +191,55 @@ export function validateAgentWaitInput(value: unknown): AgentWaitInput {
 		typeof value !== "object" ||
 		value === null ||
 		Array.isArray(value) ||
-		Object.keys(value).length !== 1 ||
-		!("requestMessageIds" in value) ||
-		!Array.isArray(value.requestMessageIds) ||
-		value.requestMessageIds.length === 0 ||
-		value.requestMessageIds.some(
-			(requestId) => typeof requestId !== "string" || requestId.length === 0,
-		) ||
-		new Set(value.requestMessageIds).size !== value.requestMessageIds.length
+		Object.keys(value).length !== 0
 	) {
-		throw new Error("invalid_input: Agent Wait requires unique non-empty Request identities");
+		throw new Error("invalid_input: Agent Wait does not accept parameters");
 	}
-	return { requestMessageIds: [...value.requestMessageIds] };
+	return {};
 }
 
-function committedAgentWaitInput(options: {
+function committedAgentWaitCall(options: {
 	agentId: string;
 	transcript: TranscriptInspection;
 	toolCallId: string;
-}): AgentWaitInput {
+}): Readonly<{ source: ToolCallPointer; input: AgentWaitInput }> {
 	const committed = resolveCommittedToolCall({
 		agentId: options.agentId,
 		transcript: options.transcript,
 		toolCallId: options.toolCallId,
 		toolName: "agent_wait",
 	});
-	return validateAgentWaitInput(committed.input);
+	return { source: committed.source, input: validateAgentWaitInput(committed.input) };
+}
+
+function findCallerRequestSource(options: {
+	agentId: string;
+	transcript: TranscriptInspection;
+	requestMessageId: string;
+}): ToolCallPointer {
+	const matches: ToolCallPointer[] = [];
+	for (const entry of currentCoordinationScope(options.transcript, options.agentId)) {
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		for (const part of entry.message.content) {
+			if (
+				part.type !== "toolCall" ||
+				(part.name !== "agent_spawn" &&
+					(part.name !== "agent_message" || part.arguments.operation !== "request"))
+			) continue;
+			const source = {
+				agentId: options.agentId,
+				entryId: entry.id,
+				toolCallId: part.id,
+			};
+			if (deriveMessageIdentity(source) === options.requestMessageId) matches.push(source);
+		}
+	}
+	if (matches.length !== 1) {
+		throw new ProtocolInvariantError(
+			`Agent Wait result Request ${options.requestMessageId} has ${matches.length} caller sources`,
+		);
+	}
+	return matches[0]!;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

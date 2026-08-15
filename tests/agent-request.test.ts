@@ -17,6 +17,7 @@ import type {
 	AgentWaitBoundaryHooks,
 	AgentWaitClock,
 } from "../src/coordination/agent-waits.ts";
+import type { AgentWaitAnswer } from "../src/protocol/agent-wait.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { answerSourceDeliveryRequestId } from "../src/protocol/request-resolution.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
@@ -1166,11 +1167,12 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Agent Wait retrieves a lost Answer and later reports its committed Delivery proof", async (t) => {
+test("Agent Wait retrieves an outstanding Answer and rejects a join once none remain", async (t) => {
 	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: ({ operation }) =>
 			operation === "answer" ? "confirmed_failure" : undefined,
 	});
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-lost-answer-wait");
 	const requestInput = {
 		operation: "request" as const,
 		targetAgentId: harness.childId,
@@ -1237,7 +1239,7 @@ test("Agent Wait retrieves a lost Answer and later reports its committed Deliver
 		toolCallId: answerToolCallId,
 	};
 	const waitToolCallId = "wait-for-lost-answer";
-	const waitInput = { requestMessageIds: [requestId] };
+	const waitInput = {};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
@@ -1271,30 +1273,262 @@ test("Agent Wait retrieves a lost Answer and later reports its committed Deliver
 	};
 	assert.equal(harness.view.guardToolResult(waitResultMessage), undefined);
 	harness.host.session.sessionManager.appendMessage(waitResultMessage);
-	const waitResultEntry = harness.host.session.sessionManager.getLeafEntry();
-	assert.ok(waitResultEntry);
 	harness.view.reconcileCommittedToolResults();
 
-	const repeatedCallId = "wait-for-already-delivered-answer";
+	const repeatedCallId = "wait-with-no-outstanding-requests";
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_wait", waitInput, { id: repeatedCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
-	assert.deepEqual(
-		await harness.view.wait(repeatedCallId, waitInput, new AbortController().signal),
-		{
-			answers: [{
-				disposition: "answer_already_delivered",
-				requestMessageId: requestId,
-				answerId: deriveMessageId(answerSource),
-				deliveryEvidence: {
-					agentId: harness.host.session.sessionId,
-					entryId: waitResultEntry.id,
-				},
-			}],
+	await assert.rejects(
+		() => harness.view.wait(
+			repeatedCallId,
+			waitInput,
+			new AbortController().signal,
+		),
+		/invalid_input: Agent Wait requires at least one outstanding outbound Agent Request/,
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("Agent Wait excludes an Answer retrieved earlier in the same tool batch", async (t) => {
+	const harness = await createDormantChildHarness(t, {
+		beforeDeliveryAdmission: ({ operation }) =>
+			operation === "answer" ? "confirmed_failure" : undefined,
+	});
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-retry-wait-batch");
+	const requestMessageId = await commitHarnessAnswer(
+		harness,
+		"request-before-retry-wait-batch",
+		"answer-before-retry-wait-batch",
+		"The retry retrieves this Answer before the Wait executes.",
+	);
+	const retryToolCallId = "retry-before-wait-in-one-batch";
+	const waitToolCallId = "wait-after-retry-in-one-batch";
+	const retryInput = { operation: "retry" as const, messageId: requestMessageId };
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			[
+				fauxToolCall("agent_message", retryInput, { id: retryToolCallId }),
+				fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
+			],
+			{ stopReason: "toolUse" },
+		),
+	);
+	const retryResult = await harness.view.message(retryToolCallId, retryInput);
+	assert.equal(
+		"disposition" in retryResult ? retryResult.disposition : undefined,
+		"answer_delivered",
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: retryToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(retryResult) }],
+		details: retryResult,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	await assert.rejects(
+		() => harness.view.wait(
+			waitToolCallId,
+			{},
+			new AbortController().signal,
+		),
+		/invalid_input: Agent Wait requires at least one outstanding outbound Agent Request/,
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("Agent Wait joins every outstanding Request in authoring order", async (t) => {
+	let releaseFirstAnswer!: () => void;
+	const firstAnswerGate = new Promise<void>((resolve) => {
+		releaseFirstAnswer = resolve;
+	});
+	const harness = await createDormantChildHarness(t, {
+		scheduleDeliveryDispatch: ({ kind }, dispatch) => {
+			if (kind !== "answer") dispatch();
 		},
+	});
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-aggregate-wait");
+	const waitToolCallId = "wait-for-all-outstanding-requests";
+	const firstQuestion = "Resolve the first joined Request.";
+	const secondQuestion = "Resolve the second joined Request.";
+	const routeModelCall = async (messages: Context) => {
+		const context = JSON.stringify(messages);
+		if (context.includes("OWNER_JOIN_ALL_OUTSTANDING")) {
+			return context.includes(waitToolCallId)
+				? fauxAssistantMessage("The aggregate Answer set is complete.")
+				: fauxAssistantMessage(
+					fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
+					{ stopReason: "toolUse" },
+				);
+		}
+		if (context.includes(secondQuestion)) {
+			return context.includes("answer-second-joined-request")
+				? fauxAssistantMessage("The second joined Answer committed.")
+				: fauxAssistantMessage(
+					fauxToolCall(
+						"agent_message",
+						{ operation: "answer", answer: "Second joined Answer." },
+						{ id: "answer-second-joined-request" },
+					),
+					{ stopReason: "toolUse" },
+				);
+		}
+		if (context.includes(firstQuestion)) {
+			if (context.includes("answer-first-joined-request")) {
+				return fauxAssistantMessage("The first joined Answer committed.");
+			}
+			await firstAnswerGate;
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "answer", answer: "First joined Answer." },
+					{ id: "answer-first-joined-request" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage("No coordination action was needed.");
+	};
+	harness.host.model.setResponses(Array.from({ length: 8 }, () => routeModelCall));
+
+	const authorRequest = async (toolCallId: string, question: string) => {
+		const input = {
+			operation: "request" as const,
+			targetAgentId: harness.childId,
+			question,
+		};
+		harness.host.session.sessionManager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall("agent_message", input, { id: toolCallId }),
+				{ stopReason: "toolUse" },
+			),
+		);
+		const receipt = await harness.view.message(toolCallId, input);
+		harness.host.session.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId,
+			toolName: "agent_message",
+			content: [{ type: "text", text: JSON.stringify(receipt) }],
+			details: receipt,
+			isError: false,
+			timestamp: Date.now(),
+		});
+		if (!("requestMessageId" in receipt)) throw new Error("Request has no identity");
+		return receipt.requestMessageId;
+	};
+	const firstRequestId = await authorRequest("author-first-joined-request", firstQuestion);
+	const secondRequestId = await authorRequest("author-second-joined-request", secondQuestion);
+	const prompt = harness.host.session.prompt("OWNER_JOIN_ALL_OUTSTANDING");
+	releaseFirstAnswer();
+	await prompt;
+
+	const waitResult = requireToolResult(
+		harness.host.session.sessionManager.getEntries(),
+		waitToolCallId,
+	).message.details;
+	assert.ok(waitResult && typeof waitResult === "object" && "answers" in waitResult);
+	const answers = (waitResult as { answers: AgentWaitAnswer[] }).answers;
+	assert.deepEqual(
+		answers.map(({ requestMessageId }) => requestMessageId),
+		[firstRequestId, secondRequestId],
+	);
+	assert.deepEqual(
+		answers.map((answer) =>
+			answer.disposition === "answer_delivered" ? answer.answer : undefined
+		),
+		["First joined Answer.", "Second joined Answer."],
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("Agent Wait excludes Requests authored after its call in the same tool batch", async (t) => {
+	const harness = await createDormantChildHarness(t, {
+		beforeDeliveryAdmission: ({ operation }) =>
+			operation === "answer" ? "confirmed_failure" : undefined,
+	});
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-wait-boundary");
+	const firstRequestInput = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: "Answer the Request before the Wait boundary.",
+	};
+	const laterRequestInput = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: "Remain outside the preceding Wait boundary.",
+	};
+	const firstRequestToolCallId = "request-before-wait-boundary";
+	const waitToolCallId = "wait-between-request-sources";
+	const laterRequestToolCallId = "request-after-wait-boundary";
+	const sourceEntryId = harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			[
+				fauxToolCall("agent_message", firstRequestInput, {
+					id: firstRequestToolCallId,
+				}),
+				fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
+				fauxToolCall("agent_message", laterRequestInput, {
+					id: laterRequestToolCallId,
+				}),
+			],
+			{ stopReason: "toolUse" },
+		),
+	);
+	const firstRequestId = deriveMessageId({
+		agentId: harness.host.session.sessionId,
+		entryId: sourceEntryId,
+		toolCallId: firstRequestToolCallId,
+	});
+	harness.host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "answer", answer: "Boundary Answer." },
+				{ id: "answer-before-wait-boundary" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The boundary Answer committed."),
+	]);
+	const requestReceipt = await harness.view.message(
+		firstRequestToolCallId,
+		firstRequestInput,
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: firstRequestToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(requestReceipt) }],
+		details: requestReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	await waitForEntry(childSessionFile, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === "answer-before-wait-boundary" &&
+		entry.message.isError === false
+	);
+
+	const result = await harness.view.wait(
+		waitToolCallId,
+		{},
+		new AbortController().signal,
+	);
+	assert.ok(!("disposition" in result));
+	assert.deepEqual(
+		result.answers.map(({ requestMessageId }) => requestMessageId),
+		[firstRequestId],
 	);
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
@@ -1316,6 +1550,7 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 			markAnswerDispatchHeld();
 		},
 	});
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-held-answer-wait");
 	const requestInput = {
 		operation: "request" as const,
 		targetAgentId: harness.childId,
@@ -1393,7 +1628,7 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 	const answerId = deriveMessageId(answerSource);
 
 	const waitToolCallId = "wait-before-held-answer-delivery";
-	const waitInput = { requestMessageIds: [requestId] };
+	const waitInput = {};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
@@ -1435,7 +1670,7 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 	releaseAnswerDispatch();
 	await harness.view.reachSafeBoundary();
 	await waitForCondition(
-		() => retentionCount(harness.view.status().run, "awaiting_answer") === 1,
+		() => retentionCount(harness.view.status().run, "awaiting_answer") === 0,
 	);
 	const ownerEntries = harness.host.session.sessionManager.getEntries();
 	assert.equal(
@@ -1662,6 +1897,7 @@ test("a retired Delivery dispatch callback cannot bypass a later queued Message"
 			if (heldOwnerDispatches.length === 2) markTwoAnswerDispatchesHeld();
 		},
 	});
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-stale-dispatch-wait");
 	ownerAgentId = harness.host.session.sessionId;
 	const requestInput = {
 		operation: "request" as const,
@@ -1765,7 +2001,7 @@ test("a retired Delivery dispatch callback cannot bypass a later queued Message"
 	);
 
 	const waitToolCallId = "wait-before-stale-answer-dispatch-release";
-	const waitInput = { requestMessageIds: [requestId] };
+	const waitInput = {};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
@@ -1836,6 +2072,7 @@ test("a retired Delivery dispatch callback cannot bypass a later queued Message"
 });
 
 test("Answer retrievals re-arbitrate when direct Answer Delivery commits first", async (t) => {
+	let ownerAgentId: string | undefined;
 	let markAnswerDispatchHeld!: () => void;
 	const answerDispatchHeld = new Promise<void>((resolve) => {
 		markAnswerDispatchHeld = resolve;
@@ -1855,12 +2092,15 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 			releaseAnswerDispatch = () => dispatch();
 			markAnswerDispatchHeld();
 		},
-		afterSteerFreeze: ({ release }) => {
+		afterSteerFreeze: ({ recipientAgentId, release }) => {
+			if (recipientAgentId !== ownerAgentId) return;
 			releaseAnswerFreeze = release;
 			markAnswerFreezeHeld();
 			return "defer";
 		},
 	});
+	ownerAgentId = harness.host.session.sessionId;
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-rearbitrated-wait");
 	const requestInput = {
 		operation: "request" as const,
 		targetAgentId: harness.childId,
@@ -1938,7 +2178,7 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 	const selectedRetryToolCallId = "retry-before-direct-answer-delivery-commits";
 	const selectedRetryInput = { operation: "retry" as const, messageId: requestId };
 	const waitToolCallId = "wait-before-direct-answer-delivery-commits";
-	const waitInput = { requestMessageIds: [requestId] };
+	const waitInput = {};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			[
@@ -2078,6 +2318,7 @@ test("an exact-Run fence prevents a resolved Agent Wait from becoming Answer Del
 			failExactRun();
 		},
 	});
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-resolved-fence-wait");
 	const requestToolCallId = "request-before-fenced-wait";
 	const requestInput = {
 		operation: "request" as const,
@@ -2143,7 +2384,7 @@ test("an exact-Run fence prevents a resolved Agent Wait from becoming Answer Del
 		toolCallId: answerToolCallId,
 	};
 	const waitToolCallId = "fence-resolved-agent-wait";
-	const waitInput = { requestMessageIds: [requestId] };
+	const waitInput = {};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
@@ -2207,6 +2448,7 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 			},
 		},
 	);
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-preempted-fence-wait");
 	const ownerAgentId = harness.host.session.sessionId;
 	const selectedRequestToolCallId = "request-before-preemption-fence";
 	const selectedRequestInput = {
@@ -2290,7 +2532,7 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 		isError: false,
 		timestamp: Date.now(),
 	});
-	const waitInput = { requestMessageIds: [selectedRequestId] };
+	const waitInput = {};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
@@ -2356,6 +2598,7 @@ test("Agent Wait parks requester execution capacity until the pending Answer com
 				? "confirmed_failure"
 				: undefined,
 	}, policy, undefined, clock);
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-capacity-wait");
 	const requestToolCallId = "request-before-capacity-wait";
 	const requestInput = {
 		operation: "request" as const,
@@ -2393,7 +2636,7 @@ test("Agent Wait parks requester execution capacity until the pending Answer com
 
 	const retryToolCallId = "retry-while-owner-holds-capacity";
 	const waitToolCallId = "park-for-capacity-answer";
-	const waitInput = { requestMessageIds: [requestId] };
+	const waitInput = {};
 	const answerToolCallId = "answer-after-requester-parks";
 	const answerText = "The responder ran after Agent Wait released capacity.";
 	let responderStarted!: () => void;
@@ -2500,6 +2743,7 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 			moderatorRunStarts += 1;
 		},
 	);
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-reverse-request-wait");
 	responderAgentId = harness.childId;
 	const ownerAgentId = harness.host.session.sessionId;
 	const originalRequestToolCallId = "request-before-reverse-preemption";
@@ -2555,7 +2799,7 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 					),
 					fauxToolCall(
 						"agent_wait",
-						{ requestMessageIds: [originalRequestId] },
+						{},
 						{ id: repeatedWaitToolCallId },
 					),
 				], { stopReason: "toolUse" });
@@ -2568,7 +2812,7 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 				),
 				fauxToolCall(
 					"agent_wait",
-					{ requestMessageIds: [originalRequestId] },
+					{},
 					{ id: firstWaitToolCallId },
 				),
 			], { stopReason: "toolUse" });
@@ -2713,6 +2957,7 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 			if (recipientAgentId === ownerAgentId) markInboundRequestAdmitted();
 		},
 	});
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-third-party-wait");
 	ownerAgentId = harness.host.session.sessionId;
 	const spawnThirdPartyToolCallId = "spawn-third-party-requester";
 	const spawnThirdPartyInput = {
@@ -2793,7 +3038,7 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 				: fauxAssistantMessage(
 					fauxToolCall(
 						"agent_wait",
-						{ requestMessageIds: [selectedRequestId] },
+						{},
 						{ id: waitToolCallId },
 					),
 					{ stopReason: "toolUse" },
@@ -2871,7 +3116,7 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("a completed selected aggregate wins the inbound Request preemption race", async (t) => {
+test("a completed outstanding aggregate wins the inbound Request preemption race", async (t) => {
 	let ownerAgentId: string | undefined;
 	let commitSelectedAnswer = () => undefined;
 	let raceBoundaryChecks = 0;
@@ -2891,6 +3136,7 @@ test("a completed selected aggregate wins the inbound Request preemption race", 
 			},
 		},
 	);
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-completion-race-wait");
 	ownerAgentId = harness.host.session.sessionId;
 	const selectedRequestToolCallId = "request-before-completion-race";
 	const selectedRequestInput = {
@@ -2991,7 +3237,15 @@ test("a completed selected aggregate wins the inbound Request preemption race", 
 		spawnThirdPartyToolCallId,
 		spawnThirdPartyInput,
 	);
-	if (!("agentId" in thirdParty)) throw new Error("Race third-party Agent was not created");
+	if (!("agentId" in thirdParty) || !("requestMessageId" in thirdParty)) {
+		throw new Error("Race third-party Agent was not created");
+	}
+	await cancelHarnessRequest(
+		harness,
+		thirdParty.requestMessageId,
+		thirdParty.agentId,
+		"cancel-race-third-party-creation-request",
+	);
 	const inboundRequestToolCallId = "inbound-request-at-answer-race";
 	const waitToolCallId = "wait-that-wins-completion-race";
 	let releaseInboundRequest!: () => void;
@@ -3002,11 +3256,11 @@ test("a completed selected aggregate wins the inbound Request preemption race", 
 		const context = JSON.stringify(messages);
 		if (context.includes("OWNER_WAIT_FOR_COMPLETION_RACE")) {
 			return context.includes(selectedAnswer)
-				? fauxAssistantMessage("The completed selected aggregate won.")
+				? fauxAssistantMessage("The completed outstanding aggregate won.")
 				: fauxAssistantMessage(
 					fauxToolCall(
 						"agent_wait",
-						{ requestMessageIds: [selectedRequestId] },
+						{},
 						{ id: waitToolCallId },
 					),
 					{ stopReason: "toolUse" },
@@ -3100,6 +3354,7 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 		undefined,
 		clock,
 	);
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-fallback-wait");
 	const requestToolCallId = "request-before-fallback-reconciliation";
 	const requestInput = {
 		operation: "request" as const,
@@ -3137,7 +3392,7 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 	);
 	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
 	const waitToolCallId = "wait-for-fallback-reconciliation";
-	const waitInput = { requestMessageIds: [requestId] };
+	const waitInput = {};
 	harness.host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
@@ -4203,6 +4458,59 @@ async function createDormantChildHarness(
 }
 
 type DormantChildHarness = Awaited<ReturnType<typeof createDormantChildHarness>>;
+
+async function cancelHarnessCreationRequest(
+	harness: DormantChildHarness,
+	toolCallId: string,
+): Promise<void> {
+	await cancelHarnessRequest(
+		harness,
+		harness.creationRequestId,
+		harness.childId,
+		toolCallId,
+	);
+}
+
+async function cancelHarnessRequest(
+	harness: DormantChildHarness,
+	requestMessageId: string,
+	responderAgentId: string,
+	toolCallId: string,
+): Promise<void> {
+	const settledMessage = `Harness Request cancelled by ${toolCallId}.`;
+	harness.host.model.setResponses([fauxAssistantMessage(settledMessage)]);
+	const input = {
+		operation: "cancel" as const,
+		requestMessageId,
+		reason: "Exclude this unscheduled harness Request from the wait scenario.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const receipt = await harness.view.message(toolCallId, input);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(receipt) }],
+		details: receipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	const responderSessionFile = await waitForChildSessionFile(
+		harness.host,
+		responderAgentId,
+	);
+	await waitForEntry(responderSessionFile, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "assistant" &&
+		JSON.stringify(entry.message.content).includes(settledMessage)
+	);
+}
+
 type TranscriptEntry = ReturnType<SessionManager["getEntries"]>[number];
 type MessageTranscriptEntry = Extract<TranscriptEntry, { type: "message" }>;
 type ToolResultTranscriptEntry = MessageTranscriptEntry & {
@@ -4256,6 +4564,37 @@ async function authorOwnerRequest(
 		throw new Error("Request receipt has no identity");
 	}
 	return { requestMessageId: receipt.requestMessageId };
+}
+
+async function commitHarnessAnswer(
+	harness: DormantChildHarness,
+	requestToolCallId: string,
+	answerToolCallId: string,
+	answer: string,
+): Promise<string> {
+	harness.host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "answer", answer },
+				{ id: answerToolCallId },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The harness Answer committed."),
+	]);
+	const request = await authorOwnerRequest(harness, requestToolCallId);
+	const responderSessionFile = await waitForChildSessionFile(
+		harness.host,
+		harness.childId,
+	);
+	await waitForEntry(responderSessionFile, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === answerToolCallId &&
+		entry.message.isError === false
+	);
+	return request.requestMessageId;
 }
 
 function requireToolResult(

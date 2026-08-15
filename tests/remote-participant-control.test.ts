@@ -38,7 +38,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 			case "runtime.guardToolResult": return { result: null };
 			case "coordination.observe": return status;
 			case "coordination.message": return { messageId: "message-1", messageStatus: "sent" };
-			case "coordination.wait": return { answers: [] };
+			case "coordination.wait": return { disposition: "preempted" };
 			case "coordination.control": return { agentId: "target", disposition: "held" };
 			case "coordination.spawn": return { spawnStatus: "not_created", failedStage: "identity_commit" };
 			case "coordination.askHuman": return { requestId: "human-1", answer: "Proceed." };
@@ -75,10 +75,10 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 	assert.deepEqual(
 		await proxies.coordination.wait(
 			"wait-call",
-			{ requestMessageIds: ["request-1"] },
+			{},
 			cancellation.signal,
 		),
-		{ answers: [] },
+		{ disposition: "preempted" },
 	);
 	assert.deepEqual(
 		await proxies.coordination.askUserQuestion(
@@ -106,7 +106,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		}, undefined],
 		["coordination.wait", {
 			toolCallId: "wait-call",
-			input: { requestMessageIds: ["request-1"] },
+			input: {},
 		}, cancellation.signal],
 		["coordination.askHuman", {
 			toolCallId: "human-call",

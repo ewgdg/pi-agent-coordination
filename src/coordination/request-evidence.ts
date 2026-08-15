@@ -7,7 +7,11 @@ import {
 	inspectCreationRequestDelivery,
 	resolveCreationRequest,
 } from "../protocol/creation-request.ts";
-import { deriveMessageIdentity } from "../protocol/identities.ts";
+import {
+	compareCommittedToolCallOrder,
+	deriveMessageIdentity,
+	type ToolCallPointer,
+} from "../protocol/identities.ts";
 import {
 	inspectAnswerDelivery,
 	inspectAnswerRetrievals,
@@ -205,6 +209,44 @@ export class RequestEvidence {
 			if (request) requests.push(request);
 		}
 		return requests;
+	}
+
+	outstandingRequestIdsAt(
+		author: AgentRecord,
+		waitSource: ToolCallPointer,
+	): readonly string[] {
+		if (waitSource.agentId !== author.identity.agentId) {
+			throw new Error("wrong_participant: Agent Wait source belongs to another Agent");
+		}
+		const transcript = author.transcript.inspect();
+		return this.#canonicalRequestsAuthoredBy(author)
+			.filter((request) =>
+				compareCommittedToolCallOrder(transcript, request.source, waitSource) < 0
+			)
+			.sort((left, right) =>
+				compareCommittedToolCallOrder(transcript, left.source, right.source)
+			)
+			.flatMap((request) => {
+				const cancellation = this.findCancellation(request);
+				if (
+					cancellation &&
+					compareCommittedToolCallOrder(
+						transcript,
+						cancellation.source,
+						waitSource,
+					) < 0
+				) return [];
+
+				const answer = this.findAnswer(request);
+				if (!answer) return [request.messageId];
+				const delivery = inspectAnswerDelivery({
+					requesterAgentId: author.identity.agentId,
+					transcript,
+					answer,
+				}).deliveryEvidence;
+				if (delivery) return [];
+				return [request.messageId];
+			});
 	}
 
 	activeRequestFor(responder: AgentRecord): Request {

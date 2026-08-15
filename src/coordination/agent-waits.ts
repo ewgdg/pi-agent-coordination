@@ -5,7 +5,7 @@ import type { AgentRecord } from "./agent-record.ts";
 import type { MessageCoordinator } from "./messages.ts";
 import {
 	inspectCommittedAgentWaitResult,
-	resolveCommittedAgentWaitInput,
+	resolveCommittedAgentWaitCall,
 	type AgentWaitInput,
 	type AgentWaitResult,
 } from "../protocol/agent-wait.ts";
@@ -47,7 +47,7 @@ export type GuardedAgentWaitToolResult = Readonly<{
 type PendingAgentWait = {
 	callerAgentId: string;
 	toolCallId: string;
-	input: AgentWaitInput;
+	requestMessageIds: readonly string[];
 	record: AgentRecord;
 	handle: AgentRunHandle;
 	signal: AbortSignal;
@@ -100,15 +100,19 @@ export class AgentWaitCoordinator {
 			throw new Error("host_shutting_down: Workflow is shutting down");
 		}
 		const caller = this.#requireAgent(callerAgentId);
-		const input = resolveCommittedAgentWaitInput({
+		const call = resolveCommittedAgentWaitCall({
 			agentId: callerAgentId,
 			transcript: caller.transcript.inspect(),
 			toolCallId,
 			providedInput,
 		});
+		const requestMessageIds = this.#messages.outstandingRequestIds(
+			callerAgentId,
+			call.source,
+		);
 		const completed = this.#messages.waitAnswers(
 			callerAgentId,
-			input.requestMessageIds,
+			requestMessageIds,
 		);
 		const handle = caller.host.currentHandle();
 		if (!handle) throw new Error("Agent Run is unavailable");
@@ -128,7 +132,7 @@ export class AgentWaitCoordinator {
 		const pending: PendingAgentWait = {
 			callerAgentId,
 			toolCallId,
-			input,
+			requestMessageIds,
 			record: caller,
 			handle,
 			signal,
@@ -186,11 +190,11 @@ export class AgentWaitCoordinator {
 				agentId: pending.callerAgentId,
 				toolCallId: pending.toolCallId,
 			});
-			// This is the race boundary: a fully committed selected aggregate wins
+			// This is the race boundary: the complete outstanding snapshot wins
 			// before the inbound Request acquires the parked Run.
 			completed = this.#messages.waitAnswers(
 				pending.callerAgentId,
-				pending.input.requestMessageIds,
+				pending.requestMessageIds,
 			);
 		} catch (error) {
 			this.#fence(
@@ -249,7 +253,7 @@ export class AgentWaitCoordinator {
 			// Pi commits it. Preemption has no Answer retrieval to re-arbitrate.
 			const current = this.#messages.waitAnswers(
 				callerAgentId,
-				pending.input.requestMessageIds,
+				pending.requestMessageIds,
 			);
 			if (current) {
 				if (isDeepStrictEqual(current, pending.candidate)) return undefined;
@@ -312,7 +316,7 @@ export class AgentWaitCoordinator {
 		try {
 			completed = this.#messages.waitAnswers(
 				pending.callerAgentId,
-				pending.input.requestMessageIds,
+				pending.requestMessageIds,
 			);
 		} catch (error) {
 			this.#fence(

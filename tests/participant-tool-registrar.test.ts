@@ -139,17 +139,11 @@ test("Agent Message schema correlates Answer implicitly and Cancellation explici
 	assert.equal("requestId" in cancellation.properties, false);
 });
 
-test("Agent Wait schema requires explicit unique Request identities", () => {
+test("Agent Wait schema accepts only a parameterless join", () => {
 	const schema = participantCoordinationToolSchemas.agent_wait;
+	assert.equal(Value.Check(schema, {}), true);
 	assert.equal(Value.Check(schema, {
-		requestMessageIds: ["request-a", "request-b"],
-	}), true);
-	assert.equal(Value.Check(schema, { requestMessageIds: [] }), false);
-	assert.equal(Value.Check(schema, {
-		requestMessageIds: ["request-a", "request-a"],
-	}), false);
-	assert.equal(Value.Check(schema, {
-		requestMessageIds: [""],
+		requestMessageIds: ["request-a"],
 	}), false);
 });
 
@@ -296,15 +290,15 @@ test("participant registrar contributes one shared asynchronous Agent control gu
 		],
 		[
 			"reserve Agent Wait for strict fan-in",
-			/one next decision requires every selected Answer together[\s\S]*avoiding one model turn per Answer matters/,
+			/one next decision requires every outstanding Answer together[\s\S]*avoiding one model turn per Answer matters/,
 		],
 		[
-			"ordinary Messages do not resolve selected Requests",
-			/Ordinary Messages do not satisfy selected Requests/,
+			"ordinary Messages do not resolve Agent Requests",
+			/Ordinary Messages do not satisfy Agent Requests/,
 		],
 		[
-			"preserve selected Answers across wait preemption",
-			/agent_wait returns disposition "preempted"[\s\S]*Reissue agent_wait with the same selected Request identities[\s\S]*does not consume[\s\S]*Answer Delivery proof/,
+			"preserve Answers across wait preemption",
+			/agent_wait returns disposition "preempted"[\s\S]*call agent_wait again[\s\S]*preemption does not consume[\s\S]*Answer Delivery proof/,
 		],
 		[
 			"keep provisional responder work off the Message lane",
@@ -336,9 +330,9 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	assert.deepEqual(toolMetadata(ordinary, "agent_wait"), {
 		label: "Wait for Answers",
 		description:
-			"Wait until every selected outbound Agent Request has a committed Answer, unless an inbound Agent Request preempts the wait for attention.",
+			"Wait until every outstanding outbound Agent Request has a committed Answer, unless an inbound Agent Request preempts the wait for attention.",
 		promptSnippet:
-			"Park this Run until selected Agent Requests are answered or an inbound Agent Request preempts it.",
+			"Join all outstanding Agent Request Answers unless an inbound Agent Request preempts the wait.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(ordinary, "agent_spawn"), {
@@ -446,7 +440,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 	const host = await createRegistrarHost(t, "ordinary", routedHandlers);
 	const samples = [
 		["agent_message", "call-message", { operation: "poll", messageId: "message-1" }, messageReceipt],
-		["agent_wait", "call-wait", { requestMessageIds: ["request-1"] }, waitReceipt],
+		["agent_wait", "call-wait", {}, waitReceipt],
 		["agent_spawn", "call-spawn", { request: "Investigate." }, spawnReceipt],
 		["agent_observe", "call-observe", { operation: "children" }, observeReceipt],
 		["agent_control", "call-control", { operation: "interrupt", agentId: "child-agent" }, controlReceipt],

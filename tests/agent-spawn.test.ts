@@ -132,6 +132,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 				"find",
 				"ls",
 				"agent_message",
+				"agent_wait",
 				"agent_control",
 				"agent_observe",
 				"agent_spawn",
@@ -416,7 +417,7 @@ test("copied coordination evidence grants no authority or obligations to a conve
 		/wrong_participant: Agent .* did not author Message/,
 	);
 
-	const waitInput = { requestMessageIds: [historicalRequestId] };
+	const waitInput = {};
 	childTranscript.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_wait", waitInput, {
@@ -431,7 +432,7 @@ test("copied coordination evidence grants no authority or obligations to a conve
 			waitInput,
 			new AbortController().signal,
 		),
-		/wrong_participant: Agent .* did not author Message/,
+		/invalid_input: Agent Wait requires at least one outstanding outbound Agent Request/,
 	);
 
 	const answerInput = {
@@ -598,6 +599,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 		allowedTools: [
 			"read",
 			"agent_message",
+			"agent_wait",
 			"agent_control",
 			"agent_observe",
 			"agent_spawn",

@@ -208,6 +208,14 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		disposition: "already_cancelled",
 		cancellationMessageId: "cancellation-message",
 	}), true);
+	assert.equal(Check(agentControlMethods["coordination.wait"].request, {
+		toolCallId: "call-wait",
+		input: {},
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.wait"].request, {
+		toolCallId: "call-legacy-wait",
+		input: { requestMessageIds: ["request-message"] },
+	}), false);
 	assert.equal(Check(agentControlMethods["coordination.wait"].response, {
 		disposition: "preempted",
 	}), true);
