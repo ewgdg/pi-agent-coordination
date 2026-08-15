@@ -345,10 +345,6 @@ const RunControlReceiptSchema = Type.Union([
 		disposition: Type.Union([Type.Literal("terminated"), Type.Literal("not_running")]),
 		residualRequests: closed({ incoming: Type.Integer({ minimum: 0 }), outgoing: Type.Integer({ minimum: 0 }) }),
 	}),
-	closed({
-		agentId: NonEmptyStringSchema, disposition: Type.Literal("rejected"),
-		rejectionReason: Type.Literal("interactive_selection"),
-	}),
 ]);
 const HumanAnswerSchema = closed({ requestId: NonEmptyStringSchema, answer: NonEmptyStringSchema });
 const ModeratorControlReceiptSchema = Type.Union([

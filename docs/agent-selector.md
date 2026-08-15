@@ -16,7 +16,7 @@ Live uses one continuous list across three adjacent sections:
 
 Right Arrow or `l` enters the focused ordinary Agent's child scope. Left Arrow or `h` returns to its parent and refocuses that Agent. Breadcrumbs omit Owner, retain the newest three Agent scopes, and tighten to the available width.
 
-Opening a live Agent view attaches its Agent Runtime's complete Pi mode. `interactive_selection` retains that Runtime and protects its exact current Run from ordinary termination, but does not itself admit or prolong a Run. Returning to Owner or switching Agents removes Runtime retention; an unselected Dormant Runtime is then disposed, while live work follows ordinary Run retention.
+Opening a live Agent view attaches its Agent Runtime's complete Pi mode. `interactive_selection` retains that Runtime without itself admitting or prolonging a Run. Run failure or ordinary termination may end the exact Run while keeping the Runtime and view attached, leaving the Agent Dormant. Returning to Owner or switching Agents removes Runtime retention; an unselected Dormant Runtime is then disposed, while live work follows ordinary Run retention.
 
 ## Dormant roster
 

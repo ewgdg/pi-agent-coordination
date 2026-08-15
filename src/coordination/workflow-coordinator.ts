@@ -335,7 +335,6 @@ export class WorkflowCoordinator {
 			quarantinedAgentIds: this.#quarantinedAgentIds,
 			ownerAgentId: identity.agentId,
 			messages: this.#messages,
-			isInteractivelySelected: (agentId) => this.#isInteractivelySelected(agentId),
 		});
 		this.#operationalIncidents = new OperationalIncidentCoordinator({
 			agents: this.#agents,
@@ -955,10 +954,6 @@ export class WorkflowCoordinator {
 			}
 			active.attachment.projection().focusEditor();
 		});
-	}
-
-	#isInteractivelySelected(agentId: string): boolean {
-		return this.#activeAgentView?.record.identity.agentId === agentId;
 	}
 
 	async #beginExecution(agentId: string): Promise<void> {

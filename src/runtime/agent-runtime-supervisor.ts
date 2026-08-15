@@ -830,11 +830,12 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		}
 		this.#cancelReleaseAfterActivitySettlement(run);
 		// Pi owns the native Owner Runtime across coordination Runs. A selected child
-		// is supervisor-owned but temporarily retained to preserve its attached view.
+		// is supervisor-owned but temporarily retained to preserve its attached view
+		// when its exact Run ends in a terminal event that bypasses Run Retention.
 		const retainRuntime = disposeRuntime === undefined && (
 			this.#runtimeOwnership === "native-host" ||
 			(
-				cause === "failure" &&
+				(cause === "failure" || cause === "termination") &&
 				run.runtime.projection !== undefined &&
 				this.#retentionReasons.has("interactive_selection")
 			)

@@ -121,7 +121,7 @@ An authorized supervisor's free-form Message requesting that one exact held Agen
 The live decision that permits an exact child Agent Run to end only when no Run Retention Reason remains. A separately retained Agent Runtime may remain prepared after Run release.
 
 **Run Termination**:
-An authorized controlled end of one exact current Agent Run that deliberately bypasses its Run Retention Reasons. Ordinary termination is rejected while the Agent owns Interactive Selection; completed deselection permits termination. It settles an exact pending Human Request through interruption but does not cancel Agent Requests, affect descendants, or create Agent lifecycle state. A later Message may start a successor Run for the same Agent.
+An authorized controlled end of one exact current Agent Run that deliberately bypasses its Run Retention Reasons. It may end the exact Run of a selected Agent while retaining that Agent's Runtime and open view, leaving the Agent Dormant. It settles an exact pending Human Request through interruption but does not cancel Agent Requests, affect descendants, or create Agent lifecycle state. A later Message or native input may start a successor Run in the same retained Runtime.
 _Avoid_: Agent termination
 
 **Run Failure**:

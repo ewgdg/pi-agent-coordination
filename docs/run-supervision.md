@@ -74,7 +74,7 @@ A resume that loses its bound Hold before Delivery becomes an ordinary Steer Mes
 
 A supervisory dispatch failure reports an error, clears only the failed resumption attempt, and leaves the exact Hold available for an explicit retry.
 
-The [Agent selector and view](agent-selector.md) present a durable Agent without changing protocol authority or Owner runtime ownership. `interactive_selection` retains the Agent Runtime and protects a current Run from ordinary termination without itself admitting work. Selecting a Dormant Agent prepares its ordinary configured session, complete Pi mode, and persisted evidence while observation remains Dormant. Extension behavior is not filtered: editor input, extension effects, and ordinary coordination Delivery may activate an exact Run in that same Runtime. Run release or failure can return the selected Agent to Dormant without replacing its projection. Switching or closing removes Runtime retention, and orderly shutdown closes the overlay before ending child Runs and disposing retained Runtimes.
+The [Agent selector and view](agent-selector.md) present a durable Agent without changing protocol authority or Owner runtime ownership. `interactive_selection` retains the Agent Runtime without itself admitting work. Selecting a Dormant Agent prepares its ordinary configured session, complete Pi mode, and persisted evidence while observation remains Dormant. Extension behavior is not filtered: editor input, extension effects, and ordinary coordination Delivery may activate an exact Run in that same Runtime. Run release, failure, or termination can return the selected Agent to Dormant without replacing its projection. Switching or closing removes Runtime retention, and orderly shutdown closes the overlay before ending child Runs and disposing retained Runtimes.
 
 The native above-editor activity dock identifies the selected durable Agent by label, compact Agent identity, and semantic work status. It also projects only that Agent's direct children with a current Run; Dormant children remain absent from activity. Owner scope prepends Owner-only attention. The child mode's complete fullscreen transcript, Run state, widgets, editor, footer, commands, and extension UI render inside the headerless outer overlay, while the Owner presentation remains mounted and unchanged underneath.
 
@@ -87,18 +87,8 @@ The native above-editor activity dock identifies the selected durable Agent by l
 }
 ```
 
-Termination fences and confirms the end of the target's exact current Run, bypasses every Retention Reason, and discards its uncommitted coordination and native input. An Agent with an open live view rejects ordinary termination without changing its Run or overlay attachment:
+Termination fences and confirms the end of the target's exact current Run, bypasses every Retention Reason, and discards its uncommitted coordination and native input. It does not roll back effects, Answer or cancel Requests, notify participants, mutate descendants, remove the Agent, or create Agent lifecycle evidence. Later Message Delivery may start a fresh successor Run for the same Agent identity. Recovery of any discarded Message remains explicit through transcript inspection, poll, or retry.
 
-```json
-{
-  "agentId": "child-agent-id",
-  "disposition": "rejected",
-  "rejectionReason": "interactive_selection"
-}
-```
-
-After the view closes, ordinary termination may proceed. A successful or already-Dormant receipt reports `terminated` or `not_running` plus complete live `residualRequests.incoming` and `residualRequests.outgoing` counts. Coordinated shutdown remains a dedicated lifecycle path and closes any open Agent view before ending child Runs.
-
-Termination does not roll back effects, Answer or cancel Requests, notify participants, mutate descendants, remove the Agent, or create Agent lifecycle evidence. Later Message Delivery may start a fresh successor Run for the same Agent identity. Recovery of any discarded Message remains explicit through transcript inspection, poll, or retry.
+A selected Agent keeps its retained Runtime and open view after termination; the Agent becomes Dormant in place, and later editor input or Message Delivery may admit a successor Run in that same Runtime. A successful or already-Dormant receipt reports `terminated` or `not_running` plus complete live `residualRequests.incoming` and `residualRequests.outgoing` counts. Coordinated shutdown remains a dedicated lifecycle path and closes any open Agent view before ending child Runs.
 
 Interruption Holds, live scheduling, open Agent-view attachment, and exact Run handles are volatile. Pi transcripts remain the authority for durable identity, authored Messages, and committed Delivery.

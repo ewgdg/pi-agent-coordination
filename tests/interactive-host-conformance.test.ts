@@ -109,43 +109,68 @@ test("repeated Agent view attachment does not replay either session startup life
 	assert.equal(host.runtime.session, host.session);
 });
 
-test("an open Agent view rejects exact-Run termination and closing permits ordinary termination", {
-	timeout: INTERACTIVE_HOST_TEST_TIMEOUT_MS,
+test("exact-Run termination of an open Agent view retains the Runtime and view", {
+	timeout: 20_000,
 }, async (t) => {
+	const evidencePath = join(tmpdir(), `.process-ui-probe-${process.pid}-termination.jsonl`);
+	const previousEvidencePath = process.env.PROCESS_UI_PROBE_EVIDENCE;
+	process.env.PROCESS_UI_PROBE_EVIDENCE = evidencePath;
+	t.after(() => restoreEnvironment("PROCESS_UI_PROBE_EVIDENCE", previousEvidencePath));
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 		fauxTokensPerSecond: 1,
+		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
 	host.model.setResponses([
-		fauxAssistantMessage("Remain live until interactive view retention is released."),
+		fauxAssistantMessage("Remain live until exact-Run termination."),
+		fauxAssistantMessage("Done."),
 	]);
 	const agentId = await spawnRetainedChild(host, "spawn-view-termination-agent");
+	await waitForProbeEvidence(evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "session_start" && entry.sessionId === agentId,
+	));
 	const ownerSession = host.runtime.session;
 	const opened = await openLiveAgentView(host, agentId);
-
-	const rejected = await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_control",
-		"reject-viewed-run-termination",
-		{ operation: "terminate", agentId },
+	const agentSessionStarts = async () => (await readProbeEvidence(evidencePath)).filter(
+		(entry) => entry.kind === "session_start" && entry.sessionId === agentId,
 	);
-	assert.deepEqual(rejected.details, {
-		agentId,
-		disposition: "rejected",
-		rejectionReason: "interactive_selection",
-	});
-	assert.equal(host.runtime.session, ownerSession);
+	const startsBefore = await agentSessionStarts();
+	assert.equal(startsBefore.length, 1);
+	const childPid = startsBefore[0]!.pid;
 
-	await returnAgentViewToOwner(host, opened);
+	await waitForAsyncCondition(async () => (await agentRunStatus(host, agentId)).phase === "live");
 	const terminated = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_control",
-		"terminate-after-agent-view-close",
+		"terminate-viewed-run",
 		{ operation: "terminate", agentId },
 	);
 	assert.equal((terminated.details as { disposition: string }).disposition, "terminated");
 	assert.equal(host.runtime.session, ownerSession);
+	// The retained Runtime keeps the open view attached while the Agent becomes Dormant.
+	const retainedStatus = await agentRunStatus(host, agentId);
+	assert.equal(retainedStatus.phase, "dormant");
+	assert.equal((await agentSessionStarts()).length, 1);
+	assert.doesNotThrow(() => process.kill(childPid, 0));
+
+	// Editor input through the still-open view admits a successor in the retained Runtime.
+	opened.view.handleInput?.("Continue in the retained Runtime.");
+	opened.view.handleInput?.("\r");
+	await waitForAsyncCondition(async () => (await agentRunStatus(host, agentId)).phase === "live");
+	assert.equal((await agentSessionStarts()).length, 1);
+	assert.doesNotThrow(() => process.kill(childPid, 0));
+	// The successor inherits the unanswered creation-request obligation and settles live.
+	await waitForAsyncCondition(async () => {
+		const run = await agentRunStatus(host, agentId);
+		return run.phase === "live" && run.work === "settled";
+	});
+	assert.equal((await agentSessionStarts()).length, 1);
+	assert.doesNotThrow(() => process.kill(childPid, 0));
+
+	await returnAgentViewToOwner(host, opened);
+	assert.equal(host.runtime.session, ownerSession);
+	await host.runtime.dispose();
 });
 
 test("a third-party child-view command remains unique and does not interfere with Agent startup", {
@@ -359,6 +384,36 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
 		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
 	throw new Error("Expected conformance condition did not become true");
+}
+
+async function waitForAsyncCondition(predicate: () => Promise<boolean>): Promise<void> {
+	for (let attempt = 0; attempt < MAX_CONDITION_ATTEMPTS; attempt += 1) {
+		if (await predicate()) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error("Expected conformance condition did not become true");
+}
+
+type ObservedAgentRun = Readonly<{
+	phase: string;
+	work?: string;
+	retentionReasons: readonly Readonly<{ reason: string }>[];
+}>;
+
+async function agentRunStatus(
+	host: TestOwnerHost,
+	agentId: string,
+): Promise<ObservedAgentRun> {
+	const observe = host.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const status = await observe.execute(
+		`observe-terminated-view-${Date.now()}`,
+		{ operation: "status", agentId },
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	return (status.details as { run: ObservedAgentRun }).run;
 }
 
 type ProcessUiProbeEvidence = Readonly<{

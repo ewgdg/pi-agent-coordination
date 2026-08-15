@@ -18,20 +18,17 @@ export class RunSupervisor {
 	readonly #ownerAgentId: string;
 	readonly #messages: MessageCoordinator;
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
-	readonly #isInteractivelySelected: (agentId: string) => boolean;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		quarantinedAgentIds?: ReadonlySet<string>;
 		ownerAgentId: string;
 		messages: MessageCoordinator;
-		isInteractivelySelected(agentId: string): boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
 		this.#ownerAgentId = options.ownerAgentId;
 		this.#messages = options.messages;
-		this.#isInteractivelySelected = options.isInteractivelySelected;
 	}
 
 	execute(
@@ -56,13 +53,6 @@ export class RunSupervisor {
 						agentId: target.identity.agentId,
 						disposition: "not_running",
 						residualRequests,
-					};
-				}
-				if (this.#isInteractivelySelected(target.identity.agentId)) {
-					return {
-						agentId: target.identity.agentId,
-						disposition: "rejected",
-						rejectionReason: "interactive_selection",
 					};
 				}
 				this.#messages.discardSchedulingInLane(target);
