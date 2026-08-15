@@ -696,9 +696,14 @@ async function spawnLiveChild(
 			"The Creation Request remains available for an Agent Answer.",
 		)
 	);
+	await waitForChildEntry(child, (entry) =>
+		entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.obligation-reminder"
+	);
 	await waitForCondition(() => {
 		const run = view.status(agentId).run;
-		return run.phase === "live" && run.work === "settled";
+		return run.phase === "live" && run.work === "settled" &&
+			!run.retentionReasons.some(({ reason }) => reason === "pending_delivery");
 	});
 	return child;
 }

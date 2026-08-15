@@ -901,6 +901,7 @@ test("host loss removes exhausted Operational Attention and attempt handling", a
 	);
 	host.model.setResponses([
 		fauxAssistantMessage("I settled without answering the Creation Request."),
+		fauxAssistantMessage("I remained settled after the runtime reminder."),
 		...Array.from(
 			{
 				length:
@@ -1067,10 +1068,12 @@ async function createUnboundTestOwnerHost(
 	options?: TestOwnerHostOptions,
 ): Promise<TestOwnerHost> {
 	const broker = await createProcessModelBroker({
-		responseOverride: (context) =>
-			(options?.implicitModeratorResponses ?? true) && isImplicitModeratorRequest(context)
-				? fauxAssistantMessage("I will wait for explicit Moderator work.")
-				: undefined,
+		responseOverride: (context) => {
+			const response = (options?.implicitModeratorResponses ?? true)
+				? implicitOperationalResponse(context)
+				: undefined;
+			return response ? fauxAssistantMessage(response) : undefined;
+		},
 	});
 	durableModelBrokers.add(broker);
 	try {
@@ -1131,6 +1134,17 @@ async function createHostWithDurableModelBroker(
 	};
 	hostModelBrokers.set(processVisibleHost, broker);
 	return processVisibleHost;
+}
+
+function implicitOperationalResponse(context: Context): string | undefined {
+	const latestMessage = JSON.stringify(context.messages.at(-1));
+	if (
+		latestMessage.includes("requestSnippet") &&
+		latestMessage.includes("You still owe an Answer to this Request.")
+	) return "I remain settled after the automatic Answer reminder.";
+	return isImplicitModeratorRequest(context)
+		? "I will wait for explicit Moderator work."
+		: undefined;
 }
 
 function isImplicitModeratorRequest(context: Context): boolean {

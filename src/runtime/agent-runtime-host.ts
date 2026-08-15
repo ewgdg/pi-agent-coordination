@@ -4,6 +4,7 @@ import type { TerminalProjection } from "../presentation/terminal-projection.ts"
 import type { ModelVisibleRunFailureRecovery } from "../protocol/run-failure-recovery.ts";
 import type { ModelVisibleMessageDelivery } from "../protocol/message-delivery.ts";
 import type { ModelVisibleModeratorRoutineStart } from "../protocol/moderator-input.ts";
+import type { ModelVisibleObligationReminder } from "../protocol/obligation-reminder.ts";
 import type {
 	ModelReference,
 	RuntimeThinkingLevel,
@@ -70,6 +71,7 @@ export type AgentRuntimeDelivery =
 		message:
 			| ModelVisibleMessageDelivery
 			| ModelVisibleModeratorRoutineStart
+			| ModelVisibleObligationReminder
 			| ModelVisibleRunFailureRecovery;
 		triggerTurn: true;
 		deliverAs?: "steer" | "followUp";

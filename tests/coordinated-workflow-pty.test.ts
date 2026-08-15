@@ -90,7 +90,7 @@ test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Ow
 		);
 		assert.ok(agentsHeadingRow > identityRow);
 		assert.ok(nestedActivityRow > agentsHeadingRow);
-		for (let notch = 0; notch < 6; notch += 1) {
+		for (let notch = 0; notch < 25; notch += 1) {
 			terminal.write("\x1b[<64;10;8M");
 		}
 		await terminal.waitForScreen((frame) =>

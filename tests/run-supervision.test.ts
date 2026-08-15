@@ -1296,12 +1296,17 @@ async function createRunSupervisionHarness(
 			);
 			const receipt = await ownerView.spawn(toolCallId, input);
 			assert.ok("agentId" in receipt && typeof receipt.agentId === "string");
+			const driver = createDriver(receipt.agentId);
 			await waitForCondition(() => {
 				const run = ownerView.status(receipt.agentId).run;
-				return run.phase === "live" && run.work === "settled" &&
-					run.retentionReasons.some(({ reason }) => reason === "answer_owed");
+				return driver.entries().some(
+					(entry) => entry.type === "custom_message" &&
+						entry.customType === "agent-coordination.obligation-reminder",
+				) && run.phase === "live" && run.work === "settled" &&
+					run.retentionReasons.some(({ reason }) => reason === "answer_owed") &&
+					!run.retentionReasons.some(({ reason }) => reason === "pending_delivery");
 			});
-			return createDriver(receipt.agentId);
+			return driver;
 		},
 		async spawnChildFrom(parent: ProcessAgentDriver, toolCallId: string) {
 			host.model.setResponses([
@@ -1311,12 +1316,17 @@ async function createRunSupervisionHarness(
 			parent.appendToolCall("agent_spawn", toolCallId, input);
 			const receipt = await parent.view.spawn(toolCallId, input);
 			assert.ok("agentId" in receipt && typeof receipt.agentId === "string");
+			const driver = createDriver(receipt.agentId);
 			await waitForCondition(() => {
 				const run = ownerView.status(receipt.agentId).run;
-				return run.phase === "live" && run.work === "settled" &&
-					run.retentionReasons.some(({ reason }) => reason === "answer_owed");
+				return driver.entries().some(
+					(entry) => entry.type === "custom_message" &&
+						entry.customType === "agent-coordination.obligation-reminder",
+				) && run.phase === "live" && run.work === "settled" &&
+					run.retentionReasons.some(({ reason }) => reason === "answer_owed") &&
+					!run.retentionReasons.some(({ reason }) => reason === "pending_delivery");
 			});
-			return createDriver(receipt.agentId);
+			return driver;
 		},
 		async control(
 			toolCallId: string,

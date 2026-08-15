@@ -17,6 +17,11 @@ import {
 } from "../protocol/moderator-input.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
 import {
+	createModelVisibleObligationReminder,
+	inspectObligationReminder,
+	obligationReminderDeliveryId,
+} from "../protocol/obligation-reminder.ts";
+import {
 	createModelVisibleRunFailureRecovery,
 	runFailureRecoveryDeliveryId,
 	inspectRunFailureRecovery,
@@ -402,9 +407,16 @@ export class OperationalIncidentCoordinator {
 			snapshots.push(snapshot);
 		}
 		snapshots.push(...this.#observeOperationReviews());
-		snapshots.push(...this.#observeDependencyDeadlocks());
+		const dependencyDeadlocks = this.#observeDependencyDeadlocks();
+		snapshots.push(...dependencyDeadlocks);
+		const deadlockedAgentIds = new Set(
+			dependencyDeadlocks.flatMap(({ affectedAgentIds }) => affectedAgentIds),
+		);
 		for (const record of [...this.#agents.values()]) {
-			if (this.#isModerator(record)) continue;
+			if (
+				this.#isModerator(record) ||
+				deadlockedAgentIds.has(record.identity.agentId)
+			) continue;
 			const snapshot = this.#observeObligationStall(record);
 			if (snapshot) snapshots.push(snapshot);
 		}
@@ -415,6 +427,11 @@ export class OperationalIncidentCoordinator {
 		for (const snapshot of snapshots) {
 			const existing = this.#handlingByKey.get(snapshot.key);
 			if (existing?.moderatorAgentId !== undefined || existing?.exhausted) continue;
+			if (
+				!existing &&
+				snapshot.kind === "obligation_stall" &&
+				this.#scheduleObligationReminder(snapshot)
+			) continue;
 			const handling: OperationalIncidentHandling = existing ?? {
 				snapshot,
 				committedAttemptCount: 0,
@@ -434,6 +451,47 @@ export class OperationalIncidentCoordinator {
 				throw error;
 			}
 		}
+	}
+
+	#scheduleObligationReminder(
+		snapshot: ObligationStallSnapshot,
+	): boolean {
+		const requestId = snapshot.requestIds[0];
+		if (!requestId || snapshot.requestIds.length !== 1) {
+			throw new Error(
+				`invariant_violation: Agent ${snapshot.agentId} has an invalid Answer obligation set`,
+			);
+		}
+		const recipient = this.#requireAgent(snapshot.agentId);
+		const question = this.#messages.requestQuestion(requestId);
+		const inspectProof = () => inspectObligationReminder({
+			recipientAgentId: snapshot.agentId,
+			transcript: recipient.transcript.inspect(),
+			requestMessageId: requestId,
+			question,
+		});
+		if (inspectProof()) return false;
+		// Settlement reconciliation can run while the affected Agent lane is held.
+		// Schedule admission without awaiting that lane so the reminder cannot
+		// deadlock behind the reconciliation that requested it.
+		void this.#messages.admitCustomDelivery(recipient, {
+			messageId: obligationReminderDeliveryId(requestId),
+			deliveryMode: "deferred",
+			customMessage: createModelVisibleObligationReminder({
+				requestMessageId: requestId,
+				question,
+			}),
+			inspectProof,
+			isSuppressed: () => !this.#messages.hasUnsettledAnswerObligation(
+				recipient,
+				[requestId],
+			),
+		}).then((admission) => {
+			if (admission !== "pending") {
+				throw new Error(`Obligation Reminder delivery rejected: ${admission}`);
+			}
+		}).catch((error: unknown) => this.#reportError(error));
+		return true;
 	}
 
 	async #createModerator(

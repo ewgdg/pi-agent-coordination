@@ -3,5 +3,7 @@ export const MODERATOR_INPUT_CUSTOM_TYPE =
 	"agent-coordination.moderator-input";
 export const MODERATOR_ROUTINE_START_CUSTOM_TYPE =
 	"agent-coordination.moderator-routine-start";
+export const OBLIGATION_REMINDER_CUSTOM_TYPE =
+	"agent-coordination.obligation-reminder";
 export const RUN_FAILURE_RECOVERY_CUSTOM_TYPE =
 	"agent-coordination.run-failure-recovery";

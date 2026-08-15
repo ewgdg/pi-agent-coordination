@@ -4,7 +4,9 @@ The host starts an isolated Moderator when live coordination evidence matches an
 
 ## Detection
 
-An Obligation Stall exists while an ordinary Agent Run is live, settled, still owes an Answer, and has no admitted input, pending Delivery, Human attention, interactive selection, Interruption Hold, or outgoing Request path that can make progress.
+An Obligation Stall exists while an ordinary Agent Run is live, settled, still owes an Answer, and has no admitted input, pending Delivery, Human attention, interactive selection, Interruption Hold, or outgoing Request path that can make progress. Before creating a Moderator for a simple Stall, the host delivers one model-visible `agent-coordination.obligation-reminder` for the exact Request. The reminder contains the Request identity, a whitespace-normalized snippet of at most 160 code points, and direct Answer guidance; it never repeats a longer Request body.
+
+Reminder suppression is per durable Request identity. A successor Run or a later recurrence with the same unresolved obligation does not receive another reminder. The reminder uses ordinary Deferred custom Delivery scheduling and supplies its own model turn. If the Agent settles again without discharging that obligation, the host creates the Obligation Stall Moderator. A closed Dependency Deadlock is handled as one normalized condition instead of also reminding or independently moderating its member Stalls.
 
 An Operation Review exists when an independently watched root Pi tool call reaches its review deadline while still unresolved and its Agent still owes an Answer. A Pi tool batch is effectively blocking when any call in the committed batch declares sequential execution; otherwise its calls are asynchronous. Blocking review begins at execution admission. Asynchronous review covers only a continuous unattended Idle interval and ends when Agent work resumes before expiry. Each call uses the Workflow Policy interval captured at admission.
 
@@ -24,7 +26,7 @@ Clean Run release, deliberate termination, orderly shutdown, optional work, ordi
 
 Each trigger has a deterministic transient Handling Key:
 
-- Obligation Stall uses the affected Agent and sorted qualifying Request identities.
+- Obligation Stall uses the affected Agent and sorted qualifying Request identities after any required reminder has been delivered.
 - Run Failure uses the affected Agent and exact Run sequence.
 - Dependency Deadlock uses sorted component Agent and Request identities.
 - Operation Review uses the exact root tool-call pointer.

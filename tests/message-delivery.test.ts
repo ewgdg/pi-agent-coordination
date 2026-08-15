@@ -120,6 +120,54 @@ test("Agent Request Delivery exposes requestMessageId as its correlation identit
 	});
 });
 
+test("host-authored Obligation Reminders do not become Agent Message evidence", () => {
+	const sessionManager = SessionManager.inMemory(process.cwd());
+	const recipientAgentId = sessionManager.getSessionId();
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
+		agentId: recipientAgentId,
+	});
+	const source = {
+		agentId: "sender-agent",
+		entryId: "sender-entry",
+		toolCallId: "sender-call",
+	};
+	const projection = {
+		kind: "message" as const,
+		messageId: "message-before-reminder",
+		fromAgentId: "sender-agent",
+		content: "Preserve this Delivery proof.",
+	};
+	sessionManager.appendCustomMessageEntry(
+		"agent-coordination.message-delivery",
+		JSON.stringify({ messages: [projection] }),
+		true,
+		{ messages: [source] },
+	);
+	const delivery = sessionManager.getLeafEntry();
+	assert.ok(delivery);
+	sessionManager.appendCustomMessageEntry(
+		"agent-coordination.obligation-reminder",
+		JSON.stringify({
+			requestMessageId: "request-1",
+			requestSnippet: "Answer the pending Request.",
+			guidance:
+				"You still owe an Answer to this Request. Call agent_message with operation \"answer\" now. Unless another obligation or independent task remains, end the turn immediately afterward.",
+		}),
+		true,
+	);
+
+	assert.deepEqual(inspectStandaloneMessageDelivery({
+		recipientAgentId,
+		transcript: transcriptFromSessionManager(sessionManager).inspect(),
+		source,
+		expectedProjection: projection,
+		subject: "Message message-before-reminder",
+	}).deliveryEvidence, {
+		agentId: recipientAgentId,
+		entryId: delivery.id,
+	});
+});
+
 test("one Delivery batch cannot repeat a Message source", () => {
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = sessionManager.getSessionId();

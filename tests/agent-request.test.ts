@@ -5,6 +5,7 @@ import test from "node:test";
 import {
 	fauxAssistantMessage,
 	fauxToolCall,
+	type Context,
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
@@ -1780,8 +1781,10 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 			),
 			{ stopReason: "toolUse" },
 		),
-		(context) => requesterFailureOrResponderReceipt(context.messages),
-		(context) => requesterFailureOrResponderReceipt(context.messages),
+		...Array.from(
+			{ length: 7 },
+			() => (context: Context) => requesterFailureOrResponderReceipt(context.messages),
+		),
 	]);
 	const wakeInput = {
 		operation: "send" as const,

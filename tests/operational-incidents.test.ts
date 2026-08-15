@@ -46,7 +46,7 @@ import {
 const CONDITION_WAIT_TIMEOUT_MS = 5_000;
 const CONDITION_POLL_INTERVAL_MS = 1;
 
-test("a settled answer-obligated Agent creates one atomic Obligation Stall Moderator", async (t) => {
+test("a settled answer-obligated Agent is reminded once before one atomic Obligation Stall Moderator", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
@@ -64,6 +64,7 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 		),
 		fauxAssistantMessage("The child is now responsible for the Request."),
 		fauxAssistantMessage("I settled without discharging the Answer obligation."),
+		fauxAssistantMessage("I settled again after the runtime reminder without answering."),
 		(context) => {
 			moderatorTools = context.tools?.map(({ name }) => name).sort() ?? [];
 			return fauxAssistantMessage("I will inspect the stalled obligation.");
@@ -116,6 +117,20 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	assert.equal(input.trigger.kind, "obligation_stall");
 	assert.equal(input.trigger.obligations.total, 1);
 	assert.deepEqual(input.trigger.obligations.sources, [spawnSource]);
+	const affectedSessionPath = await sessionPathFor(host, input.trigger.agentId);
+	const reminders = SessionManager.open(affectedSessionPath).getEntries().filter(
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.obligation-reminder",
+	);
+	assert.equal(reminders.length, 1);
+	assert.ok(reminders[0]?.type === "custom_message");
+	assert.deepEqual(JSON.parse(reminders[0].content as string), {
+		requestMessageId: deriveMessageIdentity(spawnSource),
+		requestSnippet: "Answer this Creation Request after completing the work.",
+		guidance:
+			"You still owe an Answer to this Request. Call agent_message with operation \"answer\" now. Unless another obligation or independent task remains, end the turn immediately afterward.",
+	});
 	assert.deepEqual(input.inspectedThrough, [
 		{
 			agentId: input.trigger.agentId,
@@ -219,6 +234,68 @@ test("a settled answer-obligated Agent creates one atomic Obligation Stall Moder
 	await returnAgentViewToOwner(host, dormantView);
 });
 
+test("an Answer triggered by the runtime reminder avoids Obligation Stall moderation", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t);
+	const routeReminderRecovery = (context: Context) => {
+		if (JSON.stringify(context.messages).includes("requestSnippet")) {
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{
+						operation: "answer",
+						answer: "The runtime reminder recovered the forgotten Answer.",
+					},
+					{ id: "answer-after-runtime-reminder" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage("I initially settled without answering.");
+	};
+	harness.host.model.setResponses(
+		Array.from({ length: 4 }, () => routeReminderRecovery),
+	);
+	const affected = await spawnFromView(
+		harness.host.session,
+		harness.owner,
+		"spawn-reminder-recovery-agent",
+		"Return the requested result through the correlated Answer.",
+	);
+
+	const affectedSessionPath = await sessionPathFor(harness.host, affected.agentId);
+	await waitForTranscriptEntry(
+		affectedSessionPath,
+		(entry) => entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === "answer-after-runtime-reminder",
+	);
+	await waitForCondition(() =>
+		!harness.owner.status(affected.agentId).run.retentionReasons.some(
+			({ reason }) => reason === "answer_owed",
+		)
+	);
+	await harness.owner.reachSafeBoundary();
+	assert.equal((await findModerators(harness.host)).length, 0);
+	const entries = SessionManager.open(affectedSessionPath).getEntries();
+	assert.equal(
+		entries.filter(
+			(entry) => entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.obligation-reminder",
+		).length,
+		1,
+	);
+	assert.equal(
+		entries.some(
+			(entry) => entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolCallId === "answer-after-runtime-reminder",
+		),
+		true,
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
 test("deselecting a genuinely live settled obligation creates an Obligation Stall Moderator", async (t) => {
 	let markChildStarted!: () => void;
 	const childStarted = new Promise<void>((resolve) => {
@@ -242,6 +319,8 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 					"I settled while selected without answering the Creation Request.",
 				);
 			},
+			fauxAssistantMessage("I remained settled after the runtime reminder."),
+			fauxAssistantMessage("I will inspect the stalled selected Agent."),
 		]);
 		const spawn = await executeAndCommitRegisteredTool(
 			host.session,
@@ -754,10 +833,14 @@ test("a successor clears Run Failure before its later Stall is handled separatel
 		if (context.tools?.some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I will inspect this exact condition.");
 		}
+		const transcript = JSON.stringify(context.messages);
 		const latestUser = JSON.stringify(
 			[...context.messages].reverse().find(({ role }) => role === "user"),
 		);
-		if (latestUser.includes("Start the successor Run.")) {
+		if (
+			latestUser.includes("Start the successor Run.") ||
+			transcript.includes("requestSnippet")
+		) {
 			return fauxAssistantMessage("The successor settled without answering.");
 		}
 		return fauxAssistantMessage("The first exact Run fails before answering.", {
@@ -924,6 +1007,7 @@ test("Moderator Resolution is blocked while the Obligation Stall remains", async
 		),
 		fauxAssistantMessage("The unresolved Request is delegated."),
 		fauxAssistantMessage("I settled without an Answer."),
+		fauxAssistantMessage("I remained settled after the runtime reminder."),
 		fauxAssistantMessage(
 			fauxToolCall(
 				"moderator_control",
@@ -977,6 +1061,7 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 		),
 		fauxAssistantMessage("The control target is delegated."),
 		fauxAssistantMessage("I settled without answering."),
+		fauxAssistantMessage("I remained settled after the runtime reminder."),
 		(context) => {
 			const input = context.messages.flatMap((message) => {
 				if (message.role !== "user") return [];
@@ -1093,6 +1178,7 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 		),
 		fauxAssistantMessage("The termination case is delegated."),
 		fauxAssistantMessage("I settled without answering."),
+		fauxAssistantMessage("I remained settled after the runtime reminder."),
 		(context) => {
 			const input = context.messages.flatMap((message) => {
 				if (message.role !== "user") return [];
@@ -1170,6 +1256,7 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 		),
 		fauxAssistantMessage("The escalation case is delegated."),
 		fauxAssistantMessage("I settled without resolving the Owner's intent."),
+		fauxAssistantMessage("I remained settled after the runtime reminder."),
 		fauxAssistantMessage(
 			[
 				fauxToolCall(
@@ -1285,6 +1372,7 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 		),
 		fauxAssistantMessage("The child may need a reminder."),
 		fauxAssistantMessage("I settled before answering."),
+		fauxAssistantMessage("I remained settled after the runtime reminder."),
 		fauxAssistantMessage("I am inspecting while the obligation remains."),
 	]);
 
@@ -1430,6 +1518,7 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 		),
 		fauxAssistantMessage("The recurring Stall case is delegated."),
 		fauxAssistantMessage("I settled before answering."),
+		fauxAssistantMessage("I remained settled after the runtime reminder."),
 		fauxAssistantMessage("I am handling the first continuous Stall."),
 	]);
 
@@ -1474,6 +1563,16 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 	const secondModerator = moderators.find(({ id }) => id !== firstModerator.id);
 	assert.ok(secondModerator);
 	assert.equal(moderatorAffectedAgentId(secondModerator.path), affectedAgentId);
+	const affectedEntries = SessionManager.open(
+		await sessionPathFor(host, affectedAgentId),
+	).getEntries();
+	assert.equal(
+		affectedEntries.filter(
+			(entry) => entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.obligation-reminder",
+		).length,
+		1,
+	);
 	await waitForTranscriptEntry(
 		secondModerator.path,
 		(entry) => entry.type === "message" && entry.message.role === "assistant" &&
@@ -1754,10 +1853,10 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 		}
 
 		const moderator = await waitForModeratorKind(host, "dependency_deadlock");
-		await waitForCondition(async () => (await findModerators(host)).length === 3);
+		await owner.reachSafeBoundary();
 		assert.deepEqual(
-			(await findModerators(host)).map(({ path }) => moderatorTriggerKind(path)).sort(),
-			["dependency_deadlock", "obligation_stall", "obligation_stall"],
+			(await findModerators(host)).map(({ path }) => moderatorTriggerKind(path)),
+			["dependency_deadlock"],
 		);
 		const inputEntry = SessionManager.open(moderator.path).getEntries().find(
 			(entry) =>
@@ -2782,6 +2881,16 @@ async function transcriptTailFor(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
 	agentId: string,
 ): Promise<string> {
+	const sessionPath = await sessionPathFor(host, agentId);
+	const tail = SessionManager.open(sessionPath).getEntries().at(-1);
+	assert.ok(tail);
+	return tail.id;
+}
+
+async function sessionPathFor(
+	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
+	agentId: string,
+): Promise<string> {
 	const sessionDirectory = host.session.sessionManager.getSessionDir();
 	const workflowDirectory = `${sessionDirectory}/pi-agent-coordination/${Buffer.from(
 		host.session.sessionId,
@@ -2791,9 +2900,7 @@ async function transcriptTailFor(
 		(candidate) => candidate.id === agentId,
 	);
 	assert.ok(session);
-	const tail = SessionManager.open(session.path).getEntries().at(-1);
-	assert.ok(tail);
-	return tail.id;
+	return session.path;
 }
 
 async function waitForTranscriptEntry(

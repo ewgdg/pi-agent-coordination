@@ -527,10 +527,12 @@ async function createTestModelRuntime(options: {
 			modelId: MODEL_ID,
 			modelName: "Deterministic Owner",
 			tokensPerSecond: options.fauxTokensPerSecond,
-			responseOverride: (context) =>
-				options.implicitModeratorResponses && isImplicitModeratorRequest(context)
-					? fauxAssistantMessage("I will wait for explicit Moderator work.")
-					: undefined,
+			responseOverride: (context) => {
+				const response = options.implicitModeratorResponses
+					? implicitOperationalResponse(context)
+					: undefined;
+				return response ? fauxAssistantMessage(response) : undefined;
+			},
 			responses: [fauxAssistantMessage("Owner interaction preserved.")],
 		});
 		return {
@@ -556,15 +558,15 @@ async function createTestModelRuntime(options: {
 		],
 	});
 	faux.setResponses([fauxAssistantMessage("Owner interaction preserved.")]);
-	const maybeImplicitModeratorResponse = (
+	const maybeImplicitOperationalResponse = (
 		model: Model<string>,
 		context: Context,
 		streamOptions: StreamOptions | SimpleStreamOptions | undefined,
 	) => {
-		if (
-			!options.implicitModeratorResponses ||
-			!isImplicitModeratorRequest(context)
-		) return undefined;
+		const response = options.implicitModeratorResponses
+			? implicitOperationalResponse(context)
+			: undefined;
+		if (!response) return undefined;
 		const implicit = createFauxCore({
 			api: PROVIDER_ID,
 			provider: PROVIDER_ID,
@@ -580,7 +582,7 @@ async function createTestModelRuntime(options: {
 				},
 			],
 		});
-		implicit.setResponses([fauxAssistantMessage("I will wait for explicit Moderator work.")]);
+		implicit.setResponses([fauxAssistantMessage(response)]);
 		return implicit.streamSimple(model, context, streamOptions);
 	};
 	modelRuntime.registerProvider(PROVIDER_ID, {
@@ -590,10 +592,25 @@ async function createTestModelRuntime(options: {
 		apiKey: "in-memory-test",
 		models: faux.models,
 		streamSimple: (model, context, streamOptions) =>
-			maybeImplicitModeratorResponse(model, context, streamOptions) ??
+			maybeImplicitOperationalResponse(model, context, streamOptions) ??
 			faux.streamSimple(model, context, streamOptions),
 	});
 	return { modelRuntime, faux };
+}
+
+function implicitOperationalResponse(context: Context): string | undefined {
+	if (isImplicitObligationReminder(context)) {
+		return "I remain settled after the automatic Answer reminder.";
+	}
+	return isImplicitModeratorRequest(context)
+		? "I will wait for explicit Moderator work."
+		: undefined;
+}
+
+function isImplicitObligationReminder(context: Context): boolean {
+	const latestMessage = JSON.stringify(context.messages.at(-1));
+	return latestMessage.includes("requestSnippet") &&
+		latestMessage.includes("You still owe an Answer to this Request.");
 }
 
 function isImplicitModeratorRequest(context: Context): boolean {

@@ -130,8 +130,11 @@ The unexpected terminal end of one exact Agent Run after Pi's user-configured na
 **Dependency Deadlock**:
 A live closed component of current Agent Runs in which every Run is settled, retained solely by unresolved Request relationships within the component, and has no admitted input or other progress source. It is a transient observation that clears when its predicate changes, grants no additional authority, and is not reconstructed after host loss.
 
+**Obligation Reminder**:
+One runtime-authored, model-visible Deferred Delivery sent when a simple Obligation Stall first appears for an exact Request identity. It carries only that identity, a bounded normalized Request snippet, and direct Answer guidance. Durable transcript proof suppresses another reminder for the same obligation across later Runs and recurring Stall conditions. If the reminded Agent settles again without discharging the obligation, Moderator handling begins. Dependency Deadlock members use their normalized Deadlock handling instead of individual reminders.
+
 **Obligation Stall**:
-A settled Agent Run retained by an Answer Obligation it must discharge, with no active or admitted work, external progress source, or Interruption Hold. An unresolved outgoing Request to a dormant Agent is not an external progress source. It starts Moderator handling immediately.
+A settled Agent Run retained by an Answer Obligation it must discharge, with no active or admitted work, external progress source, or Interruption Hold. An unresolved outgoing Request to a dormant Agent is not an external progress source. The first simple occurrence schedules an Obligation Reminder; a later occurrence with durable reminder proof starts Moderator handling.
 
 **Operational Incident**:
 A predefined suspicious live coordination condition blocking at least one unresolved Answer Obligation and starting Moderator handling. It is a transient occurrence rather than a durable aggregate or lifecycle; unnecessary review is preferable to silently stranded obligated work.

@@ -9,6 +9,7 @@ import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
 import {
 	MODERATOR_ROUTINE_START_CUSTOM_TYPE,
+	OBLIGATION_REMINDER_CUSTOM_TYPE,
 	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
 } from "../protocol/custom-entry-types.ts";
 import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
@@ -405,6 +406,11 @@ const AgentRuntimeDeliverySchema = Type.Union([
 				customType: Type.Literal(MODERATOR_ROUTINE_START_CUSTOM_TYPE),
 				content: Type.Literal(MODERATOR_ROUTINE_START_INSTRUCTION),
 				display: Type.Literal(false),
+			}),
+			closed({
+				customType: Type.Literal(OBLIGATION_REMINDER_CUSTOM_TYPE),
+				content: Type.String(),
+				display: Type.Literal(true),
 			}),
 			closed({
 				customType: Type.Literal(RUN_FAILURE_RECOVERY_CUSTOM_TYPE),

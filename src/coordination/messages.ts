@@ -132,6 +132,10 @@ export class MessageCoordinator {
 		);
 	}
 
+	requestQuestion(requestId: string): string {
+		return this.#requestEvidence.requireRequest(requestId).question;
+	}
+
 	requestTargetAgentIds(requestIds: readonly string[]): readonly string[] {
 		return requestIds.map(
 			(requestId) => this.#requestEvidence.requireRequest(requestId).targetAgentId,

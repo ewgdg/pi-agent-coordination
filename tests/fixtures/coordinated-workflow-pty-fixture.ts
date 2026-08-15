@@ -91,6 +91,27 @@ await waitFor(() =>
 		"Viewed child is ready for direct editor input.",
 	)
 );
+// Let the automatic obligation reminder finish before exposing the PTY setup
+// marker; otherwise the first physical input can race its model turn.
+await waitFor(
+	() => readFileSync(childTranscriptPath, "utf8").includes(
+		"I remain settled after the automatic Answer reminder.",
+	),
+	20_000,
+	"automatic Answer reminder response",
+);
+await waitForAsync(async () => {
+	const status = await observeAgent(childAgentId);
+	const run = (status.details as {
+		run: {
+			phase: string;
+			work?: string;
+			retentionReasons?: readonly { reason: string }[];
+		};
+	}).run;
+	return run.phase === "live" && run.work === "settled" &&
+		!run.retentionReasons?.some(({ reason }) => reason === "pending_delivery");
+}, 20_000, "automatic Answer reminder settlement");
 host.model.setResponses([
 	fauxAssistantMessage("Second PTY child remains independently interactive."),
 ]);
