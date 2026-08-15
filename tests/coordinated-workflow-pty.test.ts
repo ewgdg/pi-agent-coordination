@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -601,42 +601,45 @@ test("interactive /reload keeps a selected process child alive after inherited e
 	timeout: 2 * PTY_WAIT_TIMEOUT_MS,
 }, async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-agent-child-reload-"));
-	const agentDir = join(root, "agent");
-	const sessionDir = join(root, "sessions");
-	const broker = await createProcessModelBroker({
-		responseOverride: routeCliRepeatResponse,
-		tokensPerSecond: 20_000,
-	});
-	const inputPreflightExtension = join(root, "child-input-preflight.mjs");
-	const childLifecycleEvidence = join(root, "child-lifecycle.jsonl");
-	await writeFile(inputPreflightExtension, [
-		"import { appendFileSync } from 'node:fs';",
-		`const evidencePath = ${JSON.stringify(childLifecycleEvidence)};`,
-		"const isChild = process.env.PI_AGENT_COORDINATION_BOOTSTRAP !== undefined;",
-		"const record = (event) => appendFileSync(evidencePath, `${JSON.stringify({ ...event, pid: process.pid })}\\n`);",
-		"export default function childInputPreflight(pi) {",
-		"  if (isChild) {",
-		"    pi.on('session_start', (event) => record({ kind: 'session_start', reason: event.reason }));",
-		"    pi.on('session_shutdown', (event) => record({ kind: 'session_shutdown', reason: event.reason }));",
-		"  }",
-		"  pi.on('input', (event) => {",
-		"    if (event.text === 'CLI child before reload') {",
-		"      return { action: 'transform', text: 'CLI child transformed before reload' };",
-		"    }",
-		"    if (event.text === 'CLI child after reload') {",
-		"      return { action: 'transform', text: 'CLI child transformed after reload' };",
-		"    }",
-		"  });",
-		"}",
-	].join("\n"));
-	const terminal = launchPiCli({
-		agentDir,
-		sessionDir,
-		additionalExtensionPaths: [broker.extensionPath, inputPreflightExtension],
-		provider: broker.providerId,
-		model: broker.modelId,
-	});
+	let broker: Awaited<ReturnType<typeof createProcessModelBroker>> | undefined;
+	let terminal: PtyFixture | undefined;
 	try {
+		const agentDir = join(root, "agent");
+		const sessionDir = join(root, "sessions");
+		broker = await createProcessModelBroker({
+			responseOverride: routeCliRepeatResponse,
+			tokensPerSecond: 20_000,
+		});
+		const inputPreflightExtension = join(root, "child-input-preflight.mjs");
+		const childLifecycleEvidence = join(root, "child-lifecycle.jsonl");
+		await writeFile(inputPreflightExtension, [
+			"import { appendFileSync } from 'node:fs';",
+			`const evidencePath = ${JSON.stringify(childLifecycleEvidence)};`,
+			"const isChild = process.env.PI_AGENT_COORDINATION_BOOTSTRAP !== undefined;",
+			"const record = (event) => appendFileSync(evidencePath, `${JSON.stringify({ ...event, pid: process.pid })}\\n`);",
+			"export default function childInputPreflight(pi) {",
+			"  if (isChild) {",
+			"    pi.on('session_start', (event) => record({ kind: 'session_start', reason: event.reason }));",
+			"    pi.on('session_shutdown', (event) => record({ kind: 'session_shutdown', reason: event.reason }));",
+			"  }",
+			"  pi.on('input', (event) => {",
+			"    if (event.text === 'CLI child before reload') {",
+			"      return { action: 'transform', text: 'CLI child transformed before reload' };",
+			"    }",
+			"    if (event.text === 'CLI child after reload') {",
+			"      return { action: 'transform', text: 'CLI child transformed after reload' };",
+			"    }",
+			"  });",
+			"}",
+		].join("\n"));
+		const activeBroker = broker;
+		terminal = launchPiCli({
+			agentDir,
+			sessionDir,
+			additionalExtensionPaths: [activeBroker.extensionPath, inputPreflightExtension],
+			provider: activeBroker.providerId,
+			model: activeBroker.modelId,
+		});
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("deterministic-owner"))
 		);
@@ -654,7 +657,7 @@ test("interactive /reload keeps a selected process child alive after inherited e
 		);
 
 		terminal.write("\x15");
-		await appendFile(broker.extensionPath, "\n// Selected-child reload regression generation.\n");
+		await appendFile(activeBroker.extensionPath, "\n// Selected-child reload regression generation.\n");
 		terminal.write("/reload\r");
 		await terminal.waitFor("Reloaded keybindings, extensions, skills, prompts, themes, and context files");
 		const reloadedChild = await waitForChildLifecycleEvidence(
@@ -697,11 +700,12 @@ test("interactive /reload keeps a selected process child alive after inherited e
 		terminal.write("/quit\r");
 		await terminal.closed();
 	} finally {
-		terminal.kill();
-		await broker.close();
-		await import("node:fs/promises").then(({ rm }) =>
-			rm(root, { recursive: true, force: true })
-		);
+		terminal?.kill();
+		try {
+			await broker?.close();
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
 	}
 });
 

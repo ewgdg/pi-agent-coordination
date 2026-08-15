@@ -609,7 +609,8 @@ function implicitOperationalResponse(context: Context): string | undefined {
 
 function isImplicitObligationReminder(context: Context): boolean {
 	const latestMessage = JSON.stringify(context.messages.at(-1));
-	return latestMessage.includes("requestSnippet") &&
+	return typeof latestMessage === "string" &&
+		latestMessage.includes("requestSnippet") &&
 		latestMessage.includes("You still owe an Answer to this Request.");
 }
 

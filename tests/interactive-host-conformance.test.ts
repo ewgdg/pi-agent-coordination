@@ -27,7 +27,9 @@ const PROCESS_UI_PROBE = fileURLToPath(
 );
 const LLAMA_MODEL_ID = "local-conformance-model";
 const MAX_CONDITION_ATTEMPTS = 1_000;
-const INTERACTIVE_HOST_TEST_TIMEOUT_MS = 10_000;
+// Probe evidence can take its full polling window after the child process starts;
+// leave room for host setup and teardown instead of racing the test-level timeout.
+const INTERACTIVE_HOST_TEST_TIMEOUT_MS = 20_000;
 
 test("child session_start UI side effects stay detached before, during, and after Agent view attachment", {
 	timeout: INTERACTIVE_HOST_TEST_TIMEOUT_MS,
