@@ -9,7 +9,11 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
-import type { Message } from "../src/protocol/message.ts";
+import {
+	inspectAgentMessageAuthorResult,
+	type Message,
+} from "../src/protocol/message.ts";
+import { ANSWER_REQUIRED_GUIDANCE } from "../src/protocol/agent-message-input.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
 import {
 	answerSourceDeliveryRequestId,
@@ -301,4 +305,43 @@ test("a schema-rejected agent_message call is not authored protocol evidence", (
 		authorAgentId: agentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 	}), []);
+});
+
+test("an answer-required rejection does not author a retryable Message", () => {
+	const agentId = "answer-required-message-author";
+	const toolCallId = "send-provisional-answer";
+	const input = {
+		operation: "send" as const,
+		targetAgentId: "requester-agent",
+		content: "This provisional finding must remain local.",
+	};
+	const sessionManager = SessionManager.inMemory(process.cwd(), { id: agentId });
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
+	const entryId = sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Answer required." }],
+		details: {
+			disposition: "rejected",
+			reason: "answer_required",
+			requestMessageId: "active-request",
+			guidance: ANSWER_REQUIRED_GUIDANCE,
+		},
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	assert.equal(inspectAgentMessageAuthorResult({
+		authorAgentId: agentId,
+		transcript: transcriptFromSessionManager(sessionManager).inspect(),
+		source: { agentId, entryId, toolCallId },
+		input,
+	}), "not_created");
 });

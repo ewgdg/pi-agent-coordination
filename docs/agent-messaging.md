@@ -19,7 +19,9 @@ Call `agent_message` with the recipient and content:
 }
 ```
 
-The committed tool call fixes the Message identity, sender, recipient, Workflow, and content. These values cannot be supplied again or changed by retry.
+When the invocation authors a Message, its committed tool call fixes the Message identity, sender, recipient, Workflow, and content. These values cannot be supplied again or changed by retry.
+
+An Agent with an active Answer Obligation cannot author an ordinary Message to that Request's requester. The invocation returns `disposition: "rejected"` with reason `answer_required`, the active `requestMessageId`, and direct guidance without creating a Message identity or retry path. Keep provisional findings local and use `answer` for the curated result. If progress depends on requester input or a decision, issue a reverse `request`. Ordinary Messages to other Agents remain available. Existing Messages are not withdrawn when an Answer Obligation begins.
 
 Use Steer only when the next model turn needs exceptional direction:
 
@@ -74,6 +76,8 @@ The responder Answers that sole active Request without supplying correlation ide
 ```
 
 Answer commitment correlates the immutable Answer to the active Request, ends that obligation even if return scheduling fails, and makes the next waiting Request eligible. Calling Answer without an active Request is rejected. More than one active Request is a protocol invariant violation. Answers use fixed Steer scheduling so they become actionable at the requester's next safe boundary without aborting generation or tools.
+
+After Answer commitment, ordinary Message authorship to the former requester is available again. Request Cancellation restores it only when Cancellation Delivery ends the responder's obligation.
 
 The Answer tool call is the responder's terminal response to that Request. The responder does not add an assistant-message recap or summary after it. Unless another obligation or independent task remains, the responder ends the turn immediately so its Run settles.
 

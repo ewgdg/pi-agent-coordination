@@ -22,6 +22,7 @@ import {
 import {
 	sameAgentMessageInput,
 	validateAgentMessageInput,
+	ANSWER_REQUIRED_GUIDANCE,
 	type AgentMessageInput,
 	type AnswerInput,
 	type CancellationInput,
@@ -323,7 +324,12 @@ function inspectMessageAuthorResult(options: {
 			}
 			return "not_created";
 		}
-		if (isNonAuthoringRequestResult(result.message.details, identity)) {
+		if (isNonAuthoringMessageResult(result.message.details, identity)) {
+			if (deliveryEvidence) {
+				throw new Error(
+					`invariant_violation: Message ${identity.messageId} has a non-authoring result and Delivery`,
+				);
+			}
 			return "not_created";
 		}
 		validateMessageAuthorResult(result.message.details, identity);
@@ -332,10 +338,23 @@ function inspectMessageAuthorResult(options: {
 	return deliveryEvidence ? "canonical" : "indeterminate";
 }
 
-function isNonAuthoringRequestResult(
+function isNonAuthoringMessageResult(
 	value: unknown,
 	message: MessageResultIdentity,
 ): boolean {
+	if (message.kind === "message" && isRecord(value)) {
+		return sameStringList(Object.keys(value).sort(), [
+			"disposition",
+			"guidance",
+			"reason",
+			"requestMessageId",
+		]) &&
+			value.disposition === "rejected" &&
+			value.reason === "answer_required" &&
+			typeof value.requestMessageId === "string" &&
+			value.requestMessageId.length > 0 &&
+			value.guidance === ANSWER_REQUIRED_GUIDANCE;
+	}
 	if (
 		(message.kind !== "answer" && message.kind !== "request_cancellation") ||
 		!isRecord(value) ||

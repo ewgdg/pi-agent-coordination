@@ -53,6 +53,8 @@ After a receipt containing requestMessageId with messageStatus "sent", continue 
 
 A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
 
+While an Answer Obligation is active, agent_message operation "send" to that Request's requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
+
 agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request. After the operation returns, the Answer is the terminal response to that Request. Do not add an assistant-message recap or summary. Unless another obligation or independent task remains, end the turn immediately so the Agent Run settles.
 
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.

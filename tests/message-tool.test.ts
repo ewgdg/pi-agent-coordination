@@ -157,6 +157,25 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	).render(160).join("\n");
 	assert.match(existingCancellationText, /cancellation-message-identity/);
 
+	const answerRequiredText = tool.renderResult(
+		{
+			content: [{ type: "text", text: "Answer required" }],
+			details: {
+				disposition: "rejected",
+				reason: "answer_required",
+				requestMessageId: "active-request-identity",
+				guidance:
+					'Use operation "answer" for the curated result, or operation "request" back to the requester when their input or decision is needed.',
+			},
+		},
+		{ expanded: false, isPartial: false },
+		plainTheme,
+		renderContext,
+	).render(160).join("\n");
+	assert.match(answerRequiredText, /rejected/);
+	assert.match(answerRequiredText, /answer_required/);
+	assert.match(answerRequiredText, /active-request-identity/);
+
 	const retrievalText = tool.renderResult(
 		{
 			content: [{ type: "text", text: "retrieved Answer" }],

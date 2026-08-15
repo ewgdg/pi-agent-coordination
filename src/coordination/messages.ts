@@ -42,6 +42,7 @@ import {
 	type MessagePollInput,
 	type MessageRetryInput,
 } from "../protocol/message.ts";
+import { ANSWER_REQUIRED_GUIDANCE } from "../protocol/agent-message-input.ts";
 import {
 	createCreationRequestDeliveryItem,
 	inspectCreationRequestDelivery,
@@ -279,6 +280,22 @@ export class MessageCoordinator {
 		const recipient = this.#requireAgent(message.targetAgentId);
 		if (recipient.identity.workflowId !== message.workflowId) {
 			throw new Error("wrong_workflow: Message recipient is outside the sender Workflow");
+		}
+		if (message.kind === "message") {
+			const activeRequestId = await sender.host.lane.run(
+				() => this.answerObligationRequestIds(sender)[0],
+			);
+			if (activeRequestId !== undefined) {
+				const activeRequest = this.#requestEvidence.requireRequest(activeRequestId);
+				if (activeRequest.fromAgentId === message.targetAgentId) {
+					return {
+						disposition: "rejected",
+						reason: "answer_required",
+						requestMessageId: activeRequest.messageId,
+						guidance: ANSWER_REQUIRED_GUIDANCE,
+					};
+				}
+			}
 		}
 		const identity = message.kind === "request"
 			? { requestMessageId: message.messageId }

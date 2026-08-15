@@ -1665,7 +1665,9 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 			assert.deepEqual(findLatestModelDelivery(context.messages), [
 				{
 					kind: "message",
-					messageId: lateReceipt?.messageId,
+					messageId: lateReceipt && "messageId" in lateReceipt
+						? lateReceipt.messageId
+						: undefined,
 					fromAgentId: harness.host.session.sessionId,
 					content: "Wait for the following safe boundary.",
 				},
@@ -1685,10 +1687,16 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 		"Enter the first frozen batch.",
 		{ deliveryMode: "steer" },
 	);
+	if (!("messageId" in first.receipt)) {
+		throw new Error("First Steer Message was unexpectedly rejected");
+	}
 	releaseFirstGeneration();
 	await waitForCondition(() => lateAdmission !== undefined);
 	const lateReceipt = await lateAdmission;
 	assert.ok(lateReceipt);
+	if (!("messageId" in lateReceipt)) {
+		throw new Error("Late Steer Message was unexpectedly rejected");
+	}
 	assert.deepEqual(lateReceipt, {
 		messageId: lateReceipt.messageId,
 		messageStatus: "sent",

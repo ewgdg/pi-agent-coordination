@@ -78,7 +78,7 @@ _Avoid_: Workflow state, Workflow configuration lifecycle
 A Request targeting a known Agent in the same Workflow. Requests waiting for one responder become eligible for Delivery in admission order, and only the front Request may deliver while that responder has no unresolved Answer Obligation. Each Request keeps its authored Delivery mode. Its Request Message identity, named `requestMessageId`, is the public identity for Cancellation, retry, and retrieval.
 
 **Answer Obligation**:
-The responder's sole live duty created by Agent Request Delivery and ended by committing the correlated Agent Answer or receiving Request Cancellation. Automatic moderation protects only work with an unresolved Answer Obligation.
+The responder's sole live duty created by Agent Request Delivery and ended by committing the correlated Agent Answer or receiving Request Cancellation. While the obligation is active, an ordinary Message to that Request's requester is rejected without creating a Message; the responder instead keeps provisional findings local, commits the curated Agent Answer, or authors a reverse Agent Request when requester input is needed. Automatic moderation protects only work with an unresolved Answer Obligation.
 
 **Agent Answer**:
 An immutable responder-authored Message correlated by the coordinator to the responder's sole Answer Obligation. Its route follows from that Request, and its commit ends the obligation.

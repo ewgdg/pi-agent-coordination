@@ -18,6 +18,7 @@ import type {
 	AgentWaitClock,
 } from "../src/coordination/agent-waits.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { ANSWER_REQUIRED_GUIDANCE } from "../src/protocol/agent-message-input.ts";
 import { answerSourceDeliveryRequestId } from "../src/protocol/request-resolution.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -123,6 +124,200 @@ test("Request commitment retains its requester and Delivery obligates its respon
 			entryId: delivery.id,
 		},
 	});
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("an active responder rejects ordinary Message authorship to its requester while preserving structured communication", async (t) => {
+	const harness = await createDormantChildHarness(t);
+	const siblingId = await spawnDormantSibling(harness, "answer-lane-sibling");
+	const rejectedCallId = "reject-provisional-message-to-requester";
+	const reverseRequestCallId = "admit-reverse-request-to-requester";
+	const unrelatedSendCallId = "admit-message-to-unrelated-agent";
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	harness.host.model.setResponses([
+		fauxAssistantMessage([
+			fauxToolCall("agent_message", {
+				operation: "send",
+				targetAgentId: harness.host.session.sessionId,
+				content: "This provisional finding must not enter the Answer route.",
+			}, { id: rejectedCallId }),
+			fauxToolCall("agent_message", {
+				operation: "request",
+				targetAgentId: harness.host.session.sessionId,
+				question: "Which requester decision is required before the curated Answer?",
+			}, { id: reverseRequestCallId }),
+			fauxToolCall("agent_message", {
+				operation: "send",
+				targetAgentId: siblingId,
+				content: "This unrelated coordination remains available.",
+			}, { id: unrelatedSendCallId }),
+		], { stopReason: "toolUse" }),
+		fauxAssistantMessage("The structured communication results are complete."),
+		fauxAssistantMessage("The reverse Request reached the requester."),
+		fauxAssistantMessage("The unrelated Message reached its recipient."),
+	]);
+
+	const requestReceipt = await authorOwnerRequest(
+		harness,
+		"request-structured-answer-route",
+	);
+	const entries = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === unrelatedSendCallId,
+	);
+	const rejectedResult = requireToolResult(entries, rejectedCallId);
+	const reverseRequestResult = requireToolResult(entries, reverseRequestCallId);
+	const unrelatedSendResult = requireToolResult(entries, unrelatedSendCallId);
+	assert.deepEqual(rejectedResult.message.details, {
+		disposition: "rejected",
+		reason: "answer_required",
+		requestMessageId: requestReceipt.requestMessageId,
+		guidance: ANSWER_REQUIRED_GUIDANCE,
+	});
+	assert.equal(rejectedResult.message.isError, false);
+	assert.equal(
+		(reverseRequestResult.message.details as { messageStatus?: string }).messageStatus,
+		"sent",
+	);
+	assert.equal(
+		(unrelatedSendResult.message.details as { messageStatus?: string }).messageStatus,
+		"sent",
+	);
+	const rejectedSourceEntry = entries.find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "toolCall" && part.id === rejectedCallId,
+			),
+	);
+	assert.ok(rejectedSourceEntry);
+	const rejectedSource = {
+		agentId: harness.childId,
+		entryId: rejectedSourceEntry.id,
+		toolCallId: rejectedCallId,
+	};
+	assert.equal(
+		harness.host.session.sessionManager.getEntries().some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.message-delivery" &&
+				JSON.stringify(entry.details) === JSON.stringify({ messages: [rejectedSource] }),
+		),
+		false,
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("ordinary Message authorship to the requester resumes after Answer commitment", async (t) => {
+	const harness = await createDormantChildHarness(t, {
+		beforeDeliveryAdmission: ({ operation }) =>
+			operation === "answer" ? "confirmed_failure" : undefined,
+	});
+	const answerCallId = "commit-answer-before-ordinary-message";
+	const sendCallId = "send-after-answer-commitment";
+	harness.host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "answer",
+				answer: "The curated Answer ends the active obligation.",
+			}, { id: answerCallId }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "send",
+				targetAgentId: harness.host.session.sessionId,
+				content: "Independent communication is available after Answer commitment.",
+			}, { id: sendCallId }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The post-Answer Message was admitted."),
+		fauxAssistantMessage("The requester received the post-Answer Message."),
+	]);
+
+	await authorOwnerRequest(harness, "request-before-post-answer-send");
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	const entries = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === sendCallId,
+	);
+	assert.equal(
+		(requireToolResult(entries, sendCallId).message.details as { messageStatus?: string })
+			.messageStatus,
+		"sent",
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("ordinary Message authorship to the requester resumes after Cancellation Delivery", async (t) => {
+	const harness = await createDormantChildHarness(t);
+	const sendCallId = "send-after-cancellation-delivery";
+	harness.host.model.setResponses([
+		fauxAssistantMessage("The Request remains active until Cancellation Delivery."),
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "send",
+				targetAgentId: harness.host.session.sessionId,
+				content: "Independent communication is available after Cancellation Delivery.",
+			}, { id: sendCallId }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The post-Cancellation Message was admitted."),
+		fauxAssistantMessage("The requester received the post-Cancellation Message."),
+	]);
+
+	const request = await authorOwnerRequest(
+		harness,
+		"request-before-post-cancellation-send",
+	);
+	await waitForCondition(() =>
+		retentionCount(harness.view.status(harness.childId).run, "answer_owed") === 1,
+	);
+	const cancelCallId = "cancel-before-ordinary-message";
+	const cancelInput = {
+		operation: "cancel" as const,
+		requestMessageId: request.requestMessageId,
+		reason: "End the responder obligation before unrelated communication.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", cancelInput, { id: cancelCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const cancellation = await harness.view.message(cancelCallId, cancelInput);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: cancelCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(cancellation) }],
+		details: cancellation,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	const entries = await waitForEntry(
+		childSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === sendCallId,
+	);
+	assert.equal(
+		(requireToolResult(entries, sendCallId).message.details as { messageStatus?: string })
+			.messageStatus,
+		"sent",
+	);
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
@@ -3241,6 +3436,78 @@ async function createDormantChildHarness(
 		childId: spawn.agentId,
 		creationRequestId: spawn.requestMessageId,
 	};
+}
+
+type DormantChildHarness = Awaited<ReturnType<typeof createDormantChildHarness>>;
+type TranscriptEntry = ReturnType<SessionManager["getEntries"]>[number];
+type MessageTranscriptEntry = Extract<TranscriptEntry, { type: "message" }>;
+type ToolResultTranscriptEntry = MessageTranscriptEntry & {
+	message: Extract<MessageTranscriptEntry["message"], { role: "toolResult" }>;
+};
+
+async function spawnDormantSibling(
+	harness: DormantChildHarness,
+	toolCallId: string,
+): Promise<string> {
+	const input = { request: "Remain dormant as an unrelated Message recipient." };
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const receipt = await harness.view.spawn(toolCallId, input);
+	assert.equal(receipt.spawnStatus, "created");
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
+	if (!("agentId" in receipt)) throw new Error("Sibling Spawn has no Agent identity");
+	return receipt.agentId;
+}
+
+async function authorOwnerRequest(
+	harness: DormantChildHarness,
+	toolCallId: string,
+): Promise<{ requestMessageId: string }> {
+	const input = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: "Resolve this active Answer Obligation.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const receipt = await harness.view.message(toolCallId, input);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(receipt) }],
+		details: receipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	if (!("requestMessageId" in receipt)) {
+		throw new Error("Request receipt has no identity");
+	}
+	return { requestMessageId: receipt.requestMessageId };
+}
+
+function requireToolResult(
+	entries: readonly TranscriptEntry[],
+	toolCallId: string,
+): ToolResultTranscriptEntry {
+	const result = entries.find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === toolCallId,
+	);
+	if (!result || result.type !== "message" || result.message.role !== "toolResult") {
+		throw new Error(`Tool result ${toolCallId} did not commit`);
+	}
+	return result as ToolResultTranscriptEntry;
 }
 
 function deriveMessageId(source: {

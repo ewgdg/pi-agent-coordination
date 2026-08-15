@@ -101,6 +101,9 @@ export function renderAgentMessageResult(
 			` · ${receipt.reason}`,
 		);
 	}
+	if (options.expanded && "guidance" in receipt) {
+		text += theme.fg("dim", `\n${receipt.guidance}`);
+	}
 	if (options.expanded) {
 		if ("deliveryEvidence" in receipt) {
 			text += theme.fg(
