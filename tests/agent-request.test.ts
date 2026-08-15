@@ -1967,7 +1967,12 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 		waitInput,
 		new AbortController().signal,
 	);
-	assert.equal(selectedWaitResult.answers[0]?.disposition, "answer_delivered");
+	assert.equal(
+		"answers" in selectedWaitResult
+			? selectedWaitResult.answers[0]?.disposition
+			: undefined,
+		"answer_delivered",
+	);
 
 	releaseAnswerDispatch();
 	await answerFreezeHeld;
@@ -2182,6 +2187,157 @@ test("an exact-Run fence prevents a resolved Agent Wait from becoming Answer Del
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
+test("an exact-Run fence prevents a preempted Agent Wait result from committing", async (t) => {
+	const waitToolCallId = "fence-preempted-agent-wait";
+	let rejectSelectedRequest = true;
+	let resultCommitBoundaryReached = false;
+	const harness = await createDormantChildHarness(
+		t,
+		{
+			beforeDeliveryAdmission: ({ operation }) => {
+				if (operation !== "send" || !rejectSelectedRequest) return;
+				rejectSelectedRequest = false;
+				return "confirmed_failure";
+			},
+		},
+		undefined,
+		{
+			beforeResultCommit: ({ toolCallId, failExactRun }) => {
+				if (toolCallId !== waitToolCallId) return;
+				resultCommitBoundaryReached = true;
+				failExactRun();
+			},
+		},
+	);
+	const ownerAgentId = harness.host.session.sessionId;
+	const selectedRequestToolCallId = "request-before-preemption-fence";
+	const selectedRequestInput = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: "Remain unanswered while preemption loses its exact Run.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", selectedRequestInput, {
+				id: selectedRequestToolCallId,
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const selectedRequestEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(selectedRequestEntry);
+	const selectedRequestId = deriveMessageId({
+		agentId: ownerAgentId,
+		entryId: selectedRequestEntry.id,
+		toolCallId: selectedRequestToolCallId,
+	});
+	const selectedReceipt = await harness.view.message(
+		selectedRequestToolCallId,
+		selectedRequestInput,
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: selectedRequestToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(selectedReceipt) }],
+		details: selectedReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	let releaseInboundRequest!: () => void;
+	const inboundRequestGate = new Promise<void>((resolve) => {
+		releaseInboundRequest = resolve;
+	});
+	const inboundRequestToolCallId = "request-that-preempts-fenced-wait";
+	const routeModelCall = async (messages: Context) => {
+		const context = JSON.stringify(messages);
+		if (context.includes(inboundRequestToolCallId)) {
+			return fauxAssistantMessage("The inbound Request was admitted before the fence.");
+		}
+		await inboundRequestGate;
+		return fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{
+					operation: "request",
+					targetAgentId: ownerAgentId,
+					question: "Preempt the wait before its exact Run is fenced.",
+				},
+				{ id: inboundRequestToolCallId },
+			),
+			{ stopReason: "toolUse" },
+		);
+	};
+	harness.host.model.setResponses(Array.from({ length: 4 }, () => routeModelCall));
+	const triggerToolCallId = "trigger-preemption-fence-request";
+	const triggerInput = {
+		operation: "send" as const,
+		targetAgentId: harness.childId,
+		content: "Author the inbound Request after the Owner parks.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", triggerInput, { id: triggerToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const triggerReceipt = await harness.view.message(triggerToolCallId, triggerInput);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: triggerToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(triggerReceipt) }],
+		details: triggerReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	const waitInput = { requestMessageIds: [selectedRequestId] };
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_wait", waitInput, { id: waitToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const wait = harness.view.wait(
+		waitToolCallId,
+		waitInput,
+		new AbortController().signal,
+	);
+	await waitForCondition(() => {
+		const run = harness.view.status().run;
+		return "attention" in run && run.attention === "agent_wait";
+	});
+	releaseInboundRequest();
+	const selectedResult = await settleBeforeTimeout(
+		wait,
+		"Inbound Request did not produce a preemption candidate",
+	);
+	assert.deepEqual(selectedResult, { disposition: "preempted" });
+	const selectedResultMessage = {
+		role: "toolResult" as const,
+		toolCallId: waitToolCallId,
+		toolName: "agent_wait",
+		content: [{ type: "text" as const, text: JSON.stringify(selectedResult) }],
+		details: selectedResult,
+		isError: false,
+		timestamp: Date.now(),
+	};
+	const guarded = harness.view.guardToolResult(selectedResultMessage);
+	assert.equal(resultCommitBoundaryReached, true);
+	const guardedMessage = guarded?.message;
+	assert.equal(guardedMessage?.role, "toolResult");
+	assert.equal(
+		guardedMessage?.role === "toolResult" ? guardedMessage.isError : false,
+		true,
+	);
+	if (!guardedMessage) throw new Error("Exact-Run fence did not replace preemption result");
+	harness.host.session.sessionManager.appendMessage(guardedMessage);
+	harness.view.reconcileCommittedToolResults();
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
 test("Agent Wait parks requester execution capacity until the pending Answer commits", async (t) => {
 	const policy = new WorkflowPolicyStore(
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}'),
@@ -2320,6 +2476,612 @@ test("Agent Wait parks requester execution capacity until the pending Answer com
 	);
 	assert.deepEqual(scheduledReconciliations, [5_000]);
 	assert.equal(cancelledReconciliations, 1);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("an inbound reverse Request preempts Agent Wait and the requester can re-wait", async (t) => {
+	let responderAgentId: string | undefined;
+	let rejectInitialRequest = true;
+	let moderatorRunStarts = 0;
+	const harness = await createDormantChildHarness(
+		t,
+		{
+			beforeDeliveryAdmission: ({ recipientAgentId }) => {
+				if (recipientAgentId !== responderAgentId || !rejectInitialRequest) return;
+				rejectInitialRequest = false;
+				return "confirmed_failure";
+			},
+		},
+		new WorkflowPolicyStore(
+			parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}'),
+		),
+		undefined,
+		undefined,
+		() => {
+			moderatorRunStarts += 1;
+		},
+	);
+	responderAgentId = harness.childId;
+	const ownerAgentId = harness.host.session.sessionId;
+	const originalRequestToolCallId = "request-before-reverse-preemption";
+	const originalQuestion = "Ask the requester for one decision before answering.";
+	const originalRequestInput = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: originalQuestion,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", originalRequestInput, {
+				id: originalRequestToolCallId,
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const originalRequestEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(originalRequestEntry);
+	const originalRequestId = deriveMessageId({
+		agentId: ownerAgentId,
+		entryId: originalRequestEntry.id,
+		toolCallId: originalRequestToolCallId,
+	});
+	const retryOriginalRequestToolCallId = "retry-before-reverse-preemption";
+	const firstWaitToolCallId = "wait-preempted-by-reverse-request";
+	const repeatedWaitToolCallId = "rewait-after-reverse-answer";
+	const deferredMessageToolCallId = "deferred-message-before-reverse-request";
+	const reverseRequestToolCallId = "request-decision-from-waiting-requester";
+	const reverseAnswerToolCallId = "answer-reverse-request";
+	const originalAnswerToolCallId = "answer-after-reverse-decision";
+	const deferredMessage = "This ordinary Deferred Message must remain queued.";
+	const reverseQuestion = "Should I use the concise form?";
+	const reverseAnswer = "Yes, use the concise form.";
+	const originalAnswer = "Used the requested concise form.";
+	let releaseReverseRequest!: () => void;
+	const reverseRequestGate = new Promise<void>((resolve) => {
+		releaseReverseRequest = resolve;
+	});
+	const routeModelCall = async (messages: Context) => {
+		const context = JSON.stringify(messages);
+		if (context.includes("OWNER_WAIT_FOR_REVERSE_REQUEST")) {
+			if (
+				context.includes(repeatedWaitToolCallId) &&
+				context.includes(originalAnswer)
+			) return fauxAssistantMessage("The nested coordination completed.");
+			if (context.includes('"disposition":"preempted"')) {
+				return fauxAssistantMessage([
+					fauxToolCall(
+						"agent_message",
+						{ operation: "answer", answer: reverseAnswer },
+						{ id: reverseAnswerToolCallId },
+					),
+					fauxToolCall(
+						"agent_wait",
+						{ requestMessageIds: [originalRequestId] },
+						{ id: repeatedWaitToolCallId },
+					),
+				], { stopReason: "toolUse" });
+			}
+			return fauxAssistantMessage([
+				fauxToolCall(
+					"agent_message",
+					{ operation: "retry", messageId: originalRequestId },
+					{ id: retryOriginalRequestToolCallId },
+				),
+				fauxToolCall(
+					"agent_wait",
+					{ requestMessageIds: [originalRequestId] },
+					{ id: firstWaitToolCallId },
+				),
+			], { stopReason: "toolUse" });
+		}
+		if (context.includes(reverseAnswer)) {
+			return context.includes(originalAnswerToolCallId)
+				? fauxAssistantMessage("The original Answer is committed.")
+				: fauxAssistantMessage(
+					fauxToolCall(
+						"agent_message",
+						{ operation: "answer", answer: originalAnswer },
+						{ id: originalAnswerToolCallId },
+					),
+					{ stopReason: "toolUse" },
+				);
+		}
+		if (context.includes(reverseRequestToolCallId)) {
+			return fauxAssistantMessage("I need the requester decision before answering.");
+		}
+		await reverseRequestGate;
+		return fauxAssistantMessage([
+			fauxToolCall(
+				"agent_message",
+				{
+					operation: "send",
+					targetAgentId: ownerAgentId,
+					content: deferredMessage,
+				},
+				{ id: deferredMessageToolCallId },
+			),
+			fauxToolCall(
+				"agent_message",
+				{
+					operation: "request",
+					targetAgentId: ownerAgentId,
+					question: reverseQuestion,
+				},
+				{ id: reverseRequestToolCallId },
+			),
+		], { stopReason: "toolUse" });
+	};
+	harness.host.model.setResponses(Array.from({ length: 8 }, () => routeModelCall));
+
+	const requestReceipt = await harness.view.message(
+		originalRequestToolCallId,
+		originalRequestInput,
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: originalRequestToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(requestReceipt) }],
+		details: requestReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	const prompt = harness.host.session.prompt("OWNER_WAIT_FOR_REVERSE_REQUEST");
+	await waitForCondition(() => {
+		const run = harness.view.status().run;
+		return "attention" in run && run.attention === "agent_wait";
+	});
+	releaseReverseRequest();
+	await settleBeforeTimeout(
+		prompt,
+		"Inbound reverse Request did not preempt Agent Wait",
+	);
+
+	const ownerEntries = harness.host.session.sessionManager.getEntries();
+	const firstWaitResult = ownerEntries.find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === firstWaitToolCallId,
+	);
+	assert.ok(
+		firstWaitResult?.type === "message" &&
+		firstWaitResult.message.role === "toolResult",
+	);
+	assert.equal(firstWaitResult.message.isError, false);
+	assert.deepEqual(firstWaitResult.message.details, { disposition: "preempted" });
+	const reverseDeliveryIndex = ownerEntries.findIndex(
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.message-delivery" &&
+			JSON.stringify(entry.content).includes(reverseQuestion),
+	);
+	const reverseAnswerIndex = ownerEntries.findIndex(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "toolCall" && part.id === reverseAnswerToolCallId,
+			),
+	);
+	assert.notEqual(reverseDeliveryIndex, -1);
+	assert.ok(reverseDeliveryIndex < reverseAnswerIndex);
+	assert.equal(
+		ownerEntries.slice(0, reverseAnswerIndex).some(
+			(entry) =>
+				entry.type === "custom_message" &&
+				entry.customType === "agent-coordination.message-delivery" &&
+				JSON.stringify(entry.content).includes(deferredMessage),
+		),
+		false,
+	);
+	const repeatedWaitResult = ownerEntries.find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === repeatedWaitToolCallId,
+	);
+	assert.ok(
+		repeatedWaitResult?.type === "message" &&
+		repeatedWaitResult.message.role === "toolResult",
+	);
+	assert.equal(repeatedWaitResult.message.isError, false);
+	assert.equal(
+		"answers" in (repeatedWaitResult.message.details as object) &&
+		JSON.stringify(repeatedWaitResult.message.details).includes(originalAnswer),
+		true,
+	);
+	await harness.view.reachSafeBoundary();
+	assert.equal(moderatorRunStarts, 0);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("a pending third-party Request preempts a wait for another responder", async (t) => {
+	let rejectSelectedRequest = true;
+	let ownerAgentId: string | undefined;
+	let markInboundRequestAdmitted!: () => void;
+	const inboundRequestAdmitted = new Promise<void>((resolve) => {
+		markInboundRequestAdmitted = resolve;
+	});
+	const harness = await createDormantChildHarness(t, {
+		beforeDeliveryAdmission: ({ operation }) => {
+			if (operation !== "send" || !rejectSelectedRequest) return;
+			rejectSelectedRequest = false;
+			return "confirmed_failure";
+		},
+		afterDeliveryAdmission: ({ recipientAgentId }) => {
+			if (recipientAgentId === ownerAgentId) markInboundRequestAdmitted();
+		},
+	});
+	ownerAgentId = harness.host.session.sessionId;
+	const spawnThirdPartyToolCallId = "spawn-third-party-requester";
+	const spawnThirdPartyInput = {
+		request: "Wait for a trigger, then ask the Owner an unrelated Request.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnThirdPartyInput, {
+				id: spawnThirdPartyToolCallId,
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const thirdParty = await harness.view.spawn(
+		spawnThirdPartyToolCallId,
+		spawnThirdPartyInput,
+	);
+	assert.equal(thirdParty.spawnStatus, "created");
+	if (!("agentId" in thirdParty)) throw new Error("Third-party Agent was not created");
+
+	const selectedRequestToolCallId = "request-selected-other-responder";
+	const selectedRequestInput = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: "Remain unanswered while a third party asks for attention.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", selectedRequestInput, {
+				id: selectedRequestToolCallId,
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const selectedRequestEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(selectedRequestEntry);
+	const selectedRequestId = deriveMessageId({
+		agentId: ownerAgentId,
+		entryId: selectedRequestEntry.id,
+		toolCallId: selectedRequestToolCallId,
+	});
+	const selectedReceipt = await harness.view.message(
+		selectedRequestToolCallId,
+		selectedRequestInput,
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: selectedRequestToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(selectedReceipt) }],
+		details: selectedReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	const thirdPartyQuestion = "Can you review this independent choice?";
+	const thirdPartyRequestToolCallId = "third-party-request-during-wait";
+	const waitToolCallId = "wait-preempted-by-third-party";
+	let releaseThirdParty!: () => void;
+	const thirdPartyGate = new Promise<void>((resolve) => {
+		releaseThirdParty = resolve;
+	});
+	let markThirdPartyGenerationStarted!: () => void;
+	const thirdPartyGenerationStarted = new Promise<void>((resolve) => {
+		markThirdPartyGenerationStarted = resolve;
+	});
+	let markOwnerGenerationStarted!: () => void;
+	const ownerGenerationStarted = new Promise<void>((resolve) => {
+		markOwnerGenerationStarted = resolve;
+	});
+	const routeModelCall = async (messages: Context) => {
+		const context = JSON.stringify(messages);
+		if (context.includes("OWNER_WAIT_FOR_THIRD_PARTY_REQUEST")) {
+			markOwnerGenerationStarted();
+			await inboundRequestAdmitted;
+			return context.includes('"disposition":"preempted"')
+				? fauxAssistantMessage("The unrelated inbound Request has my attention.")
+				: fauxAssistantMessage(
+					fauxToolCall(
+						"agent_wait",
+						{ requestMessageIds: [selectedRequestId] },
+						{ id: waitToolCallId },
+					),
+					{ stopReason: "toolUse" },
+				);
+		}
+		if (context.includes(thirdPartyRequestToolCallId)) {
+			return fauxAssistantMessage("The independent Request was admitted.");
+		}
+		markThirdPartyGenerationStarted();
+		await thirdPartyGate;
+		return fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{
+					operation: "request",
+					targetAgentId: ownerAgentId,
+					question: thirdPartyQuestion,
+				},
+				{ id: thirdPartyRequestToolCallId },
+			),
+			{ stopReason: "toolUse" },
+		);
+	};
+	harness.host.model.setResponses(Array.from({ length: 5 }, () => routeModelCall));
+
+	const triggerToolCallId = "trigger-third-party-requester";
+	const triggerInput = {
+		operation: "send" as const,
+		targetAgentId: thirdParty.agentId,
+		content: "Ask the independent Request now.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", triggerInput, { id: triggerToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const triggerReceipt = await harness.view.message(triggerToolCallId, triggerInput);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: triggerToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(triggerReceipt) }],
+		details: triggerReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	await thirdPartyGenerationStarted;
+	const prompt = harness.host.session.prompt("OWNER_WAIT_FOR_THIRD_PARTY_REQUEST");
+	await ownerGenerationStarted;
+	releaseThirdParty();
+	await settleBeforeTimeout(
+		prompt,
+		"Third-party Request did not preempt Agent Wait",
+	);
+
+	const entries = harness.host.session.sessionManager.getEntries();
+	const waitResult = entries.find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === waitToolCallId,
+	);
+	assert.ok(waitResult?.type === "message" && waitResult.message.role === "toolResult");
+	assert.deepEqual(waitResult.message.details, { disposition: "preempted" });
+	assert.equal(waitResult.message.isError, false);
+	assert.equal(entries.some(
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.message-delivery" &&
+			JSON.stringify(entry.content).includes(thirdPartyQuestion) &&
+			JSON.stringify(entry.content).includes(thirdParty.agentId),
+	), true);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("a completed selected aggregate wins the inbound Request preemption race", async (t) => {
+	let ownerAgentId: string | undefined;
+	let commitSelectedAnswer = () => undefined;
+	let raceBoundaryChecks = 0;
+	const harness = await createDormantChildHarness(
+		t,
+		{
+			beforeDeliveryAdmission: ({ recipientAgentId, operation }) => {
+				if (operation === "send" && recipientAgentId === ownerAgentId) {
+					commitSelectedAnswer();
+				}
+			},
+		},
+		undefined,
+		{
+			beforeInboundRequestPreemptionDecision: () => {
+				raceBoundaryChecks += 1;
+			},
+		},
+	);
+	ownerAgentId = harness.host.session.sessionId;
+	const selectedRequestToolCallId = "request-before-completion-race";
+	const selectedRequestInput = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: "Commit the selected Answer at the inbound Request race boundary.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", selectedRequestInput, {
+				id: selectedRequestToolCallId,
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const selectedRequestEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(selectedRequestEntry);
+	const selectedRequestId = deriveMessageId({
+		agentId: ownerAgentId,
+		entryId: selectedRequestEntry.id,
+		toolCallId: selectedRequestToolCallId,
+	});
+	harness.host.model.setResponses([
+		fauxAssistantMessage("Keep the selected Request active until the race boundary."),
+	]);
+	const selectedReceipt = await harness.view.message(
+		selectedRequestToolCallId,
+		selectedRequestInput,
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: selectedRequestToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(selectedReceipt) }],
+		details: selectedReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	await waitForCondition(() =>
+		retentionCount(harness.view.status(harness.childId).run, "answer_owed") === 1
+	);
+	const selectedResponderSessionFile = await waitForChildSessionFile(
+		harness.host,
+		harness.childId,
+	);
+	const selectedAnswerToolCallId = "answer-at-preemption-race-boundary";
+	const selectedAnswer = "The completed aggregate wins the race.";
+	let selectedAnswerSource: {
+		agentId: string;
+		entryId: string;
+		toolCallId: string;
+	} | undefined;
+	commitSelectedAnswer = () => {
+		if (selectedAnswerSource) return;
+		const session = SessionManager.open(selectedResponderSessionFile);
+		const entryId = session.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "answer", answer: selectedAnswer },
+					{ id: selectedAnswerToolCallId },
+				),
+				{ stopReason: "toolUse" },
+			),
+		);
+		selectedAnswerSource = {
+			agentId: harness.childId,
+			entryId,
+			toolCallId: selectedAnswerToolCallId,
+		};
+		session.appendMessage({
+			role: "toolResult",
+			toolCallId: selectedAnswerToolCallId,
+			toolName: "agent_message",
+			content: [{ type: "text", text: "Selected Answer committed." }],
+			details: {
+				messageId: deriveMessageId(selectedAnswerSource),
+				requestMessageId: selectedRequestId,
+				messageStatus: "not_sent",
+				reason: "target_unavailable",
+			},
+			isError: false,
+			timestamp: Date.now(),
+		});
+	};
+
+	const spawnThirdPartyToolCallId = "spawn-race-third-party";
+	const spawnThirdPartyInput = { request: "Ask an independent Request when triggered." };
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnThirdPartyInput, {
+				id: spawnThirdPartyToolCallId,
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const thirdParty = await harness.view.spawn(
+		spawnThirdPartyToolCallId,
+		spawnThirdPartyInput,
+	);
+	if (!("agentId" in thirdParty)) throw new Error("Race third-party Agent was not created");
+	const inboundRequestToolCallId = "inbound-request-at-answer-race";
+	const waitToolCallId = "wait-that-wins-completion-race";
+	let releaseInboundRequest!: () => void;
+	const inboundRequestGate = new Promise<void>((resolve) => {
+		releaseInboundRequest = resolve;
+	});
+	const routeModelCall = async (messages: Context) => {
+		const context = JSON.stringify(messages);
+		if (context.includes("OWNER_WAIT_FOR_COMPLETION_RACE")) {
+			return context.includes(selectedAnswer)
+				? fauxAssistantMessage("The completed selected aggregate won.")
+				: fauxAssistantMessage(
+					fauxToolCall(
+						"agent_wait",
+						{ requestMessageIds: [selectedRequestId] },
+						{ id: waitToolCallId },
+					),
+					{ stopReason: "toolUse" },
+				);
+		}
+		if (context.includes(inboundRequestToolCallId)) {
+			return fauxAssistantMessage("The race-triggering Request was admitted.");
+		}
+		await inboundRequestGate;
+		return fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{
+					operation: "request",
+					targetAgentId: ownerAgentId as string,
+					question: "This inbound Request reaches the answer race boundary.",
+				},
+				{ id: inboundRequestToolCallId },
+			),
+			{ stopReason: "toolUse" },
+		);
+	};
+	harness.host.model.setResponses(Array.from({ length: 5 }, () => routeModelCall));
+	const triggerToolCallId = "trigger-completion-race-request";
+	const triggerInput = {
+		operation: "send" as const,
+		targetAgentId: thirdParty.agentId,
+		content: "Trigger the inbound Request race.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", triggerInput, { id: triggerToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const triggerReceipt = await harness.view.message(triggerToolCallId, triggerInput);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: triggerToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(triggerReceipt) }],
+		details: triggerReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	const prompt = harness.host.session.prompt("OWNER_WAIT_FOR_COMPLETION_RACE");
+	await waitForCondition(() => {
+		const run = harness.view.status().run;
+		return "attention" in run && run.attention === "agent_wait";
+	});
+	releaseInboundRequest();
+	await prompt;
+
+	assert.equal(raceBoundaryChecks, 1);
+	assert.ok(selectedAnswerSource);
+	const waitResult = harness.host.session.sessionManager.getEntries().find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			entry.message.toolCallId === waitToolCallId,
+	);
+	assert.ok(waitResult?.type === "message" && waitResult.message.role === "toolResult");
+	assert.equal(waitResult.message.isError, false);
+	assert.deepEqual(waitResult.message.details, {
+		answers: [{
+			disposition: "answer_delivered",
+			requestMessageId: selectedRequestId,
+			answerId: deriveMessageId(selectedAnswerSource),
+			fromAgentId: harness.childId,
+			answer: selectedAnswer,
+			answerSource: selectedAnswerSource,
+		}],
+	});
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
@@ -3386,6 +4148,7 @@ async function createDormantChildHarness(
 	workflowPolicy?: WorkflowPolicyStore,
 	agentWaitBoundaryHooks?: AgentWaitBoundaryHooks,
 	agentWaitClock?: AgentWaitClock,
+	onModeratorRunStart?: () => void,
 ) {
 	let view!: ReturnType<WorkflowCoordinator["forAgent"]>;
 	const host = await createUnboundTestOwnerHost(t, (pi) => {
@@ -3402,7 +4165,10 @@ async function createDormantChildHarness(
 		// This suite parks unanswered work to probe Request semantics. Suppress live
 		// Moderator Runs so incidental stall handling does not consume scripted replies.
 		incidentBoundaryHooks: {
-			beforeModeratorRunStart: () => "confirmed_failure",
+			beforeModeratorRunStart: () => {
+				onModeratorRunStart?.();
+				return "confirmed_failure";
+			},
 		},
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
@@ -3561,6 +4327,20 @@ async function waitForCondition(predicate: () => boolean): Promise<void> {
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("Expected condition was not reached");
+}
+
+async function settleBeforeTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+	let timeout: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_resolve, reject) => {
+				timeout = setTimeout(() => reject(new Error(message)), 2_000);
+			}),
+		]);
+	} finally {
+		if (timeout) clearTimeout(timeout);
+	}
 }
 
 function requesterFailureOrResponderReceipt(messages: readonly unknown[]) {

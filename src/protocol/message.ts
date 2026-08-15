@@ -588,6 +588,7 @@ function completedAgentWaitAnswers(options: {
 		transcript: options.transcript,
 		toolCallId: options.toolCallId,
 	});
+	if (inspection.state === "preempted") return [];
 	if (inspection.state !== "completed") {
 		throw new ProtocolInvariantError(
 			`Agent Wait ${options.toolCallId} successful result is not canonical`,

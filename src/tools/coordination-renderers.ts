@@ -57,6 +57,9 @@ export function renderAgentWaitResult(
 	theme: Theme,
 ): Text {
 	if (options.isPartial) return pending(theme, "waiting for Answers");
+	if (result.details && "disposition" in result.details) {
+		return receipt(theme, "preempted", result.details, options);
+	}
 	const count = result.details?.answers.length ?? 0;
 	return receipt(
 		theme,

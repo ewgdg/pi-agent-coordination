@@ -7,6 +7,7 @@ import {
 } from "./agent-record.ts";
 import {
 	MessageDeliveryScheduler,
+	type IncomingRequestWaitPreemptor,
 	type ScheduledCustomDelivery,
 	type ScheduledMessageDelivery,
 	type ResumeReservationHandler,
@@ -100,6 +101,7 @@ export class MessageCoordinator {
 		quarantinedAgentIds?: ReadonlySet<string>;
 		isShuttingDown(): boolean;
 		boundaryHooks?: MessageBoundaryHooks;
+		preemptAgentWait?: IncomingRequestWaitPreemptor;
 		workflowPolicy: WorkflowPolicyStore;
 	}) {
 		this.#agents = options.agents;
@@ -115,6 +117,7 @@ export class MessageCoordinator {
 			scheduleDeliveryDispatch: this.#boundaryHooks.scheduleDeliveryDispatch,
 			afterSteerFreeze: this.#boundaryHooks.afterSteerFreeze,
 			afterResumeReservation: this.#boundaryHooks.afterResumeReservation,
+			preemptAgentWait: options.preemptAgentWait,
 			workflowPolicy: options.workflowPolicy,
 		});
 	}
@@ -395,6 +398,10 @@ export class MessageCoordinator {
 
 	requestRelease(record: AgentRecord): Promise<"released" | "retained" | "stale"> {
 		return this.#deliveryScheduler.requestRelease(record);
+	}
+
+	agentWaitStarted(record: AgentRecord): Promise<void> {
+		return this.#deliveryScheduler.requestQueueAdvanced(record);
 	}
 
 	async reachSafeBoundary(agentId: string): Promise<void> {

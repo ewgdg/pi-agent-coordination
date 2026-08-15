@@ -8,6 +8,7 @@ import {
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
+import { inspectCommittedAgentWaitResult } from "../src/protocol/agent-wait.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import {
 	inspectAgentMessageAuthorResult,
@@ -274,6 +275,52 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 		transcript: transcriptFromSessionManager(requester).inspect(),
 		source: answerSource,
 	}), "waited-request");
+});
+
+test("a preempted Agent Wait is a non-error result without Answer Delivery proof", () => {
+	const requesterAgentId = "preempted-wait-requester";
+	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
+	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
+		agentId: requesterAgentId,
+	});
+	const waitToolCallId = "preempted-agent-wait-call";
+	requester.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_wait", {
+				requestMessageIds: ["still-pending-request"],
+			}, { id: waitToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const preempted = { disposition: "preempted" as const };
+	requester.appendMessage({
+		role: "toolResult",
+		toolCallId: waitToolCallId,
+		toolName: "agent_wait",
+		content: [{ type: "text", text: JSON.stringify(preempted) }],
+		details: preempted,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	const transcript = transcriptFromSessionManager(requester).inspect();
+	assert.deepEqual(inspectCommittedAgentWaitResult({
+		agentId: requesterAgentId,
+		transcript,
+		toolCallId: waitToolCallId,
+	}), {
+		state: "preempted",
+		resultEntryId: requester.getLeafEntry()?.id,
+	});
+	assert.equal(answerSourceDeliveryRequestId({
+		requesterAgentId,
+		transcript,
+		source: {
+			agentId: "unanswered-responder",
+			entryId: "unanswered-entry",
+			toolCallId: "unanswered-call",
+		},
+	}), undefined);
 });
 
 test("a schema-rejected agent_message call is not authored protocol evidence", () => {

@@ -211,6 +211,13 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		disposition: "already_cancelled",
 		cancellationMessageId: "cancellation-message",
 	}), true);
+	assert.equal(Check(agentControlMethods["coordination.wait"].response, {
+		disposition: "preempted",
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.wait"].response, {
+		disposition: "preempted",
+		answers: [],
+	}), false);
 	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
 		spawnStatus: "created",
 		agentId: "child",

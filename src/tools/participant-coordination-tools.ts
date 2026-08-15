@@ -51,6 +51,8 @@ A successful asynchronous Message send returns messageStatus "sent". This includ
 
 After a receipt containing requestMessageId with messageStatus "sent", continue independent work when possible. If the next action requires all selected Answers together, call agent_wait with their exact Request identities; otherwise end the turn and let correlated Answers arrive automatically. Do not poll merely to wait.
 
+If agent_wait returns disposition "preempted", handle the delivered inbound Agent Request first. Reissue agent_wait with the same selected Request identities afterward when their Answers are still required; preemption does not consume them or create Answer Delivery proof.
+
 A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
 
 While an Answer Obligation is active, agent_message operation "send" to that Request's requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
@@ -396,8 +398,9 @@ export function registerParticipantCoordinationTools<
 		name: "agent_wait",
 		label: "Wait for Answers",
 		description:
-			"Wait until every selected outbound Agent Request has a committed Answer, then return the Answers together.",
-		promptSnippet: "Park this Run until selected Agent Requests are answered.",
+			"Wait until every selected outbound Agent Request has a committed Answer, unless an inbound Agent Request preempts the wait for attention.",
+		promptSnippet:
+			"Park this Run until selected Agent Requests are answered or an inbound Agent Request preempts it.",
 		promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentWaitParameters,

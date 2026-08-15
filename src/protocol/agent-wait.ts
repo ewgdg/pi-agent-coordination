@@ -29,16 +29,21 @@ export type AgentWaitAnswer =
 		deliveryEvidence: Readonly<{ agentId: string; entryId: string }>;
 	}>;
 
-export type AgentWaitResult = Readonly<{
+export type CompletedAgentWaitResult = Readonly<{
 	answers: readonly AgentWaitAnswer[];
 }>;
+
+export type AgentWaitResult =
+	| CompletedAgentWaitResult
+	| Readonly<{ disposition: "preempted" }>;
 
 export type AgentWaitResultInspection =
 	| Readonly<{ state: "pending" }>
 	| Readonly<{ state: "interrupted"; resultEntryId: string }>
+	| Readonly<{ state: "preempted"; resultEntryId: string }>
 	| Readonly<{
 		state: "completed";
-		result: AgentWaitResult;
+		result: CompletedAgentWaitResult;
 		resultEntryId: string;
 	}>;
 
@@ -84,16 +89,7 @@ export function inspectCommittedAgentWaitResult(options: {
 	if (match.message.isError) {
 		return { state: "interrupted", resultEntryId: match.id };
 	}
-	const input = committedAgentWaitInput(options);
 	const result = validateAgentWaitResult(match.message.details);
-	if (!isDeepStrictEqual(
-		result.answers.map(({ requestMessageId }) => requestMessageId),
-		input.requestMessageIds,
-	)) {
-		throw new ProtocolInvariantError(
-			"Agent Wait result does not preserve its selected Request identities",
-		);
-	}
 	if (
 		match.message.content.length !== 1 ||
 		match.message.content[0]?.type !== "text"
@@ -109,10 +105,27 @@ export function inspectCommittedAgentWaitResult(options: {
 	if (!isDeepStrictEqual(content, result)) {
 		throw new ProtocolInvariantError("Agent Wait result content differs from its details");
 	}
+	const input = committedAgentWaitInput(options);
+	if ("disposition" in result) {
+		return { state: "preempted", resultEntryId: match.id };
+	}
+	if (!isDeepStrictEqual(
+		result.answers.map(({ requestMessageId }) => requestMessageId),
+		input.requestMessageIds,
+	)) {
+		throw new ProtocolInvariantError(
+			"Agent Wait result does not preserve its selected Request identities",
+		);
+	}
 	return { state: "completed", result, resultEntryId: match.id };
 }
 
 export function validateAgentWaitResult(value: unknown): AgentWaitResult {
+	if (
+		isRecord(value) &&
+		sameKeys(value, ["disposition"]) &&
+		value.disposition === "preempted"
+	) return { disposition: "preempted" };
 	if (!isRecord(value) || !sameKeys(value, ["answers"]) || !Array.isArray(value.answers)) {
 		throw new ProtocolInvariantError("Agent Wait result has an invalid shape");
 	}

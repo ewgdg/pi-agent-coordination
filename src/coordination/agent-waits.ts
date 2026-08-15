@@ -14,6 +14,7 @@ import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 const ANSWER_WAIT_RECONCILIATION_INTERVAL_MS = 5_000;
 const INTERRUPTED_MESSAGE = "Agent Wait interrupted before all Answers arrived.";
 const FENCED_MESSAGE = "Agent Wait ended because its Agent Run is no longer available.";
+const PREEMPTED_RESULT = Object.freeze({ disposition: "preempted" as const });
 
 export type AgentWaitClock = Readonly<{
 	schedule(delayMs: number, callback: () => void): () => void;
@@ -28,6 +29,10 @@ export const SYSTEM_AGENT_WAIT_CLOCK: AgentWaitClock = {
 };
 
 export type AgentWaitBoundaryHooks = Readonly<{
+	beforeInboundRequestPreemptionDecision?(context: Readonly<{
+		agentId: string;
+		toolCallId: string;
+	}>): void;
 	beforeResultCommit?(context: Readonly<{
 		agentId: string;
 		toolCallId: string;
@@ -148,6 +153,13 @@ export class AgentWaitCoordinator {
 			try {
 				caller.host.beginAgentWait(handle, toolCallId);
 				this.#suspendExecution(caller);
+				void this.#messages.agentWaitStarted(caller).catch((error: unknown) => {
+					this.#fence(
+						callerAgentId,
+						toolCallId,
+						error instanceof Error ? error.message : String(error),
+					);
+				});
 			} catch (error) {
 				this.#complete(pending);
 				throw error;
@@ -156,6 +168,56 @@ export class AgentWaitCoordinator {
 			void this.#reconcile(pending);
 		}
 		return result;
+	}
+
+	async preemptForInboundRequest(
+		record: AgentRecord,
+		reserveDelivery: () => boolean,
+	): Promise<void> {
+		const pending = [...this.#pendingByKey.values()].find(
+			(candidate) =>
+				candidate.record === record &&
+				candidate.phase === "waiting",
+		);
+		if (!pending) return;
+		let completed: AgentWaitResult | undefined;
+		try {
+			this.#boundaryHooks.beforeInboundRequestPreemptionDecision?.({
+				agentId: pending.callerAgentId,
+				toolCallId: pending.toolCallId,
+			});
+			// This is the race boundary: a fully committed selected aggregate wins
+			// before the inbound Request acquires the parked Run.
+			completed = this.#messages.waitAnswers(
+				pending.callerAgentId,
+				pending.input.requestMessageIds,
+			);
+		} catch (error) {
+			this.#fence(
+				pending.callerAgentId,
+				pending.toolCallId,
+				error instanceof Error ? error.message : String(error),
+			);
+			return;
+		}
+		if (completed) {
+			await this.#resumeWithResult(pending, completed);
+			return;
+		}
+		if (!record.host.isCurrent(pending.handle)) return;
+		let reserved: boolean;
+		try {
+			reserved = reserveDelivery();
+		} catch (error) {
+			this.#fence(
+				pending.callerAgentId,
+				pending.toolCallId,
+				error instanceof Error ? error.message : String(error),
+			);
+			return;
+		}
+		if (!reserved) return;
+		await this.#resumeWithResult(pending, PREEMPTED_RESULT);
 	}
 
 	guardResultCommit(
@@ -182,7 +244,9 @@ export class AgentWaitCoordinator {
 			!pending.record.host.currentRunFailed() &&
 			isDeepStrictEqual(message.details, pending.candidate)
 		) {
-			// The candidate may have lost to direct Delivery before Pi commits it.
+			if (pending.candidate && "disposition" in pending.candidate) return undefined;
+			// A completed aggregate candidate may have lost to direct Delivery before
+			// Pi commits it. Preemption has no Answer retrieval to re-arbitrate.
 			const current = this.#messages.waitAnswers(
 				callerAgentId,
 				pending.input.requestMessageIds,
@@ -207,9 +271,14 @@ export class AgentWaitCoordinator {
 				toolCallId: pending.toolCallId,
 			});
 			if (inspection.state === "pending") continue;
+			const committedResult = inspection.state === "completed"
+				? inspection.result
+				: inspection.state === "preempted"
+					? PREEMPTED_RESULT
+					: undefined;
 			if (
-				inspection.state === "completed" &&
-				!isDeepStrictEqual(inspection.result, pending.candidate)
+				committedResult &&
+				!isDeepStrictEqual(committedResult, pending.candidate)
 			) {
 				throw new Error(
 					`invariant_violation: Agent Wait ${pending.toolCallId} committed a different result`,
@@ -254,6 +323,14 @@ export class AgentWaitCoordinator {
 			return;
 		}
 		if (!completed) return;
+		await this.#resumeWithResult(pending, completed);
+	}
+
+	async #resumeWithResult(
+		pending: PendingAgentWait,
+		result: AgentWaitResult,
+	): Promise<void> {
+		if (pending.phase !== "waiting") return;
 		pending.phase = "resuming";
 		this.#clearTimer(pending);
 		try {
@@ -267,8 +344,8 @@ export class AgentWaitCoordinator {
 				return;
 			}
 			pending.phase = "result_pending";
-			pending.candidate = completed;
-			pending.resolve(completed);
+			pending.candidate = result;
+			pending.resolve(result);
 		} catch (error) {
 			this.#fence(
 				pending.callerAgentId,

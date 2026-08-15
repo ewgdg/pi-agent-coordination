@@ -330,6 +330,8 @@ export class WorkflowCoordinator {
 			quarantinedAgentIds: this.#quarantinedAgentIds,
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
+			preemptAgentWait: (record, reserveDelivery) =>
+				this.#agentWaits.preemptForInboundRequest(record, reserveDelivery),
 			workflowPolicy: this.#workflowPolicy,
 		});
 		this.#agentWaits = new AgentWaitCoordinator({

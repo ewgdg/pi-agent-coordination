@@ -376,9 +376,10 @@ const AgentWaitAnswerSchema = Type.Union([
 		deliveryEvidence: EntryPointerSchema,
 	}),
 ]);
-const AgentWaitResultSchema = closed({
-	answers: Type.Array(AgentWaitAnswerSchema, { minItems: 1 }),
-});
+const AgentWaitResultSchema = Type.Union([
+	closed({ answers: Type.Array(AgentWaitAnswerSchema, { minItems: 1 }) }),
+	closed({ disposition: Type.Literal("preempted") }),
+]);
 const HumanAnswerSchema = closed({ requestId: NonEmptyStringSchema, answer: NonEmptyStringSchema });
 const ModeratorControlReceiptSchema = Type.Union([
 	closed({

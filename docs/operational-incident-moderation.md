@@ -20,7 +20,7 @@ A Dependency Deadlock is a normalized closed component of current ordinary Runs.
 
 Deadlock detection is observational. It does not cancel a Request, interrupt or terminate a Run, control descendants, or grant authority.
 
-Clean Run release, deliberate termination, orderly shutdown, optional work, ordinary model duration, Human waiting, and intentional Holds do not create Run Failure or Dependency Deadlock handling. Operation Review never times model generation or internal coordination machinery, including a parked `agent_wait`; the existing Request graph remains eligible for Dependency Deadlock observation.
+Clean Run release, deliberate termination, orderly shutdown, optional work, ordinary model duration, Human waiting, and intentional Holds do not create Run Failure or Dependency Deadlock handling. Operation Review never times model generation or internal coordination machinery, including a parked `agent_wait`; the existing Request graph remains eligible for Dependency Deadlock observation. An eligible inbound Agent Request preempts the parked Wait through normal coordination, so a reverse-Request flow does not depend on Dependency Deadlock moderation.
 
 ## Continuous conditions
 

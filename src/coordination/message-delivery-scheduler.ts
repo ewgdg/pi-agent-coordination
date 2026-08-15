@@ -81,11 +81,18 @@ export type MessageDeliveryAdmission =
 	| "target_unavailable"
 	| "capacity_exhausted";
 
+export type IncomingRequestWaitPreemptor = (
+	record: AgentRecord,
+	reserveDelivery: () => boolean,
+) => Promise<void>;
+
 type ActiveDeferredDelivery = {
 	delivery: ScheduledDelivery;
 	completion: Promise<void>;
 	deliveryCommitted: boolean;
 };
+
+type ActiveWaitPreemption = ActiveDeferredDelivery;
 
 type FrozenSteerBatch = {
 	deliveries: readonly ScheduledMessageDelivery[];
@@ -104,6 +111,7 @@ type ActiveResume = ReservedResume & {
 export class MessageDeliveryScheduler {
 	readonly #pendingByAgent = new Map<string, Map<string, ScheduledDelivery>>();
 	readonly #activeDeferredByAgent = new Map<string, ActiveDeferredDelivery>();
+	readonly #activeWaitPreemptionByAgent = new Map<string, ActiveWaitPreemption>();
 	readonly #frozenSteerByAgent = new Map<string, FrozenSteerBatch>();
 	readonly #reservedResumeByAgent = new Map<string, ReservedResume>();
 	readonly #activeResumeByAgent = new Map<string, ActiveResume>();
@@ -113,6 +121,7 @@ export class MessageDeliveryScheduler {
 	readonly #scheduleDeliveryDispatchHook: ScheduleDeliveryDispatch | undefined;
 	readonly #afterSteerFreeze: SteerFreezeHandler | undefined;
 	readonly #afterResumeReservation: ResumeReservationHandler | undefined;
+	readonly #preemptAgentWait: IncomingRequestWaitPreemptor | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
 
 	constructor(options: {
@@ -120,12 +129,14 @@ export class MessageDeliveryScheduler {
 		scheduleDeliveryDispatch?: ScheduleDeliveryDispatch;
 		afterSteerFreeze?: SteerFreezeHandler;
 		afterResumeReservation?: ResumeReservationHandler;
+		preemptAgentWait?: IncomingRequestWaitPreemptor;
 		workflowPolicy: WorkflowPolicyStore;
 	}) {
 		this.#scheduleReleaseEvaluationHook = options.scheduleReleaseEvaluation;
 		this.#scheduleDeliveryDispatchHook = options.scheduleDeliveryDispatch;
 		this.#afterSteerFreeze = options.afterSteerFreeze;
 		this.#afterResumeReservation = options.afterResumeReservation;
+		this.#preemptAgentWait = options.preemptAgentWait;
 		this.#workflowPolicy = options.workflowPolicy;
 	}
 
@@ -234,6 +245,10 @@ export class MessageDeliveryScheduler {
 		});
 	}
 
+	requestQueueAdvanced(record: AgentRecord): Promise<void> {
+		return record.host.lane.run(() => this.#drainInLane(record));
+	}
+
 	requestQueueAdvancedInLane(record: AgentRecord): Promise<void> {
 		return this.#drainInLane(record);
 	}
@@ -241,6 +256,8 @@ export class MessageDeliveryScheduler {
 	hasDispatchReservation(recipientAgentId: string, messageId: string): boolean {
 		return this.#activeDeferredByAgent.get(recipientAgentId)?.delivery.messageId ===
 			messageId ||
+			this.#activeWaitPreemptionByAgent.get(recipientAgentId)?.delivery.messageId ===
+				messageId ||
 			this.#frozenSteerByAgent.get(recipientAgentId)?.deliveries.some(
 				(delivery) => delivery.messageId === messageId,
 			) === true ||
@@ -262,6 +279,7 @@ export class MessageDeliveryScheduler {
 
 	discardInLane(record: AgentRecord): void {
 		this.#activeDeferredByAgent.delete(record.identity.agentId);
+		this.#activeWaitPreemptionByAgent.delete(record.identity.agentId);
 		this.#frozenSteerByAgent.delete(record.identity.agentId);
 		this.#reservedResumeByAgent.delete(record.identity.agentId);
 		this.#activeResumeByAgent.delete(record.identity.agentId);
@@ -324,8 +342,14 @@ export class MessageDeliveryScheduler {
 				return;
 			}
 		}
-		const active = this.#activeDeferredByAgent.get(record.identity.agentId);
-		if (active) {
+		for (const [activeByAgent, active] of [
+			[this.#activeDeferredByAgent, this.#activeDeferredByAgent.get(record.identity.agentId)],
+			[
+				this.#activeWaitPreemptionByAgent,
+				this.#activeWaitPreemptionByAgent.get(record.identity.agentId),
+			],
+		] as const) {
+			if (!active) continue;
 			let failed = false;
 			try {
 				await active.completion;
@@ -334,7 +358,7 @@ export class MessageDeliveryScheduler {
 			}
 			if (!record.host.isCurrent(handle)) return;
 			const proof = active.delivery.inspectProof();
-			this.#activeDeferredByAgent.delete(record.identity.agentId);
+			activeByAgent.delete(record.identity.agentId);
 			this.#pendingByAgent
 				.get(record.identity.agentId)
 				?.delete(active.delivery.messageId);
@@ -399,16 +423,30 @@ export class MessageDeliveryScheduler {
 			pending.set(reservedResume.delivery.messageId, reservedResume.delivery);
 		}
 		if (record.host.blocksOrdinaryDelivery()) return;
+		if (this.#activeWaitPreemptionByAgent.has(record.identity.agentId)) return;
+		const pending = this.#pendingByAgent.get(record.identity.agentId);
+		if (!pending || pending.size === 0) return;
+		const eligible = this.#eligibleDeliveries(pending);
+		const incomingRequest = eligible.find(
+			(delivery) => delivery.isIncomingRequest,
+		);
+		const run = record.host.observe();
+		if ("attention" in run && run.attention === "agent_wait") {
+			if (incomingRequest && this.#preemptAgentWait) {
+				void this.#preemptAgentWait(record, () =>
+					this.#reservePreemptingRequestInLane(record, incomingRequest)
+				);
+			}
+			// Only an eligible inbound Request may acquire a parked Wait. Ordinary
+			// Deferred and Steer Messages remain queued regardless of host work-state
+			// projection; Steer Message preemption is a separate protocol decision.
+			return;
+		}
 		if (
 			this.#activeDeferredByAgent.has(record.identity.agentId) ||
 			this.#hasUnprovenFrozenBatch(record)
-		) {
-			return;
-		}
-		const pending = this.#pendingByAgent.get(record.identity.agentId);
-		if (!pending || pending.size === 0) return;
+		) return;
 		if (record.host.currentWorkState() !== "settled") return;
-		const eligible = this.#eligibleDeliveries(pending);
 		const steer = this.#eligibleSteerDeliveries(eligible);
 		const selected = steer.length > 0 ? steer : eligible.slice(0, 1);
 		const delivery = selected[0];
@@ -447,6 +485,33 @@ export class MessageDeliveryScheduler {
 			completion,
 			deliveryCommitted: false,
 		});
+	}
+
+	#reservePreemptingRequestInLane(
+		record: AgentRecord,
+		delivery: ScheduledDelivery,
+	): boolean {
+		const pending = this.#pendingByAgent.get(record.identity.agentId);
+		if (
+			!pending ||
+			pending.get(delivery.messageId) !== delivery ||
+			!this.#eligibleDeliveries(pending).includes(delivery) ||
+			this.#activeWaitPreemptionByAgent.has(record.identity.agentId)
+		) return false;
+		const { completion } = record.host.deliverInLane({
+			kind: "custom",
+			message: "customMessage" in delivery
+				? delivery.customMessage
+				: createMessageDelivery([delivery.deliveryItem]),
+			triggerTurn: true,
+			deliverAs: "steer",
+		});
+		this.#activeWaitPreemptionByAgent.set(record.identity.agentId, {
+			delivery,
+			completion,
+			deliveryCommitted: false,
+		});
+		return true;
 	}
 
 	#continueDeliveryDispatchInLane(
@@ -560,15 +625,19 @@ export class MessageDeliveryScheduler {
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending) return;
 		const active = this.#activeDeferredByAgent.get(record.identity.agentId);
+		const preemption = this.#activeWaitPreemptionByAgent.get(
+			record.identity.agentId,
+		);
 		for (const [messageId, delivery] of pending) {
 			const proof = delivery.inspectProof();
 			const activeDelivery = active?.delivery.messageId === messageId;
-			const suppressed = !proof && !activeDelivery && delivery.isSuppressed?.();
+			const preemptingDelivery = preemption?.delivery.messageId === messageId;
+			const suppressed =
+				!proof && !activeDelivery && !preemptingDelivery && delivery.isSuppressed?.();
 			if (!proof && !suppressed) continue;
 			pending.delete(messageId);
-			if (activeDelivery) {
-				active.deliveryCommitted = true;
-			}
+			if (activeDelivery) active.deliveryCommitted = true;
+			if (preemptingDelivery) preemption.deliveryCommitted = true;
 			if (proof) delivery.afterCommit?.();
 		}
 		if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);
@@ -624,6 +693,7 @@ export class MessageDeliveryScheduler {
 
 	#hasPendingScheduling(record: AgentRecord): boolean {
 		return this.#activeDeferredByAgent.has(record.identity.agentId) ||
+			this.#activeWaitPreemptionByAgent.has(record.identity.agentId) ||
 			this.#reservedResumeByAgent.has(record.identity.agentId) ||
 			this.#activeResumeByAgent.has(record.identity.agentId) ||
 			this.#hasUnprovenFrozenBatch(record) ||
