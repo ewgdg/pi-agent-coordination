@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,7 +30,10 @@ windowsOnly("Windows process child starts through Control admission and shuts do
 		const artifactDirectory = dirname(bootstrapPath);
 		const contextArtifactPath = runtime.snapshot.projectContext?.filePath;
 		assert.ok(contextArtifactPath);
-		assert.equal(contextArtifactPath, join(artifactDirectory, "context.md"));
+		assert.equal(
+			await realpath(contextArtifactPath),
+			await realpath(join(artifactDirectory, "context.md")),
+		);
 		assert.equal(isAbsolute(bootstrapPath), true);
 		assert.equal(bootstrapPath.startsWith("\\\\.\\pipe\\"), false);
 		assert.equal(runtime.ready.sessionId, options.expectedSessionId);
@@ -60,7 +63,10 @@ windowsOnly("Windows process child unexpected exit closes Control and removes ru
 		const artifactDirectory = dirname(bootstrapPath);
 		const contextArtifactPath = runtime.snapshot.projectContext?.filePath;
 		assert.ok(contextArtifactPath);
-		assert.equal(contextArtifactPath, join(artifactDirectory, "context.md"));
+		assert.equal(
+			await realpath(contextArtifactPath),
+			await realpath(join(artifactDirectory, "context.md")),
+		);
 		process.kill(runtime.pid, "SIGTERM");
 		const exit = await runtime.exited;
 		assert.notEqual(exit.exitCode, 0);

@@ -25,20 +25,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            transport-test: named-pipe-control-transport.test.ts
-          - os: macos-latest
-            transport-test: unix-control-transport.test.ts
+        os: [windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: '22.19.0'
+          node-version: '24'
           cache: npm
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:fast -- --file=control-protocol-schemas.test.ts
-      - run: npm run test:process -- --file=${{ matrix.transport-test }}
+      - if: runner.os == 'macOS'
+        run: npm run test:process -- --file=unix-control-transport.test.ts
+        env:
+          # Test fixtures add a directory below the runner temp root; keep that
+          # fixture-only nesting within macOS sockaddr_un limits.
+          TMPDIR: /tmp
+      - if: runner.os == 'Windows'
+        run: npm run test:process -- --file=named-pipe-control-transport.test.ts
       - if: runner.os == 'Windows'
         run: npm run test:process -- --file=windows-process-control-transport.test.ts
