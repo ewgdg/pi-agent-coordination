@@ -4,6 +4,16 @@ Durable Pi agents that collaborate asynchronously under explicit Owner and Spawn
 
 ## Features
 
+### Interactive Agent switching
+
+Run `/agents` from the Owner or any Agent to open the Agent switcher:
+
+![The Agent switcher overlay with Live and Dormant tabs](docs/images/agent-switcher.png)
+
+Select a subagent to enter its complete Pi session and interact with it directly—read its transcript, type into its editor, or use its commands and tools.
+
+### Coordination and supervision
+
 - **Owner-directed Workflows:** the current interactive Pi session becomes the durable Workflow Owner. The Owner can fork or clone copied conversation into a fresh, independent Workflow.
 - **Durable child Agents:** ordinary Agents can create configurable context-isolated children or cache-affine conversation forks with `agent_spawn`.
 - **Messaging and Requests:** `agent_message` supports immutable Deferred and Steer Messages, one active incoming Request per Agent, automatically correlated Answers, retrieval, and cancellation. `agent_wait` joins every outstanding outbound Request Answer without consuming Workflow execution capacity when one next decision needs the complete set.
@@ -11,7 +21,6 @@ Durable Pi agents that collaborate asynchronously under explicit Owner and Spawn
 - **Run supervision:** Workflow Owners and Direct Spawners can inspect authorized Agents with `agent_observe`, then interrupt, explicitly resume, or terminate exact Runs with `agent_control`.
 - **Operational incident handling:** one bounded runtime reminder recovers simple forgotten Answers before isolated Moderators handle persistent Obligation Stalls, overdue answer obligations, answer-obligated Run Failures, and closed live Dependency Deadlocks. Review renewal, Run control, Owner escalation, and Resolution are policy-bounded and mechanically gated.
 - **Durable recovery:** a fresh host reconstructs verified authority, standalone Moderators, and residual Request retention from complete Pi transcripts without replaying volatile work.
-- **Interactive Agent views:** `/agents` presents attention plus live and dormant Agents without rebinding the Owner runtime. Selecting a Dormant Agent prepares its configured session and complete UI without admitting a Run. User input, extension effects, and coordination Delivery retain their normal power and can activate that same session without replacing the view. A native above-editor dock keeps selected identity, scoped direct-child activity, and Owner-only attention visible after the selector closes.
 
 Coordination does not override Pi's user-configured compaction, retry, provider-retry, or transport behavior. One failed Moderator may be replaced once; a second failure creates passive, Owner-only Operational Attention.
 
