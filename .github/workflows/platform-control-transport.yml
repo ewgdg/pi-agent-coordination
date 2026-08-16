@@ -1,6 +1,7 @@
 name: Platform Control transport
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - '.github/workflows/platform-control-transport.yml'
