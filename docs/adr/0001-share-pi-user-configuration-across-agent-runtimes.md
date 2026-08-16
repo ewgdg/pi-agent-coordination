@@ -1,0 +1,3 @@
+# Share Pi user configuration across Agent Runtimes
+
+Every Owner and child Agent Runtime uses the same user-owned Pi configuration. Runtime Preparation may explicitly select a model, thinking level, resources, and other launch inputs without persisting those effective values; only explicit user preference actions—including actions performed from an interactively selected child view—may update the shared configuration. Isolating production child configuration would make the same user's Pi preferences depend on which Agent view is open, so synthetic tests that exercise persistent Pi APIs must isolate their fixture environment instead.

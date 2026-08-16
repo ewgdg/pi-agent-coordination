@@ -68,6 +68,10 @@ _Avoid_: Template cache, Template configuration
 The optional caller-authored `config` object in a context-isolated canonical Agent Spawn tool call. It is the only durable child Runtime configuration input and may override model, thinking, working directory, the ordinary-tool allowlist, skills, extension inheritance, and Project Context. The allowlist is a capability ceiling; Pi and extensions own the active subset and its order. It is never expanded into durable effective configuration. A Conversation Fork rejects Agent Spawn Configuration.
 _Avoid_: Agent settings, runtime state, inheritance snapshot
 
+**Shared Pi User Configuration**:
+The user-owned Pi preference space shared by the Owner and every child Agent Runtime. Runtime Preparation may select effective values without changing it, while an explicit user preference action from any interactive Agent view updates the same shared preferences.
+_Avoid_: Owner configuration, child configuration
+
 **Runtime Preparation**:
 The volatile resolution performed immediately before one new Agent Runtime starts. For an ordinary Agent it recursively obtains the current parent Runtime configuration, resolves the Agent's current selected Template and canonical Agent Spawn Configuration, adds fixed role requirements, and discovers current resources, trust, and Project Context. A Moderator instead resolves the current Owner Runtime and current reserved `moderator` Template. The fully resolved launch specification may be serialized for that process launch but is never transcript evidence or recovery configuration.
 
