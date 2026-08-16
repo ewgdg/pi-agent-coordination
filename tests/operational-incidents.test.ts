@@ -159,6 +159,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		"agent_control",
 		"agent_message",
 		"agent_observe",
+		"agent_wait",
 		"ask_user_question",
 		"bash",
 		"edit",
