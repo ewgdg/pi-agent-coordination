@@ -41,7 +41,7 @@ This matrix records the production process-backed Agent-view contract and its re
 | Contract | Evidence |
 |---|---|
 | Owner and process children render the complete scoped selector | selector surface and remote selector snapshot tests |
-| Selecting Owner closes only the attachment and keeps retained child work alive | fullscreen return and interactive host conformance tests |
+| `o` returns to Owner by closing only the attachment and keeping retained child work alive | fullscreen return and interactive host conformance tests |
 | Selecting another child retargets one physical attachment without restoring Owner between children | physical attachment tests, independent process-child switch tests, and fullscreen PTY switch |
 | Raw output, native mouse input, ordinary input, and resize continue after retarget | physical attachment, mouse-scroll, complete-frame/input, and 100×30 PTY cases |
 | Selecting the same child is safe; cancellation preserves selection | remote selector domain tests |

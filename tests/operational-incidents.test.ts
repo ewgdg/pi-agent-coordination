@@ -2562,9 +2562,9 @@ async function returnAgentViewToOwner(
 	assert.ok(ownerSelector);
 	assert.match(
 		stripTerminalSequences(ownerSelector.render(80).join("\n")),
-		new RegExp(`→ Owner[\\s\\S]*${host.session.sessionId}`),
+		/o Owner · Tab views/,
 	);
-	ownerSelector.handleInput?.("\r");
+	ownerSelector.handleInput?.("o");
 	await Promise.all([returnCommand, opened.command]);
 }
 

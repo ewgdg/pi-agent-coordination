@@ -53,7 +53,6 @@ test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Ow
 			frame.some((line) => line.includes("PTY Viewed Worker")) &&
 			frame.some((line) => line.includes("Tab views"))
 		);
-		terminal.write("j");
 		await terminal.waitForScreen((frame) => frame.some((line) =>
 			line.includes("→") && line.includes("PTY Viewed Worker")
 		));
@@ -140,8 +139,7 @@ test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Ow
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Tab views"))
 		);
-		terminal.write("k");
-		terminal.write("\r");
+		terminal.write("o");
 		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
 		const ownerFrame = await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
@@ -175,7 +173,6 @@ for (const failureKind of ["input", "render"] as const) {
 				frame.some((line) => line.includes("PTY Failure Worker")) &&
 				frame.some((line) => line.includes("Tab views"))
 			);
-			terminal.write("j");
 			await terminal.waitForScreen((frame) => frame.some(
 				(line) => line.includes("→") && line.includes("PTY Failure Worker"),
 			));
@@ -214,7 +211,6 @@ test("real fullscreen PTY closes a failed Agent runtime initialization and resto
 			frame.some((line) => line.includes("PTY Failure Worker")) &&
 			frame.some((line) => line.includes("Tab views"))
 		);
-		terminal.write("j");
 		await terminal.waitForScreen((frame) => frame.some(
 			(line) => line.includes("→") && line.includes("PTY Failure Worker"),
 		));
@@ -246,7 +242,6 @@ test("real fullscreen PTY keeps a terminally failed selected Run in its Agent vi
 			frame.some((line) => line.includes("PTY Failure Worker")) &&
 			frame.some((line) => line.includes("Tab views"))
 		);
-		terminal.write("j");
 		await terminal.waitForScreen((frame) => frame.some(
 			(line) => line.includes("→") && line.includes("PTY Failure Worker"),
 		));
@@ -306,7 +301,6 @@ test("real fullscreen PTY command returns as soon as physical child attachment i
 			frame.some((line) => line.includes("PTY Viewed Worker")) &&
 			frame.some((line) => line.includes("Tab views"))
 		);
-		terminal.write("j");
 		terminal.write("\r");
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Viewed child transcript line 59")) &&
@@ -349,7 +343,7 @@ test("real fullscreen PTY can return to Owner and attach the same Agent again", 
 			frame.some((line) => line.includes("PTY Viewed Worker")) &&
 			frame.some((line) => line.includes("Tab views"))
 		);
-		terminal.write("j\r");
+		terminal.write("\r");
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Viewed child transcript line 59")) &&
 			!frame.some((line) => line.includes("Tab views"))
@@ -368,7 +362,7 @@ test("real fullscreen PTY can return to Owner and attach the same Agent again", 
 		await waitForFile(readyPath);
 		terminal.write("/agents\r");
 		await terminal.waitForScreen((frame) => frame.some((line) => line.includes("Tab views")));
-		terminal.write("j\r");
+		terminal.write("\r");
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Streaming child update 39")) &&
 			!frame.some((line) => line.includes("Tab views"))
@@ -379,7 +373,7 @@ test("real fullscreen PTY can return to Owner and attach the same Agent again", 
 		await terminal.waitForScreen((frame) => frame.some((line) => line.includes("/agents")));
 		terminal.write("\r");
 		await terminal.waitForScreen((frame) => frame.some((line) => line.includes("Tab views")));
-		terminal.write("k\r");
+		terminal.write("o");
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
 			!frame.some((line) => line.includes("Tab views"))
@@ -409,7 +403,6 @@ test("real fullscreen PTY switches one mounted view between two Agent modes", {
 			frame.some((line) => line.includes("PTY Viewed Worker")) &&
 			frame.some((line) => line.includes("Tab views"))
 		);
-		terminal.write("j");
 		await terminal.waitForScreen((frame) => frame.some((line) =>
 			line.includes("→") && line.includes("PTY Viewed Worker")
 		));
@@ -462,12 +455,7 @@ test("real fullscreen PTY switches one mounted view between two Agent modes", {
 			(frame) => frame.some((line) => line.includes("Tab views")),
 			"second child-local selector",
 		);
-		terminal.write("k");
-		terminal.write("k");
-		await terminal.waitForScreen((frame) => frame.some((line) =>
-			line.includes("→") && line.includes("Owner")
-		));
-		terminal.write("\r");
+		terminal.write("o");
 		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
@@ -502,7 +490,6 @@ test("real fullscreen PTY reflows the complete Agent view at 100x30", {
 			frame.some((line) => line.includes("PTY Viewed Worker")) &&
 			frame.some((line) => line.includes("Tab views"))
 		);
-		terminal.write("j");
 		await terminal.waitForScreen((frame) => frame.some((line) =>
 			line.includes("→") && line.includes("PTY Viewed Worker")
 		));
@@ -528,11 +515,7 @@ test("real fullscreen PTY reflows the complete Agent view at 100x30", {
 			(frame) => frame.some((line) => line.includes("Tab views")),
 			"resized child-local selector",
 		);
-		terminal.write("k");
-		await terminal.waitForScreen((frame) => frame.some((line) =>
-			line.includes("→") && line.includes("Owner")
-		));
-		terminal.write("\r");
+		terminal.write("o");
 		await terminal.waitFor("__PTY_AGENT_VIEW_CLOSED__");
 		const ownerFrame = await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Owner baseline response remains mounted")) &&
@@ -1002,14 +985,10 @@ async function returnPtyAgentViewToOwner(terminal: PtyFixture): Promise<void> {
 	terminal.write("/agents");
 	await terminal.waitForScreen((frame) => frame.some((line) => line.includes("/agents")));
 	terminal.write("\r");
-	const selector = await terminal.waitForScreen((frame) =>
+	await terminal.waitForScreen((frame) =>
 		frame.some((line) => line.includes("Tab views"))
 	);
-	terminal.write(selector.some((line) => line.includes("Dormant Agents")) ? "\t" : "k");
-	await terminal.waitForScreen((frame) => frame.some((line) =>
-		line.includes("→") && line.includes("Owner")
-	));
-	terminal.write("\r");
+	terminal.write("o");
 }
 
 async function waitForFile(path: string): Promise<void> {

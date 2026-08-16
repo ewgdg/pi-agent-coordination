@@ -33,10 +33,11 @@ const FRAME_ROWS = 2;
 const TAB_ROWS = 1;
 const CONTENT_GAP_ROWS = 2;
 const HELP_ROWS = 1;
-const MAX_LIVE_SECTION_HEADER_ROWS = 3;
+const MAX_LIVE_SECTION_HEADER_ROWS = 2;
+const EMPTY_LIVE_AGENT_ROWS = 1;
 const FIXED_OVERLAY_ROWS =
 	FRAME_ROWS + TAB_ROWS + CONTENT_GAP_ROWS + HELP_ROWS +
-	MAX_LIVE_SECTION_HEADER_ROWS + FOCUSED_DETAIL_ROWS;
+	MAX_LIVE_SECTION_HEADER_ROWS + EMPTY_LIVE_AGENT_ROWS + FOCUSED_DETAIL_ROWS;
 const SCROLL_INDICATOR_ROWS = 1;
 const SELECT_LIST_UP_INPUT = "\x1b[A";
 const SELECT_LIST_DOWN_INPUT = "\x1b[B";
@@ -80,7 +81,7 @@ export type AgentSelectorOptions = Readonly<{
 
 type AgentSelectorItem = SelectItem & Readonly<{
 	status?: AgentRosterStatus;
-	kind: "decide" | "attention" | "owner" | "agent";
+	kind: "decide" | "attention" | "agent";
 	action?: AgentSelectorAction;
 	detailLines?: readonly string[];
 }>;
@@ -156,6 +157,13 @@ class AgentSelectorSurface implements Component {
 			this.#done(undefined);
 			return;
 		}
+		if (matchesKey(data, "o")) {
+			void this.#completeSelection({
+				kind: "select_agent",
+				agentId: this.#ownerStatus().agentId,
+			}, false);
+			return;
+		}
 		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
 			this.#activeTab = this.#activeTab === "live" ? "dormant" : "live";
 			this.#list = this.#createList();
@@ -206,7 +214,7 @@ class AgentSelectorSurface implements Component {
 			"",
 			this.#theme.fg(
 				"dim",
-				"Tab views · ↑/k ↓/j · →/l children · ←/h parent · Enter · Esc",
+				"o Owner · Tab views · ↑/k ↓/j · →/l children · ←/h parent · Enter · Esc",
 			),
 		];
 		const visibleContentLines = fitOverlayContent(
@@ -271,10 +279,13 @@ class AgentSelectorSurface implements Component {
 		return list;
 	}
 
-	async #completeSelection(action: AgentSelectorAction): Promise<void> {
+	async #completeSelection(
+		action: AgentSelectorAction,
+		showSelectionSpinner = true,
+	): Promise<void> {
 		if (this.#selectionPending) return;
 		this.#selectionPending = true;
-		this.#startSelectionSpinner();
+		if (showSelectionSpinner) this.#startSelectionSpinner();
 		try {
 			const preparation = this.#options.prepareSelection?.(action, this.#tui);
 			if (preparation) await preparation;
@@ -335,7 +346,6 @@ class AgentSelectorSurface implements Component {
 		const owner = this.#ownerStatus();
 		return [
 			...this.#attentionItems(),
-			this.#agentItem(owner, "owner"),
 			...this.#options.live
 				.filter((status) =>
 					status.agentId !== owner.agentId &&
@@ -403,10 +413,7 @@ class AgentSelectorSurface implements Component {
 		return [...human, ...operational];
 	}
 
-	#agentItem(
-		status: AgentRosterStatus,
-		kind: "owner" | "agent" = "agent",
-	): AgentSelectorItem {
+	#agentItem(status: AgentRosterStatus): AgentSelectorItem {
 		const childCount = this.#options.live.filter(
 			(candidate) => candidate.directSpawnerAgentId === status.agentId,
 		).length;
@@ -424,7 +431,7 @@ class AgentSelectorSurface implements Component {
 				children,
 			].filter(Boolean).join(" · "),
 			status,
-			kind,
+			kind: "agent",
 		};
 	}
 
@@ -437,7 +444,14 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#renderSectionedLiveList(width: number): string[] {
-		return this.#renderVisibleList(
+		const hasAgent = this.#items.some(({ kind }) => kind === "agent");
+		if (!hasAgent && this.#items.length === 0) {
+			return [
+				this.#theme.fg("toolTitle", this.#theme.bold(this.#scopeTitle(width))),
+				this.#theme.fg("dim", "  No live Agents"),
+			];
+		}
+		const visibleList = this.#renderVisibleList(
 			width,
 			(item, previous) => {
 				const sectionKind = liveSectionKind(item);
@@ -449,14 +463,19 @@ class AgentSelectorSurface implements Component {
 					this.#theme.bold(
 						sectionKind === "attention"
 							? "Attention Inbox"
-							: sectionKind === "owner"
-								? "Owner"
-								: this.#scopeTitle(width),
+							: this.#scopeTitle(width),
 					),
 				);
 			},
-			MAX_LIVE_SECTION_HEADER_ROWS,
+			hasAgent ? MAX_LIVE_SECTION_HEADER_ROWS : 1,
 		);
+		return hasAgent
+			? visibleList
+			: [
+				...visibleList,
+				this.#theme.fg("toolTitle", this.#theme.bold(this.#scopeTitle(width))),
+				this.#theme.fg("dim", "  No live Agents"),
+			];
 	}
 
 	#renderDormantList(width: number): string[] {
@@ -611,7 +630,7 @@ class AgentSelectorSurface implements Component {
 
 function liveSectionKind(
 	item: AgentSelectorItem,
-): "attention" | "owner" | "agent" {
+): "attention" | "agent" {
 	return item.kind === "decide" || item.kind === "attention"
 		? "attention"
 		: item.kind;

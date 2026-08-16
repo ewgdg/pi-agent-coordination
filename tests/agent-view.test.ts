@@ -175,12 +175,7 @@ test("/agents presents the live Agent's native interactive mode while Owner stay
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
-	view.handleInput?.("k");
-	const ownerPattern = new RegExp(`→ Owner[\\s\\S]*${ownerRuntimeSession.sessionId}`);
-	await waitForCondition(() =>
-		ownerPattern.test(stripTerminalSequences(view.render(80).join("\n")))
-	);
-	view.handleInput?.("\r");
+	view.handleInput?.("o");
 	await command;
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 	assert.equal(await hasRetention(host, agentId, "answer_owed"), true);
@@ -917,8 +912,7 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
-	view.handleInput?.("k");
-	view.handleInput?.("\r");
+	view.handleInput?.("o");
 	await command;
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 	assert.equal(host.runtime.session, ownerSession);
@@ -1495,8 +1489,7 @@ test("/agents switches the mounted durable view between independent child modes"
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
-	view.handleInput?.("k");
-	view.handleInput?.("\r");
+	view.handleInput?.("o");
 	await command;
 });
 
@@ -1943,31 +1936,8 @@ async function returnAgentViewToOwner(
 	await waitForCondition(() =>
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
-	if (stripTerminalSequences(view.render(80).join("\n")).includes("Dormant Agents")) {
-		view.handleInput?.("\t");
-		await waitForCondition(() =>
-			!stripTerminalSequences(view.render(80).join("\n")).includes("Dormant Agents")
-		);
-	}
-	const ownerPattern = new RegExp(
-		`→ Owner[\\s\\S]*${host.session.sessionId}`,
-	);
-	for (let tab = 0; tab < 2; tab += 1) {
-		const firstFrame = stripTerminalSequences(view.render(80).join("\n"));
-		for (let step = 0; step < MAX_SELECTOR_NAVIGATION_STEPS; step += 1) {
-			if (ownerPattern.test(stripTerminalSequences(view.render(80).join("\n")))) {
-				view.handleInput?.("\r");
-				await command;
-				return;
-			}
-			const previousFrame = view.render(80).join("\n");
-			view.handleInput?.("k");
-			await waitForFrameChange(view, previousFrame);
-			if (stripTerminalSequences(view.render(80).join("\n")) === firstFrame) break;
-		}
-		view.handleInput?.("\t");
-	}
-	throw new Error("Owner is absent from the child /agents selector");
+	view.handleInput?.("o");
+	await command;
 }
 
 async function openDormantAgentView(
@@ -2051,14 +2021,6 @@ function focusedDetailsShowAgent(surface: Component, targetAgentId: string): boo
 	return lines
 		.slice(selectedRow + 1, selectedRow + 5)
 		.some((line) => line.slice(1, -1).trim() === targetAgentId);
-}
-
-async function waitForFrameChange(view: Component, previousFrame: string): Promise<void> {
-	const deadline = Date.now() + 250;
-	while (Date.now() < deadline) {
-		if (view.render(80).join("\n") !== previousFrame) return;
-		await new Promise<void>((resolve) => setTimeout(resolve, 1));
-	}
 }
 
 async function hasRetention(

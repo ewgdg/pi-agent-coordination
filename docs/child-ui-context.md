@@ -20,7 +20,7 @@ The Runtime Bridge registers `/agents` inside every process child. It requests a
 
 Selection remains authoritative in the Owner:
 
-- selecting Owner closes the active attachment without terminating the child Run;
+- pressing `o` closes the active attachment without terminating the child Run;
 - selecting another Agent retargets the same attachment to that Agent's PTY projection;
 - selecting the current child closes the selector and keeps the attachment;
 - cancellation leaves the current attachment unchanged;

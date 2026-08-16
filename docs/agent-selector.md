@@ -2,16 +2,15 @@
 
 `/agents` first opens a centered roster overlay. The framed selector is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` owns focus movement, wrapping, and scrolling.
 
-Selecting a non-Owner row opens that durable Agent's full-window interactive view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. Selecting Owner returns to that exact existing Owner presentation.
+Selecting a roster row opens that durable Agent's full-window interactive view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. Pressing `o` from either tab or any Live scope returns to that exact existing Owner presentation; Owner is a global destination rather than a roster entry.
 
 Agent selection prepares the target mode before dismissing the roster. The selector retains input focus during asynchronous preparation, so typing, paste, Enter, or Escape cannot fall through to the Owner editor between selection and child attachment.
 
 ## Live roster
 
-Live uses one continuous list across three adjacent sections:
+Live uses one continuous list across two adjacent sections:
 
 - **Attention Inbox** contains Owner-visible Human `DECIDE` items and exhausted Operational `ATTENTION` items. A `DECIDE` row identifies the requesting Agent and shows a bounded one-line question preview. The first attention item receives initial focus. Selecting `DECIDE` opens that Agent's full-window view at its pending request and focuses its native editor. Selecting an Operational `ATTENTION` item with exactly one affected Agent opens that Agent's full-window view without changing the incident. Multi-Agent attention remains informational, and Enter leaves the selector open.
-- **Owner** remains fixed in every Live scope.
 - **Agents** contains the current scope's direct ordinary children in creation order. Live Moderators appear at the Owner scope as standalone participants.
 
 Right Arrow or `l` enters the focused ordinary Agent's child scope. Left Arrow or `h` returns to its parent and refocuses that Agent. Breadcrumbs omit Owner, retain the newest three Agent scopes, and tighten to the available width.
@@ -40,7 +39,7 @@ All input is routed directly to the selected child PTY. Printable text, paste, c
 
 `/agents` remains available inside the child mode:
 
-- select Owner to return to the exact mounted Owner presentation;
+- press `o` to return to the exact mounted Owner presentation;
 - select another Agent to retarget the same full-window attachment without exposing the Owner editor; or
 - select the current Agent to keep the existing mode.
 
@@ -60,6 +59,7 @@ The focused roster row reserves four detail lines:
 An absent description leaves its line empty, keeping the overlay height stable as focus moves.
 
 - Tab or Shift-Tab: switch Live and Dormant
+- `o`: return to Owner
 - Up/Down or `k`/`j`: move focus
 - Right/Left or `l`/`h`: enter or leave a Live ordinary-Agent scope
 - Enter: perform the focused row's action

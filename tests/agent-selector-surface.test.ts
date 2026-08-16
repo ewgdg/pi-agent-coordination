@@ -70,7 +70,7 @@ test("a long Live roster stays bounded and scrolls from the selected Agent", asy
 	assert.ok(rendered.length <= 13, `rendered ${rendered.length} rows in a 15-row terminal`);
 	assert.ok(rendered.every((line) => visibleWidth(line) <= 80));
 	assert.match(rendered.join("\n"), /Agent 10/);
-	assert.match(rendered.join("\n"), /\(11\/20\)/);
+	assert.match(rendered.join("\n"), /\(10\/19\)/);
 	assert.match(rendered.find((line) => line.includes("Agent 10")) ?? "", /→ Agent 10/);
 	assert.match(rendered[0] ?? "", /^┌─+┐$/);
 	assert.match(rendered.at(-1) ?? "", /^└─+┘$/);
@@ -94,7 +94,7 @@ test("a long Live roster stays bounded and scrolls from the selected Agent", asy
 	assert.equal(await selection, undefined);
 });
 
-test("Live remains terminal-bounded across Attention, Owner, and Agent sections", async () => {
+test("Live remains terminal-bounded across Attention and Agent sections", async () => {
 	const harness = surfaceHarness(24);
 	const selection = openAgentSelectorSurface(harness.ui, {
 		live: [
@@ -117,8 +117,9 @@ test("Live remains terminal-bounded across Attention, Owner, and Agent sections"
 
 	const rendered = harness.component.render(80);
 	assert.match(rendered.join("\n"), /Attention Inbox/);
-	assert.match(rendered.join("\n"), /│\s+Owner\s+│/);
 	assert.match(rendered.join("\n"), /│\s+Agents\s+│/);
+	assert.doesNotMatch(rendered.join("\n"), /│\s+Owner\s+│/);
+	assert.match(rendered.join("\n"), /o Owner · Tab views/);
 	assert.ok(rendered.length <= 21, `rendered ${rendered.length} rows in a 24-row terminal`);
 	for (let move = 0; move < 10; move += 1) harness.component.handleInput?.("j");
 	assert.equal(harness.component.render(80).length, rendered.length);
@@ -140,6 +141,8 @@ test("a short terminal keeps both frame edges inside Pi's overlay height", async
 	assert.ok(rendered.length <= 8, `rendered ${rendered.length} rows in a 10-row terminal`);
 	assert.match(rendered[0] ?? "", /^┌─+┐$/);
 	assert.match(rendered.at(-1) ?? "", /^└─+┘$/);
+	assert.match(rendered.join("\n"), /Agents/);
+	assert.match(rendered.join("\n"), /No live Agents/);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -223,6 +226,27 @@ test("Live and Dormant are explicit keyboard-accessible tabs", async () => {
 	assert.equal(await selection, undefined);
 });
 
+test("o returns to Owner from the flat Dormant roster", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [
+			agentStatus("owner", "Owner", null),
+			agentStatus("live", "Live Agent", "owner"),
+		],
+		dormant: [dormantAgentStatus("dormant", "Dormant Agent", "owner")],
+		selectedAgentId: "dormant",
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+
+	const dormant = harness.component.render(80).join("\n");
+	assert.match(dormant, /\[ Dormant \]/);
+	assert.match(dormant, /→ Dormant Agent/);
+	assert.doesNotMatch(dormant, /→ Owner/);
+	harness.component.handleInput?.("o");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
+});
+
 test("reopening preserves the selected Dormant Agent", async () => {
 	const harness = surfaceHarness(30);
 	const firstSelection = openAgentSelectorSurface(harness.ui, {
@@ -279,12 +303,11 @@ test("Live shows direct children and navigates Agent scopes", async () => {
 	assert.ok(harness.component);
 
 	const ownerScope = harness.component.render(80).join("\n");
-	assert.match(ownerScope, /Owner/);
+	assert.doesNotMatch(ownerScope, /→?\s*Owner\s+live/);
 	assert.match(ownerScope, /Researcher.*2 children/);
 	assert.match(ownerScope, /Builder.*1 child/);
 	assert.doesNotMatch(ownerScope, /Source Scout|Synthesizer|Reviewer/);
 
-	harness.component.handleInput?.("j");
 	harness.component.handleInput?.("l");
 	const researcherScope = harness.component.render(80).join("\n");
 	assert.match(researcherScope, /Agents \/ Researcher/);
@@ -339,29 +362,21 @@ test("focused Agent details use a stable four-row budget", async () => {
 			retentionReasons: [{ reason: "answer_owed", count: 2 }],
 		},
 	}, "research-provider", "research-model", "medium", 1);
+	const builder = selectorAgent({
+		...agentStatus("builder-full-identity", "Builder", "owner-full-identity"),
+		workflowId: "owner-full-identity",
+		description: "Builds the selected design",
+	}, "build-provider", "build-model", "low", 0);
 	const selection = openAgentSelectorSurface(harness.ui, {
-		live: [owner, researcher],
+		live: [owner, researcher, builder],
 		dormant: [],
-		selectedAgentId: owner.agentId,
+		selectedAgentId: researcher.agentId,
 	});
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const ownerLines = harness.component.render(80);
-	const ownerRendered = ownerLines.join("\n");
-	assert.match(ownerRendered, /Workflow Owner/);
-	assert.match(ownerRendered, /owner-full-identity/);
-	assert.match(
-		ownerRendered,
-		/Live · settled · Retention owner host binding, interactive selection/,
-	);
-	assert.match(ownerRendered, /owner-provider\/owner-model · thinking high · 0 queued/);
-	assert.doesNotMatch(ownerRendered, /description unavailable|no description/i);
-
-	harness.component.handleInput?.("j");
 	const researcherLines = harness.component.render(80);
 	const researcherRendered = researcherLines.join("\n");
-	assert.equal(researcherLines.length, ownerLines.length);
 	assert.match(researcherRendered, /Investigates focused questions/);
 	assert.match(researcherRendered, /researcher-full-identity/);
 	assert.match(
@@ -372,6 +387,11 @@ test("focused Agent details use a stable four-row budget", async () => {
 		researcherRendered,
 		/research-provider\/research-model · thinking medium · 1 queued/,
 	);
+
+	harness.component.handleInput?.("j");
+	const builderLines = harness.component.render(80);
+	assert.equal(builderLines.length, researcherLines.length);
+	assert.match(builderLines.join("\n"), /Builds the selected design/);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -475,13 +495,10 @@ test("Live uses one attention-first list and dispatches the exact Human Request"
 	const lines = harness.component.render(80);
 	const attentionHeader = lines.findIndex((line) => line.includes("Attention Inbox"));
 	const decideRow = lines.findIndex((line) => line.includes("DECIDE 1"));
-	const ownerHeader = lines.findIndex((line) => /│\s+Owner\s+│/.test(line));
-	const ownerRow = lines.findIndex((line) => /→?\s*Owner\s+live/.test(line));
 	const agentsHeader = lines.findIndex((line) => /│\s+Agents\s+│/.test(line));
 	assert.ok(attentionHeader < decideRow);
-	assert.ok(decideRow < ownerHeader);
-	assert.ok(ownerHeader < ownerRow);
-	assert.ok(ownerRow < agentsHeader);
+	assert.ok(decideRow < agentsHeader);
+	assert.doesNotMatch(lines.join("\n"), /→?\s*Owner\s+live/);
 	assert.match(lines[decideRow] ?? "", /→ DECIDE 1/);
 
 	harness.component.handleInput?.("\r");

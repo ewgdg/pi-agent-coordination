@@ -186,7 +186,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		});
 		projection.dispatchInput("/agents\r");
 		await waitForFrame(runtime, "Tab views");
-		projection.dispatchInput("k\r");
+		projection.dispatchInput("o");
 		await waitUntil(() => ownerSelections.length === 2);
 		assert.deepEqual(ownerSelections[1], {
 			kind: "select_agent",
