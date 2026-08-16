@@ -54,9 +54,14 @@ test("Agent Wait rendering shows snapshot responders, then their Answers", () =>
 		context,
 		resolveAgentLabel,
 	).render(120).join("\n");
-	assert.match(waiting, /waiting for 2 Answers/);
-	assert.match(waiting, /Researcher · ch-agent/);
-	assert.match(waiting, /Reviewer · ew-agent/);
+	assert.equal(
+		waiting.split("\n").map((line) => line.trimEnd()).join("\n"),
+		[
+			"waiting for 2 Answers…",
+			"• Researcher · ch-agent",
+			"• Reviewer · ew-agent",
+		].join("\n"),
+	);
 	assert.doesNotMatch(waiting, /request-research/);
 
 	const answers = {

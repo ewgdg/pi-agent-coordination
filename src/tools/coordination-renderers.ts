@@ -69,7 +69,7 @@ export function renderAgentWaitResult(
 			);
 			return new Text([
 				theme.fg("warning", `waiting for ${count} Answer${count === 1 ? "" : "s"}…`),
-				...identities.map((identity) => `  ${identity}`),
+				...identities.map((identity) => `• ${identity}`),
 			].join("\n"), 0, 0);
 		}
 		return pending(theme, "waiting for Answers");
