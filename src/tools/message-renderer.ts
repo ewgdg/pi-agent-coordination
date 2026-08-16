@@ -4,7 +4,8 @@ import type {
 	ThemeColor,
 	ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 
 import type {
 	AgentMessageInput,
@@ -14,61 +15,111 @@ import {
 	formatAgentIdentity,
 	type AgentLabelResolver,
 } from "../presentation/agent-identity.ts";
-import { boundedToolPreview } from "./bounded-preview.ts";
+import { BodyPreview } from "../presentation/body-preview.ts";
 
 export function renderAgentMessageCall(
 	args: AgentMessageInput,
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
-): Text {
-	let text = theme.fg("toolTitle", theme.bold("message "));
-	if (args.operation === "send") {
+	expanded = false,
+): Component {
+	const container = new Container();
+	container.addChild(new Text(
+		renderMessageCallHeader(args, theme, resolveAgentLabel),
+		0,
+		0,
+	));
+	const body = messageCallBody(args);
+	if (body) {
+		if (expanded) {
+			container.addChild(new Spacer(1));
+			container.addChild(new Markdown(
+				body,
+				0,
+				0,
+				getMarkdownTheme(),
+				{ color: (content) => theme.fg("customMessageText", content) },
+				{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+			));
+		} else {
+			container.addChild(new BodyPreview(
+				body,
+				(content) => theme.fg("customMessageText", content),
+			));
+		}
+	}
+	return container;
+}
+
+function renderMessageCallHeader(
+	args: AgentMessageInput,
+	theme: Theme,
+	resolveAgentLabel: AgentLabelResolver,
+): string {
+	// Badge and body reuse the delivered-message theme roles (customMessageLabel /
+	// customMessageText) so sent and delivered coordination content speak one visual
+	// language, even though the tool frame background differs from customMsgBg.
+	let text = theme.fg(
+		"customMessageLabel",
+		theme.bold(`[${messageCallOperationLabel(args.operation)}]`),
+	);
+	if (args.operation === "send" || args.operation === "request") {
 		text += theme.fg(
-			"accent",
-			formatAgentIdentity(args.targetAgentId, resolveAgentLabel),
+			"muted",
+			` to ${formatAgentIdentity(args.targetAgentId, resolveAgentLabel)}`,
 		);
 		if (args.deliveryMode === "steer") {
 			text += theme.fg("warning", " · steer");
 		}
-		text += theme.fg("dim", ` · ${boundedToolPreview(args.content)}`);
-		return new Text(text, 0, 0);
+	} else if (args.operation === "cancel") {
+		text += theme.fg("dim", ` · ${args.requestMessageId}`);
+	} else if (args.operation === "poll" || args.operation === "retry") {
+		text += theme.fg("dim", ` · ${args.messageId}`);
 	}
-	if (args.operation === "request") {
-		text += theme.fg(
-			"accent",
-			formatAgentIdentity(args.targetAgentId, resolveAgentLabel),
-		);
-		if (args.deliveryMode === "steer") {
-			text += theme.fg("warning", " · steer");
-		}
-		text += theme.fg("dim", ` · ${boundedToolPreview(args.question)}`);
-		return new Text(text, 0, 0);
+	return text;
+}
+
+function messageCallOperationLabel(operation: AgentMessageInput["operation"]): string {
+	switch (operation) {
+		case "send":
+			return "Send";
+		case "request":
+			return "Request";
+		case "answer":
+			return "Answer";
+		case "cancel":
+			return "Cancel";
+		case "poll":
+			return "Poll";
+		case "retry":
+			return "Retry";
 	}
-	if (args.operation === "answer") {
-		text += theme.fg("accent", "answer");
-		text += theme.fg("dim", ` · ${boundedToolPreview(args.answer)}`);
-		return new Text(text, 0, 0);
+}
+
+function messageCallBody(args: AgentMessageInput): string | undefined {
+	switch (args.operation) {
+		case "send":
+			return args.content;
+		case "request":
+			return args.question;
+		case "answer":
+			return args.answer;
+		case "cancel":
+			return args.reason;
+		default:
+			return undefined;
 	}
-	if (args.operation === "cancel") {
-		text += theme.fg("accent", "cancel");
-		text += theme.fg(
-			"dim",
-			` · ${args.requestMessageId} · ${boundedToolPreview(args.reason)}`,
-		);
-		return new Text(text, 0, 0);
-	}
-	text += theme.fg("accent", args.operation);
-	text += theme.fg("dim", ` · ${args.messageId}`);
-	return new Text(text, 0, 0);
 }
 
 export function renderAgentMessageResult(
 	result: AgentToolResult<AgentMessageReceipt>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-): Text {
+): Component {
+	const container = new Container();
 	if (options.isPartial) {
-		return new Text(theme.fg("warning", "scheduling…"), 0, 0);
+		container.addChild(new Text(theme.fg("warning", "scheduling…"), 0, 0));
+		return container;
 	}
 	const receipt = result.details;
 	const disposition = "messageStatus" in receipt
@@ -84,37 +135,44 @@ export function renderAgentMessageResult(
 	} else {
 		text += theme.fg("dim", ` · ${receipt.cancellationMessageId}`);
 	}
+	container.addChild(new Text(text, 0, 0));
 	if (
+		!options.expanded &&
 		"disposition" in receipt &&
 		receipt.disposition === "answer_delivered"
 	) {
-		text += theme.fg(
-			"dim",
-			` · ${receipt.answerId} · ${boundedToolPreview(receipt.answer)}`,
-		);
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(
+			theme.fg("dim", `answer · ${receipt.answerId}`),
+			0,
+			0,
+		));
+		container.addChild(new BodyPreview(
+			receipt.answer,
+			(content) => theme.fg("customMessageText", content),
+		));
 	}
-	if ("reason" in receipt) {
-		text += theme.fg(
-			"messageStatus" in receipt && receipt.messageStatus === "not_sent"
-				? "error"
-				: "warning",
-			` · ${receipt.reason}`,
-		);
+	if (!options.expanded && "reason" in receipt) {
+		container.addChild(new Text(
+			theme.fg(
+				"messageStatus" in receipt && receipt.messageStatus === "not_sent"
+					? "error"
+					: "warning",
+				receipt.reason,
+			),
+			0,
+			0,
+		));
 	}
 	if (options.expanded) {
-		if ("deliveryEvidence" in receipt) {
-			text += theme.fg(
-				"dim",
-				`\nproof · ${receipt.deliveryEvidence.agentId}:${receipt.deliveryEvidence.entryId}`,
-			);
-		} else if ("inspectedThrough" in receipt) {
-			text += theme.fg(
-				"dim",
-				`\ninspected · ${receipt.inspectedThrough.agentId}:${receipt.inspectedThrough.entryId}`,
-			);
-		}
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(
+			theme.fg("dim", JSON.stringify(receipt, null, 2)),
+			0,
+			0,
+		));
 	}
-	return new Text(text, 0, 0);
+	return container;
 }
 
 function dispositionColor(disposition: string): ThemeColor {

@@ -10,9 +10,6 @@ import {
 	Markdown,
 	Spacer,
 	Text,
-	truncateToWidth,
-	visibleWidth,
-	wrapTextWithAnsi,
 	type Component,
 } from "@earendil-works/pi-tui";
 
@@ -21,13 +18,12 @@ import {
 	type AgentIdentityDetail,
 	type AgentLabelResolver,
 } from "../presentation/agent-identity.ts";
+import { BodyPreview } from "../presentation/body-preview.ts";
 import {
 	MESSAGE_DELIVERY_CUSTOM_TYPE,
 	parseMessageDeliveryContent,
 	type ModelVisibleMessage,
 } from "../protocol/message-delivery.ts";
-
-const COLLAPSED_BODY_LINES = 2;
 
 export function registerMessageDeliveryRenderer(
 	pi: ExtensionAPI,
@@ -94,42 +90,12 @@ export function renderMessageProjection(
 			{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
 		));
 	} else {
-		container.addChild(new CollapsedBodyPreview(
+		container.addChild(new BodyPreview(
 			messageBody(projection),
 			(content) => theme.fg("customMessageText", content),
 		));
 	}
 	return container;
-}
-
-class CollapsedBodyPreview implements Component {
-	readonly #body: string;
-	readonly #color: (content: string) => string;
-
-	constructor(body: string, color: (content: string) => string) {
-		this.#body = body;
-		this.#color = color;
-	}
-
-	render(width: number): string[] {
-		if (width <= 0) return [];
-		const normalized = this.#body.replaceAll(/\s+/g, " ").trim();
-		const lines = wrapTextWithAnsi(this.#color(normalized), width);
-		if (lines.length <= COLLAPSED_BODY_LINES) return lines;
-
-		const visibleLines = lines.slice(0, COLLAPSED_BODY_LINES);
-		const ellipsis = this.#color("…");
-		const bodyWidth = Math.max(0, width - visibleWidth(ellipsis));
-		visibleLines[COLLAPSED_BODY_LINES - 1] =
-			truncateToWidth(
-				visibleLines[COLLAPSED_BODY_LINES - 1]!,
-				bodyWidth,
-				"",
-			) + ellipsis;
-		return visibleLines;
-	}
-
-	invalidate(): void {}
 }
 
 function renderHeader(

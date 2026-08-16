@@ -383,8 +383,8 @@ export function registerParticipantCoordinationTools<
 		promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentMessageParameters,
-		renderCall: (args, theme) =>
-			renderAgentMessageCall(args, theme, resolveAgentLabel),
+		renderCall: (args, _theme, context) =>
+			renderAgentMessageCall(args, _theme, resolveAgentLabel, context.expanded),
 		renderResult: renderAgentMessageResult,
 		async execute(toolCallId, parameters) {
 			return toolResult(await availableHandlers.message(toolCallId, parameters));
