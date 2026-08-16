@@ -1,6 +1,7 @@
 {
   "name": "pi-agent-coordination",
   "version": "0.1.0",
+  "license": "MIT",
   "description": "Durable Pi agents that collaborate asynchronously under explicit Owner and Spawner supervision.",
   "type": "module",
   "engines": {
