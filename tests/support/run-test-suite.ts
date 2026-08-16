@@ -24,6 +24,7 @@ const PROCESS_TEST_FILES = new Set([
 	"human-request.test.ts",
 	"interactive-host-conformance.test.ts",
 	"message.test.ts",
+	"named-pipe-control-transport.test.ts",
 	"operational-incidents.test.ts",
 	"owner-bootstrap.test.ts",
 	"owner-fork.test.ts",
@@ -37,6 +38,7 @@ const PROCESS_TEST_FILES = new Set([
 	"pty-terminal-projection.test.ts",
 	"run-supervision.test.ts",
 	"unix-control-transport.test.ts",
+	"windows-process-control-transport.test.ts",
 ]);
 
 const suite = process.argv[2];

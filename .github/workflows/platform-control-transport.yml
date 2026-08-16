@@ -1,0 +1,43 @@
+name: Platform Control transport
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/platform-control-transport.yml'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - 'src/control/**'
+      - 'src/process-runtime/**'
+      - 'src/runtime/process-child-session-factory.ts'
+      - 'tests/*control*.test.ts'
+      - 'tests/support/**'
+      - 'tests/fixtures/process-runtime-child-extension.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  control-transport:
+    name: ${{ matrix.os }} Control transport
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            transport-test: named-pipe-control-transport.test.ts
+          - os: macos-latest
+            transport-test: unix-control-transport.test.ts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:fast -- --file=control-protocol-schemas.test.ts
+      - run: npm run test:process -- --file=${{ matrix.transport-test }}
+      - if: runner.os == 'Windows'
+        run: npm run test:process -- --file=windows-process-control-transport.test.ts

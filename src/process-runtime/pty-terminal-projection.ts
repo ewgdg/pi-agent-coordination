@@ -277,12 +277,12 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	kill(signal: NodeJS.Signals): void {
 		this.#requireActive();
 		if (this.#exitObserved) return;
-		this.#child.kill(signal);
+		signalPty(this.#child, signal);
 	}
 
 	killProcessGroup(signal: NodeJS.Signals): void {
 		this.#requireActive();
-		signalOwnedProcessGroup(this.#child.pid, signal);
+		signalOwnedPty(this.#child, signal);
 	}
 
 	drain(): Promise<void> {
@@ -388,16 +388,19 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 
 	async #dispose(): Promise<void> {
 		try {
-			if (!this.#exitObserved) signalOwnedProcessGroup(this.#child.pid, "SIGHUP");
+			if (!this.#exitObserved) signalOwnedPty(this.#child, "SIGHUP");
 			await this.exited;
 			await this.#waitForParserDrain();
 		} finally {
 			let processGroupCleanupError: unknown;
 			try {
-				// forkpty makes the child a process-group leader. The leader can exit while
-				// a signal-ignoring descendant remains, so terminate the owned group before
-				// releasing the only process handle.
-				signalOwnedProcessGroup(this.#child.pid, "SIGKILL");
+				// forkpty makes the Unix child a process-group leader. The leader can exit
+				// while a signal-ignoring descendant remains, so terminate that owned group
+				// before releasing the only process handle. Windows process-tree ownership
+				// is separate; once ConPTY exit is observed there is no live PTY to kill.
+				if (process.platform !== "win32" || !this.#exitObserved) {
+					signalOwnedPty(this.#child, "SIGKILL");
+				}
 			} catch (error) {
 				processGroupCleanupError = error;
 			}
@@ -495,6 +498,24 @@ function emptyCell(): TerminalProjectionCell {
 			overline: false,
 		},
 	};
+}
+
+function signalPty(child: nodePty.IPty, signal: NodeJS.Signals): void {
+	// node-pty does not accept signal arguments on Windows; closing the ConPTY is
+	// the only supported exact PTY termination operation.
+	if (process.platform === "win32") {
+		child.kill();
+		return;
+	}
+	child.kill(signal);
+}
+
+function signalOwnedPty(child: nodePty.IPty, signal: NodeJS.Signals): void {
+	if (process.platform === "win32") {
+		child.kill();
+		return;
+	}
+	signalOwnedProcessGroup(child.pid, signal);
 }
 
 function signalOwnedProcessGroup(pid: number, signal: NodeJS.Signals): void {

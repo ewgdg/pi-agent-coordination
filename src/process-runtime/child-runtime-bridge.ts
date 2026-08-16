@@ -929,7 +929,11 @@ async function readBootstrapDescriptor(): Promise<ChildProcessBootstrap> {
 	if (!descriptorStats.isFile()) {
 		throw new Error("control_bootstrap_invalid: descriptor path is not a regular file");
 	}
-	if ((descriptorStats.mode & 0o077) !== 0) {
+	// Windows stat modes do not expose ACL ownership and report synthesized
+	// group/other bits even for files created with mode 0600. The artifact lives
+	// in a unique current-user temporary directory there; POSIX keeps the exact
+	// owner-only mode check.
+	if (process.platform !== "win32" && (descriptorStats.mode & 0o077) !== 0) {
 		throw new Error("control_bootstrap_invalid: descriptor must be owner-only");
 	}
 	let value: unknown;

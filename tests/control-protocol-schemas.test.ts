@@ -20,6 +20,10 @@ const identity = { protocolVersion: 1, workflowId: "workflow", agentId: "agent" 
 
 test("Control Endpoint and child bootstrap descriptors are closed and versioned", () => {
 	const endpoint = { transport: "unix", address: "/tmp/control.sock" } as const;
+	const namedPipeEndpoint = {
+		transport: "named-pipe",
+		address: "\\\\.\\pipe\\pi-ac-control",
+	} as const;
 	const bootstrap = {
 		protocolVersion: 1,
 		endpoint,
@@ -31,10 +35,16 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		expectedSessionId: "session",
 	} as const;
 	assert.equal(Check(ControlEndpointSchema, endpoint), true);
+	assert.equal(Check(ControlEndpointSchema, namedPipeEndpoint), true);
 	assert.deepEqual(validateChildProcessBootstrap(bootstrap), bootstrap);
+	assert.deepEqual(
+		validateChildProcessBootstrap({ ...bootstrap, endpoint: namedPipeEndpoint }),
+		{ ...bootstrap, endpoint: namedPipeEndpoint },
+	);
 	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, protocolVersion: 2 }), false);
 	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, unixPath: endpoint.address }), false);
 	assert.equal(Check(ControlEndpointSchema, { ...endpoint, extra: true }), false);
+	assert.equal(Check(ControlEndpointSchema, { ...namedPipeEndpoint, extra: true }), false);
 });
 
 test("Control frame schema is a closed hello/request/response/event/cancel union", () => {

@@ -1,6 +1,16 @@
 import { randomBytes } from "node:crypto";
-import { readFile, realpath, writeFile, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	realpath,
+	rmdir,
+	writeFile,
+	unlink,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
@@ -110,6 +120,7 @@ export class PiChildProcessRuntime {
 		ready: PiChildRuntimeReady;
 		snapshot: PiChildRuntimeSnapshot;
 		bootstrapPath: string;
+		artifactDirectory: string;
 		contextArtifactPath: string | undefined;
 		eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
 	}) {
@@ -120,13 +131,17 @@ export class PiChildProcessRuntime {
 		this.ready = options.ready;
 		this.snapshot = options.snapshot;
 		this.bootstrapPath = options.bootstrapPath;
-		this.#cleanup = async () => {
-			await this.channel.close().catch(() => undefined);
-			await unlinkIfExists(this.bootstrapPath);
-			if (options.contextArtifactPath) await unlinkIfExists(options.contextArtifactPath);
-			await this.#admissionBroker.close().catch(() => undefined);
-			await this.#projection.dispose().catch(() => undefined);
-		};
+		const contextArtifactPath = options.contextArtifactPath;
+		this.#cleanup = () => completeCleanup([
+			() => this.channel.close().catch(() => undefined),
+			() => unlinkIfExists(this.bootstrapPath),
+			...(contextArtifactPath === undefined
+				? []
+				: [() => unlinkIfExists(contextArtifactPath)]),
+			() => this.#admissionBroker.close().catch(() => undefined),
+			() => this.#projection.dispose().catch(() => undefined),
+			() => removeEmptyDirectory(options.artifactDirectory),
+		]);
 		this.exited = this.#projection.exited.then(async (exit) => {
 			this.#exitObserved = true;
 			this.#exitResult = exit;
@@ -159,8 +174,17 @@ export class PiChildProcessRuntime {
 			protocol: agentControlProtocol,
 			workflowId: options.workflowId,
 		});
-		const bootstrapPath = join(dirname(listener.endpoint.address), "bootstrap.json");
-		const contextArtifactCandidatePath = join(dirname(listener.endpoint.address), "context.md");
+		let artifactDirectory: string;
+		try {
+			artifactDirectory = await createRuntimeArtifactDirectory(options.runtimeDirectory);
+		} catch (error) {
+			await admissionBroker.close().catch(() => undefined);
+			throw error;
+		}
+		// Control endpoints are opaque IPC descriptors. In particular, a Windows
+		// named pipe is not a filesystem parent for bootstrap or context artifacts.
+		const bootstrapPath = join(artifactDirectory, "bootstrap.json");
+		const contextArtifactCandidatePath = join(artifactDirectory, "context.md");
 		let contextArtifactPath: string | undefined;
 		let projection: PtyTerminalProjection | undefined;
 		let channel: PiChildRuntimeChannel | undefined;
@@ -291,15 +315,22 @@ export class PiChildProcessRuntime {
 				rows: options.rows ?? DEFAULT_ROWS,
 			});
 			const exactProjection = projection;
+			const exactContextArtifactPath = contextArtifactPath;
 			const cleanup = () => {
-				cleanupPromise ??= (async () => {
-					await channel?.close().catch(() => undefined);
-					forceKillProjection(exactProjection);
-					await exactProjection.dispose().catch(() => undefined);
-					await unlinkIfExists(bootstrapPath);
-					if (contextArtifactPath) await unlinkIfExists(contextArtifactPath);
-					await admissionBroker.close().catch(() => undefined);
-				})();
+				cleanupPromise ??= completeCleanup([
+					() => channel?.close().catch(() => undefined) ?? Promise.resolve(),
+					() => {
+						forceKillProjection(exactProjection);
+						return Promise.resolve();
+					},
+					() => exactProjection.dispose().catch(() => undefined),
+					() => unlinkIfExists(bootstrapPath),
+					...(exactContextArtifactPath === undefined
+						? []
+						: [() => unlinkIfExists(exactContextArtifactPath)]),
+					() => admissionBroker.close().catch(() => undefined),
+					() => removeEmptyDirectory(artifactDirectory),
+				]);
 				return cleanupPromise;
 			};
 			const timeoutMilliseconds = options.startupTimeoutMilliseconds
@@ -344,7 +375,7 @@ export class PiChildProcessRuntime {
 							options.projectTrusted,
 							bootstrap.expectedSessionId,
 							options.sessionPath,
-							contextArtifactPath,
+							exactContextArtifactPath,
 						);
 						return new PiChildProcessRuntime({
 							projection: exactProjection,
@@ -353,7 +384,8 @@ export class PiChildProcessRuntime {
 							ready: readyPayload,
 							snapshot,
 							bootstrapPath,
-							contextArtifactPath,
+							artifactDirectory,
+							contextArtifactPath: exactContextArtifactPath,
 							eventHandlers,
 						});
 					} catch (error) {
@@ -362,12 +394,25 @@ export class PiChildProcessRuntime {
 				},
 			});
 		} catch (error) {
-			await channel?.close().catch(() => undefined);
-			if (projection) forceKillProjection(projection);
-			await projection?.dispose().catch(() => undefined);
-			await unlinkIfExists(bootstrapPath);
-			await unlinkIfExists(contextArtifactCandidatePath);
-			await admissionBroker.close().catch(() => undefined);
+			try {
+				await completeCleanup([
+					() => channel?.close().catch(() => undefined) ?? Promise.resolve(),
+					() => {
+						if (projection) forceKillProjection(projection);
+						return Promise.resolve();
+					},
+					() => projection?.dispose().catch(() => undefined) ?? Promise.resolve(),
+					() => unlinkIfExists(bootstrapPath),
+					() => unlinkIfExists(contextArtifactCandidatePath),
+					() => admissionBroker.close().catch(() => undefined),
+					() => removeEmptyDirectory(artifactDirectory),
+				]);
+			} catch (cleanupError) {
+				throw new AggregateError(
+					[asError(error), asError(cleanupError)],
+					"child_runtime_startup_cleanup_failed",
+				);
+			}
 			throw error;
 		}
 	}
@@ -768,6 +813,53 @@ function forceKillProjection(projection: PtyTerminalProjection): void {
 	} catch {
 		// A concurrent group exit is success; exact leader settlement is observed via exited.
 	}
+}
+
+async function completeCleanup(
+	actions: readonly (() => Promise<unknown>)[],
+): Promise<void> {
+	const errors: Error[] = [];
+	for (const action of actions) {
+		try {
+			await action();
+		} catch (error) {
+			errors.push(asError(error));
+		}
+	}
+	if (errors.length === 1) throw errors[0];
+	if (errors.length > 1) throw new AggregateError(errors, "child_runtime_cleanup_failed");
+}
+
+async function createRuntimeArtifactDirectory(runtimeDirectory?: string): Promise<string> {
+	const root = runtimeDirectory
+		?? process.env.XDG_RUNTIME_DIR
+		?? tmpdir();
+	if (!isAbsolute(root)) {
+		throw new Error("invalid_child_runtime: runtime directory must be absolute");
+	}
+	await mkdir(root, { recursive: true });
+	const directory = await mkdtemp(join(root, "pi-ac-runtime-"));
+	// POSIX modes do not model Windows ACLs; on Windows the unique directory
+	// inherits the current user's temporary-directory access policy.
+	try {
+		if (process.platform !== "win32") await chmod(directory, 0o700);
+		return directory;
+	} catch (error) {
+		await removeEmptyDirectory(directory).catch(() => undefined);
+		throw error;
+	}
+}
+
+async function removeEmptyDirectory(path: string): Promise<void> {
+	try {
+		await rmdir(path);
+	} catch (error) {
+		if (!hasCode(error, "ENOENT")) throw error;
+	}
+}
+
+function asError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
 }
 
 function requireIdentity(field: string, value: string): string {

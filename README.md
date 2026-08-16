@@ -37,6 +37,8 @@ The package adopts the current session as the Workflow Owner; no separate activa
 
 Pi supplies the package's Pi peer modules. Compatibility is defined jointly by a fail-fast structural gate against the running host module world and the native behavioral conformance suite. The Pi version is diagnostic only.
 
+Process-isolated Agent Runtimes select local IPC internally: Unix-domain sockets on Unix platforms and native named pipes on Windows. This transport choice is not user-configurable.
+
 Maintainers can run the focused compatibility gate with:
 
 ```bash

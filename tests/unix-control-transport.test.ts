@@ -334,22 +334,33 @@ unixOnly("Unix connector fails clearly for path length and missing listeners", a
 	);
 });
 
-test("platform admission selects Unix internally and fails before allocation elsewhere", async () => {
-	if (process.platform !== "win32") assert.equal(admitControlTransportPlatform(), "unix");
+test("platform admission selects its internal IPC Adapter and fails before unsupported allocation", async () => {
+	assert.equal(
+		admitControlTransportPlatform(),
+		process.platform === "win32" ? "named-pipe" : "unix",
+	);
+	assert.equal(admitControlTransportPlatform("win32"), "named-pipe");
 	assert.throws(
-		() => admitControlTransportPlatform("win32"),
-		/control_transport_unsupported_platform: win32/,
+		() => admitControlTransportPlatform("android"),
+		/control_transport_unsupported_platform: android/,
 	);
 	const neverCreated = join(tmpdir(), `pi-control-unsupported-${process.pid}-${Date.now()}`);
 	await assert.rejects(
 		createPlatformControlListener({
 			workflowId: "unsupported",
 			runtimeDirectory: neverCreated,
-			platform: "win32",
+			platform: "android",
 		}),
 		/control_transport_unsupported_platform/,
 	);
 	await assert.rejects(lstat(neverCreated), hasFsCode("ENOENT"));
+	await assert.rejects(
+		connectControlTransport(
+			{ transport: "named-pipe", address: "\\\\.\\pipe\\pi-ac-mismatch" },
+			{ platform: "linux" },
+		),
+		/control_endpoint_transport_mismatch/,
+	);
 });
 
 async function leaveStaleSocket(address: string): Promise<void> {

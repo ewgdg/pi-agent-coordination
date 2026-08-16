@@ -15,8 +15,14 @@ export const UnixControlEndpointSchema = Type.Object({
 	address: NonEmptyStringSchema,
 }, { additionalProperties: false });
 
+export const NamedPipeControlEndpointSchema = Type.Object({
+	transport: Type.Literal("named-pipe"),
+	address: NonEmptyStringSchema,
+}, { additionalProperties: false });
+
 export const ControlEndpointSchema = Type.Union([
 	UnixControlEndpointSchema,
+	NamedPipeControlEndpointSchema,
 ]);
 
 export const AgentTemplateCatalogueEntrySchema = Type.Object({
@@ -60,6 +66,7 @@ export const AgentTemplateCatalogueSnapshotSchema = Type.Object({
 
 export type ControlEndpoint = Static<typeof ControlEndpointSchema>;
 export type UnixControlEndpoint = Static<typeof UnixControlEndpointSchema>;
+export type NamedPipeControlEndpoint = Static<typeof NamedPipeControlEndpointSchema>;
 
 export const ChildProcessBootstrapSchema = Type.Object({
 	protocolVersion: Type.Literal(AGENT_CONTROL_PROTOCOL_VERSION),
