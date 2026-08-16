@@ -69,7 +69,3 @@ Pi transcripts are the durable authority for identity, Messages, Requests, Deliv
 - [Agent selector](docs/agent-selector.md) — Live hierarchy, Dormant recency, attention, and keyboard navigation
 - [Interactive Agent view acceptance](docs/agent-view-acceptance.md) — complete-mode rendering, input, transitions, isolation, and lifecycle evidence
 - [Run supervision](docs/run-supervision.md) — observation, interruption, resumption, termination, and Agent-view retention
-
-## License
-
-[MIT](LICENSE)
