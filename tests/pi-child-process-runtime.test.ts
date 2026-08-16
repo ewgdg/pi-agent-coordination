@@ -915,7 +915,11 @@ function ordinaryOwnerHandlers(options: Readonly<{
 				return { agentId: input.agentId, disposition: "not_running" };
 			},
 			async spawn() {
-				return { spawnStatus: "not_created", failedStage: "identity_commit" };
+				return {
+					spawnStatus: "not_created",
+					failedStage: "identity_commit",
+					reason: "Test child was not created",
+				};
 			},
 			async askUserQuestion() {
 				return { requestId: "unused-human", answer: "unused" };

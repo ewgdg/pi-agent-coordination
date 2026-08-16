@@ -381,10 +381,9 @@ test("a selected Agent whose runtime initialization fails closes the invalid vie
 		label: "Startup Failure Worker",
 		config: {
 			model: {
-				id: "missing-process-provider/missing-process-model",
+				id: "coordination-test/deterministic-owner",
 				thinking: "inherit" as const,
 			},
-			extensions: "none" as const,
 		},
 	};
 	const spawn = await executeAndCommitRegisteredTool(
@@ -393,15 +392,16 @@ test("a selected Agent whose runtime initialization fails closes the invalid vie
 		"spawn-selected-startup-failure",
 		spawnInput,
 	);
-	assert.deepEqual(
-		{
-			spawnStatus: (spawn.details as { spawnStatus: string }).spawnStatus,
-			messageStatus: (spawn.details as { messageStatus: string }).messageStatus,
-			failedStage: (spawn.details as { failedStage?: string }).failedStage,
-		},
-		{ spawnStatus: "created", messageStatus: "not_sent", failedStage: "run_start" },
-	);
+	assert.equal((spawn.details as { spawnStatus: string }).spawnStatus, "created");
 	const agentId = (spawn.details as { agentId: string }).agentId;
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"terminate-before-selected-startup-failure",
+		{ operation: "terminate", agentId },
+	);
+	assert.equal(await currentRunPhase(host, agentId), "dormant");
+	host.services.modelRuntime.unregisterProvider("coordination-test");
 
 	const { command, surface: selector } = await openAgentsSurface(host);
 	selector.handleInput?.("\t");

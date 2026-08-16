@@ -55,11 +55,17 @@ export function resolveAgentRunConfiguration(options: {
 		inherited.extensions,
 	);
 	const projectContext = resolveProjectContext(template, overrides);
+	const explicitlySelectedModel = overrides?.model && overrides.model.id !== "inherit"
+		? parseModelId(overrides.model.id)
+		: undefined;
+	if (explicitlySelectedModel && !options.isModelAvailable(explicitlySelectedModel)) {
+		throw new Error(
+			`Configured Agent model is unavailable: ${explicitlySelectedModel.provider}/${explicitlySelectedModel.modelId}`,
+		);
+	}
 	const modelConfiguration = overrides?.model
 		? {
-			model: overrides.model.id === "inherit"
-				? inherited.model
-				: parseModelId(overrides.model.id),
+			model: explicitlySelectedModel ?? inherited.model,
 			thinking: overrides.model.thinking === "inherit"
 				? inherited.thinking
 				: overrides.model.thinking,

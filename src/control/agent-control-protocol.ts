@@ -239,9 +239,17 @@ const AgentSpawnReceiptSchema = Type.Union([
 		spawnStatus: Type.Literal("created"), agentId: NonEmptyStringSchema,
 		requestMessageId: NonEmptyStringSchema, messageStatus: Type.Literal("not_sent"),
 		failedStage: Type.Union([Type.Literal("run_start"), Type.Literal("delivery_admission")]),
+		reason: NonEmptyStringSchema,
 		effectiveConfiguration: EffectiveConfigurationSchema,
 	}),
-	closed({ spawnStatus: Type.Literal("not_created"), failedStage: Type.Literal("identity_commit") }),
+	closed({
+		spawnStatus: Type.Literal("not_created"),
+		failedStage: Type.Union([
+			Type.Literal("configuration"),
+			Type.Literal("identity_commit"),
+		]),
+		reason: NonEmptyStringSchema,
+	}),
 	closed({
 		spawnStatus: Type.Literal("unknown"),
 		candidateAgentId: Type.Optional(NonEmptyStringSchema),

@@ -50,7 +50,11 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 				waitProgressHandler?.(waitProgress);
 				return { disposition: "preempted" };
 			case "coordination.control": return { agentId: "target", disposition: "held" };
-			case "coordination.spawn": return { spawnStatus: "not_created", failedStage: "identity_commit" };
+			case "coordination.spawn": return {
+				spawnStatus: "not_created",
+				failedStage: "identity_commit",
+				reason: "Test child was not created",
+			};
 			case "coordination.askHuman": return { requestId: "human-1", answer: "Proceed." };
 			default: return {};
 		}

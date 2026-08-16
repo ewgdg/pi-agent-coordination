@@ -51,11 +51,13 @@ export type AgentSpawnReceipt =
 		requestMessageId: string;
 		messageStatus: "not_sent";
 		failedStage: "run_start" | "delivery_admission";
+		reason: string;
 		effectiveConfiguration: EffectiveAgentRunConfiguration;
 	}>
 	| Readonly<{
 		spawnStatus: "not_created";
-		failedStage: "identity_commit";
+		failedStage: "configuration" | "identity_commit";
+		reason: string;
 	}>
 	| Readonly<{
 		spawnStatus: "unknown";
@@ -148,13 +150,30 @@ export class DefaultChildSpawner {
 				spawnInput: input,
 				preserveParentPromptSurface: input.conversation === "fork",
 			});
+		} catch (error) {
+			if (error instanceof ProtocolInvariantError) throw error;
+			return {
+				spawnStatus: "not_created",
+				failedStage: "configuration",
+				reason: errorMessage(error),
+			};
+		}
+		try {
 			sessionManager = this.#sessionFactory.createStagingSession(prepared);
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
-			return { spawnStatus: "not_created", failedStage: "identity_commit" };
+			return {
+				spawnStatus: "not_created",
+				failedStage: "identity_commit",
+				reason: errorMessage(error),
+			};
 		}
 		if (this.#isShuttingDown()) {
-			return { spawnStatus: "not_created", failedStage: "identity_commit" };
+			return {
+				spawnStatus: "not_created",
+				failedStage: "identity_commit",
+				reason: "host_shutting_down: Workflow is shutting down",
+			};
 		}
 
 		const identity: ChildAgentIdentity = {
@@ -169,7 +188,11 @@ export class DefaultChildSpawner {
 				commitChildAgentIdentity(sessionManager, identity);
 			} catch (error) {
 				if (error instanceof ProtocolInvariantError) throw error;
-				return { spawnStatus: "not_created", failedStage: "identity_commit" };
+				return {
+					spawnStatus: "not_created",
+					failedStage: "identity_commit",
+					reason: errorMessage(error),
+				};
 			}
 		}
 
@@ -192,7 +215,11 @@ export class DefaultChildSpawner {
 				input.conversation === "fork",
 				parentTranscript,
 			)) {
-				return { spawnStatus: "not_created", failedStage: "identity_commit" };
+				return {
+					spawnStatus: "not_created",
+					failedStage: "identity_commit",
+					reason: errorMessage(error),
+				};
 			}
 			sessionPath = candidatePath;
 			materializationUncertain = true;
@@ -256,6 +283,7 @@ export class DefaultChildSpawner {
 				requestMessageId: requestId,
 				messageStatus: "not_sent",
 				failedStage: "run_start",
+				reason: errorMessage(error),
 				effectiveConfiguration: prepared.configuration,
 			};
 		}
@@ -289,7 +317,7 @@ export class DefaultChildSpawner {
 				question: input.request,
 				source,
 			});
-			if (admission === "rejected") throw new Error("Confirmed Delivery admission failure");
+			if (admission !== "pending") throw new Error(admission);
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;
 			child.host.removeRetentionReason("pending_delivery");
@@ -300,6 +328,7 @@ export class DefaultChildSpawner {
 				requestMessageId: requestId,
 				messageStatus: "not_sent",
 				failedStage: "delivery_admission",
+				reason: errorMessage(error),
 				effectiveConfiguration: prepared.configuration,
 			};
 		}
@@ -372,4 +401,9 @@ export class DefaultChildSpawner {
 		if (!record) throw new Error(`unknown_identity: ${agentId}`);
 		return record;
 	}
+}
+
+function errorMessage(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	return message.trim() || "Unknown Agent Spawn failure";
 }

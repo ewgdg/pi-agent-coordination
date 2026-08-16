@@ -299,7 +299,7 @@ test("fails when no configured Template model is available", () => {
 	);
 });
 
-test("paired spawn model override bypasses unavailable Template candidates", () => {
+test("available paired spawn model override bypasses unavailable Template candidates", () => {
 	const inherited = {
 		cwd: "/project",
 		model: { provider: "parent", modelId: "model" },
@@ -318,7 +318,12 @@ test("paired spawn model override bypasses unavailable Template candidates", () 
 		projectContext: "",
 		sourcePath: "/templates/fallback-agent.md",
 	};
-	const base = { inherited, template, fixedAllowedTools: [], isModelAvailable: () => false };
+	const base = {
+		inherited,
+		template,
+		fixedAllowedTools: [],
+		isModelAvailable: ({ provider }: { provider: string }) => provider === "explicit",
+	};
 
 	assert.deepEqual(resolveAgentRunConfiguration({
 		...base,

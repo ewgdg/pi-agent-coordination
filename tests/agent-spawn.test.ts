@@ -718,6 +718,31 @@ test("a successor Runtime re-resolves its current Template and project resources
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
 
+test("a catalogued model under an unconfigured provider fails before Agent Identity", async (t) => {
+	const harness = await createCoordinatorHarness(t, {});
+	const provider = "openai-codex";
+	const cataloguedModel = harness.host.services.modelRuntime.getModels(provider)[0];
+	assert.ok(cataloguedModel, "expected an OpenAI Codex model in Pi's catalogue");
+	assert.equal(harness.host.services.modelRuntime.hasConfiguredAuth(provider), false);
+	const configuredModelId = `${provider}/${cataloguedModel.id}`;
+
+	const receipt = await harness.spawn("spawn-unconfigured-provider", {
+		request: "This request must never acquire a child.",
+		config: {
+			model: { id: configuredModelId, thinking: "off" },
+		},
+	});
+
+	assert.deepEqual(receipt, {
+		spawnStatus: "not_created",
+		failedStage: "configuration",
+		reason: `Configured Agent model is unavailable: ${configuredModelId}`,
+	});
+	assert.deepEqual(harness.view.children(), []);
+
+	await harness.shutdown();
+});
+
 test("invalid default-child metadata fails before Agent Identity", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	host.model.setResponses([
@@ -740,7 +765,8 @@ test("invalid default-child metadata fails before Agent Identity", async (t) => 
 
 	assert.deepEqual(findSpawnReceipt(host.session.sessionManager), {
 		spawnStatus: "not_created",
-		failedStage: "identity_commit",
+		failedStage: "configuration",
+		reason: "invalid_input: Agent description must not be empty",
 	});
 	const observe = host.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
@@ -791,7 +817,8 @@ test("ambiguous selected skills fail before Agent Identity", async (t) => {
 
 	assert.deepEqual(findSpawnReceipt(host.session.sessionManager), {
 		spawnStatus: "not_created",
-		failedStage: "identity_commit",
+		failedStage: "configuration",
+		reason: "Agent skill resource is ambiguous: colliding-skill",
 	});
 
 	await host.runtime.dispose();
@@ -824,7 +851,8 @@ test("an untrusted effective cwd cannot contribute selected project resources", 
 
 	assert.deepEqual(receipt, {
 		spawnStatus: "not_created",
-		failedStage: "identity_commit",
+		failedStage: "configuration",
+		reason: "Agent skill resource is unavailable: untrusted-skill",
 	});
 	assert.deepEqual(harness.view.children(), []);
 
@@ -908,6 +936,8 @@ test("confirmed post-Identity Run startup failure keeps a visible dormant child"
 	assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
 	assert.ok("failedStage" in receipt);
 	assert.equal(receipt.failedStage, "run_start");
+	assert.ok("reason" in receipt);
+	assert.equal(receipt.reason, "Confirmed Run startup failure");
 	assert.deepEqual(harness.view.children()[0]?.run, {
 		phase: "dormant",
 		retentionReasons: [],
@@ -932,6 +962,8 @@ test("shutdown after Agent Identity keeps the durable child dormant", async (t) 
 	assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
 	assert.ok("failedStage" in receipt);
 	assert.equal(receipt.failedStage, "run_start");
+	assert.ok("reason" in receipt);
+	assert.equal(receipt.reason, "host_shutting_down: Workflow is shutting down");
 	assert.deepEqual(harness.view.children()[0]?.run, {
 		phase: "dormant",
 		retentionReasons: [],
@@ -963,6 +995,8 @@ test("confirmed post-Identity Delivery admission failure keeps the child and Req
 	assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
 	assert.ok("failedStage" in receipt);
 	assert.equal(receipt.failedStage, "delivery_admission");
+	assert.ok("reason" in receipt);
+	assert.equal(receipt.reason, "Confirmed Delivery admission failure");
 	assert.deepEqual(harness.view.children()[0]?.run, {
 		phase: "dormant",
 		retentionReasons: [],

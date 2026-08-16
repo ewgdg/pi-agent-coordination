@@ -480,7 +480,9 @@ export class ProcessChildSessionFactory {
 	}
 
 	#isModelAvailable(model: Readonly<{ provider: string; modelId: string }>): boolean {
-		return this.#ownerRuntime.services.modelRuntime.getModel(model.provider, model.modelId) !== undefined;
+		return this.#ownerRuntime.services.modelRuntime.getAvailableSnapshot().some(
+			(candidate) => candidate.provider === model.provider && candidate.id === model.modelId,
+		);
 	}
 
 	#isCoordinationExtension(path: string): boolean {

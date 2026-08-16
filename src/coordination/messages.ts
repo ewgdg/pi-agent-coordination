@@ -365,7 +365,7 @@ export class MessageCoordinator {
 		fromAgentId: string;
 		question: string;
 		source: ToolCallPointer;
-	}): Promise<"pending" | "rejected"> {
+	}): Promise<"pending" | "target_unavailable" | "capacity_exhausted"> {
 		const { recipient, requestId, fromAgentId, question, source } = options;
 		const delivery: ScheduledMessageDelivery = {
 			messageId: requestId,
@@ -399,9 +399,7 @@ export class MessageCoordinator {
 				}
 			},
 		};
-		return (await this.#deliveryScheduler.admit(recipient, delivery)) === "pending"
-			? "pending"
-			: "rejected";
+		return this.#deliveryScheduler.admit(recipient, delivery);
 	}
 
 	admitCustomDelivery(

@@ -72,7 +72,11 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 		return { answers: [] };
 	},
 	async spawn() {
-		return { spawnStatus: "not_created", failedStage: "identity_commit" };
+		return {
+			spawnStatus: "not_created",
+			failedStage: "identity_commit",
+			reason: "Test child was not created",
+		};
 	},
 	async agentTemplateSnapshot() {
 		return {
@@ -424,6 +428,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 	const spawnReceipt = {
 		spawnStatus: "not_created",
 		failedStage: "identity_commit",
+		reason: "Test child was not created",
 	} as const;
 	const observeReceipt = { children: [agentStatus] } as const;
 	const controlReceipt = { agentId: "child-agent", disposition: "held" } as const;

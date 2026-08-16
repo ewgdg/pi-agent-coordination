@@ -379,7 +379,7 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 		const input = {
 			request: "Materialize me before deterministic process startup failure.",
 			config: {
-				model: { id: "missing-process-provider/missing-process-model", thinking: "inherit" as const },
+				model: { id: "coordination-test/deterministic-owner", thinking: "inherit" as const },
 				extensions: "none" as const,
 			},
 		};
@@ -396,6 +396,8 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 		assert.ok("agentId" in receipt);
 		assert.ok("failedStage" in receipt);
 		assert.equal(receipt.failedStage, "run_start");
+		assert.ok("reason" in receipt);
+		assert.match(receipt.reason, /coordination-test|provider|model/i);
 		const status = owner.status(receipt.agentId);
 		assert.equal(status.run.phase, "dormant");
 		assert.ok(status.primaryEvidence.transcriptPath);

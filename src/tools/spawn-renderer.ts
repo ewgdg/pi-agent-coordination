@@ -66,6 +66,9 @@ export function renderAgentSpawnResult(
 	if ("failedStage" in receipt) {
 		text += theme.fg("warning", ` · ${receipt.failedStage}`);
 	}
+	if ("reason" in receipt) {
+		text += theme.fg("warning", ` · ${boundedToolPreview(receipt.reason)}`);
+	}
 	if (options.expanded) {
 		text += theme.fg("dim", `\n${JSON.stringify(receipt, null, 2)}`);
 	}

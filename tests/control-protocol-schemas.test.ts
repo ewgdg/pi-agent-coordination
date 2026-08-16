@@ -254,8 +254,13 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	}), true);
 	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
 		spawnStatus: "not_created",
-		failedStage: "identity_commit",
+		failedStage: "configuration",
+		reason: "Configured Agent model is unavailable: provider/model",
 	}), true);
+	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
+		spawnStatus: "not_created",
+		failedStage: "identity_commit",
+	}), false);
 	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
 		disposition: "pending",
 		agentId: "child",

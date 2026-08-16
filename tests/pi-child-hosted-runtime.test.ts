@@ -542,7 +542,13 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 			async control(_toolCallId, input) {
 				return { agentId: input.agentId, disposition: "not_running" };
 			},
-			async spawn() { return { spawnStatus: "not_created", failedStage: "identity_commit" }; },
+			async spawn() {
+				return {
+					spawnStatus: "not_created",
+					failedStage: "identity_commit",
+					reason: "Test child was not created",
+				};
+			},
 			async askUserQuestion() { return { requestId: "unused-human", answer: "unused" }; },
 		},
 	};
