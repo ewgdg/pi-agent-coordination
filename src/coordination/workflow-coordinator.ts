@@ -168,6 +168,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 		toolCallId: string,
 		input: AgentWaitInput,
 		signal: AbortSignal | undefined,
+		onProgress?: Parameters<AgentWaitCoordinator["wait"]>[4],
 	): Promise<AgentWaitResult>;
 	control(toolCallId: string, input: RunControlInput): Promise<RunControlReceipt>;
 	askHuman(
@@ -443,9 +444,9 @@ export class WorkflowCoordinator {
 			refreshAgentActivity: () => this.#notifyAgentActivityChanged(),
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
-			wait: (toolCallId, input, signal) => {
+			wait: (toolCallId, input, signal, onProgress) => {
 				this.#assertAdmissionOpen();
-				return this.#agentWaits.wait(agentId, toolCallId, input, signal);
+				return this.#agentWaits.wait(agentId, toolCallId, input, signal, onProgress);
 			},
 			control: (toolCallId, input) => {
 				this.#assertAdmissionOpen();

@@ -16,6 +16,7 @@ import {
 import type { AgentStatus } from "../coordination/agent-record.ts";
 import type {
 	AgentWaitInput,
+	AgentWaitProgress,
 	AgentWaitResult,
 } from "../protocol/agent-wait.ts";
 import {
@@ -35,6 +36,7 @@ import type {
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import type { AgentRunState } from "../runtime/agent-runtime-host.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
+import { renderMessageProjection } from "./message-delivery-renderer.ts";
 
 type AgentObserveInput = Readonly<{
 	operation: "status" | "children";
@@ -45,25 +47,101 @@ export function renderAgentWaitCall(
 	_args: AgentWaitInput,
 	theme: Theme,
 ): Text {
-	return toolCall(theme, "wait", ["all outstanding Answers"]);
+	return toolCall(theme, "wait", []);
 }
 
 export function renderAgentWaitResult(
-	result: AgentToolResult<AgentWaitResult>,
+	result: AgentToolResult<AgentWaitResult | AgentWaitProgress>,
 	options: ToolRenderResultOptions,
 	theme: Theme,
-): Text {
-	if (options.isPartial) return pending(theme, "waiting for Answers");
+	context: Readonly<{ state: AgentWaitRenderState }>,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
+): Component {
+	if (options.isPartial) {
+		if (isAgentWaitProgress(result.details)) {
+			context.state.progress = result.details;
+			const count = result.details.waitingFor.length;
+			const identities = result.details.waitingFor.map(({ responderAgentId }) =>
+				theme.fg(
+					"accent",
+					formatAgentIdentity(responderAgentId, resolveAgentLabel),
+				)
+			);
+			return new Text([
+				theme.fg("warning", `waiting for ${count} Answer${count === 1 ? "" : "s"}…`),
+				...identities.map((identity) => `  ${identity}`),
+			].join("\n"), 0, 0);
+		}
+		return pending(theme, "waiting for Answers");
+	}
 	if (result.details && "disposition" in result.details) {
 		return receipt(theme, "preempted", result.details, options);
 	}
-	const count = result.details?.answers.length ?? 0;
-	return receipt(
-		theme,
-		`${count} Answer${count === 1 ? "" : "s"}`,
-		result.details,
-		options,
+	if (!result.details || !("answers" in result.details)) {
+		return receipt(theme, "0 Answers", result.details, options);
+	}
+	const count = result.details.answers.length;
+	const progressByRequest = new Map<string, string>(
+		context.state.progress?.waitingFor.map((waiting): [string, string] => [
+			waiting.requestMessageId,
+			waiting.responderAgentId,
+		]) ?? [],
 	);
+	const container = new Container();
+	container.addChild(new Text(
+		theme.fg("success", `${count} Answer${count === 1 ? "" : "s"}`),
+		0,
+		0,
+	));
+	for (const answer of result.details.answers) {
+		container.addChild(new Spacer(1));
+		if (answer.disposition === "answer_delivered") {
+			container.addChild(renderMessageProjection(
+				{
+					kind: "answer",
+					answerId: answer.answerId,
+					requestMessageId: answer.requestMessageId,
+					fromAgentId: answer.fromAgentId,
+					answer: answer.answer,
+				},
+				options,
+				theme,
+				resolveAgentLabel,
+			));
+			continue;
+		}
+		const responderAgentId = progressByRequest.get(answer.requestMessageId);
+		const identity = responderAgentId
+			? ` from ${formatAgentIdentity(
+				responderAgentId,
+				resolveAgentLabel,
+				options.expanded ? "full" : "compact",
+			)}`
+			: "";
+		container.addChild(new Text(
+			`${theme.fg("customMessageLabel", theme.bold("[Answer already delivered]"))}${
+				theme.fg("muted", identity)
+			}`,
+			0,
+			0,
+		));
+	}
+	if (options.expanded) {
+		container.addChild(new Spacer(1));
+		container.addChild(new Text(
+			theme.fg("dim", JSON.stringify(result.details, null, 2)),
+			0,
+			0,
+		));
+	}
+	return container;
+}
+
+type AgentWaitRenderState = { progress?: AgentWaitProgress };
+
+function isAgentWaitProgress(value: unknown): value is AgentWaitProgress {
+	return typeof value === "object" && value !== null &&
+		"waitingFor" in value && Array.isArray(value.waitingFor);
 }
 
 export function renderAgentObserveCall(

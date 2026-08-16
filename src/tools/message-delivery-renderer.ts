@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	Box,
+	Container,
 	Markdown,
 	Spacer,
 	Text,
@@ -54,35 +55,51 @@ export function renderMessageDelivery(
 
 	for (const [index, projection] of projections.entries()) {
 		if (index > 0) box.addChild(new Spacer(1));
-		box.addChild(new Text(
-			renderHeader(
-				projection,
-				theme,
-				resolveAgentLabel,
-				options.expanded ? "full" : "compact",
-			),
-			0,
-			0,
+		box.addChild(renderMessageProjection(
+			projection,
+			options,
+			theme,
+			resolveAgentLabel,
 		));
-		if (options.expanded) {
-			box.addChild(new Spacer(1));
-			box.addChild(new Markdown(
-				messageBody(projection),
-				0,
-				0,
-				getMarkdownTheme(),
-				{ color: (content) => theme.fg("customMessageText", content) },
-				{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
-			));
-		} else {
-			box.addChild(new CollapsedBodyPreview(
-				messageBody(projection),
-				(content) => theme.fg("customMessageText", content),
-			));
-		}
 	}
 
 	return box;
+}
+
+export function renderMessageProjection(
+	projection: ModelVisibleMessage,
+	options: Pick<MessageRenderOptions, "expanded">,
+	theme: Theme,
+	resolveAgentLabel: AgentLabelResolver = () => undefined,
+): Component {
+	const container = new Container();
+	container.addChild(new Text(
+		renderHeader(
+			projection,
+			theme,
+			resolveAgentLabel,
+			options.expanded ? "full" : "compact",
+		),
+		0,
+		0,
+	));
+	if (options.expanded) {
+		container.addChild(new Spacer(1));
+		container.addChild(new Markdown(
+			messageBody(projection),
+			0,
+			0,
+			getMarkdownTheme(),
+			{ color: (content) => theme.fg("customMessageText", content) },
+			{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+		));
+	} else {
+		container.addChild(new CollapsedBodyPreview(
+			messageBody(projection),
+			(content) => theme.fg("customMessageText", content),
+		));
+	}
+	return container;
 }
 
 class CollapsedBodyPreview implements Component {

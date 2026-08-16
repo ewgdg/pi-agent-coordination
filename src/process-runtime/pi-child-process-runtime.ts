@@ -243,7 +243,18 @@ export class PiChildProcessRuntime {
 				},
 				(candidate) => {
 					candidate.onRequest((request) =>
-						dispatchParticipantRequestToOwner(options.ownerRequestHandlers, request)
+						dispatchParticipantRequestToOwner(
+							options.ownerRequestHandlers,
+							request,
+							{
+								waitProgress: (toolCallId, progress) => {
+									void candidate.sendEvent("coordination.wait.progress", {
+										toolCallId,
+										progress,
+									}).catch(() => undefined);
+								},
+							},
+						)
 					);
 					const removePresentationChangeHandler = options.ownerRequestHandlers
 						?.presentation.addChangeHandler?.((snapshot) => {

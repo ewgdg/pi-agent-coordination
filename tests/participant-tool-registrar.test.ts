@@ -398,6 +398,13 @@ test("participant registrar preserves role-specific tool presentation metadata",
 
 test("participant registrar routes intents and returns exact handler receipts", async (t) => {
 	const calls: unknown[] = [];
+	const updates: unknown[] = [];
+	const waitProgress = {
+		waitingFor: [{
+			requestMessageId: "request-waiting",
+			responderAgentId: "child-agent",
+		}],
+	} as const;
 	const messageReceipt = { messageId: "message-2", messageStatus: "sent" } as const;
 	const waitReceipt = { answers: [] } as const;
 	const spawnReceipt = {
@@ -413,8 +420,9 @@ test("participant registrar routes intents and returns exact handler receipts", 
 			calls.push(["message", toolCallId, input]);
 			return messageReceipt;
 		},
-		async wait(toolCallId, input, receivedSignal) {
+		async wait(toolCallId, input, receivedSignal, onProgress) {
 			calls.push(["wait", toolCallId, input, receivedSignal]);
+			onProgress?.(waitProgress);
 			return waitReceipt;
 		},
 		async spawn(toolCallId, input) {
@@ -447,12 +455,23 @@ test("participant registrar routes intents and returns exact handler receipts", 
 		["ask_user_question", "call-human", { question: "Proceed?" }, humanReceipt],
 	] as const;
 	for (const [toolName, toolCallId, input, receipt] of samples) {
-		const result = await executeTool(host, toolName, toolCallId, input, signal);
+		const result = await executeTool(
+			host,
+			toolName,
+			toolCallId,
+			input,
+			signal,
+			toolName === "agent_wait" ? (update) => updates.push(update) : undefined,
+		);
 		assert.equal(result.details, receipt, toolName);
 		assert.deepEqual(result.content, [
 			{ type: "text", text: JSON.stringify(receipt) },
 		], toolName);
 	}
+	assert.deepEqual(updates, [{
+		content: [{ type: "text", text: "Waiting for 1 Agent Answer." }],
+		details: waitProgress,
+	}]);
 	assert.deepEqual(calls, [
 		["message", "call-message", samples[0][2]],
 		["wait", "call-wait", samples[1][2], signal],
@@ -548,6 +567,7 @@ async function executeTool(
 	toolCallId: string,
 	input: unknown,
 	signal?: AbortSignal,
+	onUpdate?: (update: unknown) => void,
 ) {
 	const tool = host.session.getToolDefinition(toolName);
 	assert.ok(tool, toolName);
@@ -555,7 +575,7 @@ async function executeTool(
 		toolCallId,
 		input,
 		signal,
-		undefined,
+		onUpdate,
 		host.session.extensionRunner.createContext(),
 	);
 }

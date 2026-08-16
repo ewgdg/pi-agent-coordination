@@ -11,6 +11,7 @@ import {
 	type RemoteAgentSelectorSnapshot,
 } from "../control/agent-control-protocol.ts";
 import type { ParticipantLifecycleHandlers } from "../pi-integration/participant-lifecycle.ts";
+import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
 import type {
 	ParticipantCoordinationRole,
 	ParticipantCoordinationToolHandlers,
@@ -64,6 +65,13 @@ export type ChildNativeInputIdentity = Readonly<{
 	take(): number | undefined;
 }>;
 
+export type ChildAgentWaitProgressSource = Readonly<{
+	subscribe(
+		toolCallId: string,
+		handler: (progress: AgentWaitProgress) => void,
+	): () => void;
+}>;
+
 type CommonChildCoordinationHandlers = Pick<
 	ParticipantCoordinationToolHandlers<"ordinary">,
 	"observe" | "message" | "wait" | "control"
@@ -83,16 +91,19 @@ export function createControlBackedChildParticipantHandlers(
 	role: "ordinary",
 	request: ChildParticipantControlRequester,
 	nativeInputIdentity?: ChildNativeInputIdentity,
+	waitProgress?: ChildAgentWaitProgressSource,
 ): ControlBackedChildParticipantHandlers<"ordinary">;
 export function createControlBackedChildParticipantHandlers(
 	role: "moderator",
 	request: ChildParticipantControlRequester,
 	nativeInputIdentity?: ChildNativeInputIdentity,
+	waitProgress?: ChildAgentWaitProgressSource,
 ): ControlBackedChildParticipantHandlers<"moderator">;
 export function createControlBackedChildParticipantHandlers(
 	role: RemoteParticipantRole,
 	request: ChildParticipantControlRequester,
 	nativeInputIdentity?: ChildNativeInputIdentity,
+	waitProgress?: ChildAgentWaitProgressSource,
 ): ControlBackedChildParticipantHandlers<"ordinary"> | ControlBackedChildParticipantHandlers<"moderator"> {
 	const lifecycle: ParticipantLifecycleHandlers = {
 		async executionStarted() {
@@ -132,8 +143,16 @@ export function createControlBackedChildParticipantHandlers(
 		observe: (input) => request("coordination.observe", input),
 		message: (toolCallId, input) =>
 			request("coordination.message", { toolCallId, input }),
-		wait: (toolCallId, input, signal) =>
-			request("coordination.wait", { toolCallId, input }, signal),
+		async wait(toolCallId, input, signal, onProgress) {
+			const removeProgressHandler = onProgress && waitProgress
+				? waitProgress.subscribe(toolCallId, onProgress)
+				: () => undefined;
+			try {
+				return await request("coordination.wait", { toolCallId, input }, signal);
+			} finally {
+				removeProgressHandler();
+			}
+		},
 		control: (toolCallId, input) =>
 			request("coordination.control", { toolCallId, input }),
 	};
@@ -165,6 +184,9 @@ export async function dispatchParticipantRequestToOwner(
 		| OwnerParticipantRequestHandlers<"moderator">
 		| undefined,
 	request: ControlRequest<typeof agentControlProtocol>,
+	events?: Readonly<{
+		waitProgress(toolCallId: string, progress: AgentWaitProgress): void;
+	}>,
 ): Promise<unknown> {
 	if (!handlers) throw new Error("child_runtime_owner_request_unavailable");
 	assertValidRequest(request);
@@ -219,6 +241,7 @@ export async function dispatchParticipantRequestToOwner(
 				request.payload.toolCallId,
 				request.payload.input,
 				request.signal,
+				(progress) => events?.waitProgress(request.payload.toolCallId, progress),
 			);
 			break;
 		case "coordination.control":

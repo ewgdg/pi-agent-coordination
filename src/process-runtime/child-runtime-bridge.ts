@@ -40,6 +40,7 @@ import { registerParticipantCoordinationTools } from "../tools/participant-coord
 import { registerAgentTemplateCataloguePrompt } from "../tools/agent-template-catalogue-prompt.ts";
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
+import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
 import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
 import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
 import { NativeInputSubmissionIdentity } from "./native-input-submission-identity.ts";
@@ -75,6 +76,7 @@ type ChildRuntimeBinding = {
 
 type ChildControlState = {
 	channel: ChildChannel;
+	waitProgressHandlers: Map<string, (progress: AgentWaitProgress) => void>;
 	currentBinding?: ChildRuntimeBinding;
 	currentRunId?: string;
 	latestRunId?: string;
@@ -107,6 +109,16 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
 		return state.channel.request(method, payload, signal);
 	};
+	const waitProgress = {
+		subscribe(toolCallId: string, handler: (progress: AgentWaitProgress) => void) {
+			if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
+			if (state.waitProgressHandlers.has(toolCallId)) {
+				throw new Error(`child_runtime_wait_progress_exists: ${toolCallId}`);
+			}
+			state.waitProgressHandlers.set(toolCallId, handler);
+			return () => state?.waitProgressHandlers.delete(toolCallId);
+		},
+	};
 	const nativeInputIdentity = {
 		current: () => state?.nativeInputIdentity.current(),
 		take: () => state?.nativeInputIdentity.take(),
@@ -133,6 +145,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			"ordinary",
 			participantRequest,
 			nativeInputIdentity,
+			waitProgress,
 		);
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
@@ -151,6 +164,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			"moderator",
 			participantRequest,
 			nativeInputIdentity,
+			waitProgress,
 		);
 		participantLifecycle = participant.lifecycle;
 		registerParticipantLifecycle(pi, participant.lifecycle, { registerInput: false });
@@ -219,6 +233,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			);
 			state = {
 				channel,
+				waitProgressHandlers: new Map(),
 				currentRunOutcome: "completed",
 				nativeRunSequence: 0,
 				queueIntentionTail: Promise.resolve(),
@@ -365,11 +380,14 @@ function createChildRuntimeBinding(
 		handleOwnerEvent(event) {
 			if (event.event === "presentation.agents.changed") {
 				binding.activity.update(event.payload);
+			} else if (event.event === "coordination.wait.progress") {
+				state.waitProgressHandlers.get(event.payload.toolCallId)?.(event.payload.progress);
 			}
 		},
 		handleControlClose() {
 			if (state.shutdownStarted) return;
 			state.shutdownStarted = true;
+			state.waitProgressHandlers.clear();
 			context.shutdown();
 		},
 		dispose() {

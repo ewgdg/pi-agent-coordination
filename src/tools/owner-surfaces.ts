@@ -183,7 +183,8 @@ export function participantCoordinatorHandlers(
 			toolCallId: string,
 			input: Parameters<AgentCoordinatorView["wait"]>[1],
 			signal: AbortSignal | undefined,
-		) => resolveView().wait(toolCallId, input, signal),
+			onProgress: Parameters<AgentCoordinatorView["wait"]>[3],
+		) => resolveView().wait(toolCallId, input, signal, onProgress),
 		async observe(input: { operation: "status" | "children"; agentId?: string }) {
 			const view = resolveView();
 			return input.operation === "children"

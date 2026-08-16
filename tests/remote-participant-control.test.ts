@@ -25,6 +25,14 @@ const status = {
 
 test("Control-backed participant proxies preserve exact lifecycle and tool intentions", async () => {
 	const calls: unknown[] = [];
+	const waitUpdates: unknown[] = [];
+	let waitProgressHandler: ((progress: {
+		waitingFor: readonly { requestMessageId: string; responderAgentId: string }[];
+	}) => void) | undefined;
+	let waitProgressRemoved = false;
+	const waitProgress = {
+		waitingFor: [{ requestMessageId: "request-1", responderAgentId: "target" }],
+	} as const;
 	const cancellation = new AbortController();
 	const request = (async (
 		method: string,
@@ -38,7 +46,9 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 			case "runtime.guardToolResult": return { result: null };
 			case "coordination.observe": return status;
 			case "coordination.message": return { messageId: "message-1", messageStatus: "sent" };
-			case "coordination.wait": return { disposition: "preempted" };
+			case "coordination.wait":
+				waitProgressHandler?.(waitProgress);
+				return { disposition: "preempted" };
 			case "coordination.control": return { agentId: "target", disposition: "held" };
 			case "coordination.spawn": return { spawnStatus: "not_created", failedStage: "identity_commit" };
 			case "coordination.askHuman": return { requestId: "human-1", answer: "Proceed." };
@@ -49,6 +59,16 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		"ordinary",
 		request,
 		{ current: () => 7, take: () => undefined },
+		{
+			subscribe(toolCallId, handler) {
+				assert.equal(toolCallId, "wait-call");
+				waitProgressHandler = handler;
+				return () => {
+					waitProgressRemoved = true;
+					waitProgressHandler = undefined;
+				};
+			},
+		},
 	);
 
 	await proxies.lifecycle.executionStarted();
@@ -77,9 +97,12 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 			"wait-call",
 			{},
 			cancellation.signal,
+			(progress) => waitUpdates.push(progress),
 		),
 		{ disposition: "preempted" },
 	);
+	assert.deepEqual(waitUpdates, [waitProgress]);
+	assert.equal(waitProgressRemoved, true);
 	assert.deepEqual(
 		await proxies.coordination.askUserQuestion(
 			"human-call",
@@ -235,6 +258,39 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 		"owner-call",
 		{ operation: "poll", messageId: "message-0" },
 	]]);
+});
+
+test("Owner dispatch publishes the admitted Agent Wait snapshot", async () => {
+	const progress = {
+		waitingFor: [{
+			requestMessageId: "remote-wait-request",
+			responderAgentId: "responder-agent",
+		}],
+	} as const;
+	const published: unknown[] = [];
+	const handlers = {
+		coordination: {
+			async wait(_toolCallId: string, _input: unknown, _signal: AbortSignal, onProgress: (value: typeof progress) => void) {
+				onProgress(progress);
+				return { disposition: "preempted" };
+			},
+		},
+	} as unknown as OwnerParticipantRequestHandlers<"ordinary">;
+	const signal = new AbortController().signal;
+	const result = await dispatchParticipantRequestToOwner(
+		handlers,
+		{
+			method: "coordination.wait",
+			payload: { toolCallId: "remote-wait-call", input: {} },
+			signal,
+		},
+		{
+			waitProgress: (toolCallId, update) => published.push([toolCallId, update]),
+		},
+	);
+
+	assert.deepEqual(result, { disposition: "preempted" });
+	assert.deepEqual(published, [["remote-wait-call", progress]]);
 });
 
 test("Owner dispatch awaits the authenticated child's presentation selection with cancellation", async () => {

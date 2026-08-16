@@ -12,6 +12,13 @@ import {
 
 export type AgentWaitInput = Readonly<Record<never, never>>;
 
+export type AgentWaitProgress = Readonly<{
+	waitingFor: readonly Readonly<{
+		requestMessageId: string;
+		responderAgentId: string;
+	}>[];
+}>;
+
 export type AgentWaitAnswer =
 	| Readonly<{
 		disposition: "answer_delivered";

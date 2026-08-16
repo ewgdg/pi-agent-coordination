@@ -98,6 +98,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		"agent.end",
 		"agent.settled",
 		"presentation.agents.changed",
+		"coordination.wait.progress",
 		"session.shutdown",
 		"runtime.fault",
 	]);
@@ -116,6 +117,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 	assert.equal(Check(AgentControlEventSchema, "runtime.compaction.started"), true);
 	assert.equal(Check(AgentControlEventSchema, "runtime.compaction.completed"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.settled"), true);
+	assert.equal(Check(AgentControlEventSchema, "coordination.wait.progress"), true);
 	assert.equal(Check(AgentControlEventSchema, "agent.unknown"), false);
 	for (const definition of Object.values(agentControlMethods)) {
 		assert.equal(typeof definition.request, "object");
@@ -139,6 +141,19 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		outcome: "interrupted",
 		queuedInputCount: 0,
 	}), true);
+	assert.equal(Check(agentControlEvents["coordination.wait.progress"].payload, {
+		toolCallId: "wait-call",
+		progress: {
+			waitingFor: [{
+				requestMessageId: "request-1",
+				responderAgentId: "responder-1",
+			}],
+		},
+	}), true);
+	assert.equal(Check(agentControlEvents["coordination.wait.progress"].payload, {
+		toolCallId: "wait-call",
+		progress: { waitingFor: [] },
+	}), false);
 	const validRuntimeSnapshot = {
 		cwd: "/project",
 		model: { provider: "provider", modelId: "model" },

@@ -1247,11 +1247,21 @@ test("Agent Wait retrieves an outstanding Answer and rejects a join once none re
 		),
 	);
 
+	let progress: unknown;
 	const result = await harness.view.wait(
 		waitToolCallId,
 		waitInput,
 		new AbortController().signal,
+		(update) => {
+			progress = update;
+		},
 	);
+	assert.deepEqual(progress, {
+		waitingFor: [{
+			requestMessageId: requestId,
+			responderAgentId: harness.childId,
+		}],
+	});
 	assert.deepEqual(result, {
 		answers: [{
 			disposition: "answer_delivered",

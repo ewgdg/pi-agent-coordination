@@ -6,7 +6,7 @@ import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
 import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
-import type { AgentWaitResult } from "../protocol/agent-wait.ts";
+import type { AgentWaitProgress, AgentWaitResult } from "../protocol/agent-wait.ts";
 import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
 import {
 	MODERATOR_ROUTINE_START_CUSTOM_TYPE,
@@ -376,6 +376,12 @@ const AgentWaitResultSchema = Type.Union([
 	closed({ answers: Type.Array(AgentWaitAnswerSchema, { minItems: 1 }) }),
 	closed({ disposition: Type.Literal("preempted") }),
 ]);
+const AgentWaitProgressSchema = Type.Unsafe<AgentWaitProgress>(closed({
+	waitingFor: Type.Array(closed({
+		requestMessageId: NonEmptyStringSchema,
+		responderAgentId: NonEmptyStringSchema,
+	}), { minItems: 1 }),
+}));
 const HumanAnswerSchema = closed({ requestId: NonEmptyStringSchema, answer: NonEmptyStringSchema });
 const ModeratorControlReceiptSchema = Type.Union([
 	closed({
@@ -721,6 +727,12 @@ export const agentControlEvents = {
 		}),
 	},
 	"presentation.agents.changed": { payload: RemoteAgentSelectorSnapshotSchema },
+	"coordination.wait.progress": {
+		payload: closed({
+			toolCallId: NonEmptyStringSchema,
+			progress: AgentWaitProgressSchema,
+		}),
+	},
 	"session.shutdown": { payload: closed({ reason: Type.Optional(Type.String()) }) },
 	"runtime.fault": {
 		payload: closed({ code: NonEmptyStringSchema, message: Type.String() }),

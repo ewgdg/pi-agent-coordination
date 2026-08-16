@@ -12,6 +12,7 @@ import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type {
 	AgentWaitInput,
+	AgentWaitProgress,
 	AgentWaitResult,
 } from "../protocol/agent-wait.ts";
 import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
@@ -83,6 +84,7 @@ type CommonParticipantCoordinationToolHandlers = Readonly<{
 		toolCallId: string,
 		input: AgentWaitInput,
 		signal: AbortSignal | undefined,
+		onProgress?: (progress: AgentWaitProgress) => void,
 	): Promise<AgentWaitResult>;
 	observe(input: AgentObserveInput): Promise<AgentObserveResult>;
 	control(
@@ -386,7 +388,7 @@ export function registerParticipantCoordinationTools<
 			return toolResult(await availableHandlers.message(toolCallId, parameters));
 		},
 	});
-	pi.registerTool<typeof agentWaitParameters, AgentWaitResult>({
+	pi.registerTool<typeof agentWaitParameters, AgentWaitResult | AgentWaitProgress>({
 		name: "agent_wait",
 		label: "Wait for Answers",
 		description:
@@ -397,10 +399,30 @@ export function registerParticipantCoordinationTools<
 		executionMode: "sequential",
 		parameters: agentWaitParameters,
 		renderCall: renderAgentWaitCall,
-		renderResult: renderAgentWaitResult,
-		async execute(toolCallId, parameters, signal) {
+		renderResult: (result, options, theme, context) =>
+			renderAgentWaitResult(
+				result,
+				options,
+				theme,
+				context,
+				resolveAgentLabel,
+			),
+		async execute(toolCallId, parameters, signal, onUpdate) {
 			return toolResult(
-				await availableHandlers.wait(toolCallId, parameters, signal),
+				await availableHandlers.wait(
+					toolCallId,
+					parameters,
+					signal,
+					(progress) => onUpdate?.({
+						content: [{
+							type: "text",
+							text: `Waiting for ${progress.waitingFor.length} Agent Answer${
+								progress.waitingFor.length === 1 ? "" : "s"
+							}.`,
+						}],
+						details: progress,
+					}),
+				),
 			);
 		},
 	});

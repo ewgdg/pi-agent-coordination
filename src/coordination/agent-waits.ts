@@ -7,6 +7,7 @@ import {
 	inspectCommittedAgentWaitResult,
 	resolveCommittedAgentWaitCall,
 	type AgentWaitInput,
+	type AgentWaitProgress,
 	type AgentWaitResult,
 } from "../protocol/agent-wait.ts";
 import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
@@ -91,6 +92,7 @@ export class AgentWaitCoordinator {
 		toolCallId: string,
 		providedInput: AgentWaitInput,
 		signal: AbortSignal | undefined,
+		onProgress?: (progress: AgentWaitProgress) => void,
 	): Promise<AgentWaitResult> {
 		if (!signal) {
 			throw new Error("invariant_violation: Agent Wait has no active Run signal");
@@ -110,6 +112,14 @@ export class AgentWaitCoordinator {
 			callerAgentId,
 			call.source,
 		);
+		onProgress?.({
+			waitingFor: this.#messages.requestRelationships(requestMessageIds).map(
+				({ requestId, targetAgentId }) => ({
+					requestMessageId: requestId,
+					responderAgentId: targetAgentId,
+				}),
+			),
+		});
 		const completed = this.#messages.waitAnswers(
 			callerAgentId,
 			requestMessageIds,
