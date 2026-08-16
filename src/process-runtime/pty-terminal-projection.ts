@@ -394,13 +394,11 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		} finally {
 			let processGroupCleanupError: unknown;
 			try {
-				// forkpty makes the Unix child a process-group leader. The leader can exit
-				// while a signal-ignoring descendant remains, so terminate that owned group
-				// before releasing the only process handle. Windows process-tree ownership
-				// is separate; once ConPTY exit is observed there is no live PTY to kill.
-				if (process.platform !== "win32" || !this.#exitObserved) {
-					signalOwnedPty(this.#child, "SIGKILL");
-				}
+				// Unix may retain signal-ignoring process-group descendants after the leader
+				// exits. On Windows, node-pty's signal-less kill also releases ConPTY native
+				// handles and its output worker after process exit; skipping it keeps the Node
+				// test worker and production host alive indefinitely.
+				signalOwnedPty(this.#child, "SIGKILL");
 			} catch (error) {
 				processGroupCleanupError = error;
 			}

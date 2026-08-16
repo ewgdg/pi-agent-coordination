@@ -44,4 +44,5 @@ jobs:
       - if: runner.os == 'Windows'
         run: npm run test:process -- --file=named-pipe-control-transport.test.ts
       - if: runner.os == 'Windows'
+        timeout-minutes: 1
         run: npm run test:process -- --file=windows-process-control-transport.test.ts
