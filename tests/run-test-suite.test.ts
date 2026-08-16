@@ -4,10 +4,13 @@ import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 
 const FEEDBACK_TIMEOUT_MS = 5_000;
+const PROCESS_TEST_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 10;
+const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 test("the suite supervisor leaves no test descendants", {
 	timeout: FEEDBACK_TIMEOUT_MS,
@@ -46,6 +49,42 @@ test("the suite supervisor leaves no test descendants", {
 		await waitForProcessExit(fixture.runner.pid!, FEEDBACK_TIMEOUT_MS);
 		await assertNoProcessesAlive(fixture.evidence);
 	}
+});
+
+test("the suite isolates Pi settings inherited from a spawned Agent", {
+	timeout: PROCESS_TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async (t) => {
+	const inheritedAgentDir = await mkdtemp(join(tmpdir(), "pi-inherited-agent-dir-"));
+	const settingsPath = join(inheritedAgentDir, "settings.json");
+	const originalSettings = `${JSON.stringify({
+		defaultProvider: "user-provider",
+		defaultModel: "user-model",
+		defaultThinkingLevel: "high",
+	}, null, 2)}\n`;
+	await writeFile(settingsPath, originalSettings, "utf8");
+	t.after(() => rm(inheritedAgentDir, { recursive: true, force: true }));
+
+	const environment: NodeJS.ProcessEnv = {
+		...process.env,
+		PI_AGENT_COORDINATION_BOOTSTRAP: join(inheritedAgentDir, "inherited-bootstrap.json"),
+		PI_CODING_AGENT_DIR: inheritedAgentDir,
+		PI_SKIP_VERSION_CHECK: "1",
+	};
+	delete environment.NODE_TEST_CONTEXT;
+	const outcome = await runCommand(
+		process.execPath,
+		[
+			"tests/support/run-test-suite.ts",
+			"process",
+			"--file=pi-child-hosted-runtime.test.ts",
+			"--test-name-pattern=the common Runtime Host supervises",
+		],
+		{ cwd: PROJECT_ROOT, env: environment },
+	);
+
+	assert.equal(outcome.code, 0, outcome.output);
+	assert.equal(await readFile(settingsPath, "utf8"), originalSettings);
 });
 
 type ProcessEvidence = Readonly<{
@@ -108,6 +147,26 @@ async function launchFixture(
 		await waitForFile(processEvidencePath, FEEDBACK_TIMEOUT_MS),
 	) as ProcessEvidence;
 	return { runner, evidence };
+}
+
+async function runCommand(
+	command: string,
+	arguments_: readonly string[],
+	options: Readonly<{ cwd: string; env: NodeJS.ProcessEnv }>,
+): Promise<Readonly<{ code: number | null; output: string }>> {
+	const child = spawn(command, arguments_, {
+		cwd: options.cwd,
+		env: options.env,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let output = "";
+	child.stdout!.on("data", (chunk) => output += String(chunk));
+	child.stderr!.on("data", (chunk) => output += String(chunk));
+	const code = await new Promise<number | null>((resolve, reject) => {
+		child.once("error", reject);
+		child.once("exit", resolve);
+	});
+	return { code, output };
 }
 
 async function waitForExitWithEscalation(runner: ChildProcess): Promise<void> {
