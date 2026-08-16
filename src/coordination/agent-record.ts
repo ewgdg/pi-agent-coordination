@@ -7,6 +7,7 @@ import type {
 	AgentRuntimeHost,
 } from "../runtime/agent-runtime-host.ts";
 import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
+import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import type { AgentTranscript } from "../transcript/agent-transcript.ts";
 
 export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdentity;
@@ -15,6 +16,7 @@ export type AgentRecord = {
 	identity: AgentIdentity;
 	creationInput?: AgentSpawnInput;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
+	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot;
 	host: AgentRuntimeHost;
 	transcript: AgentTranscript;
 	children: string[];

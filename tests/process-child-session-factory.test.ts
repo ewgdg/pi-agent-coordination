@@ -104,6 +104,11 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 			modelId: "deterministic-owner",
 		});
 		assert.equal(first.configuration.thinking, "high");
+		assert.deepEqual(
+			first.agentTemplateSnapshot?.templates.find(({ name }) => name === "dynamic-parent")
+				?.allowedTools,
+			["read", "bash"],
+		);
 
 		await writeFile(
 			templatePath,
@@ -116,6 +121,11 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 		});
 		assert.equal(second.configuration.allowedTools.includes("read"), true);
 		assert.equal(second.configuration.allowedTools.includes("bash"), false);
+		assert.deepEqual(
+			second.agentTemplateSnapshot?.templates.find(({ name }) => name === "dynamic-parent")
+				?.allowedTools,
+			["read"],
+		);
 	} finally {
 		await host.runtime.dispose();
 	}
@@ -221,14 +231,27 @@ test("ordinary production spawn runs in a real child process over Owner particip
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const effectiveCwd = join(host.cwd, "process-child-cwd");
 	await mkdir(effectiveCwd);
+	const templateDirectory = join(host.services.agentDir, "agents");
+	await mkdir(templateDirectory, { recursive: true });
+	await writeFile(join(templateDirectory, "process-delegate.md"), [
+		"---",
+		"name: process-delegate",
+		"use-when: Use from a freshly prepared process Runtime.",
+		"---",
+		"Process child context.",
+	].join("\n"), "utf8");
 	const pidEvidence = join(effectiveCwd, "child-pid.txt");
+	let childSystemPrompt = "";
 	broker.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("bash", { command: `printf '%s' "$PPID" > ${JSON.stringify(pidEvidence)}` }, {
-				id: "real-child-bash",
-			}),
-			{ stopReason: "toolUse" },
-		),
+		(context) => {
+			childSystemPrompt = context.systemPrompt ?? "";
+			return fauxAssistantMessage(
+				fauxToolCall("bash", { command: `printf '%s' "$PPID" > ${JSON.stringify(pidEvidence)}` }, {
+					id: "real-child-bash",
+				}),
+				{ stopReason: "toolUse" },
+			);
+		},
 		fauxAssistantMessage(
 			fauxToolCall("agent_observe", { operation: "status" }, {
 				id: "proxied-child-observe",
@@ -295,6 +318,8 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		assert.ok(Number.isSafeInteger(childPid) && childPid > 1);
 		assert.notEqual(childPid, process.pid);
 		assert.equal(broker.state.callCount, 4);
+		assert.match(childSystemPrompt, /## Available Agent Templates/);
+		assert.match(childSystemPrompt, /process-delegate/);
 
 		await waitFor(() => owner.status(receipt.agentId).run.phase === "dormant");
 		const entriesBeforeSuccessor = SessionManager.open(sessionPath).getEntries().length;

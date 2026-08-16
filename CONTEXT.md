@@ -60,6 +60,10 @@ The ordinary Agent Request authored by an Agent Spawn invocation as its child's 
 A user-authored named partial Agent Runtime configuration selected by name during Agent Spawn. Its current complete definition is re-resolved whenever a new Runtime is prepared. It overlays the current resolved configuration of the Direct Spawner, remains overridable by the canonical Agent Spawn configuration, and changes neither protocol identity nor role relationships. Project-scoped Template discovery follows the current parent Runtime working directory. A retained Runtime keeps its already resolved configuration across its exact Runs.
 _Avoid_: Agent profile, Agent role
 
+**Agent Template Catalogue Snapshot**:
+The immutable model-safe selection summary captured when the Workflow Owner is admitted or reloaded, or when another spawning Agent Runtime is prepared. It contains that Runtime's model and thinking level plus the currently selectable Agent Templates without source paths or Project Context bodies, and is exposed only through the active Agent Spawn tool guidance. Every Run in that retained Runtime reuses the Snapshot without resource discovery; Owner resource reload and fresh Runtime Preparation capture replacements. The Snapshot guides selection but grants no authority and is never execution configuration: Agent Spawn re-resolves the selected Template from current resources before preparing a child Runtime.
+_Avoid_: Template cache, Template configuration
+
 **Agent Spawn Configuration**:
 The optional caller-authored `config` object in a context-isolated canonical Agent Spawn tool call. It is the only durable child Runtime configuration input and may override model, thinking, working directory, the ordinary-tool allowlist, skills, extension inheritance, and Project Context. The allowlist is a capability ceiling; Pi and extensions own the active subset and its order. It is never expanded into durable effective configuration. A Conversation Fork rejects Agent Spawn Configuration.
 _Avoid_: Agent settings, runtime state, inheritance snapshot

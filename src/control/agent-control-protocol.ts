@@ -17,7 +17,7 @@ import { MESSAGE_DELIVERY_CUSTOM_TYPE } from "../protocol/message-delivery.ts";
 import { MODERATOR_ROUTINE_START_INSTRUCTION } from "../protocol/moderator-input.ts";
 import type { ModeratorControlInput, ModeratorControlReceipt } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
-import { AgentTemplatePromptContextSchema } from "./control-protocol-schemas.ts";
+import { AgentTemplateCatalogueSnapshotSchema } from "./control-protocol-schemas.ts";
 import {
 	participantCoordinationToolSchemas,
 	type AgentObserveInput,
@@ -625,9 +625,9 @@ export const agentControlMethods = {
 		request: ToolIntention(AgentSpawnInputSchema),
 		response: Type.Unsafe<AgentSpawnReceipt>(AgentSpawnReceiptSchema),
 	},
-	"coordination.templates": {
+	"coordination.templateSnapshot": {
 		request: EmptySchema,
-		response: AgentTemplatePromptContextSchema,
+		response: AgentTemplateCatalogueSnapshotSchema,
 	},
 	"coordination.askHuman": {
 		request: ToolIntention(HumanRequestInputSchema),

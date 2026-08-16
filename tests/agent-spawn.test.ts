@@ -560,9 +560,15 @@ test("a successor Runtime re-resolves its current Template and project resources
 		entryModulePath: "<inline:pi-agent-coordination>",
 		packageRoot: host.cwd,
 		templateRoots: (parentCwd, projectTrusted) => {
-			assert.equal(parentCwd, host.cwd);
 			assert.equal(projectTrusted, true);
-			return [{ scope: "trusted-project", path: templateRoot }];
+			if (parentCwd === host.cwd) {
+				return [{ scope: "trusted-project", path: templateRoot }];
+			}
+			assert.equal(parentCwd, effectiveCwd);
+			return [{
+				scope: "trusted-project",
+				path: join(effectiveCwd, ".agents", "agents"),
+			}];
 		},
 	});
 	const view = coordinator.forAgent(identity.agentId);

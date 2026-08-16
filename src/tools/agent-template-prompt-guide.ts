@@ -1,25 +1,11 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-
 import type {
-	AgentTemplateCatalogueEntry,
-	AgentTemplatePromptContext,
+	AgentTemplateCatalogueSnapshot,
 } from "../templates/agent-templates.ts";
 
-export function registerAgentTemplateCataloguePrompt(
-	pi: ExtensionAPI,
-	resolveTemplates: () => Promise<AgentTemplatePromptContext>,
-): void {
-	pi.on("before_agent_start", async (event) => {
-		const catalogue = renderAgentTemplateCatalogue(await resolveTemplates());
-		if (catalogue === undefined) return;
-		return { systemPrompt: `${event.systemPrompt}\n\n${catalogue}` };
-	});
-}
-
-export function renderAgentTemplateCatalogue(
-	context: AgentTemplatePromptContext,
+export function renderAgentTemplatePromptGuide(
+	snapshot: AgentTemplateCatalogueSnapshot,
 ): string {
-	const templates = [...context.templates]
+	const templates = [...snapshot.templates]
 		.sort((left, right) => left.name.localeCompare(right.name))
 		.map((template) => [
 			`- name: ${template.name}`,
@@ -49,7 +35,7 @@ export function renderAgentTemplateCatalogue(
 		.join("\n");
 	return [
 		"## Current Agent Runtime",
-		`model:\n  id: ${context.currentRuntime.model.provider}/${context.currentRuntime.model.modelId}\n  thinking: ${context.currentRuntime.thinking}`,
+		`model:\n  id: ${snapshot.currentRuntime.model.provider}/${snapshot.currentRuntime.model.modelId}\n  thinking: ${snapshot.currentRuntime.thinking}`,
 		"## Available Agent Templates",
 		"Use `agent_spawn.template` when a Template fits the task. `use-when`, when present, explains when to choose it. Its `config` fields override the listed Template configuration. In `config.model`, use `inherit` to inherit the current Agent's model or thinking value.",
 		...(templates.length === 0 ? ["None."] : [templates]),

@@ -60,7 +60,7 @@ import type {
 import { SerialLane } from "../runtime/serial-lane.ts";
 import type {
 	AgentTemplateCatalogueEntry,
-	AgentTemplatePromptContext,
+	AgentTemplateCatalogueSnapshot,
 	AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
 import { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
@@ -190,7 +190,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 
 export type OrdinaryAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
-	availableTemplates(): Promise<AgentTemplatePromptContext>;
+	agentTemplateSnapshot(): AgentTemplateCatalogueSnapshot;
 }>;
 
 export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
@@ -405,12 +405,16 @@ export class WorkflowCoordinator {
 		});
 	}
 
+	async refreshAgentTemplateSnapshot(agentId: string): Promise<void> {
+		await this.#sessionFactory.captureTemplateSnapshotFor(this.#requireAgent(agentId));
+	}
+
 	forAgent(agentId: string): OrdinaryAgentCoordinatorView {
 		this.#requireAgent(agentId);
 		return Object.freeze({
 			...this.#agentView(agentId),
 			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
-			availableTemplates: () => this.#sessionFactory.availableTemplatesFor(
+			agentTemplateSnapshot: () => this.#sessionFactory.agentTemplateSnapshotFor(
 				this.#requireAgent(agentId),
 			),
 		});

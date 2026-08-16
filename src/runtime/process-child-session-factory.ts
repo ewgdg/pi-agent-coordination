@@ -31,7 +31,7 @@ import {
 	selectAgentTemplateForRun,
 	type AgentTemplate,
 	type AgentTemplateCatalogueEntry,
-	type AgentTemplatePromptContext,
+	type AgentTemplateCatalogueSnapshot,
 	type AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
 import { AgentRuntimeSupervisor } from "./agent-runtime-supervisor.ts";
@@ -160,6 +160,7 @@ export class ProcessChildSessionFactory {
 				});
 				firstPreparation = undefined;
 				record.effectiveConfiguration = prepared.configuration;
+				record.agentTemplateSnapshot = requireAgentTemplateSnapshot(prepared);
 				return this.#launchPreparedRuntime(identity, prepared, sessionPath);
 			},
 		});
@@ -168,7 +169,10 @@ export class ProcessChildSessionFactory {
 			creationInput: spawnInput,
 			...(options.initialPreparation === undefined
 				? {}
-				: { effectiveConfiguration: options.initialPreparation.configuration }),
+				: {
+					effectiveConfiguration: options.initialPreparation.configuration,
+					agentTemplateSnapshot: requireAgentTemplateSnapshot(options.initialPreparation),
+				}),
 			host,
 			transcript: transcriptFromSessionFile(sessionPath),
 			children: [],
@@ -214,37 +218,55 @@ export class ProcessChildSessionFactory {
 		);
 	}
 
-	async availableTemplatesFor(record: AgentRecord): Promise<AgentTemplatePromptContext> {
-		const admittedRuntime = record.host.effectiveRuntimeSnapshot();
-		if (admittedRuntime) {
-			return {
-				currentRuntime: {
-					model: admittedRuntime.model,
-					thinking: admittedRuntime.thinking,
-				},
-				templates: await this.#discoverTemplateCatalogueForRuntime(
-					admittedRuntime.cwd,
-					admittedRuntime.projectTrusted,
-				),
-			};
+	agentTemplateSnapshotFor(record: AgentRecord): AgentTemplateCatalogueSnapshot {
+		if (!record.agentTemplateSnapshot) {
+			throw new Error(
+				`invariant_violation: Agent ${record.identity.agentId} has no prepared Agent Template snapshot`,
+			);
 		}
-		const parentRuntime = await this.#resolveCurrentRuntime(record, new Set());
-		return {
-			currentRuntime: {
-				model: parentRuntime.configuration.model,
-				thinking: parentRuntime.configuration.thinking,
-			},
-			templates: await this.#discoverTemplateCatalogue(parentRuntime),
-		};
+		return record.agentTemplateSnapshot;
 	}
 
-	async #discoverTemplateCatalogue(
-		parentRuntime: ResolvedParentRuntime,
-	): Promise<readonly AgentTemplateCatalogueEntry[]> {
-		return this.#discoverTemplateCatalogueForRuntime(
-			parentRuntime.configuration.cwd,
-			parentRuntime.projectTrusted,
-		);
+	async captureTemplateSnapshotFor(record: AgentRecord): Promise<AgentTemplateCatalogueSnapshot> {
+		const admittedRuntime = record.host.effectiveRuntimeSnapshot();
+		const snapshot = admittedRuntime
+			? await this.#captureTemplateSnapshotForRuntime(admittedRuntime)
+			: await this.#captureTemplateSnapshotForResolvedRuntime(
+				await this.#resolveCurrentRuntime(record, new Set()),
+			);
+		record.agentTemplateSnapshot = snapshot;
+		return snapshot;
+	}
+
+	#captureTemplateSnapshotForResolvedRuntime(
+		runtime: ResolvedParentRuntime,
+	): Promise<AgentTemplateCatalogueSnapshot> {
+		return this.#captureTemplateSnapshotForRuntime({
+			cwd: runtime.configuration.cwd,
+			model: runtime.configuration.model,
+			thinking: runtime.configuration.thinking,
+			projectTrusted: runtime.projectTrusted,
+		});
+	}
+
+	async #captureTemplateSnapshotForRuntime(
+		runtime: Readonly<{
+			cwd: string;
+			model: AgentTemplateCatalogueSnapshot["currentRuntime"]["model"];
+			thinking: AgentTemplateCatalogueSnapshot["currentRuntime"]["thinking"];
+			projectTrusted: boolean;
+		}>,
+	): Promise<AgentTemplateCatalogueSnapshot> {
+		return {
+			currentRuntime: {
+				model: runtime.model,
+				thinking: runtime.thinking,
+			},
+			templates: await this.#discoverTemplateCatalogueForRuntime(
+				runtime.cwd,
+				runtime.projectTrusted,
+			),
+		};
 	}
 
 	async #discoverTemplateCatalogueForRuntime(
@@ -272,7 +294,7 @@ export class ProcessChildSessionFactory {
 			parentRuntime,
 			options.spawnInput.template,
 		);
-		const prepared = await prepareChildRuntime({
+		const preparedRuntime = await prepareChildRuntime({
 			agentId: options.agentId,
 			role: "ordinary",
 			agentDir: this.#ownerRuntime.services.agentDir,
@@ -283,6 +305,15 @@ export class ProcessChildSessionFactory {
 				? {}
 				: { overrides: options.spawnInput.config }),
 		});
+		const prepared: PreparedChildRuntime = {
+			...preparedRuntime,
+			agentTemplateSnapshot: await this.#captureTemplateSnapshotForRuntime({
+				cwd: preparedRuntime.configuration.cwd,
+				model: preparedRuntime.configuration.model,
+				thinking: preparedRuntime.configuration.thinking,
+				projectTrusted: preparedRuntime.projectTrusted,
+			}),
+		};
 		if (!options.preserveParentPromptSurface) return prepared;
 		if (!parentRuntime.activeTools) {
 			throw new Error(
@@ -457,4 +488,15 @@ export class ProcessChildSessionFactory {
 			path === INLINE_PUBLIC_EXTENSION_PATH ||
 			COORDINATION_EXTENSION_PREFIXES.some((prefix) => path.startsWith(prefix));
 	}
+}
+
+function requireAgentTemplateSnapshot(
+	prepared: PreparedChildRuntime,
+): AgentTemplateCatalogueSnapshot {
+	if (!prepared.agentTemplateSnapshot) {
+		throw new Error(
+			`invariant_violation: ordinary Agent ${prepared.agentId} has no prepared Agent Template snapshot`,
+		);
+	}
+	return prepared.agentTemplateSnapshot;
 }

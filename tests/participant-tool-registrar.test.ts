@@ -16,9 +16,8 @@ import {
 } from "../src/tools/participant-coordination-tools.ts";
 import type { OrdinaryAgentCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
 import {
-	registerAgentTemplateCataloguePrompt,
-	renderAgentTemplateCatalogue,
-} from "../src/tools/agent-template-catalogue-prompt.ts";
+	renderAgentTemplatePromptGuide,
+} from "../src/tools/agent-template-prompt-guide.ts";
 import {
 	createTestOwnerHost,
 	type TestCleanupRegistrar,
@@ -75,7 +74,7 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	async spawn() {
 		return { spawnStatus: "not_created", failedStage: "identity_commit" };
 	},
-	async availableTemplates() {
+	async agentTemplateSnapshot() {
 		return {
 			currentRuntime: {
 				model: { provider: "test", modelId: "model" },
@@ -178,7 +177,7 @@ test("Agent Spawn schema accepts conversation forks and rejects extension path a
 });
 
 test("Template catalogue shows current Runtime and available Template configuration", () => {
-	const catalogue = renderAgentTemplateCatalogue({
+	const catalogue = renderAgentTemplatePromptGuide({
 		currentRuntime: {
 			model: { provider: "current", modelId: "model" },
 			thinking: "low",
@@ -218,25 +217,40 @@ test("Template catalogue shows current Runtime and available Template configurat
 	assert.match(catalogue, /id: current\/model/);
 });
 
-test("Template catalogue is injected into the model prompt", async (t) => {
+test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalogue", async (t) => {
 	let observedSystemPrompt = "";
-	const host = await createTestOwnerHost(t, (pi) => {
-		registerAgentTemplateCataloguePrompt(pi, async () => ({
-			currentRuntime: {
-				model: { provider: "current", modelId: "model" },
-				thinking: "low",
-			},
-			templates: [{
-				name: "integration-researcher",
-				useWhen: "Use for integration research.",
-				models: [{
-					model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
-					thinking: "high",
-				}],
-				projectContextMode: "append",
+	const templateSnapshot = {
+		currentRuntime: {
+			model: { provider: "current", modelId: "model" },
+			thinking: "low" as const,
+		},
+		templates: [{
+			name: "integration-researcher",
+			useWhen: "Use for integration research.",
+			models: [{
+				model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
+				thinking: "high" as const,
 			}],
-		}));
+			projectContextMode: "append" as const,
+		}],
+	};
+	const host = await createTestOwnerHost(t, (pi) => {
+		registerParticipantCoordinationTools(
+			pi,
+			"owner",
+			handlers,
+			undefined,
+			templateSnapshot,
+		);
 	});
+	const spawn = host.session.getToolDefinition("agent_spawn");
+	assert.ok(spawn);
+	assert.equal(
+		spawn.promptGuidelines?.some((guideline) =>
+			guideline.includes("integration-researcher")
+		),
+		true,
+	);
 	host.model.setResponses([(context) => {
 		observedSystemPrompt = context.systemPrompt ?? "";
 		return fauxAssistantMessage("Done.");
@@ -429,8 +443,8 @@ test("participant registrar routes intents and returns exact handler receipts", 
 			calls.push(["spawn", toolCallId, input]);
 			return spawnReceipt;
 		},
-		async availableTemplates() {
-			return handlers.availableTemplates();
+		async agentTemplateSnapshot() {
+			return handlers.agentTemplateSnapshot();
 		},
 		async observe(input) {
 			calls.push(["observe", input]);
@@ -521,16 +535,19 @@ test("participant registrar preserves handler errors and Moderator control routi
 	await host.runtime.dispose();
 });
 
-test("ordinary surface composes the participant registrar with /agents while preserving tool contracts", async (t) => {
+test("ordinary surface composes its prepared Template snapshot and /agents with the participant registrar", async (t) => {
 	const direct = await createRegistrarHost(t, "ordinary", handlers);
-	const unavailableView = () => {
-		throw new Error("Surface composition does not resolve CoordinatorView");
-	};
+	const preparedView = () => ({
+		agentTemplateSnapshot: () => ({
+			currentRuntime: {
+				model: { provider: "test", modelId: "model" },
+				thinking: "off" as const,
+			},
+			templates: [],
+		}),
+	}) as unknown as OrdinaryAgentCoordinatorView;
 	const composed = await createTestOwnerHost(t, (pi) => {
-		registerOrdinaryAgentSurfaces(
-			pi,
-			unavailableView as () => OrdinaryAgentCoordinatorView,
-		);
+		registerOrdinaryAgentSurfaces(pi, preparedView);
 	});
 
 	assert.ok(composed.session.extensionRunner.getCommand("agents"));

@@ -21,7 +21,7 @@ import {
 	type ParticipantCoordinationRole,
 	type ParticipantCoordinationToolHandlers,
 } from "./participant-coordination-tools.ts";
-import { registerAgentTemplateCataloguePrompt } from "./agent-template-catalogue-prompt.ts";
+import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 
 type AgentCoordinatorView =
 	| OrdinaryAgentCoordinatorView
@@ -124,27 +124,36 @@ export function registerOrdinaryAgentSurfaces(
 	pi: ExtensionAPI,
 	resolveView: () => OrdinaryAgentCoordinatorView,
 ): void {
+	const handlers = participantCoordinatorHandlers("ordinary", resolveView);
+	const resolveAgentLabel = (agentId: string) => resolveView().agentLabel(agentId);
 	registerParticipantCoordinationTools(
 		pi,
 		"ordinary",
-		participantCoordinatorHandlers("ordinary", resolveView),
-		(agentId) => resolveView().agentLabel(agentId),
+		handlers,
+		resolveAgentLabel,
 	);
-	registerAgentTemplateCataloguePrompt(pi, () => resolveView().availableTemplates());
+	pi.on("session_start", () => registerParticipantCoordinationTools(
+		pi,
+		"ordinary",
+		handlers,
+		resolveAgentLabel,
+		resolveView().agentTemplateSnapshot(),
+	));
 	registerAgentsCommand(pi, resolveView);
 }
 
 export function registerOwnerAgentTools(
 	pi: ExtensionAPI,
 	resolveView: () => OrdinaryAgentCoordinatorView,
+	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot,
 ): void {
 	registerParticipantCoordinationTools(
 		pi,
 		"owner",
 		participantCoordinatorHandlers("owner", resolveView),
 		(agentId) => resolveView().agentLabel(agentId),
+		agentTemplateSnapshot,
 	);
-	registerAgentTemplateCataloguePrompt(pi, () => resolveView().availableTemplates());
 }
 
 export function registerModeratorAgentSurfaces(
@@ -207,14 +216,14 @@ export function participantCoordinatorHandlers(
 	const ordinaryView = resolveView as () => OrdinaryAgentCoordinatorView;
 	const spawn = (toolCallId: string, input: Parameters<OrdinaryAgentCoordinatorView["spawn"]>[1]) =>
 		ordinaryView().spawn(toolCallId, input);
-	const availableTemplates = () => ordinaryView().availableTemplates();
+	const agentTemplateSnapshot = () => ordinaryView().agentTemplateSnapshot();
 	return role === "ordinary"
 		? {
 			...common,
 			spawn,
-			availableTemplates,
+			agentTemplateSnapshot,
 			askUserQuestion: (toolCallId, input, signal) =>
 				ordinaryView().askHuman(toolCallId, input, signal),
 		}
-		: { ...common, spawn, availableTemplates };
+		: { ...common, spawn, agentTemplateSnapshot };
 }

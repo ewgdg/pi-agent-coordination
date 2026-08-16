@@ -62,6 +62,7 @@ export async function initializeOwnerWorkflow(options: {
 				runtime.services.diagnostics.push(reloaded.diagnostic);
 			}
 		}
+		await existing.coordinator.refreshAgentTemplateSnapshot(runtime.session.sessionId);
 		const resolveView = () => existing.coordinator.forAgent(runtime.session.sessionId);
 		installResolvedAgentActivityDock(ctx.ui, resolveView);
 		bindHiddenOwnerAgentExtension({
@@ -108,6 +109,7 @@ export async function initializeOwnerWorkflow(options: {
 		ownerReplacementPreparation = coordinator.shutdown(async () => undefined);
 		return ownerReplacementPreparation;
 	};
+	await coordinator.refreshAgentTemplateSnapshot(identity.agentId);
 	const resolveView = () => coordinator.forAgent(identity.agentId);
 	installResolvedAgentActivityDock(ctx.ui, resolveView);
 	bindHiddenOwnerAgentExtension({

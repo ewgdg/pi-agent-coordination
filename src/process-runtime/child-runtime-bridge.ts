@@ -37,7 +37,6 @@ import {
 } from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
 import { registerParticipantCoordinationTools } from "../tools/participant-coordination-tools.ts";
-import { registerAgentTemplateCataloguePrompt } from "../tools/agent-template-catalogue-prompt.ts";
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
@@ -140,6 +139,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		createControlBackedChildPresentationHandlers(participantRequest),
 	);
 	let participantLifecycle: ParticipantLifecycleHandlers;
+	let refreshOrdinaryAgentTools: (() => Promise<void>) | undefined;
 	if (bootstrap.role === "ordinary") {
 		const participant = createControlBackedChildParticipantHandlers(
 			"ordinary",
@@ -155,9 +155,12 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			participant.coordination,
 			resolveAgentLabel,
 		);
-		registerAgentTemplateCataloguePrompt(
+		refreshOrdinaryAgentTools = async () => registerParticipantCoordinationTools(
 			pi,
-			() => participant.coordination.availableTemplates(),
+			"ordinary",
+			participant.coordination,
+			resolveAgentLabel,
+			await participant.coordination.agentTemplateSnapshot(),
 		);
 	} else {
 		const participant = createControlBackedChildParticipantHandlers(
@@ -310,6 +313,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 					expectedSessionId: bootstrap.expectedSessionId,
 				});
 			}
+			if (bootstrap.ownerPresentation) await refreshOrdinaryAgentTools?.();
 			if (bootstrap.ownerPresentation) {
 				binding.activity.update(
 					await participantRequest("presentation.agents.snapshot", {}),
@@ -538,7 +542,7 @@ async function handleOwnerRequest(
 		case "coordination.wait":
 		case "coordination.control":
 		case "coordination.spawn":
-		case "coordination.templates":
+		case "coordination.templateSnapshot":
 		case "coordination.askHuman":
 		case "coordination.moderatorControl":
 		case "presentation.agents.snapshot":

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import piAgentCoordination from "../src/index.ts";
 import {
 	bindTestOwnerHost,
@@ -33,6 +34,22 @@ test("print, JSON, and RPC modes keep coordination tools inactive", async (t) =>
 			await host.runtime.dispose();
 		});
 	}
+});
+
+test("headless prompts do not resolve an inactive Owner Template snapshot", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	host.runtime.setRebindSession(async () => undefined);
+	await bindTestOwnerHost(host, "print");
+	host.model.setResponses([fauxAssistantMessage("Headless prompt completed.")]);
+
+	await host.session.prompt("Run without Owner coordination.");
+
+	assert.equal(
+		host.ui.notifications.some(({ message }) =>
+			message.includes("Owner Workflow is not admitted")
+		),
+		false,
+	);
 });
 
 test("headless startup never validates a malformed interactive Runtime", async (t) => {

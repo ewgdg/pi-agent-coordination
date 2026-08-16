@@ -21,7 +21,7 @@ import type {
 	ModeratorControlReceipt,
 } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
-import type { AgentTemplatePromptContext } from "../templates/agent-templates.ts";
+import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import {
 	renderAgentControlCall,
 	renderAgentControlResult,
@@ -42,6 +42,7 @@ import {
 	renderAgentSpawnCall,
 	renderAgentSpawnResult,
 } from "./spawn-renderer.ts";
+import { renderAgentTemplatePromptGuide } from "./agent-template-prompt-guide.ts";
 
 export type ParticipantCoordinationRole = "ordinary" | "moderator" | "owner";
 
@@ -95,7 +96,7 @@ type CommonParticipantCoordinationToolHandlers = Readonly<{
 
 type SpawnParticipantCoordinationToolHandler = Readonly<{
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
-	availableTemplates(): Promise<AgentTemplatePromptContext>;
+	agentTemplateSnapshot(): AgentTemplateCatalogueSnapshot | Promise<AgentTemplateCatalogueSnapshot>;
 }>;
 
 type HumanParticipantCoordinationToolHandler = Readonly<{
@@ -370,6 +371,7 @@ export function registerParticipantCoordinationTools<
 	role: Role,
 	handlers: ParticipantCoordinationToolHandlers<Role>,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
+	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot,
 ): void {
 	const availableHandlers = handlers as AvailableHandlers;
 	pi.registerTool<typeof agentMessageParameters, AgentMessageReceipt>({
@@ -433,7 +435,13 @@ export function registerParticipantCoordinationTools<
 			description:
 				"Create one fresh durable child Agent with isolated context or a cache-affine conversation fork, then deliver its initial Creation Request.",
 			promptSnippet: "Create a fresh child Agent with isolated work or a cache-affine conversation fork.",
-			promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE, AGENT_SPAWN_PROMPT_GUIDE],
+			promptGuidelines: [
+				AGENT_TOOLS_PROMPT_GUIDE,
+				AGENT_SPAWN_PROMPT_GUIDE,
+				...(agentTemplateSnapshot === undefined
+					? []
+					: [renderAgentTemplatePromptGuide(agentTemplateSnapshot)]),
+			],
 			executionMode: "sequential",
 			parameters: agentSpawnParameters,
 			renderCall: renderAgentSpawnCall,

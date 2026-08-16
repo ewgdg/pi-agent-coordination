@@ -255,6 +255,49 @@ test("resource reload rebinds the hidden Owner Agent extension", async (t) => {
 	await host.runtime.dispose();
 });
 
+test("Owner prompts retain their prepared Template snapshot until resource reload", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	const templateDirectory = join(host.services.agentDir, "agents");
+	const templatePath = join(templateDirectory, "delegate.md");
+	await mkdir(templateDirectory, { recursive: true });
+	await writeFile(templatePath, [
+		"---",
+		"name: first-delegate",
+		"use-when: Use the prepared first snapshot.",
+		"---",
+		"First context.",
+	].join("\n"), "utf8");
+	await bindTestOwnerHost(host, "tui");
+
+	await writeFile(templatePath, [
+		"---",
+		"name: second-delegate",
+		"use-when: Use only after resource reload.",
+		"---",
+		"Second context.",
+	].join("\n"), "utf8");
+	let promptBeforeReload = "";
+	host.model.setResponses([(context) => {
+		promptBeforeReload = context.systemPrompt ?? "";
+		return fauxAssistantMessage("Used the retained snapshot.");
+	}]);
+	await host.session.prompt("Inspect the prepared Agent Templates.");
+
+	assert.match(promptBeforeReload, /first-delegate/);
+	assert.doesNotMatch(promptBeforeReload, /second-delegate/);
+
+	await host.session.reload();
+	let promptAfterReload = "";
+	host.model.setResponses([(context) => {
+		promptAfterReload = context.systemPrompt ?? "";
+		return fauxAssistantMessage("Used the refreshed snapshot.");
+	}]);
+	await host.session.prompt("Inspect the refreshed Agent Templates.");
+
+	assert.match(promptAfterReload, /second-delegate/);
+	assert.doesNotMatch(promptAfterReload, /first-delegate/);
+});
+
 test("an invalid initial Workflow Policy prevents coordination runtime creation", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	const policyPath = join(
@@ -428,6 +471,14 @@ test("a child bootstrap cannot be reclassified as Workflow Owner", async (t) => 
 	);
 	assertOwnerToolsRegisteredButInactive(host);
 	assert.equal(host.session.extensionRunner.getCommand("agents"), undefined);
+	host.model.setResponses([fauxAssistantMessage("Child prompt completed.")]);
+	await host.session.prompt("Continue as the existing child Agent.");
+	assert.equal(
+		host.ui.notifications.some(({ message }) =>
+			message.includes("Owner Workflow is not admitted")
+		),
+		false,
+	);
 	await host.runtime.dispose();
 });
 

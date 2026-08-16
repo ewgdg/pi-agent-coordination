@@ -43,7 +43,7 @@ export const AgentTemplateCatalogueEntrySchema = Type.Object({
 	projectContextMode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
 }, { additionalProperties: false });
 
-export const AgentTemplatePromptContextSchema = Type.Object({
+export const AgentTemplateCatalogueSnapshotSchema = Type.Object({
 	currentRuntime: Type.Object({
 		model: Type.Object({
 			provider: NonEmptyStringSchema,

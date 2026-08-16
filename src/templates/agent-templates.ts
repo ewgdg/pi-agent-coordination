@@ -33,7 +33,7 @@ export type AgentTemplateCatalogueEntry = Readonly<{
 	projectContextMode: ProjectContextMode;
 }>;
 
-export type AgentTemplatePromptContext = Readonly<{
+export type AgentTemplateCatalogueSnapshot = Readonly<{
 	currentRuntime: Readonly<{
 		model: ModelReference;
 		thinking: RuntimeThinkingLevel;

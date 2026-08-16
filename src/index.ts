@@ -47,14 +47,15 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	// An earlier extension can launch fire-and-forget model work from session_start.
 	// Hold that turn until this exact Owner admission has either succeeded or failed.
 	pi.on("before_agent_start", () => ownerAdmissionSettled);
-	// Pi reconstructs replacement transcripts before session_start. Register the
-	// official tool definitions now so historical calls receive their renderers.
-	registerOwnerAgentTools(pi, () => {
+	const resolveAdmittedOwnerView = () => {
 		if (!resolveOwnerView) {
 			throw new Error("Owner Workflow is not admitted");
 		}
 		return resolveOwnerView();
-	});
+	};
+	// Pi reconstructs replacement transcripts before session_start. Register the
+	// official tool definitions now so historical calls receive their renderers.
+	registerOwnerAgentTools(pi, resolveAdmittedOwnerView);
 
 	const bootstrapOwner: ExtensionHandler<SessionStartEvent> = async (event, ctx) => {
 		deactivateOwnerAgentTools(pi);
@@ -68,6 +69,11 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 				bootstrapHandler: bootstrapOwner,
 				event,
 			});
+			registerOwnerAgentTools(
+				pi,
+				resolveAdmittedOwnerView,
+				resolveOwnerView().agentTemplateSnapshot(),
+			);
 			activateOwnerAgentTools(pi);
 			currentWorkflowOwnerAdmitted = true;
 		} catch (error) {

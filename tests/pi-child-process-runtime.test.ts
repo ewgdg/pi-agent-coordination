@@ -891,7 +891,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 			async executionEnded() {},
 		},
 		coordination: {
-			async availableTemplates() {
+			async agentTemplateSnapshot() {
 				return {
 					currentRuntime: {
 						model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },

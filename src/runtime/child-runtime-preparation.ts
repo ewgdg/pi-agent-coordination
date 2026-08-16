@@ -16,7 +16,10 @@ import {
 	type AgentSpawnConfigurationInput,
 	type EffectiveAgentRunConfiguration,
 } from "../templates/agent-configuration.ts";
-import type { AgentTemplate } from "../templates/agent-templates.ts";
+import type {
+	AgentTemplate,
+	AgentTemplateCatalogueSnapshot,
+} from "../templates/agent-templates.ts";
 
 const COORDINATION_TOOLS_BY_ROLE = {
 	ordinary: [
@@ -53,6 +56,7 @@ export type PreparedChildRuntime = Readonly<{
 	agentId: string;
 	role: AgentRuntimeRole;
 	configuration: EffectiveAgentRunConfiguration;
+	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot;
 	initialTools?: readonly string[];
 	projectTrusted: boolean;
 	skillSources: readonly Readonly<{ name: string; path: string }>[];

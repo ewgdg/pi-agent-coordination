@@ -74,7 +74,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		"coordination.wait",
 		"coordination.control",
 		"coordination.spawn",
-		"coordination.templates",
+		"coordination.templateSnapshot",
 		"coordination.askHuman",
 		"coordination.moderatorControl",
 		"presentation.agents.snapshot",
