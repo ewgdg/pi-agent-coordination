@@ -5,16 +5,16 @@ import {
 	type Component,
 } from "@earendil-works/pi-tui";
 
-const COLLAPSED_BODY_LINES = 2;
+const COLLAPSED_BODY_LINES = 3;
 
 /**
  * Shared collapsed body preview for coordination content.
  *
  * One bounded preview for delivered Message bodies, sent Message/Request
  * payloads, Answers, cancellation reasons, and retrieved Answer previews:
- * whitespace is normalized, the body wraps to the supplied width, and a
+ * source formatting is preserved, the body wraps to the supplied width, and a
  * trailing ellipsis marks truncation. Long bodies are capped at
- * {@link COLLAPSED_BODY_LINES} visible lines.
+ * {@link COLLAPSED_BODY_LINES} visible terminal rows.
  */
 export class BodyPreview implements Component {
 	readonly #body: string;
@@ -27,9 +27,9 @@ export class BodyPreview implements Component {
 
 	render(width: number): string[] {
 		if (width <= 0) return [];
-		const normalized = this.#body.replaceAll(/\s+/g, " ").trim();
-		if (normalized.length === 0) return [];
-		const lines = wrapTextWithAnsi(this.#color(normalized), width);
+		const formatted = formattedBody(this.#body);
+		if (formatted.length === 0) return [];
+		const lines = wrapTextWithAnsi(this.#color(formatted), width);
 		if (lines.length <= COLLAPSED_BODY_LINES) return lines;
 
 		const visibleLines = lines.slice(0, COLLAPSED_BODY_LINES);
@@ -45,4 +45,12 @@ export class BodyPreview implements Component {
 	}
 
 	invalidate(): void {}
+}
+
+function formattedBody(body: string): string {
+	const lines = body.replaceAll(/\r\n?/g, "\n").split("\n");
+	const firstContentLine = lines.findIndex((line) => line.trim().length > 0);
+	if (firstContentLine === -1) return "";
+	const lastContentLine = lines.findLastIndex((line) => line.trim().length > 0);
+	return lines.slice(firstContentLine, lastContentLine + 1).join("\n");
 }

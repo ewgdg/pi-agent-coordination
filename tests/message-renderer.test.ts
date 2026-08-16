@@ -61,6 +61,16 @@ test("send call shows the [Send] badge, compact target identity, and bounded con
 	assert.doesNotMatch(rendered, /Distinctive ending/);
 });
 
+test("collapsed send call preserves formatting within three visible body rows", () => {
+	const rendered = renderCall({
+		operation: "send",
+		targetAgentId,
+		content: "First line.\n\nThird line.",
+	});
+	assert.match(rendered, /First line\.\n\nThird line\.$/);
+	assert.doesNotMatch(rendered, /…/);
+});
+
 test("send call marks steer delivery", () => {
 	const rendered = renderCall({
 		operation: "send",

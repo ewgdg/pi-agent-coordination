@@ -43,7 +43,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		"reason",
 		"requestMessageId",
 	]);
-	const longContent = "Direction ".repeat(20).trim();
+	const longContent = "Direction ".repeat(60).trim();
 	const receiverAgentId = host.session.sessionId;
 	const args = {
 		operation: "send" as const,
