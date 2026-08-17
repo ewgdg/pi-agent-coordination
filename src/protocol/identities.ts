@@ -153,7 +153,9 @@ export function currentCoordinationScope(
 	agentId: string,
 ): readonly SessionEntry[] {
 	const entries = transcript.entries;
-	const bootstrapIndex = entries.findIndex(
+	// Self-healing may append a canonical Identity after stale evidence; the
+	// latest matching bootstrap is the current coordination cutoff.
+	const bootstrapIndex = entries.findLastIndex(
 		(entry) =>
 			(entry.type === "custom" &&
 				entry.customType === AGENT_IDENTITY_CUSTOM_TYPE &&

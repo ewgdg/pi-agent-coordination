@@ -163,27 +163,112 @@ test("an existing Owner Identity without a description is canonicalized without 
 	await host.runtime.dispose();
 });
 
-test("an Owner Identity rejects a contradictory role description", async (t) => {
+test("an Owner Identity repairs a stale id with a current bootstrap", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	const malformedIdentity = {
+		...ownerIdentityFor(host),
+		agentId: "stale-owner-id",
+		workflowId: "stale-workflow-id",
+		metadata: {
+			label: "owner",
+			description: "workflow owner",
+			extra: "obsolete metadata",
+		},
+		configuration: { label: "owner" },
+	};
+	host.session.sessionManager.appendCustomEntry(
+		"agent-coordination.identity",
+		malformedIdentity,
+	);
+
+	await bindTestOwnerHost(host, "tui");
+
+	assert.equal(host.ui.notifications.some(({ type }) => type === "error"), false);
+	const identityEntries = host.session.sessionManager.getEntries().filter(
+		(entry) =>
+			entry.type === "custom" && entry.customType === "agent-coordination.identity",
+	);
+	assert.equal(identityEntries.length, 2);
+	assert.deepEqual(
+		identityEntries[0]?.type === "custom" ? identityEntries[0].data : undefined,
+		malformedIdentity,
+	);
+	assert.deepEqual(
+		identityEntries[1]?.type === "custom" ? identityEntries[1].data : undefined,
+		{
+			agentId: host.session.sessionId,
+			workflowId: host.session.sessionId,
+			directSpawnerAgentId: null,
+			metadata: { label: "Owner", description: "Workflow Owner" },
+		},
+	);
+	assert.ok(host.session.getActiveToolNames().includes("agent_observe"));
+
+	const observe = host.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const status = await observe.execute(
+		"observe-repaired-owner-metadata",
+		{ operation: "status" },
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	assert.equal((status.details as { description: string }).description, "Workflow Owner");
+	await host.runtime.dispose();
+});
+
+test("an Owner Identity repairs contradictory role metadata", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	host.session.sessionManager.appendCustomEntry("agent-coordination.identity", {
 		...ownerIdentityFor(host),
+		workflowId: "stale-workflow-id",
 		metadata: {
-			label: "Owner",
-			description: "unrelated role",
+			label: "unrelated role",
+			description: "unrelated description",
 		},
 	});
+
+	await bindTestOwnerHost(host, "tui");
+
+	assert.equal(host.ui.notifications.some(({ type }) => type === "error"), false);
+	assert.ok(host.session.getActiveToolNames().includes("agent_observe"));
+	await host.runtime.dispose();
+});
+
+test("a Moderator bootstrap can recover through native /new", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	const failedSessionId = host.session.sessionId;
+	host.session.sessionManager.appendCustomMessageEntry(
+		"agent-coordination.moderator-input",
+		"{}",
+		true,
+		{
+			agentId: host.session.sessionId,
+			workflowId: "workflow-owner",
+			metadata: {
+				label: "Moderator",
+				description: "run failure",
+			},
+		},
+	);
 
 	await bindTestOwnerHost(host, "tui");
 
 	assert.equal(
 		host.ui.notifications.some(
 			({ message, type }) =>
-				type === "error" &&
-				message.includes('Owner description must be "Workflow Owner"'),
+				type === "error" && message.includes("current Pi session is a Moderator"),
 		),
 		true,
 	);
 	assertOwnerToolsRegisteredButInactive(host);
+
+	const replacement = await host.runtime.newSession();
+	assert.deepEqual(replacement, { cancelled: false });
+	assert.notEqual(host.runtime.session.sessionId, failedSessionId);
+	assert.ok(host.runtime.session.getToolDefinition("agent_observe"));
+	assert.ok(host.runtime.session.getActiveToolNames().includes("agent_observe"));
+
 	await host.runtime.dispose();
 });
 
@@ -448,7 +533,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 	await host.runtime.dispose();
 });
 
-test("a child bootstrap cannot be reclassified as Workflow Owner", async (t) => {
+test("a valid child Identity is not reclassified as Workflow Owner", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
 	host.session.sessionManager.appendCustomEntry("agent-coordination.identity", {
 		...ownerIdentityFor(host),

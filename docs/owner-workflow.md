@@ -4,19 +4,19 @@ Loading `pi-agent-coordination` in an interactive Pi TUI establishes the current
 
 Before creating the coordination runtime, bootstrap loads and validates the optional user [Workflow Policy](workflow-policy.md). Invalid initial policy prevents runtime creation without appending Owner Identity.
 
-On first activation, the package appends one non-model-visible `agent-coordination.identity` entry. The Pi session identity is both the Agent identity and Workflow identity, and Owner metadata is fixed to the label `owner`. Resolved Owner Runtime configuration and resources are not copied into Identity.
+On first activation, the package appends one non-model-visible `agent-coordination.identity` entry. The Pi session identity is both the Agent identity and Workflow identity, and Owner metadata is fixed to the canonical Owner role. Resolved Owner Runtime configuration and resources are not copied into Identity.
 
-On later activation, the package validates the existing current-scope Owner Identity exactly. A session identified as a child Agent or Moderator is not reclassified.
+On later activation, the package canonicalizes ordinary Identity evidence using the live Pi session for both Owner identity IDs and current Owner metadata. Malformed or copied ordinary Identity entries are treated as historical during recovery; bootstrap appends one current-scope Owner Identity when needed while preserving the old evidence. A structurally valid child Identity for the current session remains a child, and a distinct Moderator Input remains a separate role bootstrap.
 
 ## Owner fork and clone
 
-Pi's native fork and clone operations are available only while the current interactive session is the admitted Workflow Owner. An ordinary child or Moderator attempt is cancelled before Pi prepares a replacement session.
+Pi's native fork and clone operations are available only while the current interactive session is the admitted Workflow Owner. An ordinary child or Moderator attempt is cancelled before Pi prepares a replacement session. If Owner bootstrap fails, coordination remains inactive and native `/new` stays available so the user can recover in a clean Owner session; other replacements remain fenced until admission succeeds.
 
 A successful Owner fork receives a fresh Pi session identity and appends one fresh fixed Owner Identity. That entry is the coordination-evidence cutoff for the new Workflow. Pi's copied conversation remains native model and history context, but earlier Agent Identities, Messages, Requests, Deliveries, and authority are outside the new current scope.
 
 The new Owner identity also selects a new Workflow transcript directory. The fork therefore begins with no ordinary children or Moderators from the source Workflow. Source identities and Request identities cannot be observed, controlled, polled, retried, Answered, or cancelled from the fork. New children created in the fork belong only to the new Workflow.
 
-Owner `/new`, `/resume`, fork, and clone replacement exhaustively end the source Workflow's transient hosted Runs without changing its transcripts. A new or forked Owner starts a fresh Workflow; resuming an existing Owner reconstructs that session's verified Workflow. Reopening the source Owner reconstructs its verified source Workflow normally. A copied child or Moderator transcript prepared outside Pi's cancellable live fork path is not admitted as a Workflow Owner; participant admission still requires a matching bootstrap for its own Pi session identity.
+Owner `/new`, `/resume`, fork, and clone replacement exhaustively end the source Workflow's transient hosted Runs without changing its transcripts. A new or forked Owner starts a fresh Workflow; resuming an existing Owner reconstructs that session's verified Workflow. Reopening the source Owner reconstructs its verified source Workflow normally. An ordinary Identity copied by an interrupted fork is treated as historical and receives a fresh current Owner bootstrap; a structurally valid child Identity for the current session still requires child admission, and a distinct Moderator Input still requires Moderator admission.
 
 ## Coordination surface
 

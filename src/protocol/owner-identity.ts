@@ -1,4 +1,7 @@
-import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
+import type {
+	AgentSessionRuntime,
+	SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 
 import {
 	AGENT_IDENTITY_CUSTOM_TYPE,
@@ -32,12 +35,12 @@ export function adoptOrValidateOwnerIdentity(
 	const sessionManager = runtime.session.sessionManager;
 	const sessionId = sessionManager.getSessionId();
 	const entries = sessionManager.getEntries();
-	const matchingIdentityEntries = entries.filter(
-		(entry) =>
-			entry.type === "custom" &&
-			entry.customType === AGENT_IDENTITY_CUSTOM_TYPE &&
-			isRecord(entry.data) &&
-			entry.data.agentId === sessionId,
+	const identityEntries = entries.filter(
+		(entry): entry is Extract<SessionEntry, { type: "custom" }> =>
+			entry.type === "custom" && entry.customType === AGENT_IDENTITY_CUSTOM_TYPE,
+	);
+	const matchingIdentityEntries = identityEntries.filter(
+		(entry) => isRecord(entry.data) && entry.data.agentId === sessionId,
 	);
 	const matchingModeratorEntries = entries.filter(
 		(entry) =>
@@ -50,22 +53,34 @@ export function adoptOrValidateOwnerIdentity(
 	if (matchingModeratorEntries.length > 0) {
 		throw new InvalidOwnerIdentityError("current Pi session is a Moderator");
 	}
-	if (matchingIdentityEntries.length > 1) {
-		throw new InvalidOwnerIdentityError("current Pi session has multiple Identity entries");
+
+	const currentIdentity = matchingIdentityEntries.at(-1);
+	if (currentIdentity) {
+		if (isValidCurrentChildIdentity(currentIdentity.data, sessionId)) {
+			throw new InvalidOwnerIdentityError("current Pi session is a child Agent");
+		}
+		const identity = createCanonicalOwnerIdentity(sessionId);
+		if (!isCanonicalOwnerIdentity(currentIdentity.data, sessionId)) {
+			// The current session is authoritative. Append a fresh cutoff so stale
+			// Identity data, including child-shaped fork remnants, is historical only.
+			sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, identity);
+		}
+		return identity;
 	}
-	if (matchingIdentityEntries.length === 1) {
-		const entry = matchingIdentityEntries[0];
-		if (entry.type !== "custom") throw new Error("Identity entry narrowing failed");
-		return validateOwnerIdentity(entry.data, sessionId);
+	if (identityEntries.length > 0) {
+		// Any Identity entry without a current-session ID may be the tail of an
+		// interrupted fork. Continue with a fresh Owner bootstrap instead of
+		// reclassifying the copied evidence.
+		const identity = createCanonicalOwnerIdentity(sessionId);
+		sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, identity);
+		return identity;
 	}
 	if (
 		!options?.allowCopiedCoordinationContext &&
 		entries.some(
 			(entry) =>
-				(entry.type === "custom" &&
-					entry.customType === AGENT_IDENTITY_CUSTOM_TYPE) ||
-				(entry.type === "custom_message" &&
-					entry.customType === MODERATOR_INPUT_CUSTOM_TYPE),
+				entry.type === "custom_message" &&
+				entry.customType === MODERATOR_INPUT_CUSTOM_TYPE,
 		)
 	) {
 		throw new InvalidOwnerIdentityError(
@@ -73,74 +88,88 @@ export function adoptOrValidateOwnerIdentity(
 		);
 	}
 
-	const identity: OwnerIdentity = {
+	const identity = createCanonicalOwnerIdentity(sessionId);
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, identity);
+	return identity;
+}
+
+function createCanonicalOwnerIdentity(sessionId: string): OwnerIdentity {
+	return {
 		agentId: sessionId,
 		workflowId: sessionId,
 		directSpawnerAgentId: null,
 		metadata: resolveOwnerAgentMetadata(),
 	};
-	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, identity);
-	return identity;
 }
 
-function validateOwnerIdentity(value: unknown, sessionId: string): OwnerIdentity {
-	if (
-		isRecord(value) &&
-		(value.workflowId !== sessionId ||
-			value.directSpawnerAgentId !== null ||
-			"spawnSource" in value)
-	) {
-		throw new InvalidOwnerIdentityError("current Pi session is a child Agent");
-	}
-	const identity = requireExactRecord(value, [
-		"agentId",
-		"workflowId",
-		"directSpawnerAgentId",
-		"metadata",
-	]);
-	if (identity.agentId !== sessionId || identity.workflowId !== sessionId) {
-		throw new InvalidOwnerIdentityError("current Pi session is a child Agent");
-	}
-	if (identity.directSpawnerAgentId !== null) {
-		throw new InvalidOwnerIdentityError("Owner directSpawnerAgentId must be null");
-	}
-	const metadata = requireExactRecord(identity.metadata, [
-		"label",
-		...(isRecord(identity.metadata) && identity.metadata.description !== undefined
-			? ["description"]
-			: []),
-	]);
-	const canonicalMetadata = resolveOwnerAgentMetadata();
-	if (metadata.label !== canonicalMetadata.label) {
-		throw new InvalidOwnerIdentityError('Owner label must be "Owner"');
-	}
-	if (
-		metadata.description !== undefined &&
-		metadata.description !== canonicalMetadata.description
-	) {
-		throw new InvalidOwnerIdentityError(
-			'Owner description must be "Workflow Owner"',
-		);
-	}
-	return {
-		agentId: sessionId,
-		workflowId: sessionId,
-		directSpawnerAgentId: null,
-		metadata: canonicalMetadata,
-	};
+function isCanonicalOwnerIdentity(value: unknown, sessionId: string): boolean {
+	return isRecord(value) &&
+		value.agentId === sessionId &&
+		value.workflowId === sessionId &&
+		value.directSpawnerAgentId === null &&
+		!("spawnSource" in value);
 }
 
-function requireExactRecord(value: unknown, expectedKeys: readonly string[]): Record<string, unknown> {
-	if (!isRecord(value)) throw new InvalidOwnerIdentityError("Identity data must be an object");
+function isValidCurrentChildIdentity(value: unknown, sessionId: string): boolean {
+	return isValidChildIdentity(value) && value.agentId === sessionId;
+}
+
+function isValidChildIdentity(
+	value: unknown,
+): value is Record<string, unknown> & {
+	agentId: string;
+	workflowId: string;
+	directSpawnerAgentId: string;
+	spawnSource: Record<string, unknown>;
+} {
+	if (
+		!isRecord(value) ||
+		!hasExactKeys(value, [
+			"agentId",
+			"workflowId",
+			"directSpawnerAgentId",
+			"spawnSource",
+			"metadata",
+		]) ||
+		!isIdentifier(value.agentId) ||
+		!isIdentifier(value.workflowId) ||
+		value.workflowId === value.agentId ||
+		!isIdentifier(value.directSpawnerAgentId) ||
+		value.directSpawnerAgentId === value.agentId ||
+		!isRecord(value.spawnSource) ||
+		!hasExactKeys(value.spawnSource, ["agentId", "entryId", "toolCallId"]) ||
+		value.spawnSource.agentId !== value.directSpawnerAgentId ||
+		!isIdentifier(value.spawnSource.entryId) ||
+		!isIdentifier(value.spawnSource.toolCallId)
+	) {
+		return false;
+	}
+	if (!isRecord(value.metadata)) return false;
+	if (
+		!hasExactKeys(
+			value.metadata,
+			value.metadata.description === undefined
+				? ["label"]
+				: ["label", "description"],
+		) ||
+		!isIdentifier(value.metadata.label) ||
+		(value.metadata.description !== undefined &&
+			!isIdentifier(value.metadata.description))
+	) {
+		return false;
+	}
+	return true;
+}
+
+function hasExactKeys(value: Record<string, unknown>, expectedKeys: readonly string[]): boolean {
 	const actualKeys = Object.keys(value).sort();
 	const sortedExpectedKeys = [...expectedKeys].sort();
-	if (
-		actualKeys.length !== sortedExpectedKeys.length ||
-		actualKeys.some((key, index) => key !== sortedExpectedKeys[index])
-	) {
-		throw new InvalidOwnerIdentityError("Identity data has an invalid shape");
-	}
-	return value;
+	return actualKeys.length === sortedExpectedKeys.length &&
+		actualKeys.every((key, index) => key === sortedExpectedKeys[index]);
+}
+
+function isIdentifier(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && !value.includes("\0");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

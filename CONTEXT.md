@@ -7,6 +7,9 @@ This context defines durable Agent identities and their transient live coordinat
 **Agent Identity**:
 The immutable transcript bootstrap facts for one Agent, bound to its expected Pi session identity. The ordinary Identity entry creates a Workflow Owner when its Agent ID equals its Workflow ID, or a spawned Agent when it names a Direct Spawner, matching Agent Spawn source, and display metadata. A runtime-created Moderator instead receives one atomic Moderator Input bootstrap containing its Workflow relationship, display metadata, and model-visible creation reason. Resolved Runtime configuration is not Agent Identity.
 
+**Owner Identity Canonicalization**:
+The canonical interpretation of ordinary Identity evidence using the live Pi session for both Owner identity IDs and current Owner metadata. Malformed or copied ordinary Identity evidence is historical during recovery, and one current-scope Owner bootstrap may be appended when needed; a structurally valid child Identity for the current session remains a child. A distinct Moderator Input remains a separate role bootstrap.
+
 **Owner Fork**:
 A native Pi fork or clone of a Workflow Owner into a fresh independent Workflow. Its fresh Owner Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no Message, Request, authority, or child relationship in the new Workflow. Forking a child Agent or Moderator is not admitted.
 

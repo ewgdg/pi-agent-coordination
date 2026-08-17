@@ -39,7 +39,8 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 		(agentId) => resolveOwnerView?.().agentLabel(agentId),
 	);
 	const bridge = installInteractiveHostBridge(hostPi);
-	let currentWorkflowOwnerAdmitted = false;
+	type OwnerAdmissionState = "pending" | "admitted" | "failed";
+	let ownerAdmissionState: OwnerAdmissionState = "pending";
 	let settleOwnerAdmission: () => void = () => {};
 	const ownerAdmissionSettled = new Promise<void>((resolve) => {
 		settleOwnerAdmission = resolve;
@@ -75,8 +76,9 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 				resolveOwnerView().agentTemplateSnapshot(),
 			);
 			activateOwnerAgentTools(pi);
-			currentWorkflowOwnerAdmitted = true;
+			ownerAdmissionState = "admitted";
 		} catch (error) {
+			ownerAdmissionState = "failed";
 			deactivateOwnerAgentTools(pi);
 			throw error;
 		} finally {
@@ -86,11 +88,18 @@ const piAgentCoordination: ExtensionFactory = (pi) => {
 	pi.on("session_start", bootstrapOwner);
 	pi.on("session_before_fork", (_event, ctx) => {
 		if (ctx.mode !== "tui" || !ctx.hasUI) return;
-		return currentWorkflowOwnerAdmitted ? undefined : { cancel: true };
+		return ownerAdmissionState === "admitted" ? undefined : { cancel: true };
 	});
-	pi.on("session_before_switch", (_event, ctx) => {
+	pi.on("session_before_switch", (event, ctx) => {
 		if (ctx.mode !== "tui" || !ctx.hasUI) return;
-		return currentWorkflowOwnerAdmitted ? undefined : { cancel: true };
+		// A failed bootstrap must not trap the user in a session that cannot host
+		// coordination. Keep other replacements fenced until admission succeeds,
+		// but let native /new create a clean Owner transcript for recovery.
+		const canRecoverWithNewSession =
+			ownerAdmissionState === "failed" && event.reason === "new";
+		return ownerAdmissionState === "admitted" || canRecoverWithNewSession
+			? undefined
+			: { cancel: true };
 	});
 };
 

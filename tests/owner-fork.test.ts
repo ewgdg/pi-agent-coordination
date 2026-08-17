@@ -97,7 +97,7 @@ test("native fork is cancelled for a matching Moderator bootstrap", async (t) =>
 	}
 });
 
-test("offline fork preparation cannot reclassify copied child evidence as Owner", async (t) => {
+test("offline fork preparation repairs copied child evidence into the current Owner", async (t) => {
 	const source = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 	});
@@ -137,7 +137,7 @@ test("offline fork preparation cannot reclassify copied child evidence as Owner"
 			typeof prepared.session.getToolDefinition("agent_observe")?.renderResult,
 			"function",
 		);
-		assert.equal(prepared.session.getActiveToolNames().includes("agent_observe"), false);
+		assert.equal(prepared.session.getActiveToolNames().includes("agent_observe"), true);
 		assert.equal(
 			prepared.session.sessionManager.getEntries().some(
 				(entry) =>
@@ -145,11 +145,11 @@ test("offline fork preparation cannot reclassify copied child evidence as Owner"
 					entry.customType === "agent-coordination.identity" &&
 					(entry.data as { agentId?: unknown }).agentId === prepared.session.sessionId,
 			),
-			false,
+			true,
 		);
 		assert.equal(
 			prepared.ui.notifications.some(({ type }) => type === "error"),
-			true,
+			false,
 		);
 	} finally {
 		await prepared.runtime.dispose();
