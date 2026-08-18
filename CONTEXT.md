@@ -88,6 +88,10 @@ _Avoid_: Workflow state, Workflow configuration lifecycle
 **Agent Request**:
 A Request targeting a known Agent in the same Workflow. Requests waiting for one responder become eligible for Delivery in admission order, and only the front Request may deliver while that responder has no unresolved Answer Obligation. Each Request keeps its authored Delivery mode. Its Request Message identity, named `requestMessageId`, is the public identity for Cancellation, retry, and retrieval.
 
+**Agent Observation Search**:
+A passive lookup over the caller's authorized verified Agent identities. It combines structural scope, stable Agent metadata, and an Agent's current Run phase to return a bounded set of Agent Statuses. It is a live, potentially non-atomic observation and never prepares a Runtime or searches transcript contents.
+_Avoid_: transcript search, evidence search
+
 **Answer Obligation**:
 The responder's sole live duty created by Agent Request Delivery and ended by committing the correlated Agent Answer or receiving Request Cancellation. While the obligation is active, an ordinary Message to that Request's requester is rejected without creating a Message; the responder instead keeps provisional findings local, commits the curated Agent Answer, or authors a reverse Agent Request when requester input is needed. Automatic moderation protects only work with an unresolved Answer Obligation.
 

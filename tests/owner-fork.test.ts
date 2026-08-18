@@ -296,9 +296,9 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			host,
 			"agent_observe",
 			"observe-empty-fork-workflow",
-			{ operation: "children" },
+			{ operation: "search", scope: "direct_children" },
 		);
-		assert.deepEqual(children, { children: [] });
+		assert.deepEqual(children, { matches: [], hasMore: false });
 		await assertSourceIdentityIsUnavailable(host, {
 			directChildId,
 			sourceRequestId,
@@ -318,19 +318,19 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			host,
 			"agent_observe",
 			"observe-fork-only-child",
-			{ operation: "children" },
+			{ operation: "search", scope: "direct_children" },
 		) as {
-			children: Array<{
+			matches: Array<{
 				agentId: string;
 				workflowId: string;
 				primaryEvidence: { transcriptPath: string | null };
 			}>;
 		};
-		assert.equal(forkChildren.children.length, 1);
-		assert.equal(forkChildren.children[0]?.agentId, forkChildId);
-		assert.equal(forkChildren.children[0]?.workflowId, forkOwner.sessionId);
+		assert.equal(forkChildren.matches.length, 1);
+		assert.equal(forkChildren.matches[0]?.agentId, forkChildId);
+		assert.equal(forkChildren.matches[0]?.workflowId, forkOwner.sessionId);
 		assert.match(
-			forkChildren.children[0]?.primaryEvidence.transcriptPath ?? "",
+			forkChildren.matches[0]?.primaryEvidence.transcriptPath ?? "",
 			new RegExp(Buffer.from(forkOwner.sessionId, "utf8").toString("base64url")),
 		);
 		assert.notEqual(forkChildId, directChildId);
@@ -400,9 +400,9 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 				host,
 				"agent_observe",
 				"observe-branch-fork-children",
-				{ operation: "children" },
-			)) as { children: unknown[] },
-			{ children: [] },
+				{ operation: "search", scope: "direct_children" },
+			)) as { matches: unknown[]; hasMore: boolean },
+			{ matches: [], hasMore: false },
 		);
 
 		resumedSource = await createUnboundTestOwnerHost(t, piAgentCoordination, {
@@ -416,11 +416,11 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 			resumedSource,
 			"agent_observe",
 			"observe-reopened-source-child",
-			{ operation: "children" },
-		) as { children: Array<{ agentId: string; workflowId: string }> };
-		assert.equal(recovered.children.length, 1);
-		assert.equal(recovered.children[0]?.agentId, sourceChildId);
-		assert.equal(recovered.children[0]?.workflowId, sourceOwnerId);
+			{ operation: "search", scope: "direct_children" },
+		) as { matches: Array<{ agentId: string; workflowId: string }> };
+		assert.equal(recovered.matches.length, 1);
+		assert.equal(recovered.matches[0]?.agentId, sourceChildId);
+		assert.equal(recovered.matches[0]?.workflowId, sourceOwnerId);
 		resumedSource.model.setResponses([
 			fauxAssistantMessage("The reopened source child accepted new work."),
 		]);
@@ -468,13 +468,13 @@ async function waitForOnlyChild(
 		assert.ok(observe);
 		const result = await observe.execute(
 			`wait-for-nested-child-${attempt}`,
-			{ operation: "children", agentId },
+			{ operation: "search", scope: { directSpawnerAgentId: agentId } },
 			undefined,
 			undefined,
 			host.session.extensionRunner.createContext(),
 		);
-		const children = (result.details as { children: Array<{ agentId: string }> }).children;
-		if (children.length === 1) return children[0]!.agentId;
+		const matches = (result.details as { matches: Array<{ agentId: string }> }).matches;
+		if (matches.length === 1) return matches[0]!.agentId;
 		attempt += 1;
 		await waitForOwnerForkPoll();
 	}

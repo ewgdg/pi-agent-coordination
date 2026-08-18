@@ -13,6 +13,7 @@ import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
+import type { AgentObserveInput } from "../src/tools/participant-coordination-tools.ts";
 import {
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
@@ -716,9 +717,15 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 		}), { accepted: true });
 		await waitUntil(() => events.includes("agent.settled"));
 
-		assert.deepEqual(ownerCalls.slice(0, 3), [
+		assert.deepEqual(ownerCalls.slice(0, 4), [
 			[agentId, "executionStarted"],
 			[agentId, "agent_observe", { operation: "status" }],
+			[agentId, "agent_observe", {
+				operation: "search",
+				scope: "direct_children",
+				query: "remote",
+				limit: 20,
+			}],
 			[agentId, "agent_message", "process-message-call", {
 				operation: "send",
 				targetAgentId: "process-target-agent",
@@ -731,6 +738,7 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 				: []
 		);
 		assert.deepEqual(results.find((message) => message?.toolCallId === "process-observe-call")?.details, observeReceipt);
+		assert.deepEqual(results.find((message) => message?.toolCallId === "process-search-call")?.details, observeReceipt);
 		assert.deepEqual(results.find((message) => message?.toolCallId === "process-message-call")?.details, messageReceipt);
 	} finally {
 		await runtime?.dispose();
@@ -854,7 +862,7 @@ test("process Runtime shutdown grace bounds an unresponsive Control request", {
 
 function ordinaryOwnerHandlers(options: Readonly<{
 	executionStarted?: () => void;
-	observe?: (input: { operation: "status" | "children"; agentId?: string }) => void;
+	observe?: (input: AgentObserveInput) => void;
 	message?: (toolCallId: string, input: unknown) => void;
 	observeReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["observe"]>>;
 	messageReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["message"]>>;
@@ -903,7 +911,8 @@ function ordinaryOwnerHandlers(options: Readonly<{
 			async observe(input) {
 				options.observe?.(input);
 				return options.observeReceipt ?? {
-					children: [],
+					matches: [],
+					hasMore: false,
 				};
 			},
 			async message(toolCallId, input) {

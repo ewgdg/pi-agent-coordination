@@ -35,13 +35,9 @@ import type {
 } from "../protocol/moderator-control.ts";
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import type { AgentRunState } from "../runtime/agent-runtime-host.ts";
+import type { AgentObserveInput } from "./participant-coordination-tools.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 import { renderMessageProjection } from "./message-delivery-renderer.ts";
-
-type AgentObserveInput = Readonly<{
-	operation: "status" | "children";
-	agentId?: string;
-}>;
 
 export function renderAgentWaitCall(
 	_args: AgentWaitInput,
@@ -149,11 +145,27 @@ export function renderAgentObserveCall(
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 ): Text {
+	if (args.operation === "status") {
+		return toolCall(theme, "observe", [
+			args.operation,
+			args.agentId
+				? formatAgentIdentity(args.agentId, resolveAgentLabel)
+				: undefined,
+		]);
+	}
+	const scope = typeof args.scope === "string"
+		? args.scope
+		: `spawner ${formatAgentIdentity(
+			args.scope.directSpawnerAgentId,
+			resolveAgentLabel,
+		)}`;
 	return toolCall(theme, "observe", [
 		args.operation,
-		args.agentId
-			? formatAgentIdentity(args.agentId, resolveAgentLabel)
-			: undefined,
+		scope,
+		args.query ? boundedToolPreview(args.query) : undefined,
+		args.agentIdSuffix ? `id …${args.agentIdSuffix}` : undefined,
+		args.phase,
+		args.limit === undefined ? undefined : `limit ${args.limit}`,
 	]);
 }
 
@@ -165,11 +177,12 @@ export function renderAgentObserveResult(
 ): Text {
 	if (options.isPartial) return pending(theme, "inspecting");
 	const details = asRecord(result.details);
-	const children = Array.isArray(details?.children) ? details.children : undefined;
-	if (children) {
+	const matches = Array.isArray(details?.matches) ? details.matches : undefined;
+	if (matches) {
+		const hasMore = details?.hasMore === true;
 		return receipt(
 			theme,
-			`${children.length} child${children.length === 1 ? "" : "ren"}`,
+			`${matches.length} match${matches.length === 1 ? "" : "es"}${hasMore ? " · more" : ""}`,
 			result.details,
 			options,
 		);

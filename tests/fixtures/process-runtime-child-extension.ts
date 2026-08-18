@@ -63,6 +63,14 @@ faux.setResponses(process.env.PROCESS_RUNTIME_COORDINATION_TOOLS === "1"
 			fauxToolCall("agent_observe", { operation: "status" }, {
 				id: "process-observe-call",
 			}),
+			fauxToolCall("agent_observe", {
+				operation: "search",
+				scope: "direct_children",
+				query: "remote",
+				limit: 20,
+			}, {
+				id: "process-search-call",
+			}),
 			fauxToolCall("agent_message", {
 				operation: "send",
 				targetAgentId: "process-target-agent",

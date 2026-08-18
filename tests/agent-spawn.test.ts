@@ -147,13 +147,13 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	assert.ok(observe);
 	const childrenResult = await observe.execute(
 		"observe-children",
-		{ operation: "children" },
+		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
 		host.session.extensionRunner.createContext(),
 	);
-	const children = (childrenResult.details as { children: Array<Record<string, unknown>> })
-		.children;
+	const children = (childrenResult.details as { matches: Array<Record<string, unknown>> })
+		.matches;
 	assert.equal(children.length, 1);
 	assert.deepEqual(
 		{
@@ -772,12 +772,12 @@ test("invalid default-child metadata fails before Agent Identity", async (t) => 
 	assert.ok(observe);
 	const result = await observe.execute(
 		"observe-no-children",
-		{ operation: "children" },
+		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
 		host.session.extensionRunner.createContext(),
 	);
-	assert.deepEqual(result.details, { children: [] });
+	assert.deepEqual(result.details, { matches: [], hasMore: false });
 
 	await host.runtime.dispose();
 });
@@ -1184,6 +1184,113 @@ test("direct children remain in physical Agent Spawn call order", async (t) => {
 	assert.deepEqual(
 		harness.view.children().map(({ agentId }) => agentId),
 		receipts,
+	);
+
+	await harness.shutdown();
+});
+
+test("Agent observation search composes metadata, phase, identity, scope, and bounds", async (t) => {
+	const harness = await createCoordinatorHarness(t, {
+		beforeRunStart: () => "confirmed_failure",
+	});
+	const reviewerReceipt = await harness.spawn("search-dormant-reviewer", {
+		request: "Review the API contract.",
+		label: "Dormant Reviewer",
+		description: "Reviews API contracts",
+	});
+	const builderReceipt = await harness.spawn("search-dormant-builder", {
+		request: "Build the API contract.",
+		label: "Dormant Builder",
+		description: "Builds API contracts",
+	});
+	const apiBuilderReceipt = await harness.spawn("search-dormant-api-builder", {
+		request: "Build the API contract.",
+		label: "API Builder",
+		description: "Builds API contracts",
+	});
+	assert.ok("agentId" in reviewerReceipt);
+	assert.ok("agentId" in builderReceipt);
+	assert.ok("agentId" in apiBuilderReceipt);
+	const reviewer = reviewerReceipt.agentId;
+	const builder = builderReceipt.agentId;
+	const apiBuilder = apiBuilderReceipt.agentId;
+
+	const directChildren = harness.view.search({
+		operation: "search",
+		scope: "direct_children",
+		limit: 50,
+	});
+	assert.deepEqual(
+		directChildren.matches.map(({ agentId }) => agentId),
+		[reviewer, builder, apiBuilder],
+	);
+	assert.equal(directChildren.hasMore, false);
+
+	const compactIdentity = reviewer.slice(-8);
+	const reviewMatches = harness.view.search({
+		operation: "search",
+		scope: "authorized",
+		query: "review",
+		agentIdSuffix: compactIdentity,
+		phase: "dormant",
+		limit: 20,
+	});
+	assert.deepEqual(reviewMatches.matches.map(({ agentId }) => agentId), [reviewer]);
+	assert.equal(reviewMatches.matches[0]?.directSpawnerAgentId, harness.view.status().agentId);
+	assert.equal(reviewMatches.hasMore, false);
+
+	const namedSpawnerMatches = harness.view.search({
+		operation: "search",
+		scope: { directSpawnerAgentId: harness.view.status().agentId },
+		query: "api",
+		limit: 50,
+	});
+	assert.deepEqual(
+		namedSpawnerMatches.matches.map(({ agentId }) => agentId),
+		[apiBuilder, reviewer, builder],
+	);
+
+	const ordinarySearch = harness.coordinator.forAgent(reviewer).search({
+		operation: "search",
+		scope: "authorized",
+		query: "owner",
+		limit: 20,
+	});
+	assert.deepEqual(ordinarySearch, { matches: [], hasMore: false });
+	const unauthorizedParentSearch = harness.coordinator.forAgent(reviewer).search({
+		operation: "search",
+		scope: { directSpawnerAgentId: harness.view.status().agentId },
+		query: "api",
+		limit: 20,
+	});
+	assert.deepEqual(unauthorizedParentSearch, { matches: [], hasMore: false });
+	const unknownParentSearch = harness.view.search({
+		operation: "search",
+		scope: { directSpawnerAgentId: "unknown-parent" },
+		query: "api",
+		limit: 20,
+	});
+	assert.deepEqual(unknownParentSearch, { matches: [], hasMore: false });
+
+	const bounded = harness.view.search({
+		operation: "search",
+		scope: "direct_children",
+		phase: "dormant",
+		limit: 1,
+	});
+	assert.equal(bounded.matches.length, 1);
+	assert.equal(bounded.hasMore, true);
+	assert.throws(
+		() => harness.view.search({ operation: "search", scope: "authorized" }),
+		/Authorized Agent search requires a query, ID suffix, or phase/,
+	);
+	assert.throws(
+		() => harness.view.search({ operation: "search", scope: "direct_children", query: "   " }),
+		/Agent search query must not be empty/,
+	);
+	assert.throws(
+		() => harness.view.search({ operation: "search", scope: "direct_children", limit: 51 }),
+		/Agent search limit must be between 1 and 50/,
 	);
 
 	await harness.shutdown();

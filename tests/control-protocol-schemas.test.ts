@@ -285,7 +285,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		},
 	}), false);
 	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
-		children: [{
+		matches: [{
 			agentId: "child",
 			workflowId: "workflow",
 			label: "Child",
@@ -296,9 +296,25 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 			},
 			run: { phase: "dormant", retentionReasons: [] },
 		}],
+		hasMore: false,
 	}), true);
 	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
-		children: [{ agentId: "child" }],
+		matches: [{ agentId: "child" }],
+		hasMore: false,
+	}), false);
+	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
+		matches: Array.from({ length: 51 }, (_, index) => ({
+			agentId: `child-${index}`,
+			workflowId: "workflow",
+			label: "Child",
+			directSpawnerAgentId: "owner",
+			primaryEvidence: {
+				transcriptPath: null,
+				inspectedThrough: { agentId: `child-${index}`, entryId: "entry" },
+			},
+			run: { phase: "dormant", retentionReasons: [] },
+		})),
+		hasMore: true,
 	}), false);
 	const selectorSnapshot = {
 		live: [{

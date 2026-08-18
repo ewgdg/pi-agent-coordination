@@ -88,6 +88,10 @@ import type {
 	AgentActivityStatus,
 } from "../presentation/agent-activity-surface.ts";
 import { participantCoordinatorHandlers } from "../tools/owner-surfaces.ts";
+import type {
+	AgentSearchInput,
+	AgentSearchResult,
+} from "../tools/participant-coordination-tools.ts";
 import { createOwnerAgentPresentationHandlers } from "../process-runtime/remote-agent-selector.ts";
 import type {
 	DurableAgentView,
@@ -106,6 +110,9 @@ export type AgentRosterStatus = AgentStatus & Readonly<{
 	thinking: RuntimeThinkingLevel;
 	queuedInputCount: number;
 }>;
+
+const DEFAULT_AGENT_SEARCH_LIMIT = 20;
+const MAX_AGENT_SEARCH_LIMIT = 50;
 export type {
 	AgentSpawnInput,
 	AgentSpawnReceipt,
@@ -163,6 +170,7 @@ type AgentViewTarget = Readonly<{
 
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	children(agentId?: string): readonly AgentStatus[];
+	search(input: AgentSearchInput): AgentSearchResult;
 	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
 	wait(
 		toolCallId: string,
@@ -447,6 +455,7 @@ export class WorkflowCoordinator {
 			},
 			refreshAgentActivity: () => this.#notifyAgentActivityChanged(),
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
+			search: (input) => this.#searchFor(agentId, input),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
 			wait: (toolCallId, input, signal, onProgress) => {
 				this.#assertAdmissionOpen();
@@ -533,6 +542,95 @@ export class WorkflowCoordinator {
 		return statusOf(this.#requireObservable(callerAgentId, targetAgentId));
 	}
 
+	#searchFor(callerAgentId: string, input: AgentSearchInput): AgentSearchResult {
+		const query = input.query?.trim().toLowerCase();
+		if (input.query !== undefined && !query) {
+			throw new Error("invalid_input: Agent search query must not be empty");
+		}
+		const agentIdSuffix = input.agentIdSuffix?.trim();
+		if (input.agentIdSuffix !== undefined && !agentIdSuffix) {
+			throw new Error("invalid_input: Agent ID suffix must not be empty");
+		}
+		const hasFilter = query !== undefined ||
+			agentIdSuffix !== undefined ||
+			input.phase !== undefined;
+		if (input.scope === "authorized" && !hasFilter) {
+			throw new Error(
+				"invalid_input: Authorized Agent search requires a query, ID suffix, or phase",
+			);
+		}
+		const limit = input.limit ?? DEFAULT_AGENT_SEARCH_LIMIT;
+		if (!Number.isInteger(limit) || limit < 1 || limit > MAX_AGENT_SEARCH_LIMIT) {
+			throw new Error(
+				`invalid_input: Agent search limit must be between 1 and ${MAX_AGENT_SEARCH_LIMIT}`,
+			);
+		}
+
+		const authorityOrder = this.#agentAuthorityOrder();
+		const authorityIndex = new Map(
+			authorityOrder.map((record, index) => [record.identity.agentId, index]),
+		);
+		const candidates = this.#searchCandidates(callerAgentId, input.scope);
+		const matching = candidates
+			.filter((record) => {
+				const metadata = record.identity.metadata;
+				const normalizedLabel = metadata.label.toLowerCase();
+				const normalizedDescription = metadata.description?.toLowerCase();
+				if (
+					query !== undefined &&
+					!normalizedLabel.includes(query) &&
+					!normalizedDescription?.includes(query)
+				) return false;
+				if (
+					agentIdSuffix !== undefined &&
+					!record.identity.agentId.endsWith(agentIdSuffix)
+				) return false;
+				if (
+					input.phase !== undefined &&
+					record.host.observe().phase !== input.phase
+				) return false;
+				return true;
+			})
+			.map((record) => ({
+				record,
+				relevance: searchRelevance(record, query),
+				order: authorityIndex.get(record.identity.agentId) ?? Number.MAX_SAFE_INTEGER,
+			}))
+			.sort((left, right) =>
+				left.relevance - right.relevance || left.order - right.order
+			);
+		return {
+			matches: matching.slice(0, limit).map(({ record }) => statusOf(record)),
+			hasMore: matching.length > limit,
+		};
+	}
+
+	#searchCandidates(
+		callerAgentId: string,
+		scope: AgentSearchInput["scope"],
+	): readonly AgentRecord[] {
+		const caller = this.#requireAgent(callerAgentId);
+		if (scope === "authorized") {
+			if (
+				callerAgentId === this.#ownerIdentity.agentId ||
+				this.#isModerator(callerAgentId)
+			) return this.#agentAuthorityOrder();
+			return [caller, ...caller.children.map((agentId) => this.#requireAgent(agentId))];
+		}
+		if (scope === "direct_children") {
+			return caller.children.map((agentId) => this.#requireAgent(agentId));
+		}
+		if (
+			scope.directSpawnerAgentId !== callerAgentId &&
+			callerAgentId !== this.#ownerIdentity.agentId &&
+			!this.#isModerator(callerAgentId)
+		) return [];
+		const parent = this.#agents.get(scope.directSpawnerAgentId);
+		return parent
+			? parent.children.map((agentId) => this.#requireAgent(agentId))
+			: [];
+	}
+
 	#childrenFor(callerAgentId: string, targetAgentId = callerAgentId): readonly AgentStatus[] {
 		if (
 			targetAgentId !== callerAgentId &&
@@ -561,10 +659,7 @@ export class WorkflowCoordinator {
 		return target;
 	}
 
-	#selectionRoster(): Readonly<{
-		live: readonly AgentRosterStatus[];
-		dormant: readonly AgentRosterStatus[];
-	}> {
+	#agentAuthorityOrder(): AgentRecord[] {
 		const authorityOrder: AgentRecord[] = [];
 		const appendAuthoritySubtree = (agentId: string) => {
 			const record = this.#requireAgent(agentId);
@@ -575,6 +670,14 @@ export class WorkflowCoordinator {
 		for (const record of this.#agents.values()) {
 			if (!authorityOrder.includes(record)) authorityOrder.push(record);
 		}
+		return authorityOrder;
+	}
+
+	#selectionRoster(): Readonly<{
+		live: readonly AgentRosterStatus[];
+		dormant: readonly AgentRosterStatus[];
+	}> {
+		const authorityOrder = this.#agentAuthorityOrder();
 		const live: AgentRosterStatus[] = [];
 		const dormant: Array<{ status: AgentRosterStatus; recency: number; order: number }> = [];
 		for (const [order, record] of authorityOrder.entries()) {
@@ -1204,6 +1307,18 @@ export class WorkflowCoordinator {
 		}
 	}
 
+}
+
+function searchRelevance(
+	record: AgentRecord,
+	query: string | undefined,
+): number {
+	if (query === undefined) return 0;
+	const label = record.identity.metadata.label.toLowerCase();
+	if (label === query) return 0;
+	if (label.startsWith(query)) return 1;
+	if (label.includes(query)) return 2;
+	return 3;
 }
 
 function waitForInitializingProjection(

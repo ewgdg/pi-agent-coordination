@@ -44,7 +44,10 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 			case "runtime.humanInput": return { disposition: "submitted" };
 			case "runtime.humanInputMode": return { mode: "answer" };
 			case "runtime.guardToolResult": return { result: null };
-			case "coordination.observe": return status;
+			case "coordination.observe":
+				return (payload as { operation: string }).operation === "search"
+					? { matches: [status], hasMore: false }
+					: status;
 			case "coordination.message": return { messageId: "message-1", messageStatus: "sent" };
 			case "coordination.wait":
 				waitProgressHandler?.(waitProgress);
@@ -89,6 +92,15 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 	await proxies.lifecycle.executionEnded();
 	assert.equal(await proxies.coordination.observe({ operation: "status" }), status);
 	assert.deepEqual(
+		await proxies.coordination.observe({
+			operation: "search",
+			scope: "direct_children",
+			query: "observed",
+			limit: 20,
+		}),
+		{ matches: [status], hasMore: false },
+	);
+	assert.deepEqual(
 		await proxies.coordination.message("message-call", {
 			operation: "send",
 			targetAgentId: "target",
@@ -127,6 +139,12 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		["runtime.safeBoundary", {}, undefined],
 		["runtime.executionEnd", {}, undefined],
 		["coordination.observe", { operation: "status" }, undefined],
+		["coordination.observe", {
+			operation: "search",
+			scope: "direct_children",
+			query: "observed",
+			limit: 20,
+		}, undefined],
 		["coordination.message", {
 			toolCallId: "message-call",
 			input: { operation: "send", targetAgentId: "target", content: "hello" },
@@ -223,7 +241,10 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 			async executionEnded() { calls.push(["end"]); },
 		},
 		coordination: {
-			async observe(input) { calls.push(["observe", input]); return { children: [status] }; },
+			async observe(input) {
+				calls.push(["observe", input]);
+				return { matches: [status], hasMore: false };
+			},
 			async message(toolCallId, input) {
 				calls.push(["message", toolCallId, input]);
 				return { messageId: "message-owner", messageStatus: "sent" };

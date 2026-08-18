@@ -103,16 +103,16 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 	assert.ok(observe);
 	const childrenResult = await observe.execute(
 		"observe-recovered-children",
-		{ operation: "children" },
+		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
 		reopened.session.extensionRunner.createContext(),
 	);
-	const children = (childrenResult.details as {
-		children: Array<{ agentId: string; label: string; run: { phase: string } }>;
-	}).children;
+	const matches = (childrenResult.details as {
+		matches: Array<{ agentId: string; label: string; run: { phase: string } }>;
+	}).matches;
 	assert.deepEqual(
-		children.map(({ agentId, label, run }) => ({ agentId, label, phase: run.phase })),
+		matches.map(({ agentId, label, run }) => ({ agentId, label, phase: run.phase })),
 		[
 			{
 				agentId: spawned.agentId,
@@ -123,14 +123,14 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 	);
 	const nestedChildren = await observe.execute(
 		"observe-recovered-nested-children",
-		{ operation: "children", agentId: spawned.agentId },
+		{ operation: "search", scope: { directSpawnerAgentId: spawned.agentId } },
 		undefined,
 		undefined,
 		reopened.session.extensionRunner.createContext(),
 	);
 	assert.deepEqual(
-		(nestedChildren.details as { children: Array<{ agentId: string; run: { phase: string } }> })
-			.children.map(({ agentId, run }) => ({ agentId, phase: run.phase })),
+		(nestedChildren.details as { matches: Array<{ agentId: string; run: { phase: string } }> })
+			.matches.map(({ agentId, run }) => ({ agentId, phase: run.phase })),
 		[{ agentId: grandchildAgentId, phase: "dormant" }],
 	);
 
@@ -162,13 +162,13 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 	assert.ok(secondObserve);
 	const secondChildren = await secondObserve.execute(
 		"observe-freshly-recovered-children",
-		{ operation: "children" },
+		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
 		reopenedAgain.session.extensionRunner.createContext(),
 	);
 	assert.deepEqual(
-		(secondChildren.details as { children: Array<{ agentId: string }> }).children.map(
+		(secondChildren.details as { matches: Array<{ agentId: string }> }).matches.map(
 			({ agentId }) => agentId,
 		),
 		[spawned.agentId],
@@ -248,13 +248,13 @@ test("a fresh Owner host rediscovers a conversation-fork child without copied ob
 	assert.ok(observe);
 	const children = await observe.execute(
 		"observe-recovered-conversation-fork",
-		{ operation: "children" },
+		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
 		reopened.session.extensionRunner.createContext(),
 	);
 	assert.deepEqual(
-		(children.details as { children: Array<{ agentId: string; label: string }> }).children
+		(children.details as { matches: Array<{ agentId: string; label: string }> }).matches
 			.map(({ agentId, label }) => ({ agentId, label })),
 		[{ agentId: spawned.agentId, label: "recovered-fork" }],
 	);
@@ -481,13 +481,13 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	assert.ok(observe);
 	const result = await observe.execute(
 		"observe-independent-recovery",
-		{ operation: "children" },
+		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
 		reopened.session.extensionRunner.createContext(),
 	);
 	assert.deepEqual(
-		(result.details as { children: Array<{ agentId: string }> }).children.map(
+		(result.details as { matches: Array<{ agentId: string }> }).matches.map(
 			({ agentId }) => agentId,
 		),
 		[independent.agentId],
@@ -852,13 +852,13 @@ test("recovered authority keeps physical child order while Dormant view uses Pi 
 	assert.ok(observe);
 	const children = await observe.execute(
 		"observe-physical-child-order-after-reopen",
-		{ operation: "children" },
+		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
 		reopened.session.extensionRunner.createContext(),
 	);
 	assert.deepEqual(
-		(children.details as { children: Array<{ agentId: string }> }).children.map(
+		(children.details as { matches: Array<{ agentId: string }> }).matches.map(
 			({ agentId }) => agentId,
 		),
 		[first.agentId, second.agentId],
@@ -938,13 +938,13 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 	);
 	const children = await observe.execute(
 		"observe-children-with-standalone-moderator",
-		{ operation: "children" },
+		{ operation: "search", scope: "direct_children" },
 		undefined,
 		undefined,
 		reopened.session.extensionRunner.createContext(),
 	);
 	assert.equal(
-		(children.details as { children: Array<{ agentId: string }> }).children.some(
+		(children.details as { matches: Array<{ agentId: string }> }).matches.some(
 			({ agentId }) => agentId === moderator.agentId,
 		),
 		false,

@@ -26,7 +26,7 @@ The package registers the Owner tool definitions through Pi's `registerTool()` A
 - `agent_message` sends Messages, creates correlated Requests, Answers, retrieves, and cancels.
 - `agent_wait` takes a fixed snapshot of every outstanding outbound Agent Request and parks the exact Run without consuming Workflow execution capacity until the complete Answer set is ready or an eligible inbound Agent Request preempts the Wait for attention. A preempted Wait consumes no Answer; a later call takes a fresh outstanding snapshot.
 - `ask_user_question` blocks the caller's exact Run on one free-form question. Its matching successful native tool result is the sole Human Answer.
-- `agent_observe` returns an authorized Agent's durable identity, structural relationship, bounded primary transcript evidence, current semantic Run state, or direct children. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
+- `agent_observe` returns exact status or bounded composable search results for the caller's authorized Agent scope. Search can narrow by direct-child scope, label/description text, compact ID suffix, lifecycle phase, and result limit; every returned `AgentStatus` retains its Direct Spawner relationship and bounded primary evidence. Live retention reasons include a count so concurrent exact Request relationships remain visible without exposing payloads.
 - `agent_control` interrupts, explicitly resumes, or terminates one authorized exact child Run.
 - `/agents` opens the framed [Agent selector and full-window view](agent-selector.md), with Owner-only Human and Operational attention plus Live and Dormant Agent rosters.
 

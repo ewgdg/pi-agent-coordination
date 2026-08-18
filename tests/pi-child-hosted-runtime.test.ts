@@ -536,7 +536,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 					templates: [],
 				};
 			},
-			async observe() { return { children: [] }; },
+			async observe() { return { matches: [], hasMore: false }; },
 			async message() { return { messageId: "unused-message", messageStatus: "sent" }; },
 			async wait() { return { answers: [] }; },
 			async control(_toolCallId, input) {

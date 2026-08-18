@@ -212,7 +212,10 @@ const AgentRosterStatusSchema = closed({
 });
 const AgentObserveResultSchema = Type.Union([
 	AgentStatusSchema,
-	closed({ children: Type.Array(AgentStatusSchema) }),
+	closed({
+		matches: Type.Array(AgentStatusSchema, { maxItems: 50 }),
+		hasMore: Type.Boolean(),
+	}),
 ]);
 const EffectiveConfigurationSchema = closed({
 	cwd: NonEmptyStringSchema,

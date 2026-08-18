@@ -150,6 +150,49 @@ test("Agent Wait schema accepts only a parameterless join", () => {
 	}), false);
 });
 
+test("Agent Observe schema composes authorized and direct-child search filters", () => {
+	const schema = participantCoordinationToolSchemas.agent_observe;
+	assert.equal(Value.Check(schema, { operation: "status" }), true);
+	assert.equal(Value.Check(schema, {
+		operation: "search",
+		scope: "direct_children",
+	}), true);
+	assert.equal(Value.Check(schema, {
+		operation: "search",
+		scope: { directSpawnerAgentId: "parent-agent" },
+		query: "review",
+		agentIdSuffix: "a1b2c3d4",
+		phase: "dormant",
+		limit: 50,
+	}), true);
+	assert.equal(Value.Check(schema, {
+		operation: "search",
+		scope: "authorized",
+		phase: "live",
+	}), true);
+	assert.equal(Value.Check(schema, {
+		operation: "search",
+		scope: "authorized",
+	}), false);
+	assert.equal(Value.Check(schema, {
+		operation: "search",
+		scope: "authorized",
+		query: " ",
+	}), false);
+	assert.equal(Value.Check(schema, {
+		operation: "search",
+		scope: { directSpawnerAgentId: " " },
+	}), false);
+	assert.equal(Value.Check(schema, {
+		operation: "children",
+	}), false);
+	assert.equal(Value.Check(schema, {
+		operation: "search",
+		scope: "direct_children",
+		limit: 51,
+	}), false);
+});
+
 test("Agent Spawn schema accepts conversation forks and rejects extension path arrays", () => {
 	const schema = participantCoordinationToolSchemas.agent_spawn;
 	assert.equal(Value.Check(schema, {
@@ -363,15 +406,16 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	});
 	assert.deepEqual(toolMetadata(ordinary, "agent_observe"), {
 		label: "Observe Agent",
-		description: "Passively observe an authorized Agent or its direct children.",
-		promptSnippet: "Observe authorized Agents and their bounded live Run state.",
+		description: "Passively observe an authorized Agent or search its authorized Agent scope.",
+		promptSnippet: "Observe exact status or search authorized Agents by metadata and Run phase.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(moderator, "agent_observe"), {
 		label: "Observe Agent",
 		description:
-			"Passively observe any known Agent in this Workflow or enumerate ordinary children.",
-		promptSnippet: "Pull bounded status for Workflow Agents relevant to diagnosis.",
+			"Passively observe any known Agent in this Workflow or search authorized Agent scopes.",
+		promptSnippet:
+			"Pull bounded status or search results for Workflow Agents relevant to diagnosis.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(ordinary, "agent_control"), {
@@ -430,7 +474,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 		failedStage: "identity_commit",
 		reason: "Test child was not created",
 	} as const;
-	const observeReceipt = { children: [agentStatus] } as const;
+	const observeReceipt = { matches: [agentStatus], hasMore: false } as const;
 	const controlReceipt = { agentId: "child-agent", disposition: "held" } as const;
 	const humanReceipt = { requestId: "human-1", answer: "Proceed." } as const;
 	const signal = new AbortController().signal;
@@ -469,7 +513,12 @@ test("participant registrar routes intents and returns exact handler receipts", 
 		["agent_message", "call-message", { operation: "poll", messageId: "message-1" }, messageReceipt],
 		["agent_wait", "call-wait", {}, waitReceipt],
 		["agent_spawn", "call-spawn", { request: "Investigate." }, spawnReceipt],
-		["agent_observe", "call-observe", { operation: "children" }, observeReceipt],
+		[
+			"agent_observe",
+			"call-observe",
+			{ operation: "search", scope: "direct_children" },
+			observeReceipt,
+		],
 		["agent_control", "call-control", { operation: "interrupt", agentId: "child-agent" }, controlReceipt],
 		["ask_user_question", "call-human", { question: "Proceed?" }, humanReceipt],
 	] as const;

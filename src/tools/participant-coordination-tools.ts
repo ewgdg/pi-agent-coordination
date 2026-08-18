@@ -67,14 +67,35 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 const AGENT_SPAWN_PROMPT_GUIDE =
 	'Use agent_spawn `conversation: "fork"` only for a cache-affine continuation of the completed current conversation. A conversation fork cannot select a template or provide config.';
 
-export type AgentObserveInput = Readonly<{
-	operation: "status" | "children";
-	agentId?: string;
+export type AgentObservePhase = "starting" | "live" | "ending" | "dormant";
+
+export type AgentObserveScope =
+	| "authorized"
+	| "direct_children"
+	| Readonly<{ directSpawnerAgentId: string }>;
+
+export type AgentSearchInput = Readonly<{
+	operation: "search";
+	scope: AgentObserveScope;
+	query?: string;
+	agentIdSuffix?: string;
+	phase?: AgentObservePhase;
+	limit?: number;
 }>;
 
-export type AgentObserveResult = AgentStatus | Readonly<{
-	children: readonly AgentStatus[];
+export type AgentObserveInput =
+	| Readonly<{
+		operation: "status";
+		agentId?: string;
+	}>
+	| AgentSearchInput;
+
+export type AgentSearchResult = Readonly<{
+	matches: readonly AgentStatus[];
+	hasMore: boolean;
 }>;
+
+export type AgentObserveResult = AgentStatus | AgentSearchResult;
 
 type CommonParticipantCoordinationToolHandlers = Readonly<{
 	message(
@@ -254,6 +275,66 @@ const agentSpawnParameters = objectRootUnion(Type.Union([
 	),
 ]));
 
+const agentObservePhase = Type.Union([
+	Type.Literal("starting"),
+	Type.Literal("live"),
+	Type.Literal("ending"),
+	Type.Literal("dormant"),
+]);
+// The pattern only rejects whitespace-only inputs; search matching remains substring-based.
+const agentSearchNonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
+const agentSearchOptionalProperties = {
+	query: Type.Optional(agentSearchNonBlankString),
+	agentIdSuffix: Type.Optional(agentSearchNonBlankString),
+	phase: Type.Optional(agentObservePhase),
+	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
+};
+const agentSearchDirectChildrenParameters = Type.Object(
+	{
+		operation: Type.Literal("search"),
+		scope: Type.Literal("direct_children"),
+		...agentSearchOptionalProperties,
+	},
+	{ additionalProperties: false },
+);
+const agentSearchNamedSpawnerParameters = Type.Object(
+	{
+		operation: Type.Literal("search"),
+		scope: Type.Object(
+			{ directSpawnerAgentId: agentSearchNonBlankString },
+			{ additionalProperties: false },
+		),
+		...agentSearchOptionalProperties,
+	},
+	{ additionalProperties: false },
+);
+const agentSearchAuthorizedQueryParameters = Type.Object(
+	{
+		operation: Type.Literal("search"),
+		scope: Type.Literal("authorized"),
+		...agentSearchOptionalProperties,
+		query: agentSearchNonBlankString,
+	},
+	{ additionalProperties: false },
+);
+const agentSearchAuthorizedSuffixParameters = Type.Object(
+	{
+		operation: Type.Literal("search"),
+		scope: Type.Literal("authorized"),
+		...agentSearchOptionalProperties,
+		agentIdSuffix: agentSearchNonBlankString,
+	},
+	{ additionalProperties: false },
+);
+const agentSearchAuthorizedPhaseParameters = Type.Object(
+	{
+		operation: Type.Literal("search"),
+		scope: Type.Literal("authorized"),
+		...agentSearchOptionalProperties,
+		phase: agentObservePhase,
+	},
+	{ additionalProperties: false },
+);
 const agentObserveParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
@@ -262,13 +343,11 @@ const agentObserveParameters = objectRootUnion(Type.Union([
 		},
 		{ additionalProperties: false },
 	),
-	Type.Object(
-		{
-			operation: Type.Literal("children"),
-			agentId: Type.Optional(Type.String({ minLength: 1 })),
-		},
-		{ additionalProperties: false },
-	),
+	agentSearchDirectChildrenParameters,
+	agentSearchNamedSpawnerParameters,
+	agentSearchAuthorizedQueryParameters,
+	agentSearchAuthorizedSuffixParameters,
+	agentSearchAuthorizedPhaseParameters,
 ]));
 
 const agentControlParameters = objectRootUnion(Type.Union([
@@ -456,11 +535,11 @@ export function registerParticipantCoordinationTools<
 		name: "agent_observe",
 		label: "Observe Agent",
 		description: role === "moderator"
-			? "Passively observe any known Agent in this Workflow or enumerate ordinary children."
-			: "Passively observe an authorized Agent or its direct children.",
+			? "Passively observe any known Agent in this Workflow or search authorized Agent scopes."
+			: "Passively observe an authorized Agent or search its authorized Agent scope.",
 		promptSnippet: role === "moderator"
-			? "Pull bounded status for Workflow Agents relevant to diagnosis."
-			: "Observe authorized Agents and their bounded live Run state.",
+			? "Pull bounded status or search results for Workflow Agents relevant to diagnosis."
+			: "Observe exact status or search authorized Agents by metadata and Run phase.",
 		executionMode: "sequential",
 		parameters: agentObserveParameters,
 		renderCall: (args, theme) =>

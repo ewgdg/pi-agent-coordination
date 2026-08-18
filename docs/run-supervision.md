@@ -6,7 +6,7 @@ Workflow Owners, Direct Spawners, and Moderators can inspect and control authori
 
 The Workflow Owner may observe and control any verified non-Owner Agent. A Direct Spawner may observe and control only its immediate children. A Moderator may observe any known Workflow Agent and control any current non-Owner Run. An Agent may observe itself, but cannot control itself; a Moderator also cannot control the Owner Run. Knowing an Agent identity or exchanging Messages does not grant supervision authority.
 
-`agent_observe` supports one status or direct-child query:
+`agent_observe` supports exact status lookup or bounded search:
 
 ```json
 {
@@ -17,11 +17,30 @@ The Workflow Owner may observe and control any verified non-Owner Agent. A Direc
 
 ```json
 {
-  "operation": "children"
+  "operation": "search",
+  "scope": "authorized",
+  "query": "review",
+  "phase": "dormant",
+  "limit": 20
 }
 ```
 
-Omitting `agentId` observes the caller. Direct children remain in canonical spawn order.
+Search scope is required:
+
+- `"authorized"` searches the caller's complete existing observation set. The Owner and Moderator see every verified Workflow Agent; an ordinary Agent sees itself and its direct children.
+- `"direct_children"` searches direct children of the caller and may omit all filters, preserving bounded child enumeration.
+- `{ "directSpawnerAgentId": "parent-agent-id" }` searches the named Agent's exact direct children. Owner and Moderator authority follows the existing child-enumeration rule; an unauthorized or unverified parent produces no matches.
+
+Search filters combine with AND. `query` is one case-insensitive substring over `label` and `description`; `agentIdSuffix` is a separate case-sensitive compact-ID suffix; `phase` is one of `starting`, `live`, `ending`, or `dormant`; and `limit` defaults to 20 with a maximum of 50. Broad `"authorized"` searches require at least one of `query`, `agentIdSuffix`, or `phase`. Search returns:
+
+```json
+{
+  "matches": [],
+  "hasMore": false
+}
+```
+
+Results use deterministic relevance and canonical Agent order. Search is a live, non-atomic observation: each returned status has its own Run state and evidence watermark. It never prepares or activates a dormant Runtime. Full transcript-content inspection remains an explicit filesystem/`rg` technique rather than part of this operation.
 
 Each status contains the durable Agent identity and structural relationship, the current semantic Run state, and bounded primary evidence:
 
@@ -31,7 +50,7 @@ Each status contains the durable Agent identity and structural relationship, the
 
 Retention categories are `owner_host_binding`, `pending_delivery`, `awaiting_answer`, `answer_owed`, `interactive_selection`, `interruption_hold`, and `moderator_handling`. Status never exposes Message payloads, prompts, history summaries, Run handles, or raw Pi objects.
 
-The native status call and collapsed result identify the Agent as `label · compact identity`, using the final eight identity characters, and show its current semantic work status. When `agentId` is omitted for self-observation, the resolved identity appears in the result. Agent Control calls and receipts use the same identity format. Expanding a result identifies the Agent as `label · full identity`, followed by the exact structured observation or receipt.
+The native status call and collapsed result identify the Agent as `label · compact identity`, using the final eight identity characters, and show its current semantic work status. When `agentId` is omitted for self-observation, the resolved identity appears in the result. Search returns the same `AgentStatus` contract, including `directSpawnerAgentId`, which identifies the one-hop Direct Spawner. Agent Control calls and receipts use the same identity format. Expanding a result identifies the Agent as `label · full identity`, followed by the exact structured observation or receipt.
 
 ## Generation failure
 

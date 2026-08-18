@@ -18,6 +18,7 @@ import {
 } from "../process-runtime/remote-agent-selector.ts";
 import {
 	registerParticipantCoordinationTools,
+	type AgentObserveInput,
 	type ParticipantCoordinationRole,
 	type ParticipantCoordinationToolHandlers,
 } from "./participant-coordination-tools.ts";
@@ -194,11 +195,11 @@ export function participantCoordinatorHandlers(
 			signal: AbortSignal | undefined,
 			onProgress: Parameters<AgentCoordinatorView["wait"]>[3],
 		) => resolveView().wait(toolCallId, input, signal, onProgress),
-		async observe(input: { operation: "status" | "children"; agentId?: string }) {
+		async observe(input: AgentObserveInput) {
 			const view = resolveView();
-			return input.operation === "children"
-				? { children: view.children(input.agentId) }
-				: view.status(input.agentId);
+			return input.operation === "status"
+				? view.status(input.agentId)
+				: view.search(input);
 		},
 		control: (toolCallId: string, input: Parameters<AgentCoordinatorView["control"]>[1]) =>
 			resolveView().control(toolCallId, input),

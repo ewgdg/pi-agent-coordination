@@ -144,6 +144,22 @@ test("coordination renderers keep routine receipts compact", async (t) => {
 		},
 		{
 			host: ordinaryHost,
+			toolName: "agent_observe",
+			args: {
+				operation: "search",
+				scope: "direct_children",
+				query: "review",
+				phase: "dormant",
+				limit: 20,
+			},
+			details: { matches: [{}, {}], hasMore: true },
+			callLines: 1,
+			collapsedLines: 1,
+			summary: /2 matches · more/s,
+			expandedDetail: /hasMore/,
+		},
+		{
+			host: ordinaryHost,
 			toolName: "agent_control",
 			args: { operation: "interrupt", agentId: "child-agent" },
 			details: { agentId: "child-agent", disposition: "held" },
