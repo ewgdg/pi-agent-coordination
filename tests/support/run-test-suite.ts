@@ -8,7 +8,9 @@ import { runTestProcess } from "./test-process-supervisor.ts";
 const FAST_TEST_CONCURRENCY = 4;
 const PROCESS_TEST_CONCURRENCY = 1;
 const FAST_TEST_TIMEOUT_MS = 5_000;
-const PROCESS_TEST_TIMEOUT_MS = 30_000;
+// Process files contain many serial PTY/process cases; the Node test runner applies
+// this timeout to the file's top-level suite, so it must cover cumulative setup.
+const PROCESS_TEST_TIMEOUT_MS = 120_000;
 
 // These files launch real Pi processes, PTYs, sockets, or process-visible model
 // brokers. Keeping the boundary explicit prevents machine CPU count from turning

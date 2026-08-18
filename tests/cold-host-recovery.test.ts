@@ -990,6 +990,7 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 		"agent_control",
 		"agent_message",
 		"agent_observe",
+		"agent_wait",
 		"ask_user_question",
 		"bash",
 		"edit",

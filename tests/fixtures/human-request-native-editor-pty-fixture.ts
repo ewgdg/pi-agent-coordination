@@ -64,14 +64,18 @@ const view = {
 		for (const handler of activityHandlers) handler();
 	},
 	async resumeFromHuman(text: string, images: readonly unknown[] | undefined) {
-		if (!pending) return false;
+		if (!pending) return "continue";
 		if ((images?.length ?? 0) > 0) throw new Error("Images are unsupported");
 		if (text.trim().length === 0) throw new Error("Answer must not be blank");
 		submittedAnswer = text;
 		resolveAnswer({ requestId: REQUEST_ID, answer: text });
-		return true;
+		return "submitted";
 	},
 	selectionRoster: () => ({ live: [], dormant: [] }),
+	agentTemplateSnapshot: () => ({
+		currentRuntime: { model: { provider: "test", modelId: "test" }, thinking: "off" },
+		templates: [],
+	}),
 	async openAgentView() { return undefined; },
 	humanAttention: () => [],
 	operationalAttention: () => [],

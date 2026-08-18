@@ -688,6 +688,17 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 		false,
 	);
 
+	// Termination preserves the Owner's Answer Obligation, so settle that
+	// residual Request before an ordinary Owner Message can target the child.
+	harness.host.model.setResponses([
+		fauxAssistantMessage("The child received the residual Answer."),
+	]);
+	await harness.messageAs(
+		{ session: harness.host.session, view: harness.ownerView },
+		"answer-residual-request-after-termination",
+		{ operation: "answer", answer: "The Owner answered the residual Request." },
+	);
+	await child.waitForIdle();
 	harness.host.model.setResponses([
 		fauxAssistantMessage("A fresh successor Run received only later input."),
 	]);

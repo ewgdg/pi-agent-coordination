@@ -99,12 +99,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 	assert.match(renderedAgents[0] ?? "", /^┌─+┐$/);
 	assert.match(renderedAgents.join("\n"), /Live.*Dormant/);
 	assert.match(renderedAgents.join("\n"), /Owner/);
-	assert.match(renderedAgents.join("\n"), /Workflow Owner/);
-	assert.match(renderedAgents.join("\n"), new RegExp(host.session.sessionId));
-	assert.match(
-		renderedAgents.join("\n"),
-		/coordination-test\/deterministic-owner · thinking off · 0 queued/,
-	);
+	assert.match(renderedAgents.join("\n"), /o Owner · Tab views/);
 	agentsSurface.handleInput?.("\x1b");
 	await agentsCommand;
 

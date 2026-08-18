@@ -55,13 +55,12 @@ Keep exact identity lookup (`status`) and broad roster discovery (`search`) in t
 - [x] Remote transport/rendering integration.
 - [x] Documentation and glossary/ADR.
 - [x] Focused validation.
-- [ ] Full validation.
+- [x] Full validation.
 
 ## Surprises & Discoveries
 
 - The current `AgentStatus` already exposes `directSpawnerAgentId`; the search feature needs no new relationship field.
-- The cold-host recovery suite has one pre-existing unrelated expected-tool-list failure in the standalone Moderator case (`agent_wait` appears in the actual recovered tool set); all observation-search migrations in that suite pass.
-- Full process/conformance runs remain environment-sensitive: PTY durability/faux-response failures, Owner startup selector timing, and unrelated Run supervision assertions fail outside the observation-search paths. Focused process and conformance seams pass.
+- Process integration files run serially under a 120-second top-level file guard because cumulative PTY/process setup can exceed individual test durations.
 - Public observation fixtures now use `search`; internal `children()` methods and `AgentRecord.children` remain necessary for hierarchy and presentation behavior.
 - Transcripts are Workflow-directory evidence, but current Run phase is volatile and must come from the runtime host rather than `rg`.
 

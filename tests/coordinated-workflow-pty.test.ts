@@ -256,8 +256,7 @@ test("real fullscreen PTY keeps a terminally failed selected Run in its Agent vi
 		terminal.write("\r");
 		await terminal.waitFor("__PTY_SELECTED_RUN_FAILED__");
 		await openDormantAgentSelector(terminal, "PTY Failure Worker");
-		terminal.write("\t");
-		terminal.write("\r");
+		terminal.write("o");
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Owner failure baseline remains mounted."))
 		);

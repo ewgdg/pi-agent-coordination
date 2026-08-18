@@ -366,7 +366,7 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 	await returnAgentViewToOwner(host, view, command);
 });
 
-test("a selected Agent whose runtime initialization fails closes the invalid view", async (t) => {
+test("a selected Agent whose runtime initialization fails opens a read-only post-mortem view", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
@@ -401,6 +401,14 @@ test("a selected Agent whose runtime initialization fails closes the invalid vie
 	const { command, surface: selector } = await openAgentsSurface(host);
 	selector.handleInput?.("\t");
 	assert.equal(selectAgentByLabel(selector, "Startup Failure Worker"), agentId);
+	await waitForCondition(() =>
+		host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
+	);
+	const postMortem = host.ui.customSurfaces[0]!;
+	const rendered = stripTerminalSequences(postMortem.render(80).join("\n"));
+	assert.match(rendered, /Post-mortem · read-only/);
+	assert.match(rendered, /Runtime unavailable:/);
+	postMortem.handleInput?.("q");
 	await command;
 	assert.equal(host.ui.customSurfaces.length, 0);
 	assert.equal(await currentRunPhase(host, agentId), "dormant");
@@ -532,6 +540,9 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 		);
 	});
 	await waitForCondition(() => owner.status(agentId).run.phase === "dormant");
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) =>
+		childProcessSessionShutdowns(entries, agentId).length === 1
+	);
 
 	const activeView = await owner.openAgentView(agentId);
 	assert.ok(activeView);
@@ -546,12 +557,12 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 			.includes(submittedInput)
 	);
 	activeView.projection().dispatchInput("\r");
-	// Request release in the same Owner turn as Enter, before the child can
-	// acknowledge the PTY submission over Control.
-	const returningToOwner = owner.openAgentView(identity.agentId);
+	// Wait until the child has entered prompt preflight, then leave the view while
+	// that exact submission remains blocked on its release gate.
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
 		(entry) => entry.kind === "input_preflight_started" && entry.sessionId === agentId,
 	));
+	const returningToOwner = owner.openAgentView(identity.agentId);
 	await releaseProcessAgentViewProbe(probe.releasePath);
 	await returningToOwner;
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
