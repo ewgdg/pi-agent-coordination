@@ -16,7 +16,7 @@ export function buildPiChildCliLaunch(options: {
 	skillPaths: readonly string[];
 	bridgeExtensionPath: string;
 	inputExtensionPath: string;
-	contextArtifactPath?: string;
+	systemPromptArtifactPath?: string;
 	projectTrusted: boolean;
 }): PiChildCliLaunch {
 	const {
@@ -27,7 +27,7 @@ export function buildPiChildCliLaunch(options: {
 		skillPaths,
 		bridgeExtensionPath,
 		inputExtensionPath,
-		contextArtifactPath,
+		systemPromptArtifactPath,
 		projectTrusted,
 	} = options;
 	for (const [field, path] of [
@@ -36,9 +36,9 @@ export function buildPiChildCliLaunch(options: {
 		["working directory", configuration.cwd],
 		["bridge extension", bridgeExtensionPath],
 		["input extension", inputExtensionPath],
-		...(contextArtifactPath === undefined
+		...(systemPromptArtifactPath === undefined
 			? []
-			: [["Project Context", contextArtifactPath]]),
+			: [["System prompt", systemPromptArtifactPath]]),
 	] as const) {
 		requireAbsolutePath(field, path);
 	}
@@ -84,6 +84,11 @@ export function buildPiChildCliLaunch(options: {
 			);
 		}
 	}
+	if ((systemPromptArtifactPath === undefined) !== (configuration.systemPrompt === undefined)) {
+		throw new Error(
+			"invalid_child_launch: system prompt artifact and configuration must agree",
+		);
+	}
 
 	const argumentsList = [
 		cliPath,
@@ -108,10 +113,15 @@ export function buildPiChildCliLaunch(options: {
 		inputExtensionPath,
 		"--no-skills",
 		...skillPaths.flatMap((path) => ["--skill", path]),
-		"--no-context-files",
-		...(contextArtifactPath === undefined
+		...(configuration.inheritProjectContext ? [] : ["--no-context-files"]),
+		...(systemPromptArtifactPath === undefined
 			? []
-			: ["--append-system-prompt", contextArtifactPath]),
+			: [
+				configuration.systemPrompt?.mode === "replace"
+					? "--system-prompt"
+					: "--append-system-prompt",
+				systemPromptArtifactPath,
+			]),
 		projectTrusted ? "--approve" : "--no-approve",
 		"--tui-mode",
 		"fullscreen",

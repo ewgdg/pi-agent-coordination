@@ -7,7 +7,7 @@ import type {
 } from "../protocol/runtime-configuration.ts";
 import type {
 	AgentTemplate,
-	ProjectContextMode,
+	SystemPromptMode,
 } from "./agent-templates.ts";
 
 export type AgentSpawnConfigurationInput = Readonly<{
@@ -19,8 +19,9 @@ export type AgentSpawnConfigurationInput = Readonly<{
 	allowed_tools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
-	projectContext?: string;
-	projectContextMode?: ProjectContextMode;
+	systemPrompt?: string;
+	systemPromptMode?: SystemPromptMode;
+	inheritProjectContext?: boolean;
 }>;
 
 export type EffectiveAgentRunConfiguration = Readonly<{
@@ -30,10 +31,11 @@ export type EffectiveAgentRunConfiguration = Readonly<{
 	allowedTools: readonly string[];
 	skills: readonly string[];
 	extensions: readonly string[];
-	projectContext?: Readonly<{
-		mode: ProjectContextMode;
+	systemPrompt?: Readonly<{
+		mode: SystemPromptMode;
 		body: string;
 	}>;
+	inheritProjectContext: boolean;
 }>;
 
 export function resolveAgentRunConfiguration(options: {
@@ -54,7 +56,10 @@ export function resolveAgentRunConfiguration(options: {
 		templateExtensions,
 		inherited.extensions,
 	);
-	const projectContext = resolveProjectContext(template, overrides);
+	const systemPrompt = resolveSystemPrompt(template, overrides);
+	const inheritProjectContext = overrides?.inheritProjectContext
+		?? template?.inheritProjectContext
+		?? true;
 	const explicitlySelectedModel = overrides?.model && overrides.model.id !== "inherit"
 		? parseModelId(overrides.model.id)
 		: undefined;
@@ -83,7 +88,8 @@ export function resolveAgentRunConfiguration(options: {
 		allowedTools: unique([...configuredAllowedTools, ...options.fixedAllowedTools]),
 		skills: [...configuredSkills],
 		extensions: [...configuredExtensions],
-		...(projectContext === undefined ? {} : { projectContext }),
+		...(systemPrompt === undefined ? {} : { systemPrompt }),
+		inheritProjectContext,
 	};
 }
 
@@ -115,22 +121,27 @@ function resolveExtensions(
 	return [];
 }
 
-function resolveProjectContext(
+function resolveSystemPrompt(
 	template: AgentTemplate | undefined,
 	overrides: AgentSpawnConfigurationInput | undefined,
-): EffectiveAgentRunConfiguration["projectContext"] {
-	let context = template
-		? { mode: template.projectContextMode, body: template.projectContext }
+): EffectiveAgentRunConfiguration["systemPrompt"] {
+	const templatePrompt = template
+		? { mode: template.systemPromptMode, body: template.systemPrompt }
 		: undefined;
-	if (overrides?.projectContext === undefined) return context;
+	if (overrides?.systemPrompt === undefined) {
+		if (templatePrompt === undefined || overrides?.systemPromptMode === undefined) {
+			return templatePrompt;
+		}
+		return { ...templatePrompt, mode: overrides.systemPromptMode };
+	}
 	const next = {
-		mode: overrides.projectContextMode ?? "append",
-		body: overrides.projectContext,
+		mode: overrides.systemPromptMode ?? "append",
+		body: overrides.systemPrompt,
 	} as const;
-	if (next.mode === "replace" || context === undefined) return next;
+	if (next.mode === "replace" || templatePrompt === undefined) return next;
 	return {
-		mode: context.mode,
-		body: joinContext(context.body, next.body),
+		mode: templatePrompt.mode,
+		body: joinContext(templatePrompt.body, next.body),
 	};
 }
 

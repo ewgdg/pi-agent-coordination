@@ -40,7 +40,12 @@ import { registerParticipantCoordinationTools } from "../tools/participant-coord
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
-import { CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE } from "./child-process-environment.ts";
+import {
+	CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE,
+	CHILD_PROCESS_INHERIT_PROJECT_CONTEXT_ENVIRONMENT_VARIABLE,
+	CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE,
+	CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE,
+} from "./child-process-environment.ts";
 import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
 import { NativeInputSubmissionIdentity } from "./native-input-submission-identity.ts";
 import {
@@ -566,10 +571,49 @@ async function runtimeSnapshot(
 			.filter((path) => !path.startsWith("<inline:"))
 			.map((path) => canonicalFilePath(path, runtime.cwd)),
 	);
+	const explicitSystemPromptModeValue = process.env[
+		CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE
+	];
+	if (
+		explicitSystemPromptModeValue !== undefined &&
+		explicitSystemPromptModeValue !== "append" &&
+		explicitSystemPromptModeValue !== "replace"
+	) {
+		throw new Error("child_runtime_system_prompt_mismatch: mode is invalid");
+	}
+	const explicitSystemPromptMode = explicitSystemPromptModeValue as
+		| "append"
+		| "replace"
+		| undefined;
+	const explicitSystemPromptPath = process.env[
+		CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE
+	];
+	if ((explicitSystemPromptMode === undefined) !== (explicitSystemPromptPath === undefined)) {
+		throw new Error("child_runtime_system_prompt_mismatch: mode and path must be provided together");
+	}
 	const appendPrompt = runtime.services.resourceLoader.getAppendSystemPrompt();
 	const appendSources = runtime.services.resourceLoader.getAppendSystemPromptSources();
-	if (appendPrompt.length !== appendSources.length || appendPrompt.length > 1) {
-		throw new Error("child_runtime_project_context_mismatch: expected at most one file-backed append prompt");
+	if (explicitSystemPromptMode === "append"
+		&& (appendPrompt.length !== 1 || appendSources.length !== 1)) {
+		throw new Error("child_runtime_system_prompt_mismatch: expected one file-backed append prompt");
+	}
+	const systemPromptSource = runtime.services.resourceLoader.getSystemPromptSource();
+	if (explicitSystemPromptMode === "replace" && systemPromptSource === undefined) {
+		throw new Error("child_runtime_system_prompt_mismatch: expected one file-backed system prompt");
+	}
+	const explicitSystemPromptBody = explicitSystemPromptMode === undefined
+		? undefined
+		: explicitSystemPromptMode === "append"
+			? appendPrompt[0]
+			: runtime.services.resourceLoader.getSystemPrompt();
+	if (explicitSystemPromptMode !== undefined && explicitSystemPromptBody === undefined) {
+		throw new Error("child_runtime_system_prompt_mismatch: prompt body is unavailable");
+	}
+	const inheritProjectContextValue = process.env[
+		CHILD_PROCESS_INHERIT_PROJECT_CONTEXT_ENVIRONMENT_VARIABLE
+	];
+	if (inheritProjectContextValue !== "0" && inheritProjectContextValue !== "1") {
+		throw new Error("child_runtime_project_context_mismatch: inheritance marker is invalid");
 	}
 	const sessionPath = context.sessionManager.getSessionFile();
 	if (!sessionPath) throw new Error("child_runtime_session_path_unavailable");
@@ -599,12 +643,19 @@ async function runtimeSnapshot(
 		projectTrusted: runtime.services.settingsManager.isProjectTrusted(),
 		sessionId: session.sessionId,
 		sessionPath,
-		projectContext: appendPrompt.length === 0
+		systemPrompt: explicitSystemPromptMode === undefined
 			? null
 			: {
-				filePath: await canonicalFilePath(appendSources[0]!.path, runtime.cwd),
-				body: appendPrompt[0]!,
+				mode: explicitSystemPromptMode,
+				filePath: await canonicalFilePath(
+					explicitSystemPromptMode === "append"
+						? appendSources[0]!.path
+						: systemPromptSource!.path,
+					runtime.cwd,
+				),
+				body: explicitSystemPromptBody!,
 			},
+		inheritProjectContext: inheritProjectContextValue === "1",
 	};
 }
 

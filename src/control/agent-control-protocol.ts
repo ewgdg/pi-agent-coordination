@@ -227,10 +227,11 @@ const EffectiveConfigurationSchema = closed({
 	allowedTools: StringListSchema,
 	skills: StringListSchema,
 	extensions: StringListSchema,
-	projectContext: Type.Optional(closed({
+	systemPrompt: Type.Optional(closed({
 		mode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
 		body: Type.String(),
 	})),
+	inheritProjectContext: Type.Boolean(),
 });
 const AgentSpawnReceiptSchema = Type.Union([
 	closed({
@@ -573,13 +574,18 @@ export const RuntimeSnapshotSchema = closed({
 	projectTrusted: Type.Boolean(),
 	sessionId: NonEmptyStringSchema,
 	sessionPath: NonEmptyStringSchema,
-	projectContext: Type.Union([
+	systemPrompt: Type.Union([
 		Type.Null(),
-		closed({ filePath: NonEmptyStringSchema, body: Type.String() }),
+		closed({
+			mode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
+			filePath: NonEmptyStringSchema,
+			body: Type.String(),
+		}),
 	]),
+	inheritProjectContext: Type.Boolean(),
 });
 
-/** Bridge-proven version-one method payload/result map. */
+/** Bridge-proven version-two method payload/result map. */
 export const agentControlMethods = {
 	"runtime.snapshot": { request: EmptySchema, response: RuntimeSnapshotSchema },
 	"runtime.executionBegin": {

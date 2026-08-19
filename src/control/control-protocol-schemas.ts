@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
-export const AGENT_CONTROL_PROTOCOL_VERSION = 1 as const;
+export const AGENT_CONTROL_PROTOCOL_VERSION = 2 as const;
 
 const NonEmptyStringSchema = Type.String({ minLength: 1 });
 const ControlIdentityProperties = {
@@ -46,7 +46,8 @@ export const AgentTemplateCatalogueEntrySchema = Type.Object({
 	allowedTools: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	skills: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	extensions: Type.Optional(Type.Union([Type.Literal("inherit"), Type.Literal("none")])),
-	projectContextMode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
+	systemPromptMode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
+	inheritProjectContext: Type.Boolean(),
 }, { additionalProperties: false });
 
 export const AgentTemplateCatalogueSnapshotSchema = Type.Object({

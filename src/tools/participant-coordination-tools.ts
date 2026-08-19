@@ -243,10 +243,11 @@ const agentSpawnConfigurationParameters = Type.Object(
 				Type.Literal("none"),
 			]),
 		),
-		projectContext: Type.Optional(Type.String()),
-		projectContextMode: Type.Optional(
+		systemPrompt: Type.Optional(Type.String()),
+		systemPromptMode: Type.Optional(
 			Type.Union([Type.Literal("append"), Type.Literal("replace")]),
 		),
+		inheritProjectContext: Type.Optional(Type.Boolean()),
 	},
 	{ additionalProperties: false },
 );

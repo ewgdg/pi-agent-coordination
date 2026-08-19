@@ -60,7 +60,6 @@ export type PreparedChildRuntime = Readonly<{
 	initialTools?: readonly string[];
 	projectTrusted: boolean;
 	skillSources: readonly Readonly<{ name: string; path: string }>[];
-	agentsFiles: readonly Readonly<{ path: string; content: string }>[];
 }>;
 
 export async function prepareChildRuntime(options: {
@@ -118,6 +117,7 @@ export async function prepareChildRuntime(options: {
 		additionalSkillPaths: options.parentRuntime.skillSources.map(
 			({ filePath }) => filePath,
 		),
+		noContextFiles: true,
 		// Extension modules belong to the fresh child process. Runtime preparation
 		// resolves paths but never imports or invokes child extension factories.
 		noExtensions: true,
@@ -130,21 +130,6 @@ export async function prepareChildRuntime(options: {
 		configuration.skills,
 		resourceLoader.getSkills(),
 	);
-	const configuredContext = configuration.projectContext;
-	const ordinaryContext = resourceLoader.getAgentsFiles().agentsFiles.map(
-		({ path, content }) => ({ path, content }),
-	);
-	let agentsFiles = ordinaryContext;
-	if (configuredContext !== undefined) {
-		const contextFile = {
-			path: `<agent-configuration:${options.agentId}>`,
-			content: configuredContext.body,
-		};
-		agentsFiles = configuredContext.mode === "replace"
-			? [contextFile]
-			: [...ordinaryContext, contextFile];
-	}
-
 	return {
 		agentId: options.agentId,
 		role: options.role,
@@ -154,7 +139,6 @@ export async function prepareChildRuntime(options: {
 			name,
 			path: filePath,
 		})),
-		agentsFiles,
 	};
 }
 

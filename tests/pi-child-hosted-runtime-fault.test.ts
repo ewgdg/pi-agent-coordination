@@ -209,7 +209,8 @@ function createFakeRuntime(options: Readonly<{
 			projectTrusted: true,
 			sessionId: "fault-runtime",
 			sessionPath: "/sessions/fault-runtime.jsonl",
-			projectContext: null,
+			systemPrompt: null,
+			inheritProjectContext: true,
 		},
 		channel: {
 			onClose: () => () => undefined,

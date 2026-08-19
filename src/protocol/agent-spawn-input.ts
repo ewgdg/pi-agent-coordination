@@ -75,8 +75,9 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 		...(value.allowed_tools === undefined ? [] : ["allowed_tools"]),
 		...(value.skills === undefined ? [] : ["skills"]),
 		...(value.extensions === undefined ? [] : ["extensions"]),
-		...(value.projectContext === undefined ? [] : ["projectContext"]),
-		...(value.projectContextMode === undefined ? [] : ["projectContextMode"]),
+		...(value.systemPrompt === undefined ? [] : ["systemPrompt"]),
+		...(value.systemPromptMode === undefined ? [] : ["systemPromptMode"]),
+		...(value.inheritProjectContext === undefined ? [] : ["inheritProjectContext"]),
 	]);
 	const model = value.model === undefined ? undefined : validateModel(value.model);
 	const cwd = value.cwd === undefined ? undefined : requireNonEmptyString(value.cwd, "cwd");
@@ -87,24 +88,28 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	const extensions = value.extensions === undefined
 		? undefined
 		: validateExtensions(value.extensions);
-	const projectContext = value.projectContext;
-	if (projectContext !== undefined && typeof projectContext !== "string") {
-		throw new Error("invalid_input: Agent Spawn config.projectContext must be a string");
+	const systemPrompt = value.systemPrompt;
+	if (systemPrompt !== undefined && typeof systemPrompt !== "string") {
+		throw new Error("invalid_input: Agent Spawn config.systemPrompt must be a string");
 	}
-	const projectContextMode = value.projectContextMode;
+	const systemPromptMode = value.systemPromptMode;
 	if (
-		projectContextMode !== undefined &&
-		projectContextMode !== "append" &&
-		projectContextMode !== "replace"
+		systemPromptMode !== undefined &&
+		systemPromptMode !== "append" &&
+		systemPromptMode !== "replace"
 	) {
 		throw new Error(
-			'invalid_input: Agent Spawn config.projectContextMode must be "append" or "replace"',
+			'invalid_input: Agent Spawn config.systemPromptMode must be "append" or "replace"',
 		);
 	}
-	if (projectContextMode !== undefined && projectContext === undefined) {
+	if (systemPromptMode !== undefined && systemPrompt === undefined) {
 		throw new Error(
-			"invalid_input: Agent Spawn config.projectContextMode requires projectContext",
+			"invalid_input: Agent Spawn config.systemPromptMode requires systemPrompt",
 		);
+	}
+	const inheritProjectContext = value.inheritProjectContext;
+	if (inheritProjectContext !== undefined && typeof inheritProjectContext !== "boolean") {
+		throw new Error("invalid_input: Agent Spawn config.inheritProjectContext must be a boolean");
 	}
 	return {
 		...(model === undefined ? {} : { model }),
@@ -112,8 +117,9 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 		...(allowedTools === undefined ? {} : { allowed_tools: allowedTools }),
 		...(skills === undefined ? {} : { skills }),
 		...(extensions === undefined ? {} : { extensions }),
-		...(projectContext === undefined ? {} : { projectContext }),
-		...(projectContextMode === undefined ? {} : { projectContextMode }),
+		...(systemPrompt === undefined ? {} : { systemPrompt }),
+		...(systemPromptMode === undefined ? {} : { systemPromptMode }),
+		...(inheritProjectContext === undefined ? {} : { inheritProjectContext }),
 	};
 }
 

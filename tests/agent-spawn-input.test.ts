@@ -61,6 +61,38 @@ test("Agent Spawn rejects extension path arrays at input validation", () => {
 	);
 });
 
+test("Agent Spawn validates independent system-prompt and project-context controls", () => {
+	assert.deepEqual(validateAgentSpawnInput({
+		request: "Use the native project instructions with a focused prompt.",
+		config: {
+			systemPrompt: "Focus on the assigned task.",
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+		},
+	}), {
+		request: "Use the native project instructions with a focused prompt.",
+		config: {
+			systemPrompt: "Focus on the assigned task.",
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+		},
+	});
+	assert.throws(
+		() => validateAgentSpawnInput({
+			request: "A prompt mode needs a prompt body.",
+			config: { systemPromptMode: "replace" },
+		}),
+		/systemPromptMode requires systemPrompt/,
+	);
+	assert.throws(
+		() => validateAgentSpawnInput({
+			request: "The aggregate context fields are obsolete.",
+			config: { projectContext: "obsolete" },
+		}),
+		/invalid shape/,
+	);
+});
+
 test("Agent Spawn validates paired model overrides with explicit inheritance", () => {
 	assert.deepEqual(validateAgentSpawnInput({
 		request: "Use an explicit model with inherited thinking.",

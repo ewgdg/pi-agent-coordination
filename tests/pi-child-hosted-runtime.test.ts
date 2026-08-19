@@ -63,9 +63,9 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 			allowedTools: launchAllowedTools,
 			skills: [],
 			extensions: [CHILD_EXTENSION],
+			inheritProjectContext: true,
 		},
 		skillPaths: [],
-		agentsFiles: [],
 		projectTrusted: true,
 		ownerEnvironment: {
 			...process.env,
@@ -353,7 +353,8 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 			projectTrusted: true,
 			sessionId: "retry-runtime",
 			sessionPath: "/sessions/retry-runtime.jsonl",
-			projectContext: null,
+			systemPrompt: null,
+			inheritProjectContext: true,
 		},
 		channel: {
 			onClose: () => () => undefined,
@@ -472,7 +473,7 @@ for (const failure of ["channel_loss", "process_kill"] as const) {
 			await harness.launch.exited;
 			await waitUntil(async () => {
 				try {
-					await lstat(harness.contextArtifactPath);
+					await lstat(harness.systemPromptArtifactPath);
 					return false;
 				} catch (error) {
 					return hasCode("ENOENT")(error);
@@ -592,12 +593,10 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 			allowedTools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
+			systemPrompt: { mode: "append", body: `Hosted failure context for ${name}` },
+			inheritProjectContext: true,
 		},
 		skillPaths: [],
-		agentsFiles: [{
-			path: "/project/AGENTS.md",
-			content: `Hosted failure context for ${name}`,
-		}],
 		projectTrusted: true,
 		ownerEnvironment: {
 			...process.env,
@@ -615,9 +614,9 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 		startSession: async () => ({ runtime, ready: runtime.ready }),
 	});
 	const handle = await host.lane.run(() => host.startInLane());
-	const contextArtifactPath = (await launch.ready()).snapshot.projectContext?.filePath;
-	assert.ok(contextArtifactPath);
-	return { launch, host, handle, sessionPath, contextArtifactPath };
+	const systemPromptArtifactPath = (await launch.ready()).snapshot.systemPrompt?.filePath;
+	assert.ok(systemPromptArtifactPath);
+	return { launch, host, handle, sessionPath, systemPromptArtifactPath };
 }
 
 async function waitUntil(condition: () => boolean | Promise<boolean>): Promise<void> {
@@ -649,7 +648,8 @@ function fakeRuntimeSnapshot(options: Readonly<{
 		projectTrusted: true,
 		sessionId: "dynamic-runtime",
 		sessionPath: "/sessions/dynamic-runtime.jsonl",
-		projectContext: null,
+		systemPrompt: null,
+		inheritProjectContext: true,
 	};
 }
 

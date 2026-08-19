@@ -96,7 +96,7 @@ test("cancelling pending launch rejects exact readiness and bounds all startup c
 	}
 });
 
-test("failed startup removes its owned context artifact and launch directory", {
+test("failed startup removes its owned system-prompt artifact and launch directory", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
 }, async () => {
@@ -148,12 +148,10 @@ async function createLaunchOptions(
 			allowedTools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
+			systemPrompt: { mode: "append", body: `Launch context for ${name}` },
+			inheritProjectContext: true,
 		},
 		skillPaths: [],
-		agentsFiles: [{
-			path: "/project/AGENTS.md",
-			content: `Launch context for ${name}`,
-		}],
 		projectTrusted: true,
 		ownerEnvironment: {
 			...process.env,

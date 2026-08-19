@@ -246,11 +246,13 @@ test("Template catalogue shows current Runtime and available Template configurat
 			allowedTools: ["read", "bash"],
 			skills: ["research"],
 			extensions: "none",
-			projectContextMode: "replace",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
 		},
 		{
 			name: "plain-agent",
-			projectContextMode: "append",
+			systemPromptMode: "append",
+			inheritProjectContext: true,
 		},
 		],
 	});
@@ -258,8 +260,8 @@ test("Template catalogue shows current Runtime and available Template configurat
 	assert.match(catalogue ?? "", /integration-researcher/);
 	assert.match(catalogue ?? "", /Use for integration research requiring primary sources\./);
 	assert.match(catalogue ?? "", /anthropic\/claude-sonnet-4-5/);
-	assert.match(catalogue ?? "", /project-context: replace/);
-	assert.match(catalogue ?? "", /- name: plain-agent\n  project-context: append/);
+	assert.match(catalogue ?? "", /systemPromptMode: replace/);
+	assert.match(catalogue ?? "", /- name: plain-agent\n  systemPromptMode: append/);
 	assert.match(catalogue, /## Current Agent Runtime/);
 	assert.match(catalogue, /id: current\/model/);
 });
@@ -278,7 +280,8 @@ test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalog
 				model: { provider: "anthropic", modelId: "claude-sonnet-4-5" },
 				thinking: "high" as const,
 			}],
-			projectContextMode: "append" as const,
+			systemPromptMode: "append" as const,
+			inheritProjectContext: true,
 		}],
 	};
 	const host = await createTestOwnerHost(t, (pi) => {

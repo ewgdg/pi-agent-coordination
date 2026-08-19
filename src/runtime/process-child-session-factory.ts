@@ -102,7 +102,7 @@ export class ProcessChildSessionFactory {
 	/**
 	 * Dynamic preparation is deliberate product behavior: every new Runtime
 	 * re-resolves its current parent ancestry, selected Template, resources,
-	 * trust, and Project Context. Never persist or reuse this resolved launch
+	 * trust, and explicit system prompt. Never persist or reuse this resolved launch
 	 * specification for a later Runtime unless the product semantics are
 	 * explicitly changed at the user's request.
 	 */
@@ -438,7 +438,6 @@ export class ProcessChildSessionFactory {
 			skillPaths: prepared.skillSources.map(({ path }) => path),
 			projectTrusted: prepared.projectTrusted,
 			agentDir: this.#ownerRuntime.services.agentDir,
-			agentsFiles: prepared.agentsFiles,
 			ownerRequestHandlers: this.#ownerRequestHandlers(
 				prepared.role,
 				identity.agentId,

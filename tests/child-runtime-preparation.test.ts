@@ -85,8 +85,9 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			allowedTools: ["grep"],
 			skills: ["review", "project-audit"],
 			extensions: "inherit",
-			projectContextMode: "append",
-			projectContext: "Template instructions",
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+			systemPrompt: "Template instructions",
 			sourcePath: join(fixture, "research-agent.md"),
 		},
 		overrides: {
@@ -94,8 +95,8 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			model: { id: "template/template-model", thinking: "high" },
 			allowed_tools: ["read", "extension_tool"],
 			extensions: "inherit",
-			projectContext: "Spawn instructions",
-			projectContextMode: "append",
+			systemPrompt: "Spawn instructions",
+			systemPromptMode: "append",
 		},
 	});
 
@@ -118,24 +119,16 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			],
 			skills: ["review", "project-audit"],
 			extensions: [extensionPath],
-			projectContext: {
+			systemPrompt: {
 				mode: "append",
 				body: "Template instructions\n\nSpawn instructions",
 			},
+			inheritProjectContext: true,
 		},
 		projectTrusted: true,
 		skillSources: [
 			{ name: "review", path: inheritedSkillPath },
 			{ name: "project-audit", path: projectSkillPath },
-		],
-		agentsFiles: [
-			{ path: join(agentDir, "AGENTS.md"), content: "Global instructions" },
-			{ path: join(parentCwd, "AGENTS.md"), content: "Workspace instructions" },
-			{ path: join(effectiveCwd, "CLAUDE.md"), content: "Subproject instructions" },
-			{
-				path: "<agent-configuration:ordinary-child>",
-				content: "Template instructions\n\nSpawn instructions",
-			},
 		],
 	});
 	await assert.rejects(access(moduleSentinelPath), { code: "ENOENT" });
@@ -184,6 +177,8 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		mkdir(agentDir, { recursive: true }),
 		mkdir(parentCwd, { recursive: true }),
 		mkdir(newCwd, { recursive: true }),
+	]);
+	await Promise.all([
 		writeFile(join(parentCwd, "AGENTS.md"), "Ordinary context to replace"),
 		writeFile(extensionPath, 'throw new Error("extension was evaluated");\n'),
 	]);
@@ -218,8 +213,9 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 			name: "moderator",
 			useWhen: "Use for moderation.",
 			extensions: "none",
-			projectContextMode: "replace",
-			projectContext: "Moderator-only context",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			systemPrompt: "Moderator-only context",
 			sourcePath: join(fixture, "moderator.md"),
 		},
 	});
@@ -239,12 +235,9 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		],
 		skills: [],
 		extensions: [],
-		projectContext: { mode: "replace", body: "Moderator-only context" },
+		systemPrompt: { mode: "replace", body: "Moderator-only context" },
+		inheritProjectContext: false,
 	});
-	assert.deepEqual(sameCwd.agentsFiles, [{
-		path: "<agent-configuration:moderator-child>",
-		content: "Moderator-only context",
-	}]);
 
 	const sameCwdAlias = await prepareChildRuntime({
 		agentId: "ordinary-same-cwd-alias",

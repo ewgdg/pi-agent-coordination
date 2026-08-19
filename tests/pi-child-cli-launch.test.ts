@@ -15,11 +15,13 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 				allowedTools: ["read", "agent_message", "agent_spawn"],
 				skills: ["review", "testing"],
 				extensions: ["/extensions/first.ts", "/extensions/second.ts"],
+				systemPrompt: { mode: "append", body: "Child prompt" },
+				inheritProjectContext: true,
 			},
 			skillPaths: ["/skills/review/SKILL.md", "/skills/testing/SKILL.md"],
 			bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
 			inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
-			contextArtifactPath: "/runtime/child-project-context.md",
+			systemPromptArtifactPath: "/runtime/system-prompt.md",
 			projectTrusted: true,
 		}),
 		{
@@ -42,8 +44,7 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 				"--no-skills",
 				"--skill", "/skills/review/SKILL.md",
 				"--skill", "/skills/testing/SKILL.md",
-				"--no-context-files",
-				"--append-system-prompt", "/runtime/child-project-context.md",
+				"--append-system-prompt", "/runtime/system-prompt.md",
 				"--approve",
 				"--tui-mode", "fullscreen",
 			],
@@ -62,6 +63,7 @@ test("Pi child CLI launch fails before spawn when resolved resources are ambiguo
 			allowedTools: ["read"],
 			skills: ["review"],
 			extensions: ["/extensions/first.ts"],
+			inheritProjectContext: true,
 		},
 		bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
 		inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
@@ -88,4 +90,63 @@ test("Pi child CLI launch fails before spawn when resolved resources are ambiguo
 		}),
 		/input extension.*inherited extension/i,
 	);
+});
+
+test("Pi child CLI launch isolates project context and replaces the base prompt independently", () => {
+	const launch = buildPiChildCliLaunch({
+		cliPath: "/package/pi/dist/cli.js",
+		sessionPath: "/sessions/child.jsonl",
+		configuration: {
+			cwd: "/work/project",
+			model: { provider: "anthropic", modelId: "claude-test" },
+			thinking: "high",
+			allowedTools: ["read"],
+			skills: [],
+			extensions: [],
+			systemPrompt: { mode: "replace", body: "Private prompt" },
+			inheritProjectContext: false,
+		},
+		skillPaths: [],
+		bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
+		inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
+		systemPromptArtifactPath: "/runtime/system-prompt.md",
+		projectTrusted: false,
+	});
+
+	assert.ok(launch.arguments.includes("--no-context-files"));
+	assert.deepEqual(
+		launch.arguments.slice(-6),
+		[
+			"--no-context-files",
+			"--system-prompt",
+			"/runtime/system-prompt.md",
+			"--no-approve",
+			"--tui-mode",
+			"fullscreen",
+		],
+	);
+});
+
+test("Pi child CLI launch can suppress native context without an explicit prompt", () => {
+	const launch = buildPiChildCliLaunch({
+		cliPath: "/package/pi/dist/cli.js",
+		sessionPath: "/sessions/child.jsonl",
+		configuration: {
+			cwd: "/work/project",
+			model: { provider: "anthropic", modelId: "claude-test" },
+			thinking: "off",
+			allowedTools: [],
+			skills: [],
+			extensions: [],
+			inheritProjectContext: false,
+		},
+		skillPaths: [],
+		bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
+		inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
+		projectTrusted: false,
+	});
+
+	assert.ok(launch.arguments.includes("--no-context-files"));
+	assert.equal(launch.arguments.includes("--append-system-prompt"), false);
+	assert.equal(launch.arguments.includes("--system-prompt"), false);
 });

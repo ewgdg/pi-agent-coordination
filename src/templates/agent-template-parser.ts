@@ -8,7 +8,7 @@ import { isRuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import { isAgentTemplateName } from "./agent-template-name.ts";
 import type {
 	AgentTemplate,
-	ProjectContextMode,
+	SystemPromptMode,
 } from "./agent-templates.ts";
 
 const TEMPLATE_FIELDS = new Set([
@@ -18,7 +18,8 @@ const TEMPLATE_FIELDS = new Set([
 	"allowed-tools",
 	"skills",
 	"extensions",
-	"project-context",
+	"systemPromptMode",
+	"inheritProjectContext",
 ]);
 
 export class AgentTemplateParseError extends Error {
@@ -100,9 +101,12 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 	const extensions = mapping.extensions === undefined
 		? undefined
 		: parseExtensions(mapping.extensions, sourcePath, name);
-	const projectContextMode = mapping["project-context"] === undefined
+	const systemPromptMode = mapping.systemPromptMode === undefined
 		? "append"
-		: parseProjectContextMode(mapping["project-context"], sourcePath, name);
+		: parseSystemPromptMode(mapping.systemPromptMode, sourcePath, name);
+	const inheritProjectContext = mapping.inheritProjectContext === undefined
+		? true
+		: parseInheritProjectContext(mapping.inheritProjectContext, sourcePath, name);
 
 	return {
 		name,
@@ -111,8 +115,9 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 		...(allowedTools === undefined ? {} : { allowedTools }),
 		...(skills === undefined ? {} : { skills }),
 		...(extensions === undefined ? {} : { extensions }),
-		projectContextMode,
-		projectContext: split.body,
+		systemPromptMode,
+		inheritProjectContext,
+		systemPrompt: split.body,
 		sourcePath,
 	};
 }
@@ -283,15 +288,30 @@ function parseExtensions(
 	);
 }
 
-function parseProjectContextMode(
+function parseSystemPromptMode(
 	value: unknown,
 	sourcePath: string,
 	templateName: string,
-): ProjectContextMode {
+): SystemPromptMode {
 	if (value !== "append" && value !== "replace") {
 		throw new AgentTemplateParseError(
 			sourcePath,
-			'project-context must be "append" or "replace"',
+			'systemPromptMode must be "append" or "replace"',
+			templateName,
+		);
+	}
+	return value;
+}
+
+function parseInheritProjectContext(
+	value: unknown,
+	sourcePath: string,
+	templateName: string,
+): boolean {
+	if (typeof value !== "boolean") {
+		throw new AgentTemplateParseError(
+			sourcePath,
+			"inheritProjectContext must be a boolean",
 			templateName,
 		);
 	}

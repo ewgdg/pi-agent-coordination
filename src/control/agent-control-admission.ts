@@ -5,7 +5,11 @@ import {
 	type AgentControlIdentity,
 	type AgentControlProtocol,
 } from "./agent-control-channel.ts";
-import { HelloFrameSchema, type HelloFrame } from "./control-protocol-schemas.ts";
+import {
+	AGENT_CONTROL_PROTOCOL_VERSION,
+	HelloFrameSchema,
+	type HelloFrame,
+} from "./control-protocol-schemas.ts";
 import type { ControlTransport, ControlTransportListener } from "./control-transport.ts";
 
 const DEFAULT_MAXIMUM_CONTROL_FRAME_BYTES = 1024 * 1024;
@@ -143,7 +147,7 @@ export class AgentControlAdmissionBroker<P extends AgentControlProtocol> {
 			}
 			this.#pending.delete(hello.connectionToken);
 			pending.removeAbortListener();
-			if (hello.protocolVersion !== 1
+			if (hello.protocolVersion !== AGENT_CONTROL_PROTOCOL_VERSION
 				|| hello.workflowId !== this.#workflowId
 				|| hello.agentId !== pending.expected.agentId
 				|| hello.expectedSessionId !== pending.expected.expectedSessionId) {

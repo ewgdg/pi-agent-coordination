@@ -51,6 +51,9 @@ process.env.HOME = await mkdtemp(join(tmpdir(), "pi-agent-coordination-test-home
 // PTY fixtures are Owner processes. A Pi-hosted test runner may itself carry the
 // child-only bootstrap variable; child launches replace it with their own path.
 delete process.env.PI_AGENT_COORDINATION_BOOTSTRAP;
+delete process.env.PI_AGENT_COORDINATION_SYSTEM_PROMPT_MODE;
+delete process.env.PI_AGENT_COORDINATION_SYSTEM_PROMPT_PATH;
+delete process.env.PI_AGENT_COORDINATION_INHERIT_PROJECT_CONTEXT;
 
 async function loadPiBuiltInExtensionFactories(): Promise<readonly InlineExtension[]> {
 	const modulePath = join(getPackageDir(), "dist", "extensions", "index.js");

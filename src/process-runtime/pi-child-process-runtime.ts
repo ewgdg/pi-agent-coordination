@@ -34,10 +34,7 @@ import type { EffectiveAgentRunConfiguration } from "../templates/agent-configur
 import {
 	buildChildProcessEnvironment,
 } from "./child-process-environment.ts";
-import {
-	type ChildContextFile,
-	materializeNewChildContextArtifact,
-} from "./child-context-artifact.ts";
+import { materializeNewChildSystemPromptArtifact } from "./child-system-prompt-artifact.ts";
 import { buildPiChildCliLaunch } from "./pi-child-cli-launch.ts";
 import {
 	dispatchParticipantRequestToOwner,
@@ -79,7 +76,6 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	configuration: EffectiveAgentRunConfiguration;
 	initialTools?: readonly string[];
 	skillPaths: readonly string[];
-	agentsFiles: readonly ChildContextFile[];
 	projectTrusted: boolean;
 	agentDir?: string;
 	ownerEnvironment?: NodeJS.ProcessEnv;
@@ -121,7 +117,7 @@ export class PiChildProcessRuntime {
 		snapshot: PiChildRuntimeSnapshot;
 		bootstrapPath: string;
 		artifactDirectory: string;
-		contextArtifactPath: string | undefined;
+		systemPromptArtifactPath: string | undefined;
 		eventHandlers: Set<(event: PiChildRuntimeEvent) => void>;
 	}) {
 		this.#projection = options.projection;
@@ -131,13 +127,13 @@ export class PiChildProcessRuntime {
 		this.ready = options.ready;
 		this.snapshot = options.snapshot;
 		this.bootstrapPath = options.bootstrapPath;
-		const contextArtifactPath = options.contextArtifactPath;
+		const systemPromptArtifactPath = options.systemPromptArtifactPath;
 		this.#cleanup = () => completeCleanup([
 			() => this.channel.close().catch(() => undefined),
 			() => unlinkIfExists(this.bootstrapPath),
-			...(contextArtifactPath === undefined
+			...(systemPromptArtifactPath === undefined
 				? []
-				: [() => unlinkIfExists(contextArtifactPath)]),
+				: [() => unlinkIfExists(systemPromptArtifactPath)]),
 			() => this.#admissionBroker.close().catch(() => undefined),
 			() => this.#projection.dispose().catch(() => undefined),
 			() => removeEmptyDirectory(options.artifactDirectory),
@@ -182,10 +178,10 @@ export class PiChildProcessRuntime {
 			throw error;
 		}
 		// Control endpoints are opaque IPC descriptors. In particular, a Windows
-		// named pipe is not a filesystem parent for bootstrap or context artifacts.
+		// named pipe is not a filesystem parent for bootstrap or prompt artifacts.
 		const bootstrapPath = join(artifactDirectory, "bootstrap.json");
-		const contextArtifactCandidatePath = join(artifactDirectory, "context.md");
-		let contextArtifactPath: string | undefined;
+		const systemPromptArtifactCandidatePath = join(artifactDirectory, "system-prompt.md");
+		let systemPromptArtifactPath: string | undefined;
 		let projection: PtyTerminalProjection | undefined;
 		let channel: PiChildRuntimeChannel | undefined;
 		let cleanupPromise: Promise<void> | undefined;
@@ -200,10 +196,12 @@ export class PiChildProcessRuntime {
 				ownerPresentation: options.ownerRequestHandlers !== undefined,
 				expectedSessionId: requireIdentity("expectedSessionId", options.expectedSessionId),
 			};
-			contextArtifactPath = await materializeNewChildContextArtifact({
-				path: contextArtifactCandidatePath,
-				agentsFiles: options.agentsFiles,
-			});
+			if (options.configuration.systemPrompt !== undefined) {
+				systemPromptArtifactPath = await materializeNewChildSystemPromptArtifact({
+					path: systemPromptArtifactCandidatePath,
+					body: options.configuration.systemPrompt.body,
+				});
+			}
 			await writeFile(bootstrapPath, `${JSON.stringify(bootstrap)}\n`, {
 				encoding: "utf8",
 				mode: 0o600,
@@ -221,9 +219,9 @@ export class PiChildProcessRuntime {
 				skillPaths: options.skillPaths,
 				bridgeExtensionPath,
 				inputExtensionPath,
-				...(contextArtifactPath === undefined
+				...(systemPromptArtifactPath === undefined
 					? {}
-					: { contextArtifactPath }),
+					: { systemPromptArtifactPath }),
 				projectTrusted: options.projectTrusted,
 			});
 			const ownerEnvironment = options.ownerEnvironment ?? process.env;
@@ -236,6 +234,13 @@ export class PiChildProcessRuntime {
 			const environment = buildChildProcessEnvironment({
 				ownerEnvironment,
 				bootstrapPath,
+				inheritProjectContext: options.configuration.inheritProjectContext,
+				...(systemPromptArtifactPath === undefined
+					? {}
+					: {
+						systemPromptMode: options.configuration.systemPrompt!.mode,
+						systemPromptPath: systemPromptArtifactPath,
+					}),
 			});
 			environment.PI_CODING_AGENT_DIR = resolvedAgentDir;
 			// These describe the owned @xterm/headless PTY, not the Owner's terminal.
@@ -315,7 +320,7 @@ export class PiChildProcessRuntime {
 				rows: options.rows ?? DEFAULT_ROWS,
 			});
 			const exactProjection = projection;
-			const exactContextArtifactPath = contextArtifactPath;
+			const exactSystemPromptArtifactPath = systemPromptArtifactPath;
 			const cleanup = () => {
 				cleanupPromise ??= completeCleanup([
 					() => channel?.close().catch(() => undefined) ?? Promise.resolve(),
@@ -325,9 +330,9 @@ export class PiChildProcessRuntime {
 					},
 					() => exactProjection.dispose().catch(() => undefined),
 					() => unlinkIfExists(bootstrapPath),
-					...(exactContextArtifactPath === undefined
+					...(exactSystemPromptArtifactPath === undefined
 						? []
-						: [() => unlinkIfExists(exactContextArtifactPath)]),
+						: [() => unlinkIfExists(exactSystemPromptArtifactPath)]),
 					() => admissionBroker.close().catch(() => undefined),
 					() => removeEmptyDirectory(artifactDirectory),
 				]);
@@ -375,7 +380,7 @@ export class PiChildProcessRuntime {
 							options.projectTrusted,
 							bootstrap.expectedSessionId,
 							options.sessionPath,
-							exactContextArtifactPath,
+							exactSystemPromptArtifactPath,
 						);
 						return new PiChildProcessRuntime({
 							projection: exactProjection,
@@ -385,7 +390,7 @@ export class PiChildProcessRuntime {
 							snapshot,
 							bootstrapPath,
 							artifactDirectory,
-							contextArtifactPath: exactContextArtifactPath,
+							systemPromptArtifactPath: exactSystemPromptArtifactPath,
 							eventHandlers,
 						});
 					} catch (error) {
@@ -403,7 +408,7 @@ export class PiChildProcessRuntime {
 					},
 					() => projection?.dispose().catch(() => undefined) ?? Promise.resolve(),
 					() => unlinkIfExists(bootstrapPath),
-					() => unlinkIfExists(contextArtifactCandidatePath),
+					() => unlinkIfExists(systemPromptArtifactCandidatePath),
 					() => admissionBroker.close().catch(() => undefined),
 					() => removeEmptyDirectory(artifactDirectory),
 				]);
@@ -691,9 +696,12 @@ async function assertRuntimeSnapshot(
 	projectTrusted: boolean,
 	expectedSessionId: string,
 	sessionPath: string,
-	contextArtifactPath: string | undefined,
+	systemPromptArtifactPath: string | undefined,
 ): Promise<void> {
 	assertAllowedTools(actual, expected.allowedTools);
+	if ((systemPromptArtifactPath === undefined) !== (expected.systemPrompt === undefined)) {
+		throw new Error("child_runtime_system_prompt_mismatch: artifact and configuration disagree");
+	}
 	const expectedSnapshot: PiChildRuntimeSnapshot = {
 		cwd: expected.cwd,
 		model: expected.model,
@@ -709,12 +717,14 @@ async function assertRuntimeSnapshot(
 		projectTrusted,
 		sessionId: expectedSessionId,
 		sessionPath,
-		projectContext: contextArtifactPath === undefined
+		systemPrompt: systemPromptArtifactPath === undefined
 			? null
 			: {
-				filePath: await realpath(contextArtifactPath),
-				body: await readFile(contextArtifactPath, "utf8"),
+				mode: expected.systemPrompt!.mode,
+				filePath: await realpath(systemPromptArtifactPath),
+				body: await readFile(systemPromptArtifactPath, "utf8"),
 			},
+		inheritProjectContext: expected.inheritProjectContext,
 	};
 	if (JSON.stringify(actual) !== JSON.stringify(expectedSnapshot)) {
 		throw new Error(

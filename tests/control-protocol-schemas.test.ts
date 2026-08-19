@@ -16,7 +16,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 1, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 2, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control Endpoint and child bootstrap descriptors are closed and versioned", () => {
 	const endpoint = { transport: "unix", address: "/tmp/control.sock" } as const;
@@ -25,7 +25,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 1,
+		protocolVersion: 2,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
@@ -41,7 +41,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		validateChildProcessBootstrap({ ...bootstrap, endpoint: namedPipeEndpoint }),
 		{ ...bootstrap, endpoint: namedPipeEndpoint },
 	);
-	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, protocolVersion: 2 }), false);
+	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, protocolVersion: 3 }), false);
 	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, unixPath: endpoint.address }), false);
 	assert.equal(Check(ControlEndpointSchema, { ...endpoint, extra: true }), false);
 	assert.equal(Check(ControlEndpointSchema, { ...namedPipeEndpoint, extra: true }), false);
@@ -176,7 +176,8 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 		projectTrusted: true,
 		sessionId: "session",
 		sessionPath: "/sessions/session.jsonl",
-		projectContext: null,
+		systemPrompt: null,
+		inheritProjectContext: true,
 	} as const;
 	assert.equal(Check(RuntimeSnapshotSchema, validRuntimeSnapshot), true);
 	assert.equal(Check(agentControlEvents["runtime.snapshot.changed"].payload, validRuntimeSnapshot), true);
@@ -260,6 +261,7 @@ test("every version-one method and event has TypeBox payload/result schemas", ()
 			allowedTools: ["read"],
 			skills: [],
 			extensions: [],
+			inheritProjectContext: true,
 		},
 	}), true);
 	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {

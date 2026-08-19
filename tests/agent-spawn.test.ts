@@ -140,6 +140,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			],
 			skills: [],
 			extensions: processExtensions,
+			inheritProjectContext: true,
 		},
 	);
 
@@ -578,8 +579,8 @@ test("a successor Runtime re-resolves its current Template and project resources
 		description: "  Research specialist  ",
 		config: {
 			cwd: "subproject",
-			projectContext: "Spawn context",
-			projectContextMode: "append" as const,
+			systemPrompt: "Spawn context",
+			systemPromptMode: "append" as const,
 		},
 	};
 	host.session.sessionManager.appendMessage(
@@ -613,10 +614,11 @@ test("a successor Runtime re-resolves its current Template and project resources
 		],
 		skills: [],
 		extensions: processExtensions,
-		projectContext: {
+		systemPrompt: {
 			mode: "append",
 			body: "Template context\n\nSpawn context",
 		},
+		inheritProjectContext: true,
 	});
 	assert.deepEqual(
 		view.children().map(({ label, description }) => ({ label, description })),

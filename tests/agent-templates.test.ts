@@ -30,7 +30,8 @@ test("parses the complete strict Agent Template surface", () => {
 			"skills:",
 			"  - research",
 			"extensions: none",
-			"project-context: replace",
+			"systemPromptMode: replace",
+			"inheritProjectContext: false",
 			"---",
 			"Use primary sources.",
 		].join("\n"),
@@ -47,8 +48,9 @@ test("parses the complete strict Agent Template surface", () => {
 		allowedTools: ["read", "grep"],
 		skills: ["research"],
 		extensions: "none",
-		projectContextMode: "replace",
-		projectContext: "Use primary sources.",
+		systemPromptMode: "replace",
+		inheritProjectContext: false,
+		systemPrompt: "Use primary sources.",
 		sourcePath: "/templates/research-agent.md",
 	});
 });
@@ -60,6 +62,23 @@ test("rejects the removed exact tools Template field", () => {
 			"/templates/research-agent.md",
 		),
 		/unknown frontmatter field/,
+	);
+});
+
+test("rejects the removed aggregate Project Context field and invalid inheritance values", () => {
+	assert.throws(
+		() => parseAgentTemplate(
+			"---\nname: research-agent\nproject-context: replace\n---\n",
+			"/templates/research-agent.md",
+		),
+		/unknown frontmatter field/,
+	);
+	assert.throws(
+		() => parseAgentTemplate(
+			"---\nname: research-agent\ninheritProjectContext: yes\n---\n",
+			"/templates/research-agent.md",
+		),
+		/inheritProjectContext must be a boolean/,
 	);
 });
 
@@ -81,8 +100,9 @@ test("allows absent use-when guidance but rejects a blank value", () => {
 		),
 		{
 			name: "research-agent",
-			projectContextMode: "append",
-			projectContext: "",
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+			systemPrompt: "",
 			sourcePath: "/templates/research-agent.md",
 		},
 	);
@@ -206,8 +226,9 @@ test("discovers whole templates by strict precedence while safely following syml
 			model: { provider: "research", modelId: "model" },
 			thinking: "high",
 		}],
-		projectContextMode: "append",
-		projectContext: "Project context",
+		systemPromptMode: "append",
+		inheritProjectContext: true,
+		systemPrompt: "Project context",
 		sourcePath: join(projectRoot, "research.md"),
 	});
 	assert.equal(discovery.templates.has("blocked-agent"), false);
@@ -242,16 +263,17 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 				{ model: { provider: "template", modelId: "model" }, thinking: "medium" },
 			],
 			allowedTools: ["read"],
-			projectContextMode: "replace",
-			projectContext: "Template context",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			systemPrompt: "Template context",
 			sourcePath: "/templates/research.md",
 		},
 		overrides: {
 			cwd: "subproject",
 			allowed_tools: [],
 			extensions: "inherit",
-			projectContext: "Spawn context",
-			projectContextMode: "append",
+			systemPrompt: "Spawn context",
+			systemPromptMode: "append",
 		},
 		fixedAllowedTools: ["agent_message", "agent_spawn"],
 		isModelAvailable: ({ provider }) => provider === "template",
@@ -264,10 +286,11 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 		allowedTools: ["agent_message", "agent_spawn"],
 		skills: ["base-skill"],
 		extensions: ["/extensions/base.ts"],
-		projectContext: {
+		systemPrompt: {
 			mode: "replace",
 			body: "Template context\n\nSpawn context",
 		},
+		inheritProjectContext: false,
 	});
 });
 
@@ -288,8 +311,9 @@ test("fails when no configured Template model is available", () => {
 					{ model: { provider: "missing-a", modelId: "model" }, thinking: "low" },
 					{ model: { provider: "missing-b", modelId: "model" }, thinking: "high" },
 				],
-				projectContextMode: "append",
-				projectContext: "",
+				systemPromptMode: "append",
+				inheritProjectContext: true,
+				systemPrompt: "",
 				sourcePath: "/templates/fallback-agent.md",
 			},
 			fixedAllowedTools: [],
@@ -314,8 +338,9 @@ test("available paired spawn model override bypasses unavailable Template candid
 			model: { provider: "missing", modelId: "model" },
 			thinking: "high" as const,
 		}],
-		projectContextMode: "append" as const,
-		projectContext: "",
+		systemPromptMode: "append" as const,
+		inheritProjectContext: true,
+		systemPrompt: "",
 		sourcePath: "/templates/fallback-agent.md",
 	};
 	const base = {
@@ -336,7 +361,8 @@ test("available paired spawn model override bypasses unavailable Template candid
 	}), {
 		...inherited,
 		model: { provider: "explicit", modelId: "model" },
-		projectContext: { mode: "append", body: "" },
+		systemPrompt: { mode: "append", body: "" },
+		inheritProjectContext: true,
 	});
 	assert.deepEqual(resolveAgentRunConfiguration({
 		...base,
@@ -344,11 +370,12 @@ test("available paired spawn model override bypasses unavailable Template candid
 	}), {
 		...inherited,
 		thinking: "max",
-		projectContext: { mode: "append", body: "" },
+		systemPrompt: { mode: "append", body: "" },
+		inheritProjectContext: true,
 	});
 });
 
-test("creates a public Template catalogue without Project Context bodies or source paths", () => {
+test("creates a public Template catalogue without system-prompt bodies or source paths", () => {
 	assert.deepEqual(createAgentTemplateCatalogue([
 		{
 			name: "research-agent",
@@ -357,26 +384,30 @@ test("creates a public Template catalogue without Project Context bodies or sour
 				model: { provider: "research", modelId: "model" },
 				thinking: "high",
 			}],
-			projectContextMode: "replace",
-			projectContext: "Private child instructions.",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			systemPrompt: "Private child instructions.",
 			sourcePath: "/private/research-agent.md",
 		},
 		{
 			name: "moderator",
 			useWhen: "Reserved for moderation.",
-			projectContextMode: "append",
-			projectContext: "Private moderator instructions.",
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+			systemPrompt: "Private moderator instructions.",
 			sourcePath: "/private/moderator.md",
 		},
 		{
 			name: "plain-agent",
-			projectContextMode: "append",
-			projectContext: "Private plain instructions.",
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+			systemPrompt: "Private plain instructions.",
 			sourcePath: "/private/plain-agent.md",
 		},
 	]), [{
 		name: "plain-agent",
-		projectContextMode: "append",
+		systemPromptMode: "append",
+		inheritProjectContext: true,
 	}, {
 		name: "research-agent",
 		useWhen: "Use for research.",
@@ -384,7 +415,8 @@ test("creates a public Template catalogue without Project Context bodies or sour
 			model: { provider: "research", modelId: "model" },
 			thinking: "high",
 		}],
-		projectContextMode: "replace",
+		systemPromptMode: "replace",
+		inheritProjectContext: false,
 	}]);
 });
 
@@ -396,8 +428,9 @@ test("catalogue hides unavailable candidates and Templates without one available
 				{ model: { provider: "missing", modelId: "model" }, thinking: "low" },
 				{ model: { provider: "available", modelId: "model" }, thinking: "high" },
 			],
-			projectContextMode: "append",
-			projectContext: "",
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+			systemPrompt: "",
 			sourcePath: "/templates/partly-available.md",
 		},
 		{
@@ -405,8 +438,9 @@ test("catalogue hides unavailable candidates and Templates without one available
 			models: [
 				{ model: { provider: "missing", modelId: "other" }, thinking: "max" },
 			],
-			projectContextMode: "append",
-			projectContext: "",
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+			systemPrompt: "",
 			sourcePath: "/templates/unavailable.md",
 		},
 	], ({ provider }) => provider === "available");
@@ -417,7 +451,8 @@ test("catalogue hides unavailable candidates and Templates without one available
 			model: { provider: "available", modelId: "model" },
 			thinking: "high",
 		}],
-		projectContextMode: "append",
+		systemPromptMode: "append",
+		inheritProjectContext: true,
 	}]);
 });
 

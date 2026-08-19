@@ -3,7 +3,7 @@ import type {
 	RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 
-export type ProjectContextMode = "append" | "replace";
+export type SystemPromptMode = "append" | "replace";
 
 export type AgentTemplateModelCandidate = Readonly<{
 	model: ModelReference;
@@ -17,8 +17,9 @@ export type AgentTemplate = Readonly<{
 	allowedTools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
-	projectContextMode: ProjectContextMode;
-	projectContext: string;
+	systemPromptMode: SystemPromptMode;
+	inheritProjectContext: boolean;
+	systemPrompt: string;
 	sourcePath: string;
 }>;
 
@@ -30,7 +31,8 @@ export type AgentTemplateCatalogueEntry = Readonly<{
 	allowedTools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
-	projectContextMode: ProjectContextMode;
+	systemPromptMode: SystemPromptMode;
+	inheritProjectContext: boolean;
 }>;
 
 export type AgentTemplateCatalogueSnapshot = Readonly<{
@@ -98,7 +100,8 @@ export function createAgentTemplateCatalogue(
 				...(template.allowedTools === undefined ? {} : { allowedTools: template.allowedTools }),
 				...(template.skills === undefined ? {} : { skills: template.skills }),
 				...(template.extensions === undefined ? {} : { extensions: template.extensions }),
-				projectContextMode: template.projectContextMode,
+				systemPromptMode: template.systemPromptMode,
+				inheritProjectContext: template.inheritProjectContext,
 			}];
 		});
 }

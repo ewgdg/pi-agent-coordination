@@ -28,24 +28,24 @@ windowsOnly("Windows process child starts through Control admission and shuts do
 		runtime = await PiChildProcessRuntime.start(options);
 		const bootstrapPath = runtime.bootstrapPath;
 		const artifactDirectory = dirname(bootstrapPath);
-		const contextArtifactPath = runtime.snapshot.projectContext?.filePath;
-		assert.ok(contextArtifactPath);
+		const systemPromptArtifactPath = runtime.snapshot.systemPrompt?.filePath;
+		assert.ok(systemPromptArtifactPath);
 		assert.equal(
-			await realpath(contextArtifactPath),
-			await realpath(join(artifactDirectory, "context.md")),
+			await realpath(systemPromptArtifactPath),
+			await realpath(join(artifactDirectory, "system-prompt.md")),
 		);
 		assert.equal(isAbsolute(bootstrapPath), true);
 		assert.equal(bootstrapPath.startsWith("\\\\.\\pipe\\"), false);
 		assert.equal(runtime.ready.sessionId, options.expectedSessionId);
 		assert.notEqual(runtime.pid, process.pid);
-		await lstat(contextArtifactPath);
+		await lstat(systemPromptArtifactPath);
 
 		assert.deepEqual(await runtime.shutdown("Windows named-pipe integration complete"), {
 			exitCode: 0,
 			signal: 0,
 		});
 		await assert.rejects(lstat(bootstrapPath), hasCode("ENOENT"));
-		await assert.rejects(lstat(contextArtifactPath), hasCode("ENOENT"));
+		await assert.rejects(lstat(systemPromptArtifactPath), hasCode("ENOENT"));
 		await assert.rejects(lstat(artifactDirectory), hasCode("ENOENT"));
 	} finally {
 		await runtime?.dispose();
@@ -61,17 +61,17 @@ windowsOnly("Windows process child unexpected exit closes Control and removes ru
 		runtime = await PiChildProcessRuntime.start(options);
 		const bootstrapPath = runtime.bootstrapPath;
 		const artifactDirectory = dirname(bootstrapPath);
-		const contextArtifactPath = runtime.snapshot.projectContext?.filePath;
-		assert.ok(contextArtifactPath);
+		const systemPromptArtifactPath = runtime.snapshot.systemPrompt?.filePath;
+		assert.ok(systemPromptArtifactPath);
 		assert.equal(
-			await realpath(contextArtifactPath),
-			await realpath(join(artifactDirectory, "context.md")),
+			await realpath(systemPromptArtifactPath),
+			await realpath(join(artifactDirectory, "system-prompt.md")),
 		);
 		process.kill(runtime.pid, "SIGTERM");
 		const exit = await runtime.exited;
 		assert.notEqual(exit.exitCode, 0);
 		await assert.rejects(lstat(bootstrapPath), hasCode("ENOENT"));
-		await assert.rejects(lstat(contextArtifactPath), hasCode("ENOENT"));
+		await assert.rejects(lstat(systemPromptArtifactPath), hasCode("ENOENT"));
 		await assert.rejects(lstat(artifactDirectory), hasCode("ENOENT"));
 	} finally {
 		await runtime?.dispose();
@@ -111,12 +111,10 @@ async function createRuntimeOptions(name: string): Promise<StartPiChildProcessRu
 			allowedTools: [],
 			skills: [],
 			extensions: [CHILD_EXTENSION],
+			systemPrompt: { mode: "append", body: `Windows runtime context for ${name}` },
+			inheritProjectContext: true,
 		},
 		skillPaths: [],
-		agentsFiles: [{
-			path: "/project/AGENTS.md",
-			content: `Windows runtime context for ${name}`,
-		}],
 		projectTrusted: true,
 		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
 		runtimeDirectory: root,

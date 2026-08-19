@@ -30,7 +30,8 @@ export function renderAgentTemplatePromptGuide(
 			...(template.extensions === undefined
 				? []
 				: [`  extensions: ${template.extensions}`]),
-			`  project-context: ${template.projectContextMode}`,
+			`  systemPromptMode: ${template.systemPromptMode}`,
+			`  inheritProjectContext: ${template.inheritProjectContext}`,
 		].join("\n"))
 		.join("\n");
 	return [
