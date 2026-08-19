@@ -206,7 +206,7 @@ test("Agent Spawn schema accepts conversation forks and rejects extension path a
 	assert.equal(Value.Check(schema, {
 		request: "Do not configure a conversation fork.",
 		conversation: "fork",
-		config: { allowed_tools: ["read"] },
+		config: { allowedTools: ["read"] },
 	}), false);
 	assert.equal(Value.Check(schema, {
 		request: "Do not select a Template for a conversation fork.",

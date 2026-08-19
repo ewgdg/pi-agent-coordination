@@ -93,7 +93,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 		overrides: {
 			cwd: "subproject",
 			model: { id: "template/template-model", thinking: "high" },
-			allowed_tools: ["read", "extension_tool"],
+			allowedTools: ["read", "extension_tool"],
 			extensions: "inherit",
 			systemPrompt: "Spawn instructions",
 			systemPromptMode: "append",
@@ -283,7 +283,7 @@ test("replaces inherited or configured coordination tools with the exact child r
 			skillSources: [],
 		},
 		overrides: {
-			allowed_tools: ["read", "moderator_control", "agent_message"],
+			allowedTools: ["read", "moderator_control", "agent_message"],
 		},
 	});
 

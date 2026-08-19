@@ -231,7 +231,7 @@ const agentSpawnConfigurationParameters = Type.Object(
 			),
 		),
 		cwd: Type.Optional(Type.String({ minLength: 1 })),
-		allowed_tools: Type.Optional(
+		allowedTools: Type.Optional(
 			Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
 		),
 		skills: Type.Optional(

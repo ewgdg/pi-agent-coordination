@@ -16,7 +16,7 @@ export type AgentSpawnConfigurationInput = Readonly<{
 		thinking: RuntimeThinkingLevel | "inherit";
 	}>;
 	cwd?: string;
-	allowed_tools?: readonly string[];
+	allowedTools?: readonly string[];
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
 	systemPrompt?: string;
@@ -46,7 +46,7 @@ export function resolveAgentRunConfiguration(options: {
 	isModelAvailable(model: ModelReference): boolean;
 }): EffectiveAgentRunConfiguration {
 	const { inherited, template, overrides } = options;
-	const configuredAllowedTools = overrides?.allowed_tools
+	const configuredAllowedTools = overrides?.allowedTools
 		?? template?.allowedTools
 		?? inherited.allowedTools;
 	const configuredSkills = overrides?.skills ?? template?.skills ?? inherited.skills;

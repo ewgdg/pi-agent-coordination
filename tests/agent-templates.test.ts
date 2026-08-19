@@ -22,11 +22,11 @@ test("parses the complete strict Agent Template surface", () => {
 		[
 			"---",
 			"name: research-agent",
-			"use-when: Use for primary-source research.",
+			"useWhen: Use for primary-source research.",
 			"models:",
 			"  - id: coordination-test/deterministic-child",
 			"    thinking: high",
-			"allowed-tools: read, grep",
+			"allowedTools: read, grep",
 			"skills:",
 			"  - research",
 			"extensions: none",
@@ -55,14 +55,20 @@ test("parses the complete strict Agent Template surface", () => {
 	});
 });
 
-test("rejects the removed exact tools Template field", () => {
-	assert.throws(
-		() => parseAgentTemplate(
-			"---\nname: research-agent\ntools: read\n---\n",
-			"/templates/research-agent.md",
-		),
-		/unknown frontmatter field/,
-	);
+test("rejects removed non-camelcase Template fields", () => {
+	for (const field of [
+		"use-when: Use for research.",
+		"allowed-tools: read",
+		"tools: read",
+	]) {
+		assert.throws(
+			() => parseAgentTemplate(
+				`---\nname: research-agent\n${field}\n---\n`,
+				"/templates/research-agent.md",
+			),
+			/unknown frontmatter field/,
+		);
+	}
 });
 
 test("rejects the removed aggregate Project Context field and invalid inheritance values", () => {
@@ -85,14 +91,14 @@ test("rejects the removed aggregate Project Context field and invalid inheritanc
 test("rejects extension path arrays outside the Agent Template contract", () => {
 	assert.throws(
 		() => parseAgentTemplate(
-			"---\nname: research-agent\nuse-when: Use for research.\nextensions:\n  - /extensions/arbitrary.ts\n---\n",
+			"---\nname: research-agent\nuseWhen: Use for research.\nextensions:\n  - /extensions/arbitrary.ts\n---\n",
 			"/templates/research-agent.md",
 		),
 		/extensions must be "inherit" or "none"/,
 	);
 });
 
-test("allows absent use-when guidance but rejects a blank value", () => {
+test("allows absent useWhen guidance but rejects a blank value", () => {
 	assert.deepEqual(
 		parseAgentTemplate(
 			"---\nname: research-agent\n---\n",
@@ -108,10 +114,10 @@ test("allows absent use-when guidance but rejects a blank value", () => {
 	);
 	assert.throws(
 		() => parseAgentTemplate(
-			"---\nname: research-agent\nuse-when: '   '\n---\n",
+			"---\nname: research-agent\nuseWhen: '   '\n---\n",
 			"/templates/research-agent.md",
 		),
-		/use-when must be a nonblank string/,
+		/useWhen must be a nonblank string/,
 	);
 });
 
@@ -173,31 +179,31 @@ test("discovers whole templates by strict precedence while safely following syml
 	await mkdir(projectRoot, { recursive: true });
 	await writeFile(
 		join(packageRoot, "nested", "research.md"),
-		"---\nname: research-agent\nuse-when: Use for research.\nallowed-tools: read, grep\n---\nPackage context",
+		"---\nname: research-agent\nuseWhen: Use for research.\nallowedTools: read, grep\n---\nPackage context",
 	);
 	await writeFile(
 		join(packageRoot, "blocked.md"),
-		"---\nname: blocked-agent\nuse-when: Use when blocked.\n---\n",
+		"---\nname: blocked-agent\nuseWhen: Use when blocked.\n---\n",
 	);
 	await writeFile(
 		join(packageRoot, "duplicate-name.md"),
-		"---\nname: duplicate-name-agent\nuse-when: Use for duplicate checks.\n---\n",
+		"---\nname: duplicate-name-agent\nuseWhen: Use for duplicate checks.\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "research.md"),
-		"---\nname: research-agent\nuse-when: Use for research.\nmodels:\n  - id: research/model\n    thinking: high\n---\nProject context",
+		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: research/model\n    thinking: high\n---\nProject context",
 	);
 	await writeFile(
 		join(projectRoot, "blocked.md"),
-		"---\nname: blocked-agent\nuse-when: Use when blocked.\ncwd: elsewhere\n---\n",
+		"---\nname: blocked-agent\nuseWhen: Use when blocked.\ncwd: elsewhere\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "duplicate-a.md"),
-		"---\nname: duplicate-agent\nuse-when: Use for duplicates.\n---\n",
+		"---\nname: duplicate-agent\nuseWhen: Use for duplicates.\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "duplicate-b.md"),
-		"---\nname: duplicate-agent\nuse-when: Use for duplicates.\n---\n",
+		"---\nname: duplicate-agent\nuseWhen: Use for duplicates.\n---\n",
 	);
 	await writeFile(
 		join(projectRoot, "duplicate-name.md"),
@@ -270,7 +276,7 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 		},
 		overrides: {
 			cwd: "subproject",
-			allowed_tools: [],
+			allowedTools: [],
 			extensions: "inherit",
 			systemPrompt: "Spawn context",
 			systemPromptMode: "append",

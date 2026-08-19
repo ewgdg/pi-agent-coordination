@@ -38,7 +38,7 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 	const templatePath = join(templateRoot, "parent.md");
 	await writeFile(
 		templatePath,
-		"---\nname: dynamic-parent\nuse-when: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowed-tools:\n  - read\n  - bash\n---\n",
+		"---\nname: dynamic-parent\nuseWhen: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowedTools:\n  - read\n  - bash\n---\n",
 	);
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
@@ -112,7 +112,7 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 
 		await writeFile(
 			templatePath,
-			"---\nname: dynamic-parent\nuse-when: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowed-tools: read\n---\n",
+			"---\nname: dynamic-parent\nuseWhen: Use for dynamic parent work.\nmodels:\n  - id: missing/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowedTools: read\n---\n",
 		);
 		const second = await factory.prepareOrdinaryRun({
 			agentId: "descendant",
@@ -236,7 +236,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 	await writeFile(join(templateDirectory, "process-delegate.md"), [
 		"---",
 		"name: process-delegate",
-		"use-when: Use from a freshly prepared process Runtime.",
+		"useWhen: Use from a freshly prepared process Runtime.",
 		"---",
 		"Process child context.",
 	].join("\n"), "utf8");
@@ -277,7 +277,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 			config: {
 				cwd: effectiveCwd,
 				model: { id: `${broker.providerId}/${broker.modelId}`, thinking: "inherit" as const },
-				allowed_tools: ["bash"],
+				allowedTools: ["bash"],
 			},
 		};
 		host.session.sessionManager.appendMessage(

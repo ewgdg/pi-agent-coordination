@@ -348,7 +348,7 @@ test("Owner prompts retain their prepared Template snapshot until resource reloa
 	await writeFile(templatePath, [
 		"---",
 		"name: first-delegate",
-		"use-when: Use the prepared first snapshot.",
+		"useWhen: Use the prepared first snapshot.",
 		"---",
 		"First context.",
 	].join("\n"), "utf8");
@@ -357,7 +357,7 @@ test("Owner prompts retain their prepared Template snapshot until resource reloa
 	await writeFile(templatePath, [
 		"---",
 		"name: second-delegate",
-		"use-when: Use only after resource reload.",
+		"useWhen: Use only after resource reload.",
 		"---",
 		"Second context.",
 	].join("\n"), "utf8");

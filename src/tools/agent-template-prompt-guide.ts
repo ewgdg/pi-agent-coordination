@@ -11,7 +11,7 @@ export function renderAgentTemplatePromptGuide(
 			`- name: ${template.name}`,
 			...(template.useWhen === undefined
 				? []
-				: [`  use-when: ${JSON.stringify(template.useWhen)}`]),
+				: [`  useWhen: ${JSON.stringify(template.useWhen)}`]),
 			...(template.models === undefined
 				? []
 				: [
@@ -25,7 +25,7 @@ export function renderAgentTemplatePromptGuide(
 				]),
 			...(template.allowedTools === undefined
 				? []
-				: [`  allowed-tools: ${JSON.stringify(template.allowedTools)}`]),
+				: [`  allowedTools: ${JSON.stringify(template.allowedTools)}`]),
 			...(template.skills === undefined ? [] : [`  skills: ${JSON.stringify(template.skills)}`]),
 			...(template.extensions === undefined
 				? []
@@ -38,7 +38,7 @@ export function renderAgentTemplatePromptGuide(
 		"## Current Agent Runtime",
 		`model:\n  id: ${snapshot.currentRuntime.model.provider}/${snapshot.currentRuntime.model.modelId}\n  thinking: ${snapshot.currentRuntime.thinking}`,
 		"## Available Agent Templates",
-		"Use `agent_spawn.template` when a Template fits the task. `use-when`, when present, explains when to choose it. Its `config` fields override the listed Template configuration. In `config.model`, use `inherit` to inherit the current Agent's model or thinking value.",
+		"Use `agent_spawn.template` when a Template fits the task. `useWhen`, when present, explains when to choose it. Its `config` fields override the listed Template configuration. In `config.model`, use `inherit` to inherit the current Agent's model or thinking value.",
 		...(templates.length === 0 ? ["None."] : [templates]),
 	].join("\n\n");
 }

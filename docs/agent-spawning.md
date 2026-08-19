@@ -14,7 +14,7 @@ agent_spawn({
       id: "inherit",
       thinking: "high",
     },
-    allowed_tools: ["read", "grep"],
+    allowedTools: ["read", "grep"],
     systemPrompt: "Reproduce the failure before proposing changes.",
     systemPromptMode: "append",
     inheritProjectContext: true,
@@ -34,11 +34,11 @@ agent_spawn({
 
 A Conversation Fork cannot include `template` or `config`. Its first request inherits the live parent's model, thinking, cwd, resources, and active tool surface while preserving the completed message prefix for cache affinity; this does not guarantee a provider cache hit.
 
-For a context-isolated child, `config` may override the model/thinking pair, working directory, tool allowlist, skills, explicit system prompt, system-prompt mode, and native project-context inheritance. A `config.model` object requires both `id` and `thinking`; either may be `inherit` to use that value from the current parent Runtime. `id: inherit` with `thinking: inherit` is valid. Providing `config.model` bypasses Template model candidates entirely. `allowed_tools` and `skills` replace their inherited selections, including with an empty array. Child extension selection is `inherit` or `none`; arbitrary per-child extension paths are not accepted.
+For a context-isolated child, `config` may override the model/thinking pair, working directory, tool allowlist, skills, explicit system prompt, system-prompt mode, and native project-context inheritance. A `config.model` object requires both `id` and `thinking`; either may be `inherit` to use that value from the current parent Runtime. `id: inherit` with `thinking: inherit` is valid. Providing `config.model` bypasses Template model candidates entirely. `allowedTools` and `skills` replace their inherited selections, including with an empty array. Child extension selection is `inherit` or `none`; arbitrary per-child extension paths are not accepted.
 
 Every Runtime shares the user's Pi configuration. The model and thinking pair resolved for a Spawn are explicit launch inputs only: preparing or starting the child must not persist them as user defaults. An explicit user preference action from an interactively selected Owner or child view updates the same shared configuration. Production child configuration must therefore not be isolated; tests that invoke persistent Pi APIs use an isolated fixture environment. See [ADR 0001](adr/0001-share-pi-user-configuration-across-agent-runtimes.md).
 
-`allowed_tools` is a capability ceiling, not an exact active-tool list. Pi and the selected extensions decide which allowed tools are registered and active, and may change their order during the Runtime. An allowed tool may therefore be unavailable or inactive. Role-required coordination tools are always added to the allowlist. Runtime startup rejects only an active tool outside the resolved allowlist.
+`allowedTools` is a capability ceiling, not an exact active-tool list. Pi and the selected extensions decide which allowed tools are registered and active, and may change their order during the Runtime. An allowed tool may therefore be unavailable or inactive. Role-required coordination tools are always added to the allowlist. Runtime startup rejects only an active tool outside the resolved allowlist.
 
 The label resolves from the explicit label, selected template name, then `agent`. A description comes only from the explicit spawn input. Display metadata is trimmed, preserves Unicode, rejects line breaks and control characters, and is limited to 64 Unicode code points for labels and 240 for descriptions.
 
@@ -68,13 +68,13 @@ A Template is UTF-8 Markdown with required leading YAML frontmatter:
 ```markdown
 ---
 name: integration-researcher
-use-when: Use for integration work requiring external documentation or source verification.
+useWhen: Use for integration work requiring external documentation or source verification.
 models:
   - id: anthropic/claude-sonnet-4-5
     thinking: high
   - id: deepseek/deepseek-v4-flash
     thinking: medium
-allowed-tools: read, grep
+allowedTools: read, grep
 skills:
   - research
 extensions: inherit
@@ -84,11 +84,11 @@ inheritProjectContext: true
 Use primary sources and record exact reproduction evidence.
 ```
 
-`name` is required lowercase kebab-case. Optional `use-when` is nonblank text that tells a spawning Agent when to select the Template. Optional `models` is a nonempty ordered sequence of `id` and `thinking` pairs. The first model in Pi's current availability snapshot supplies both values, and preparation fails when none are available. Availability requires both a catalogue entry and configured provider authentication. Without `models`, the parent model and thinking pair is inherited. `systemPromptMode` defaults to `append`, and `inheritProjectContext` defaults to `true`. The remaining frontmatter fields are `allowed-tools`, `skills`, and `extensions`; `systemPromptMode` and `inheritProjectContext` control the two prompt channels. The Markdown body is the explicit child system prompt. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
+`name` is required lowercase kebab-case. Optional `useWhen` is nonblank text that tells a spawning Agent when to select the Template. Optional `models` is a nonempty ordered sequence of `id` and `thinking` pairs. The first model in Pi's current availability snapshot supplies both values, and preparation fails when none are available. Availability requires both a catalogue entry and configured provider authentication. Without `models`, the parent model and thinking pair is inherited. `systemPromptMode` defaults to `append`, and `inheritProjectContext` defaults to `true`. The remaining frontmatter fields are `allowedTools`, `skills`, and `extensions`; `systemPromptMode` and `inheritProjectContext` control the two prompt channels. The Markdown body is the explicit child system prompt. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
 
 Owner admission captures an Agent Template Catalogue Snapshot for the Owner Runtime; Owner resource reload replaces it. Every other spawning Agent receives a Snapshot during fresh Runtime Preparation. The Snapshot contains that Runtime's model/thinking pair and the currently valid Template catalogue. The active `agent_spawn` tool exposes it through prompt guidance; Pi owns ordinary system-prompt assembly, and coordination performs no per-Run Template discovery or system-prompt mutation. Every Run in a retained Runtime reuses the same Snapshot.
 
-Each catalogue entry exposes its name, `use-when` guidance, configured frontmatter values, and only model candidates in Pi's current availability snapshot. A Template whose configured candidates are all unavailable is omitted. This lets the Agent select a Template or deliberately override values through `agent_spawn.config` for a context-isolated Spawn. A Conversation Fork uses neither. Invalid and ambiguous Templates, Template source paths, discovery diagnostics, and Markdown system-prompt bodies are not exposed. The Snapshot is guidance only: every actual Spawn re-resolves the selected Template from current resources before preparing the child Runtime. Runtime Preparation also validates an explicitly overridden model against the current availability snapshot before committing the child Identity.
+Each catalogue entry exposes its name, `useWhen` guidance, configured frontmatter values, and only model candidates in Pi's current availability snapshot. A Template whose configured candidates are all unavailable is omitted. This lets the Agent select a Template or deliberately override values through `agent_spawn.config` for a context-isolated Spawn. A Conversation Fork uses neither. Invalid and ambiguous Templates, Template source paths, discovery diagnostics, and Markdown system-prompt bodies are not exposed. The Snapshot is guidance only: every actual Spawn re-resolves the selected Template from current resources before preparing the child Runtime. Runtime Preparation also validates an explicitly overridden model against the current availability snapshot before committing the child Identity.
 
 For every new Runtime, Template discovery is anchored to the current parent Runtime cwd. The per-spawn `config.cwd` resolves against that cwd and determines the prepared Runtime cwd. Pi applies its current project-trust decision there, and the child natively discovers permitted ordinary `AGENTS.md` context when `inheritProjectContext` is true. The explicit system prompt is passed independently with `--append-system-prompt` or `--system-prompt`; `inheritProjectContext: false` passes `--no-context-files`. An untrusted project cannot contribute selected resources. Changes to ancestor Templates, resources, trust, or cwd can therefore affect a later descendant Runtime; they never mutate an already retained Runtime.
 

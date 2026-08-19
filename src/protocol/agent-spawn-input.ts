@@ -72,7 +72,7 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	requireExactKeys(value, [
 		...(value.model === undefined ? [] : ["model"]),
 		...(value.cwd === undefined ? [] : ["cwd"]),
-		...(value.allowed_tools === undefined ? [] : ["allowed_tools"]),
+		...(value.allowedTools === undefined ? [] : ["allowedTools"]),
 		...(value.skills === undefined ? [] : ["skills"]),
 		...(value.extensions === undefined ? [] : ["extensions"]),
 		...(value.systemPrompt === undefined ? [] : ["systemPrompt"]),
@@ -81,9 +81,9 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	]);
 	const model = value.model === undefined ? undefined : validateModel(value.model);
 	const cwd = value.cwd === undefined ? undefined : requireNonEmptyString(value.cwd, "cwd");
-	const allowedTools = value.allowed_tools === undefined
+	const allowedTools = value.allowedTools === undefined
 		? undefined
-		: validateStringList(value.allowed_tools, "allowed_tools");
+		: validateStringList(value.allowedTools, "allowedTools");
 	const skills = value.skills === undefined ? undefined : validateStringList(value.skills, "skills");
 	const extensions = value.extensions === undefined
 		? undefined
@@ -114,7 +114,7 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	return {
 		...(model === undefined ? {} : { model }),
 		...(cwd === undefined ? {} : { cwd }),
-		...(allowedTools === undefined ? {} : { allowed_tools: allowedTools }),
+		...(allowedTools === undefined ? {} : { allowedTools }),
 		...(skills === undefined ? {} : { skills }),
 		...(extensions === undefined ? {} : { extensions }),
 		...(systemPrompt === undefined ? {} : { systemPrompt }),

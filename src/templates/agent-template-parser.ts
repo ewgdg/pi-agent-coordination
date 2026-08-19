@@ -13,9 +13,9 @@ import type {
 
 const TEMPLATE_FIELDS = new Set([
 	"name",
-	"use-when",
+	"useWhen",
 	"models",
-	"allowed-tools",
+	"allowedTools",
 	"skills",
 	"extensions",
 	"systemPromptMode",
@@ -86,15 +86,15 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 		}
 	}
 	const name = requireTemplateName(mapping.name, sourcePath);
-	const useWhen = mapping["use-when"] === undefined
+	const useWhen = mapping.useWhen === undefined
 		? undefined
-		: parseUseWhen(mapping["use-when"], sourcePath, name);
+		: parseUseWhen(mapping.useWhen, sourcePath, name);
 	const models = mapping.models === undefined
 		? undefined
 		: parseModelCandidates(mapping.models, sourcePath, name);
-	const allowedTools = mapping["allowed-tools"] === undefined
+	const allowedTools = mapping.allowedTools === undefined
 		? undefined
-		: parseStringSelection(mapping["allowed-tools"], "allowed-tools", sourcePath, name);
+		: parseStringSelection(mapping.allowedTools, "allowedTools", sourcePath, name);
 	const skills = mapping.skills === undefined
 		? undefined
 		: parseStringSelection(mapping.skills, "skills", sourcePath, name);
@@ -171,7 +171,7 @@ function parseUseWhen(
 	if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
 		throw new AgentTemplateParseError(
 			sourcePath,
-			"use-when must be a nonblank string",
+			"useWhen must be a nonblank string",
 			templateName,
 		);
 	}
@@ -245,7 +245,7 @@ function parseThinking(
 
 function parseStringSelection(
 	value: unknown,
-	field: "allowed-tools" | "skills" | "extensions",
+	field: "allowedTools" | "skills" | "extensions",
 	sourcePath: string,
 	templateName: string,
 ): readonly string[] {

@@ -28,27 +28,32 @@ test("conversation fork rejects Template and Runtime configuration inputs", () =
 		() => validateAgentSpawnInput({
 			request: "Do not change the forked prompt lineage.",
 			conversation: "fork",
-			config: { allowed_tools: ["read"] },
+			config: { allowedTools: ["read"] },
 		}),
 		/conversation fork cannot provide Runtime configuration/,
 	);
 });
 
-test("Agent Spawn accepts allowed_tools as the tool capability ceiling", () => {
+test("Agent Spawn accepts allowedTools as the tool capability ceiling", () => {
 	assert.deepEqual(validateAgentSpawnInput({
 		request: "Inspect the child Runtime.",
-		config: { allowed_tools: ["read", "extension_tool"] },
+		config: { allowedTools: ["read", "extension_tool"] },
 	}), {
 		request: "Inspect the child Runtime.",
-		config: { allowed_tools: ["read", "extension_tool"] },
+		config: { allowedTools: ["read", "extension_tool"] },
 	});
-	assert.throws(
-		() => validateAgentSpawnInput({
-			request: "Do not retain the obsolete exact-tool field.",
-			config: { tools: ["read"] },
-		}),
-		/invalid shape/,
-	);
+	for (const config of [
+		{ tools: ["read"] },
+		{ allowed_tools: ["read"] },
+	]) {
+		assert.throws(
+			() => validateAgentSpawnInput({
+				request: "Do not retain an obsolete tool field.",
+				config,
+			}),
+			/invalid shape/,
+		);
+	}
 });
 
 test("Agent Spawn rejects extension path arrays at input validation", () => {
