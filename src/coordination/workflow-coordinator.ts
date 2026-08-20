@@ -30,7 +30,10 @@ import {
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
 import { AgentRuntimeSupervisor } from "../runtime/agent-runtime-supervisor.ts";
-import type { ProjectionInputSubmission } from "../runtime/agent-runtime-host.ts";
+import type {
+	AgentRunHandle,
+	ProjectionInputSubmission,
+} from "../runtime/agent-runtime-host.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
 	ProcessChildSessionFactory,
@@ -225,7 +228,10 @@ export class WorkflowCoordinator {
 	#activeAgentView: ActiveDurableAgentView | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
 	readonly #executionScheduler: WorkflowExecutionScheduler;
-	readonly #executionPermits = new Map<string, WorkflowExecutionPermit>();
+	readonly #executionPermits = new Map<
+		string,
+		Readonly<{ handle: AgentRunHandle; permit: WorkflowExecutionPermit }>
+	>();
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 	readonly #agentIdBySpawnSource: Map<string, string>;
 	#shutdownPromise: Promise<void> | undefined;
@@ -796,6 +802,11 @@ export class WorkflowCoordinator {
 	#integrateAgent(record: AgentRecord): void {
 		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged());
 		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged());
+		record.host.addEndedHandler((handle) => {
+			// A terminal Runtime fault can bypass participant executionEnd. Tie the
+			// fallback release to the exact ended Run so it cannot affect a successor.
+			this.#releaseExecution(record.identity.agentId, handle);
+		});
 		record.host.setProjectionInputSettledHandler(() => {
 			void this.#messages.requestRelease(record).catch((error) =>
 				this.#reportAgentRuntimeReleaseError(error)
@@ -1186,14 +1197,14 @@ export class WorkflowCoordinator {
 			permit.release();
 			this.#assertAdmissionOpen();
 		}
-		this.#executionPermits.set(agentId, permit);
+		this.#executionPermits.set(agentId, { handle, permit });
 	}
 
-	#releaseExecution(agentId: string): void {
-		const permit = this.#executionPermits.get(agentId);
-		if (!permit) return;
+	#releaseExecution(agentId: string, handle?: AgentRunHandle): void {
+		const execution = this.#executionPermits.get(agentId);
+		if (!execution || (handle !== undefined && execution.handle !== handle)) return;
 		this.#executionPermits.delete(agentId);
-		permit.release();
+		execution.permit.release();
 	}
 
 	#handleHumanInput(

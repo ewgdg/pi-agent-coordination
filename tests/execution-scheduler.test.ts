@@ -212,6 +212,51 @@ test("real ordinary child Runs share fair execution capacity before generation a
 
 });
 
+test("an exact Run ending releases capacity without a participant execution-end boundary", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = createTestWorkflowCoordinator(host, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+	});
+	const owner = coordinator.forAgent(identity.agentId);
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "answer", answer: "Creation work is complete." },
+				{ id: "answer-before-capacity-termination" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The initial child Run completed normally."),
+	]);
+
+	await spawnChild(owner, host, "spawn-capacity-termination-child");
+	const [child] = owner.children();
+	assert.ok(child);
+	await waitForCondition(() => owner.status(child.agentId).run.phase === "dormant");
+	const childView = coordinator.forAgent(child.agentId);
+	await childView.beginExecution();
+
+	const terminationInput = { operation: "terminate" as const, agentId: child.agentId };
+	host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_control", terminationInput, { id: "terminate-capacity-holder" }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const termination = await owner.control("terminate-capacity-holder", terminationInput);
+	assert.equal("disposition" in termination && termination.disposition, "terminated");
+	assert.equal(owner.status(child.agentId).run.phase, "dormant");
+
+	await assert.doesNotReject(() => childView.beginExecution());
+	childView.endExecution();
+});
+
 test("an input-required ordinary Run releases capacity until work can resume", async (t) => {
 	let secondGenerationStarted!: () => void;
 	const secondGenerationStart = new Promise<void>((resolve) => {
