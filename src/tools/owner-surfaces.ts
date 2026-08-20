@@ -15,6 +15,8 @@ import { openPostMortemAgentViewSurface } from "../presentation/post-mortem-agen
 import {
 	createAgentSelectionSession,
 	createAgentSelectorSnapshot,
+	getAgentsArgumentCompletions,
+	parseAgentsCommandArgument,
 } from "../process-runtime/remote-agent-selector.ts";
 import {
 	registerParticipantCoordinationTools,
@@ -55,9 +57,22 @@ export function registerAgentsCommand(
 ): void {
 	pi.registerCommand("agents", {
 		description: "Show Agents in the current Workflow",
-		handler: async (_args, ctx) => {
+		getArgumentCompletions: getAgentsArgumentCompletions,
+		handler: async (args, ctx) => {
+			const commandMode = parseAgentsCommandArgument(args);
 			const view = resolveView();
-			const selectedAgentId = view.status().agentId;
+			const status = view.status();
+			if (commandMode === "owner") {
+				const selection = createAgentSelectionSession(view, status.agentId);
+				const action = {
+					kind: "select_agent" as const,
+					agentId: status.workflowId,
+				};
+				await selection.prepare(action);
+				await selection.complete(action);
+				return;
+			}
+			const selectedAgentId = status.agentId;
 			let reopenSelector = true;
 			while (reopenSelector) {
 				reopenSelector = false;

@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
+
 import type { HumanPresentationCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
+import { registerAgentsCommand } from "../src/tools/owner-surfaces.ts";
 import {
 	createAgentSelectionSession,
 	createAgentSelectorSnapshot,
 	createOwnerAgentPresentationHandlers,
+	registerRemoteAgentsCommand,
 } from "../src/process-runtime/remote-agent-selector.ts";
 import type { PostMortemAgentView } from "../src/presentation/post-mortem-agent-view-surface.ts";
 
@@ -47,6 +54,7 @@ const childStatus = {
 } as const;
 
 function presentationView(options: {
+	status?: HumanPresentationCoordinatorView["status"];
 	humanAttention?: () => readonly Readonly<{
 		requestId: string;
 		agentId: string;
@@ -58,7 +66,7 @@ function presentationView(options: {
 	focusHumanAnswer?: (agentId: string, requestId: string) => Promise<void>;
 } = {}): HumanPresentationCoordinatorView {
 	return {
-		status: () => childStatus,
+		status: options.status ?? (() => childStatus),
 		selectionRoster: () => ({ live: [ownerStatus, childStatus], dormant: [] }),
 		humanAttention: options.humanAttention ?? (() => []),
 		operationalAttention: () => [],
@@ -90,6 +98,109 @@ test("selector snapshot is one exact scoped presentation boundary value", () => 
 		humanAttention: attention,
 		operationalAttention: [],
 	});
+});
+
+test("local registered /agents owner returns through the authoritative selection path", async () => {
+	const opened: string[] = [];
+	const view = presentationView({
+		openAgentPresentation: async (agentId) => {
+			opened.push(agentId);
+			return { kind: "selected" };
+		},
+	});
+	const command = captureCommand((pi) => registerAgentsCommand(pi, () => view));
+	const ui = {
+		custom: () => {
+			throw new Error("selector must not open for /agents owner");
+		},
+	};
+
+	assert.deepEqual(command.getArgumentCompletions?.(""), [{ value: "owner", label: "owner" }]);
+	assert.deepEqual(command.getArgumentCompletions?.("o"), [{ value: "owner", label: "owner" }]);
+	assert.deepEqual(command.getArgumentCompletions?.("x"), null);
+	await command.handler("  owner  ", { ui } as unknown as ExtensionCommandContext);
+
+	const ownerView = presentationView({
+		status: () => ownerStatus,
+		openAgentPresentation: async (agentId) => {
+			opened.push(agentId);
+			return { kind: "selected" };
+		},
+	});
+	const ownerCommand = captureCommand((pi) => registerAgentsCommand(pi, () => ownerView));
+	await ownerCommand.handler("owner", { ui } as unknown as ExtensionCommandContext);
+
+	assert.deepEqual(opened, ["owner", "owner"]);
+});
+
+test("remote registered /agents owner selects Owner without opening the selector", async () => {
+	const actions: unknown[] = [];
+	let snapshotCalls = 0;
+	const presentation = {
+		async snapshot() {
+			snapshotCalls += 1;
+			return {
+				live: [ownerStatus, childStatus],
+				dormant: [],
+				selectedAgentId: "child",
+				humanAttention: [],
+				operationalAttention: [],
+			};
+		},
+		async select(action: unknown) {
+			actions.push(action);
+			return { kind: "selected" as const };
+		},
+	};
+	const command = captureCommand((pi) => registerRemoteAgentsCommand(pi, presentation));
+	const ui = {
+		custom: () => {
+			throw new Error("selector must not open for /agents owner");
+		},
+	};
+
+	await command.handler(" owner ", { ui } as unknown as ExtensionCommandContext);
+
+	assert.equal(snapshotCalls, 1);
+	assert.deepEqual(actions, [{ kind: "select_agent", agentId: "owner" }]);
+});
+
+test("registered /agents rejects unsupported arguments before opening or selecting", async () => {
+	const localOpened: string[] = [];
+	const localView = presentationView({
+		openAgentPresentation: async (agentId) => {
+			localOpened.push(agentId);
+			return { kind: "selected" };
+		},
+	});
+	const localCommand = captureCommand((pi) => registerAgentsCommand(pi, () => localView));
+	await assert.rejects(
+		localCommand.handler(" teammate ", {} as ExtensionCommandContext),
+		(error: unknown) => error instanceof Error && error.message === "Usage: /agents [owner]",
+	);
+	assert.deepEqual(localOpened, []);
+
+	let remoteSnapshotCalls = 0;
+	const remoteCommand = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+		async snapshot() {
+			remoteSnapshotCalls += 1;
+			return {
+				live: [ownerStatus, childStatus],
+				dormant: [],
+				selectedAgentId: "child",
+				humanAttention: [],
+				operationalAttention: [],
+			};
+		},
+		async select() {
+			return { kind: "selected" as const };
+		},
+	}));
+	await assert.rejects(
+		remoteCommand.handler(" teammate ", {} as ExtensionCommandContext),
+		(error: unknown) => error instanceof Error && error.message === "Usage: /agents [owner]",
+	);
+	assert.equal(remoteSnapshotCalls, 0);
 });
 
 test("stale Human Attention after view preparation restores the previous child", async () => {
@@ -261,3 +372,20 @@ test("Owner selection handler is awaited and does not resurrect the previous chi
 	);
 	assert.deepEqual(opened, ["target"]);
 });
+
+type CapturedCommand = Readonly<{
+	getArgumentCompletions?: (argumentPrefix: string) => unknown;
+	handler(args: string, ctx: ExtensionCommandContext): Promise<void>;
+}>;
+
+function captureCommand(register: (pi: ExtensionAPI) => void): CapturedCommand {
+	let command: CapturedCommand | undefined;
+	const pi = {
+		registerCommand(_name: string, options: CapturedCommand) {
+			command = options;
+		},
+	} as unknown as ExtensionAPI;
+	register(pi);
+	assert.ok(command);
+	return command;
+}

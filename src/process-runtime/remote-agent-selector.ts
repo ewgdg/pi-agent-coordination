@@ -24,6 +24,27 @@ export type AgentSelectionSession = Readonly<{
 	postMortemView(): PostMortemAgentView | undefined;
 }>;
 
+const AGENTS_OWNER_ARGUMENT = "owner";
+export const AGENTS_COMMAND_USAGE = "Usage: /agents [owner]";
+
+type AgentsCommandMode = "selector" | "owner";
+
+export function parseAgentsCommandArgument(args: string): AgentsCommandMode {
+	const argument = args.trim();
+	if (!argument) return "selector";
+	if (argument === AGENTS_OWNER_ARGUMENT) return "owner";
+	throw new Error(AGENTS_COMMAND_USAGE);
+}
+
+export function getAgentsArgumentCompletions(argumentPrefix: string): {
+	value: string;
+	label: string;
+}[] | null {
+	return AGENTS_OWNER_ARGUMENT.startsWith(argumentPrefix.trim())
+		? [{ value: AGENTS_OWNER_ARGUMENT, label: AGENTS_OWNER_ARGUMENT }]
+		: null;
+}
+
 /** Capture every selector input at one scoped Owner presentation boundary. */
 export function createAgentSelectorSnapshot(
 	view: HumanPresentationCoordinatorView,
@@ -144,7 +165,20 @@ export function registerRemoteAgentsCommand(
 ): void {
 	pi.registerCommand("agents", {
 		description: "Show Agents in the current Workflow",
-		handler: async (_args, ctx) => {
+		getArgumentCompletions: getAgentsArgumentCompletions,
+		handler: async (args, ctx) => {
+			if (parseAgentsCommandArgument(args) === "owner") {
+				const snapshot = await presentation.snapshot();
+				const owner = snapshot.live.find(
+					(status) => status.agentId === status.workflowId,
+				);
+				if (!owner) throw new Error("Agent selector roster has no live Owner");
+				await presentation.select({
+					kind: "select_agent",
+					agentId: owner.agentId,
+				});
+				return;
+			}
 			let reopenSelector = true;
 			while (reopenSelector) {
 				reopenSelector = false;

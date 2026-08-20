@@ -1,6 +1,6 @@
 # Agent selector and view
 
-`/agents` first opens a centered roster overlay. The framed selector is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` owns focus movement, wrapping, and scrolling.
+`/agents` first opens a centered roster overlay. The framed selector is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` owns focus movement, wrapping, and scrolling. `/agents owner` trims its argument and returns directly to the exact mounted Workflow Owner presentation without opening the selector; it is a harmless no-op when Owner is already mounted. Other arguments fail with `Usage: /agents [owner]`.
 
 Selecting a roster row opens that durable Agent's full-window interactive view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. Pressing `o` from either tab or any Live scope returns to that exact existing Owner presentation; Owner is a global destination rather than a roster entry.
 

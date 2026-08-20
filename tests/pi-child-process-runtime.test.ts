@@ -174,13 +174,28 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			await runtime?.drain();
 			return !frameText(runtime as PiChildProcessRuntime).includes("Tab views");
 		});
-		projection.dispatchInput("/agents\r");
-		await waitForFrame(runtime, "Tab views");
-		projection.dispatchInput("o");
+		projection.dispatchInput("/agents owner\r");
 		await waitUntil(() => ownerSelections.length === 2);
 		assert.deepEqual(ownerSelections[1], {
 			kind: "select_agent",
 			agentId: "process-runtime-test-workflow",
+		});
+		await waitUntil(async () => {
+			await runtime?.drain();
+			return !frameText(runtime as PiChildProcessRuntime).includes("Tab views");
+		});
+
+		projection.dispatchInput("/agents\r");
+		await waitForFrame(runtime, "Tab views");
+		projection.dispatchInput("o");
+		await waitUntil(() => ownerSelections.length === 3);
+		assert.deepEqual(ownerSelections[2], {
+			kind: "select_agent",
+			agentId: "process-runtime-test-workflow",
+		});
+		await waitUntil(async () => {
+			await runtime?.drain();
+			return !frameText(runtime as PiChildProcessRuntime).includes("Tab views");
 		});
 
 		assert.deepEqual(await runtime.prompt({

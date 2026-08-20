@@ -6,7 +6,7 @@ Durable Pi agents that collaborate asynchronously under explicit Owner and Spawn
 
 ### Interactive Agent switching
 
-Run `/agents` from the Owner or any Agent to open the Agent switcher:
+Run `/agents` from the Owner or any Agent to open the Agent switcher. Use `/agents owner` to return directly to the exact mounted Workflow Owner presentation without opening the switcher:
 
 ![The Agent switcher overlay with Live and Dormant tabs](docs/images/agent-switcher.png)
 
