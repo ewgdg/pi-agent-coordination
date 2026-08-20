@@ -22,13 +22,13 @@ const plainTheme = {
 	bold: (text: string) => text,
 } as unknown as Theme;
 
-test("collapsed Message Delivery shows type, sender label, compact identity, and a three-line body snippet", () => {
+test("collapsed Message Delivery shows type, sender label, compact identity, and a ten-line body snippet", () => {
 	initTheme("dark");
 	const senderAgentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
 	const fullBody = [
 		"Context ".repeat(10),
 		"second-line evidence. ",
-		"More detail. ".repeat(20),
+		"More detail. ".repeat(60),
 		"Distinctive ending.",
 	].join("");
 	const rendered = renderMessageDelivery(
@@ -52,31 +52,32 @@ test("collapsed Message Delivery shows type, sender label, compact identity, and
 	assert.doesNotMatch(rendered, /\{"messages"/);
 	assert.equal(
 		rendered.split("\n").filter((line) => line.trim().length > 0).length,
-		4,
+		11,
 	);
 });
 
-test("collapsed Message Delivery preserves formatting and truncates after three visible body rows", () => {
+test("collapsed Message Delivery preserves the head and truncates after ten visible body rows", () => {
 	initTheme("dark");
 	const rendered = renderMessageDelivery(
 		customDelivery([{
 			kind: "message",
 			messageId: "message-one",
 			fromAgentId: "sender-agent",
-			content: "First line.\nSecond line.\nThird line.\nFourth line.",
+			content: Array.from(
+				{ length: 11 },
+				(_, index) => `Line ${index + 1}.`,
+			).join("\n"),
 		}]),
 		{ expanded: false, outputPad: 1 },
 		plainTheme,
 	).render(60).join("\n");
 
-	assert.match(
-		rendered,
-		/First line\.\s*\n\s*Second line\.\s*\n\s*Third line\.\s*…/,
-	);
-	assert.doesNotMatch(rendered, /Fourth line/);
+	assert.match(rendered, /Line 1\./);
+	assert.match(rendered, /Line 9\.\s*\n\s*Line 10\.\s*…/);
+	assert.doesNotMatch(rendered, /Line 11\./);
 	assert.equal(
 		rendered.split("\n").filter((line) => line.trim().length > 0).length,
-		4,
+		11,
 	);
 });
 

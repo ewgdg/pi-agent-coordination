@@ -50,7 +50,7 @@ test("send call shows the [Send] badge, compact target identity, and bounded con
 	const rendered = renderCall({
 		operation: "send",
 		targetAgentId,
-		content: "Context ".repeat(30) + "Distinctive ending.",
+		content: "Context ".repeat(100) + "Distinctive ending.",
 	});
 	assert.match(rendered, /\[Send\]/);
 	assert.match(rendered, /to Researcher · 983c81e3/);
@@ -61,7 +61,7 @@ test("send call shows the [Send] badge, compact target identity, and bounded con
 	assert.doesNotMatch(rendered, /Distinctive ending/);
 });
 
-test("collapsed send call preserves formatting within three visible body rows", () => {
+test("collapsed send call preserves formatting within ten visible body rows", () => {
 	const rendered = renderCall({
 		operation: "send",
 		targetAgentId,
@@ -177,7 +177,7 @@ test("expanded result exposes the complete structured receipt", () => {
 });
 
 test("answer_delivered result shows the shared bounded answer preview with truncation", () => {
-	const answer = "The complete answer body ".repeat(5) + "Distinctive tail.";
+	const answer = "The complete answer body ".repeat(20) + "Distinctive tail.";
 	const rendered = renderResult({
 		disposition: "answer_delivered",
 		requestMessageId: "request-one",

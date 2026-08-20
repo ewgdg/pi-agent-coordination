@@ -43,7 +43,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		"reason",
 		"requestMessageId",
 	]);
-	const longContent = "Direction ".repeat(60).trim();
+	const longContent = "Direction ".repeat(200).trim();
 	const receiverAgentId = host.session.sessionId;
 	const args = {
 		operation: "send" as const,
@@ -237,7 +237,14 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 
 	const multilineArgs = {
 		...args,
-		request: "First request line.\nSecond request line.\nThird request line.\nFourth request line.",
+		request: [
+			"First request line.",
+			...Array.from(
+				{ length: 9 },
+				(_, index) => `Middle request line ${index + 2}.`,
+			),
+			"Final request line.",
+		].join("\n"),
 	};
 	const collapsedRequestText = tool.renderCall(
 		multilineArgs,
@@ -247,14 +254,14 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 	assert.match(collapsedRequestText, /\[Request\]/);
 	assert.match(collapsedRequestText, /First request line/);
 	assert.match(collapsedRequestText, /…/);
-	assert.doesNotMatch(collapsedRequestText, /Fourth request line/);
+	assert.doesNotMatch(collapsedRequestText, /Final request line/);
 	const expandedRequestText = tool.renderCall(
 		multilineArgs,
 		plainTheme,
 		{ ...renderContext, args: multilineArgs, expanded: true },
 	).render(60).join("\n");
 	assert.match(expandedRequestText, /\[Request\]/);
-	assert.match(expandedRequestText, /Fourth request line/);
+	assert.match(expandedRequestText, /Final request line/);
 	assert.doesNotMatch(expandedRequestText, /…/);
 
 	const effectiveConfiguration = {

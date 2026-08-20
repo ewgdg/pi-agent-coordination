@@ -5,7 +5,9 @@ import {
 	type Component,
 } from "@earendil-works/pi-tui";
 
-const COLLAPSED_BODY_LINES = 3;
+// Match Pi's built-in read preview so coordination messages expose a useful
+// amount of context without requiring expansion.
+const COLLAPSED_BODY_LINES = 10;
 
 /**
  * Shared collapsed body preview for coordination content.
