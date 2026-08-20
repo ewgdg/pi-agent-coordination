@@ -1685,6 +1685,11 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 	const initialFailureGate = new Promise<void>((resolve) => {
 		releaseInitialFailure = resolve;
 	});
+	const successorInputs = ["Start exact successor one.", "Start exact successor two."];
+	let notifySuccessorStarted: () => void = () => undefined;
+	let successorResponseGate = Promise.resolve();
+	let releaseSuccessorResponse: () => void = () => undefined;
+	t.after(() => releaseSuccessorResponse());
 	const routeFailure = async (context: {
 		messages: unknown;
 		tools?: Array<{ name: string }>;
@@ -1695,6 +1700,10 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 		const messages = JSON.stringify(context.messages);
 		if (messages.includes("Wait for selection before the initial exact Run fails.")) {
 			await initialFailureGate;
+		}
+		if (successorInputs.some((input) => messages.includes(input))) {
+			notifySuccessorStarted();
+			await successorResponseGate;
 		}
 		return fauxAssistantMessage("This exact successor Run failed as requested.", {
 			stopReason: "error",
@@ -1719,13 +1728,24 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 		stripTerminalSequences(opened.view.render(80).join("\n")).includes("failed")
 	);
 
-	for (const input of ["Start exact successor one.", "Start exact successor two."]) {
+	for (const input of successorInputs) {
 		const startsBeforeSuccessor = childProcessSessionStarts(
 			await readProcessAgentViewEvidence(probe.evidencePath),
 			agentId,
 		).length;
+		let markSuccessorStarted!: () => void;
+		const successorStarted = new Promise<void>((resolve) => {
+			markSuccessorStarted = resolve;
+		});
+		notifySuccessorStarted = markSuccessorStarted;
+		successorResponseGate = new Promise<void>((resolve) => {
+			releaseSuccessorResponse = resolve;
+		});
 		for (const character of input) opened.view.handleInput?.(character);
 		opened.view.handleInput?.("\r");
+		await successorStarted;
+		assert.equal(await currentRunPhase(host, agentId), "live");
+		releaseSuccessorResponse();
 		await waitForCondition(async () => await currentRunPhase(host, agentId) === "dormant");
 		await waitForCondition(() => {
 			const frame = stripTerminalSequences(opened.view.render(80).join("\n"));
