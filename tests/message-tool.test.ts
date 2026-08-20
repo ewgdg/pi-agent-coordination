@@ -230,6 +230,19 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 		isError: false,
 		executionStarted: true,
 	};
+	assert.doesNotThrow(() =>
+		tool.renderCall!(
+			{},
+			plainTheme,
+			{
+				...renderContext,
+				args: {},
+				argsComplete: false,
+				executionStarted: false,
+			},
+		).render(160)
+	);
+
 	const callText = tool.renderCall(args, plainTheme, renderContext).render(160).join("\n");
 	assert.match(callText, /Researcher/);
 	assert.match(callText, /Primary-source investigation/);
