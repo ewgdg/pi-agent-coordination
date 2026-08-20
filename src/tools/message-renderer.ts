@@ -31,24 +31,32 @@ export function renderAgentMessageCall(
 	));
 	const body = messageCallBody(args);
 	if (body) {
-		if (expanded) {
-			container.addChild(new Spacer(1));
-			container.addChild(new Markdown(
-				body,
-				0,
-				0,
-				getMarkdownTheme(),
-				{ color: (content) => theme.fg("customMessageText", content) },
-				{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
-			));
-		} else {
-			container.addChild(new BodyPreview(
-				body,
-				(content) => theme.fg("customMessageText", content),
-			));
-		}
+		container.addChild(new Spacer(1));
+		container.addChild(renderAgentMessageBody(body, theme, expanded));
 	}
 	return container;
+}
+
+/** Render tool-call coordination text with one collapsed/expanded body policy. */
+export function renderAgentMessageBody(
+	body: string,
+	theme: Theme,
+	expanded = false,
+): Component {
+	if (expanded) {
+		return new Markdown(
+			body,
+			0,
+			0,
+			getMarkdownTheme(),
+			{ color: (content) => theme.fg("customMessageText", content) },
+			{ preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+		);
+	}
+	return new BodyPreview(
+		body,
+		(content) => theme.fg("customMessageText", content),
+	);
 }
 
 function renderMessageCallHeader(

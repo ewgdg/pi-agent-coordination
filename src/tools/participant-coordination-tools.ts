@@ -524,7 +524,8 @@ export function registerParticipantCoordinationTools<
 			],
 			executionMode: "sequential",
 			parameters: agentSpawnParameters,
-			renderCall: renderAgentSpawnCall,
+			renderCall: (args, theme, context) =>
+				renderAgentSpawnCall(args, theme, context.expanded),
 			renderResult: renderAgentSpawnResult,
 			async execute(toolCallId, parameters) {
 				return toolResult(await availableHandlers.spawn!(toolCallId, parameters));

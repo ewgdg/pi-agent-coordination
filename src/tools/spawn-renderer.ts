@@ -4,7 +4,7 @@ import type {
 	ThemeColor,
 	ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Spacer, Text, type Component } from "@earendil-works/pi-tui";
 
 import type {
 	AgentSpawnInput,
@@ -12,14 +12,29 @@ import type {
 } from "../coordination/workflow-coordinator.ts";
 import { formatKnownAgentIdentity } from "../presentation/agent-identity.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
+import { renderAgentMessageBody } from "./message-renderer.ts";
 
-export function renderAgentSpawnCall(args: AgentSpawnInput, theme: Theme): Text {
+export function renderAgentSpawnCall(
+	args: AgentSpawnInput,
+	theme: Theme,
+	expanded = false,
+): Component {
 	const label = spawnLabel(args);
-	const detail = args.description ?? args.request;
-	let text = theme.fg("toolTitle", theme.bold("spawn "));
-	text += theme.fg("accent", label);
-	text += theme.fg("dim", ` · ${boundedToolPreview(detail)}`);
-	return new Text(text, 0, 0);
+	let header = theme.fg("toolTitle", theme.bold("spawn "));
+	header += theme.fg("accent", label);
+	if (args.description !== undefined) {
+		header += theme.fg("dim", ` · ${boundedToolPreview(args.description)}`);
+	}
+	const container = new Container();
+	container.addChild(new Text(header, 0, 0));
+	container.addChild(new Spacer(1));
+	container.addChild(new Text(
+		theme.fg("customMessageLabel", theme.bold("[Request]")),
+		0,
+		0,
+	));
+	container.addChild(renderAgentMessageBody(args.request, theme, expanded));
+	return container;
 }
 
 export function renderAgentSpawnResult(

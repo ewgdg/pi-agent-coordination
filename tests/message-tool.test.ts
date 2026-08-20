@@ -233,6 +233,29 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 	const callText = tool.renderCall(args, plainTheme, renderContext).render(160).join("\n");
 	assert.match(callText, /Researcher/);
 	assert.match(callText, /Primary-source investigation/);
+	assert.match(callText, /Investigate the configured repository/);
+
+	const multilineArgs = {
+		...args,
+		request: "First request line.\nSecond request line.\nThird request line.\nFourth request line.",
+	};
+	const collapsedRequestText = tool.renderCall(
+		multilineArgs,
+		plainTheme,
+		{ ...renderContext, args: multilineArgs },
+	).render(60).join("\n");
+	assert.match(collapsedRequestText, /\[Request\]/);
+	assert.match(collapsedRequestText, /First request line/);
+	assert.match(collapsedRequestText, /…/);
+	assert.doesNotMatch(collapsedRequestText, /Fourth request line/);
+	const expandedRequestText = tool.renderCall(
+		multilineArgs,
+		plainTheme,
+		{ ...renderContext, args: multilineArgs, expanded: true },
+	).render(60).join("\n");
+	assert.match(expandedRequestText, /\[Request\]/);
+	assert.match(expandedRequestText, /Fourth request line/);
+	assert.doesNotMatch(expandedRequestText, /…/);
 
 	const effectiveConfiguration = {
 		cwd: "/work/subproject",
