@@ -67,7 +67,7 @@ A user-authored named partial Agent Runtime configuration selected by name durin
 _Avoid_: Agent profile, Agent role
 
 **Agent Template Catalogue Snapshot**:
-The immutable model-safe selection summary captured when the Workflow Owner is admitted or reloaded, or when another spawning Agent Runtime is prepared. It contains that Runtime's model and thinking level plus the currently selectable Agent Templates without source paths or Project Context bodies, and is exposed only through the active Agent Spawn tool guidance. Every Run in that retained Runtime reuses the Snapshot without resource discovery; Owner resource reload and fresh Runtime Preparation capture replacements. The Snapshot guides selection but grants no authority and is never execution configuration: Agent Spawn re-resolves the selected Template from current resources before preparing a child Runtime.
+The immutable model-safe selection summary captured when the Workflow Owner is admitted or reloaded, or when another spawning Agent Runtime is prepared. It contains the currently selectable Agent Templates without source paths or Project Context bodies, and is exposed only through the active Agent Spawn tool guidance. Every Run in that retained Runtime reuses the Snapshot without resource discovery; Owner resource reload and fresh Runtime Preparation capture replacements. The Snapshot guides selection but grants no authority and is never execution configuration: Agent Spawn re-resolves the selected Template from current resources before preparing a child Runtime.
 _Avoid_: Template cache, Template configuration
 
 **Agent Spawn Configuration**:

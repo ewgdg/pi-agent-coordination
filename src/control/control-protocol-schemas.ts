@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
-export const AGENT_CONTROL_PROTOCOL_VERSION = 2 as const;
+export const AGENT_CONTROL_PROTOCOL_VERSION = 3 as const;
 
 const NonEmptyStringSchema = Type.String({ minLength: 1 });
 const ControlIdentityProperties = {
@@ -51,17 +51,6 @@ export const AgentTemplateCatalogueEntrySchema = Type.Object({
 }, { additionalProperties: false });
 
 export const AgentTemplateCatalogueSnapshotSchema = Type.Object({
-	currentRuntime: Type.Object({
-		model: Type.Object({
-			provider: NonEmptyStringSchema,
-			modelId: NonEmptyStringSchema,
-		}, { additionalProperties: false }),
-		thinking: Type.Union([
-			Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"),
-			Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"),
-			Type.Literal("max"),
-		]),
-	}, { additionalProperties: false }),
 	templates: Type.Array(AgentTemplateCatalogueEntrySchema),
 }, { additionalProperties: false });
 
@@ -154,7 +143,9 @@ export type ControlFrame = Static<typeof ControlFrameSchema>;
 
 export function validateChildProcessBootstrap(value: unknown): ChildProcessBootstrap {
 	if (!Check(ChildProcessBootstrapSchema, value)) {
-		throw new Error("control_bootstrap_invalid: descriptor does not match protocol version 1");
+		throw new Error(
+			`control_bootstrap_invalid: descriptor does not match protocol version ${AGENT_CONTROL_PROTOCOL_VERSION}`,
+		);
 	}
 	return value;
 }

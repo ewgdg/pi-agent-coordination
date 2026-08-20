@@ -14,7 +14,7 @@ Filesystem discovery belongs to Runtime preparation. Prompt construction should 
 - Keep Owner coordination tools inactive until admission completes.
 - Capture the Owner snapshot during initial admission and refresh it on Pi resource reload.
 - Capture an ordinary child snapshot during each fresh Runtime preparation; retained Runtime Runs reuse it.
-- Put the rendered current-runtime/template catalogue only in `agent_spawn.promptGuidelines` while that tool is active.
+- Put the rendered Template catalogue only in `agent_spawn.promptGuidelines` while that tool is active.
 - Remove the catalogue-specific `before_agent_start` hook.
 - Do not make the live catalogue a dynamic tool-schema enum.
 - Spawn-time Template selection remains authoritative and re-reads disk.

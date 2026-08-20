@@ -530,10 +530,6 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 		coordination: {
 			async agentTemplateSnapshot() {
 				return {
-					currentRuntime: {
-						model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
-						thinking: "off" as const,
-					},
 					templates: [],
 				};
 			},

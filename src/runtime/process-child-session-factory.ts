@@ -243,8 +243,6 @@ export class ProcessChildSessionFactory {
 	): Promise<AgentTemplateCatalogueSnapshot> {
 		return this.#captureTemplateSnapshotForRuntime({
 			cwd: runtime.configuration.cwd,
-			model: runtime.configuration.model,
-			thinking: runtime.configuration.thinking,
 			projectTrusted: runtime.projectTrusted,
 		});
 	}
@@ -252,16 +250,10 @@ export class ProcessChildSessionFactory {
 	async #captureTemplateSnapshotForRuntime(
 		runtime: Readonly<{
 			cwd: string;
-			model: AgentTemplateCatalogueSnapshot["currentRuntime"]["model"];
-			thinking: AgentTemplateCatalogueSnapshot["currentRuntime"]["thinking"];
 			projectTrusted: boolean;
 		}>,
 	): Promise<AgentTemplateCatalogueSnapshot> {
 		return {
-			currentRuntime: {
-				model: runtime.model,
-				thinking: runtime.thinking,
-			},
 			templates: await this.#discoverTemplateCatalogueForRuntime(
 				runtime.cwd,
 				runtime.projectTrusted,
@@ -309,8 +301,6 @@ export class ProcessChildSessionFactory {
 			...preparedRuntime,
 			agentTemplateSnapshot: await this.#captureTemplateSnapshotForRuntime({
 				cwd: preparedRuntime.configuration.cwd,
-				model: preparedRuntime.configuration.model,
-				thinking: preparedRuntime.configuration.thinking,
 				projectTrusted: preparedRuntime.projectTrusted,
 			}),
 		};

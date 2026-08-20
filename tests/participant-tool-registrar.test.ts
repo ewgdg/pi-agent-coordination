@@ -80,10 +80,6 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	},
 	async agentTemplateSnapshot() {
 		return {
-			currentRuntime: {
-				model: { provider: "test", modelId: "model" },
-				thinking: "off",
-			},
 			templates: [],
 		};
 	},
@@ -223,12 +219,8 @@ test("Agent Spawn schema accepts conversation forks and rejects extension path a
 	}), false);
 });
 
-test("Template catalogue shows current Runtime and available Template configuration", () => {
+test("Template catalogue shows available Template configuration without Runtime guidance", () => {
 	const catalogue = renderAgentTemplatePromptGuide({
-		currentRuntime: {
-			model: { provider: "current", modelId: "model" },
-			thinking: "low",
-		},
 		templates: [
 		{
 			name: "integration-researcher",
@@ -262,17 +254,14 @@ test("Template catalogue shows current Runtime and available Template configurat
 	assert.match(catalogue ?? "", /anthropic\/claude-sonnet-4-5/);
 	assert.match(catalogue ?? "", /systemPromptMode: replace/);
 	assert.match(catalogue ?? "", /- name: plain-agent\n  systemPromptMode: append/);
-	assert.match(catalogue, /## Current Agent Runtime/);
-	assert.match(catalogue, /id: current\/model/);
+	assert.doesNotMatch(catalogue, /Current Agent Runtime/);
+	assert.doesNotMatch(catalogue, /current\/model/);
+	assert.doesNotMatch(catalogue, /use `inherit`/);
 });
 
 test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalogue", async (t) => {
 	let observedSystemPrompt = "";
 	const templateSnapshot = {
-		currentRuntime: {
-			model: { provider: "current", modelId: "model" },
-			thinking: "low" as const,
-		},
 		templates: [{
 			name: "integration-researcher",
 			useWhen: "Use for integration research.",
@@ -658,10 +647,6 @@ test("ordinary surface composes its prepared Template snapshot and /agents with 
 	const direct = await createRegistrarHost(t, "ordinary", handlers);
 	const preparedView = () => ({
 		agentTemplateSnapshot: () => ({
-			currentRuntime: {
-				model: { provider: "test", modelId: "model" },
-				thinking: "off" as const,
-			},
 			templates: [],
 		}),
 	}) as unknown as OrdinaryAgentCoordinatorView;

@@ -10,13 +10,14 @@ import {
 	RuntimeSnapshotSchema,
 } from "../src/control/agent-control-protocol.ts";
 import {
+	AgentTemplateCatalogueSnapshotSchema,
 	ChildProcessBootstrapSchema,
 	ControlEndpointSchema,
 	ControlFrameSchema,
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 2, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 3, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control Endpoint and child bootstrap descriptors are closed and versioned", () => {
 	const endpoint = { transport: "unix", address: "/tmp/control.sock" } as const;
@@ -25,7 +26,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 2,
+		protocolVersion: 3,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
@@ -41,10 +42,22 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		validateChildProcessBootstrap({ ...bootstrap, endpoint: namedPipeEndpoint }),
 		{ ...bootstrap, endpoint: namedPipeEndpoint },
 	);
-	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, protocolVersion: 3 }), false);
+	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, protocolVersion: 2 }), false);
 	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, unixPath: endpoint.address }), false);
 	assert.equal(Check(ControlEndpointSchema, { ...endpoint, extra: true }), false);
 	assert.equal(Check(ControlEndpointSchema, { ...namedPipeEndpoint, extra: true }), false);
+});
+
+test("Agent Template Catalogue Snapshot contains only Template guidance", () => {
+	const snapshot = { templates: [] };
+	assert.equal(Check(AgentTemplateCatalogueSnapshotSchema, snapshot), true);
+	assert.equal(Check(AgentTemplateCatalogueSnapshotSchema, {
+		...snapshot,
+		currentRuntime: {
+			model: { provider: "stale", modelId: "model" },
+			thinking: "high",
+		},
+	}), false);
 });
 
 test("Control frame schema is a closed hello/request/response/event/cancel union", () => {
@@ -69,7 +82,7 @@ test("Control frame schema is a closed hello/request/response/event/cancel union
 	}), false);
 });
 
-test("every version-one method and event has TypeBox payload/result schemas", () => {
+test("every version-three method and event has TypeBox payload/result schemas", () => {
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
 		"runtime.executionBegin",

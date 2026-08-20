@@ -36,10 +36,6 @@ export type AgentTemplateCatalogueEntry = Readonly<{
 }>;
 
 export type AgentTemplateCatalogueSnapshot = Readonly<{
-	currentRuntime: Readonly<{
-		model: ModelReference;
-		thinking: RuntimeThinkingLevel;
-	}>;
 	templates: readonly AgentTemplateCatalogueEntry[];
 }>;
 

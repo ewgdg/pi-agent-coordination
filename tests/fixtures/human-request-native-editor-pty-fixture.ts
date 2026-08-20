@@ -73,7 +73,6 @@ const view = {
 	},
 	selectionRoster: () => ({ live: [], dormant: [] }),
 	agentTemplateSnapshot: () => ({
-		currentRuntime: { model: { provider: "test", modelId: "test" }, thinking: "off" },
 		templates: [],
 	}),
 	async openAgentView() { return undefined; },
