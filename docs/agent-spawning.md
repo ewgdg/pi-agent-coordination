@@ -34,6 +34,10 @@ agent_spawn({
 
 A Conversation Fork cannot include `template` or `config`. Its first request inherits the live parent's model, thinking, cwd, resources, and active tool surface while preserving the completed message prefix for cache affinity; this does not guarantee a provider cache hit.
 
+## Agent delegation
+
+Every Creation Request delegates work and follows the shared [Agent Delegation](agent-messaging.md#agent-delegation) rules. Once its Answer arrives, the parent synthesizes it, performs necessary validation, and integrates the result.
+
 For a context-isolated child, `config` may override the model/thinking pair, working directory, tool allowlist, skills, explicit system prompt, system-prompt mode, and native project-context inheritance. A `config.model` object requires both `id` and `thinking`; either may be `inherit` to use that value from the current parent Runtime. `id: inherit` with `thinking: inherit` is valid. Providing `config.model` bypasses Template model candidates entirely. `allowedTools` and `skills` replace their inherited selections, including with an empty array. Child extension selection is `inherit` or `none`; arbitrary per-child extension paths are not accepted.
 
 Every Runtime shares the user's Pi configuration. The model and thinking pair resolved for a Spawn are explicit launch inputs only: preparing or starting the child must not persist them as user defaults. An explicit user preference action from an interactively selected Owner or child view updates the same shared configuration. Production child configuration must therefore not be isolated; tests that invoke persistent Pi APIs use an isolated fixture environment. See [ADR 0001](adr/0001-share-pi-user-configuration-across-agent-runtimes.md).

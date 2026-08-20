@@ -313,7 +313,7 @@ test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalog
 	await host.runtime.dispose();
 });
 
-test("participant registrar contributes one shared asynchronous Agent control guide", async (t) => {
+test("participant registrar contributes focused tool guides and one shared Agent Delegation guide", async (t) => {
 	let observedSystemPrompt = "";
 	const host = await createRegistrarHost(t, "ordinary", handlers);
 	const message = host.session.getToolDefinition("agent_message");
@@ -322,60 +322,90 @@ test("participant registrar contributes one shared asynchronous Agent control gu
 	assert.ok(message);
 	assert.ok(wait);
 	assert.ok(spawn);
-	assert.equal(message.promptGuidelines?.length, 1);
+	assert.equal(message.promptGuidelines?.length, 2);
 	assert.equal(wait.promptGuidelines?.length, 1);
 	assert.equal(spawn.promptGuidelines?.length, 2);
-	assert.equal(wait.promptGuidelines[0], message.promptGuidelines[0]);
-	assert.equal(spawn.promptGuidelines[0], message.promptGuidelines[0]);
+
+	const messageGuide = message.promptGuidelines[0] ?? "";
+	const delegationGuide = message.promptGuidelines[1] ?? "";
+	const waitGuide = wait.promptGuidelines[0] ?? "";
+	const spawnGuide = spawn.promptGuidelines[0] ?? "";
+	assert.equal(spawn.promptGuidelines[1], delegationGuide);
+	assert.notEqual(waitGuide, delegationGuide);
+
+	assert.match(messageGuide, /^<agent_message>/);
 	assert.match(
-		spawn.promptGuidelines[1] ?? "",
+		messageGuide,
+		/agent_message returns messageStatus "sent"[\s\S]*may still be queued[\s\S]*does not mean delivered/,
+	);
+	assert.match(
+		messageGuide,
+		/delivered Agent Request[\s\S]*creates one Answer obligation/,
+	);
+	assert.match(
+		messageGuide,
+		/Keep provisional findings local[\s\S]*Use "answer" for the curated result[\s\S]*reverse "request"/,
+	);
+	assert.match(
+		messageGuide,
+		/terminal response to that Request[\s\S]*end the turn immediately[\s\S]*Agent Run settles/,
+	);
+
+	assert.match(delegationGuide, /^<agent_delegation>/);
+	assert.match(
+		delegationGuide,
+		/When agent_message operation "request" or agent_spawn delegates work, partition it into bounded, non-overlapping work units/,
+	);
+	assert.match(
+		delegationGuide,
+		/returns requestMessageId with messageStatus "sent"[\s\S]*responder owns the delegated work until its Answer arrives or the Request is cancelled/,
+	);
+	assert.match(
+		delegationGuide,
+		/Continue only explicitly disjoint work[\s\S]*complete, correct Answer[\s\S]*end the turn[\s\S]*arrive automatically/,
+	);
+	assert.match(
+		delegationGuide,
+		/duplicate investigation[\s\S]*Request explicitly asks for an independent cross-check/,
+	);
+
+	assert.match(waitGuide, /^<agent_wait>/);
+	assert.match(
+		waitGuide,
+		/Use agent_wait only when one next decision requires every outstanding Answer together[\s\S]*avoiding one model turn per Answer matters/,
+	);
+	assert.match(waitGuide, /Ordinary Messages do not satisfy Agent Requests/);
+	assert.match(
+		waitGuide,
+		/agent_wait returns disposition "preempted"[\s\S]*call agent_wait again[\s\S]*preemption does not consume[\s\S]*Answer Delivery proof/,
+	);
+
+	assert.match(spawnGuide, /^<agent_spawn>/);
+	assert.match(
+		spawnGuide,
+		/A successful agent_spawn returns spawnStatus "created"[\s\S]*Creation Request follows the shared Agent Delegation rules/,
+	);
+	assert.match(
+		spawnGuide,
 		/Use agent_spawn `conversation: "fork"` only for a cache-affine continuation/,
 	);
+	assert.doesNotMatch(spawnGuide, /partition work|partition it/);
+	assert.doesNotMatch(spawnGuide, /tiny work/i);
+	assert.doesNotMatch(spawnGuide, /Continue only explicitly disjoint work/);
+	assert.doesNotMatch(spawnGuide, /duplicate investigation/);
+
 	host.model.setResponses([(context) => {
 		observedSystemPrompt = context.systemPrompt ?? "";
 		return fauxAssistantMessage("Done.");
 	}]);
 
 	await host.session.prompt("Inspect the Agent tool guidance.");
-	assert.equal(observedSystemPrompt.split("<agent_control>").length - 1, 1);
-	assert.equal(observedSystemPrompt.split("</agent_control>").length - 1, 1);
-	const requiredRules: ReadonlyArray<readonly [string, RegExp]> = [
-		[
-			"treat successful sends as asynchronous admission",
-			/messageStatus "sent"[\s\S]*may still be queued[\s\S]*does not mean delivered/,
-		],
-		[
-			"make delivered Requests create Answer obligations",
-			/delivered Agent Request[\s\S]*creates one Answer obligation/,
-		],
-		[
-			"settle when Answers can be handled independently",
-			/Answers can be handled independently[\s\S]*end the turn[\s\S]*arrive automatically/,
-		],
-		[
-			"reserve Agent Wait for strict fan-in",
-			/one next decision requires every outstanding Answer together[\s\S]*avoiding one model turn per Answer matters/,
-		],
-		[
-			"ordinary Messages do not resolve Agent Requests",
-			/Ordinary Messages do not satisfy Agent Requests/,
-		],
-		[
-			"preserve Answers across wait preemption",
-			/agent_wait returns disposition "preempted"[\s\S]*call agent_wait again[\s\S]*preemption does not consume[\s\S]*Answer Delivery proof/,
-		],
-		[
-			"keep provisional responder work off the Message lane",
-			/Keep provisional findings local[\s\S]*Use "answer" for the curated result[\s\S]*reverse "request"/,
-		],
-		[
-			"make Answer the terminal responder output",
-			/terminal response to that Request[\s\S]*end the turn immediately[\s\S]*Agent Run settles/,
-		],
-	];
-	for (const [intent, pattern] of requiredRules) {
-		assert.match(observedSystemPrompt, pattern, intent);
+	for (const tag of ["agent_message", "agent_delegation", "agent_wait", "agent_spawn"]) {
+		assert.equal(observedSystemPrompt.split(`<${tag}>`).length - 1, 1);
+		assert.equal(observedSystemPrompt.split(`</${tag}>`).length - 1, 1);
 	}
+	assert.doesNotMatch(observedSystemPrompt, /<\/?agent_(?:control|request)>/);
+	assert.doesNotMatch(observedSystemPrompt, /Complete tiny work directly/i);
 	await host.runtime.dispose();
 });
 

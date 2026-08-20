@@ -59,6 +59,9 @@ An Agent Spawn mode that copies the Direct Spawner's active conversation only th
 **Creation Request**:
 The ordinary Agent Request authored by an Agent Spawn invocation as its child's initial work. Its identity derives from that invocation as a Message, while the matching child Agent Identity supplies its recipient and makes it canonical. It then uses ordinary fixed-mode delivery, retry, cancellation, Answer, and Answer Retrieval semantics without becoming an Agent lifecycle result.
 
+**Agent Delegation**:
+Assignment of one bounded work unit to another Agent through an Agent Request or an Agent Spawn Creation Request. A Request for existing information or a decision need not delegate work. Once admitted, the responder owns delegated work until its Agent Answer commits or the Request is cancelled; the requester and concurrent delegates keep their work disjoint unless the Request explicitly asks for an independent cross-check.
+
 **Agent Template**:
 A user-authored named partial Agent Runtime configuration selected by name during Agent Spawn. Its current complete definition is re-resolved whenever a new Runtime is prepared. It overlays the current resolved configuration of the Direct Spawner, remains overridable by the canonical Agent Spawn configuration, and changes neither protocol identity nor role relationships. Project-scoped Template discovery follows the current parent Runtime working directory. A retained Runtime keeps its already resolved configuration across its exact Runs.
 _Avoid_: Agent profile, Agent role

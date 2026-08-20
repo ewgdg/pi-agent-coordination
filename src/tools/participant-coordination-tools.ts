@@ -46,14 +46,8 @@ import { renderAgentTemplatePromptGuide } from "./agent-template-prompt-guide.ts
 
 export type ParticipantCoordinationRole = "ordinary" | "moderator" | "owner";
 
-const AGENT_TOOLS_PROMPT_GUIDE = `<agent_control>
-A successful asynchronous Message send returns messageStatus "sent". This includes ordinary Messages, Agent Requests, and the Creation Request sent by agent_spawn. A successful agent_spawn also returns spawnStatus "created".
-
-"sent" means admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
-
-After a receipt containing requestMessageId with messageStatus "sent", remember that agent_wait is designed to join Answers, not to monitor ordinary progress. When Answers can be handled independently or a responder may need clarification, continue independent work when possible; otherwise end the turn and let correlated Answers arrive automatically. Prefer agent_wait only when one next decision requires every outstanding Answer together and avoiding one model turn per Answer matters. Ordinary Messages do not satisfy Agent Requests. Do not poll merely to wait.
-
-If agent_wait returns disposition "preempted", handle the delivered inbound Agent Request first. If one decision still requires every outstanding Answer, call agent_wait again afterward; preemption does not consume Answers or create Answer Delivery proof.
+const AGENT_MESSAGE_PROMPT_GUIDE = `<agent_message>
+When agent_message returns messageStatus "sent", the Message was admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
 
 A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
 
@@ -62,10 +56,25 @@ While an Answer Obligation is active, agent_message operation "send" to that Req
 agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request. After the operation returns, the Answer is the terminal response to that Request. Do not add an assistant-message recap or summary. Unless another obligation or independent task remains, end the turn immediately so the Agent Run settles.
 
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
-</agent_control>`;
+</agent_message>`;
 
-const AGENT_SPAWN_PROMPT_GUIDE =
-	'Use agent_spawn `conversation: "fork"` only for a cache-affine continuation of the completed current conversation. A conversation fork cannot select a template or provide config.';
+const AGENT_DELEGATION_PROMPT_GUIDE = `<agent_delegation>
+When agent_message operation "request" or agent_spawn delegates work, partition it into bounded, non-overlapping work units before sending the Request.
+
+After either tool returns requestMessageId with messageStatus "sent", the responder owns the delegated work until its Answer arrives or the Request is cancelled. Continue only explicitly disjoint work that would still be needed if the responder returned a complete, correct Answer. Otherwise end the turn and let the correlated Answer arrive automatically. Intentional duplicate investigation is appropriate only when the Request explicitly asks for an independent cross-check.
+</agent_delegation>`;
+
+const AGENT_WAIT_PROMPT_GUIDE = `<agent_wait>
+Use agent_wait only when one next decision requires every outstanding Answer together and avoiding one model turn per Answer matters. Do not use agent_wait to monitor ordinary progress. If strict fan-in is unnecessary, let ordinary Answer Delivery reactivate the Agent. Ordinary Messages do not satisfy Agent Requests. Do not poll merely to wait.
+
+If agent_wait returns disposition "preempted", handle the delivered inbound Agent Request first. If one decision still requires every outstanding Answer, call agent_wait again afterward; preemption does not consume Answers or create Answer Delivery proof.
+</agent_wait>`;
+
+const AGENT_SPAWN_PROMPT_GUIDE = `<agent_spawn>
+A successful agent_spawn returns spawnStatus "created", confirming that the child exists. Its Creation Request follows the shared Agent Delegation rules.
+
+Use agent_spawn \`conversation: "fork"\` only for a cache-affine continuation of the completed current conversation. A conversation fork cannot select a template or provide config.
+</agent_spawn>`;
 
 export type AgentObservePhase = "starting" | "live" | "ending" | "dormant";
 
@@ -460,7 +469,10 @@ export function registerParticipantCoordinationTools<
 		description:
 			"Send one immutable Message or correlated Request to a known Agent in this Workflow.",
 		promptSnippet: "Send, request, answer, cancel, poll, or retry direct Agent communication.",
-		promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
+		promptGuidelines: [
+			AGENT_MESSAGE_PROMPT_GUIDE,
+			AGENT_DELEGATION_PROMPT_GUIDE,
+		],
 		executionMode: "sequential",
 		parameters: agentMessageParameters,
 		renderCall: (args, _theme, context) =>
@@ -477,7 +489,7 @@ export function registerParticipantCoordinationTools<
 			"Wait until every outstanding outbound Agent Request has a committed Answer, unless an inbound Agent Request preempts the wait for attention.",
 		promptSnippet:
 			"Join all outstanding Agent Request Answers unless an inbound Agent Request preempts the wait.",
-		promptGuidelines: [AGENT_TOOLS_PROMPT_GUIDE],
+		promptGuidelines: [AGENT_WAIT_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentWaitParameters,
 		renderCall: renderAgentWaitCall,
@@ -516,8 +528,8 @@ export function registerParticipantCoordinationTools<
 				"Create one fresh durable child Agent with isolated context or a cache-affine conversation fork, then deliver its initial Creation Request.",
 			promptSnippet: "Create a fresh child Agent with isolated work or a cache-affine conversation fork.",
 			promptGuidelines: [
-				AGENT_TOOLS_PROMPT_GUIDE,
 				AGENT_SPAWN_PROMPT_GUIDE,
+				AGENT_DELEGATION_PROMPT_GUIDE,
 				...(agentTemplateSnapshot === undefined
 					? []
 					: [renderAgentTemplatePromptGuide(agentTemplateSnapshot)]),

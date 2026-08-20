@@ -81,6 +81,12 @@ After Answer commitment, ordinary Message authorship to the former requester is 
 
 The Answer tool call is the responder's terminal response to that Request. The responder does not add an assistant-message recap or summary after it. Unless another obligation or independent task remains, the responder ends the turn immediately so its Run settles.
 
+## Agent delegation
+
+An Agent Request can ask for existing information or a decision without delegating work. When `agent_message` operation `request` or `agent_spawn` delegates work, partition it into bounded, non-overlapping work units before sending the Request.
+
+After Delivery admission, the responder owns the delegated work until its Answer arrives or the Request is cancelled. Continue only disjoint work that would remain necessary if the responder returned a complete, correct Answer. Otherwise end the turn and let ordinary Answer Delivery reactivate the Agent. Duplicate investigation is appropriate only when the Request explicitly asks for an independent cross-check.
+
 ## Retrieve an Answer
 
 Retrying a Request selects one authoritative outcome:
@@ -101,7 +107,7 @@ Incomplete or contradictory evidence schedules nothing. If direct Answer Deliver
 {}
 ```
 
-When Answers can be handled independently or a responder may need clarification, continue independent work when possible, then end the turn and let ordinary Answer Delivery reactivate the Agent. Do not poll merely to wait. Ordinary Messages do not satisfy Agent Requests.
+If strict fan-in is unnecessary, let ordinary Answer Delivery reactivate the Agent. Do not poll merely to wait. Ordinary Messages do not satisfy Agent Requests.
 
 When the committed sequential `agent_wait` call begins execution, it takes one fixed snapshot of every outstanding Request authored by the caller. The snapshot preserves canonical Request authoring order, includes unanswered Requests and committed Answers that lack requester-side Delivery proof, and excludes cancelled Requests and Answers already delivered to the requester. A Request authored after the Wait call is outside that snapshot, including a later Request in the same assistant tool batch. A call with no outstanding Requests is rejected.
 
@@ -119,7 +125,7 @@ Interruption, exact-Run fencing, termination, or shutdown ends the live wait wit
 
 ### Fan-out and strict fan-in
 
-An Agent may send two Requests, continue its own inspection, and join only when its next decision needs both Answers:
+An Agent may send two Requests, continue disjoint inspection outside both requested work units, and join only when its next decision needs both Answers:
 
 ```json
 { "operation": "request", "targetAgentId": "design-agent", "question": "Which invariant should the interface preserve?" }
@@ -129,7 +135,7 @@ An Agent may send two Requests, continue its own inspection, and join only when 
 { "operation": "request", "targetAgentId": "test-agent", "question": "Which observable regression must the test cover?" }
 ```
 
-After completing independent work, call `agent_wait` with `{}` if the implementation decision requires both outstanding Answers. If either Answer can be handled independently, settle instead and let each Answer activate an ordinary model turn.
+After completing that disjoint work, call `agent_wait` with `{}` if the implementation decision requires both outstanding Answers. If either Answer can be handled independently, settle instead and let each Answer activate an ordinary model turn.
 
 ### Interactive reverse Request
 
