@@ -76,6 +76,12 @@ A successful agent_spawn returns spawnStatus "created", confirming that the chil
 Use agent_spawn \`conversation: "fork"\` only for a cache-affine continuation of the completed current conversation. A conversation fork cannot select a template or provide config.
 </agent_spawn>`;
 
+const AGENT_CONTROL_PROMPT_GUIDE = `<agent_control>
+agent_control operation "terminate" ends one exact Agent Run. It does not remove the durable Agent, cancel Agent Requests, affect descendants, or prevent a later successor Run. A terminate receipt's residualRequests reports the unresolved incoming and outgoing Request counts left on that Agent.
+
+If termination abandons work from a Request you authored, use agent_message operation "cancel" with its requestMessageId before delegating replacement work or calling agent_wait. If the work remains needed, reactivate the same Agent with an ordinary Message instead. Do not assume Run termination resolves delegated work.
+</agent_control>`;
+
 export type AgentObservePhase = "starting" | "live" | "ending" | "dormant";
 
 export type AgentObserveScope =
@@ -571,6 +577,7 @@ export function registerParticipantCoordinationTools<
 		promptSnippet: role === "moderator"
 			? "Supervise any current non-Owner Run needed to restore safe progress."
 			: "Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
+		promptGuidelines: [AGENT_CONTROL_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentControlParameters,
 		renderCall: (args, theme) =>

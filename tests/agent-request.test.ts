@@ -1238,6 +1238,9 @@ test("Agent Wait retrieves an outstanding Answer and rejects a join once none re
 		entryId: answerSourceEntry.id,
 		toolCallId: answerToolCallId,
 	};
+	await waitForCondition(
+		() => harness.view.status(harness.childId).run.phase === "dormant",
+	);
 	const waitToolCallId = "wait-for-lost-answer";
 	const waitInput = {};
 	harness.host.session.sessionManager.appendMessage(

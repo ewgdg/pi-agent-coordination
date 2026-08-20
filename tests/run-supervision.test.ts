@@ -16,6 +16,7 @@ import {
 } from "../src/coordination/workflow-coordinator.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
 	WorkflowPolicyStore,
@@ -719,6 +720,66 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 				),
 		),
 	);
+
+	await harness.shutdown();
+});
+
+test("Agent Wait rejects when any unanswered work is owned by a Dormant responder", async (t) => {
+	const harness = await createRunSupervisionHarness(t);
+	const spawnToolCallId = "spawn-before-dormant-wait";
+	const child = await harness.spawnChild(spawnToolCallId);
+	await child.waitForIdle();
+
+	const spawnSourceEntry = harness.host.session.sessionManager.getEntries().find(
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			entry.message.content.some(
+				(part) => part.type === "toolCall" && part.id === spawnToolCallId,
+			),
+	);
+	assert.ok(spawnSourceEntry);
+	const creationRequestId = deriveMessageIdentity({
+		agentId: harness.host.session.sessionId,
+		entryId: spawnSourceEntry.id,
+		toolCallId: spawnToolCallId,
+	});
+	await harness.control("terminate-before-dormant-wait", {
+		operation: "terminate",
+		agentId: child.agentId,
+	});
+	assert.equal(harness.ownerView.status(child.agentId).run.phase, "dormant");
+	const replacement = await harness.spawnChild("spawn-live-replacement-before-wait");
+	assert.notEqual(harness.ownerView.status(replacement.agentId).run.phase, "dormant");
+
+	const waitToolCallId = "reject-wait-for-dormant-responder";
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	let progressObserved = false;
+	await assert.rejects(
+		() => harness.ownerView.wait(
+			waitToolCallId,
+			{},
+			AbortSignal.timeout(500),
+			() => {
+				progressObserved = true;
+			},
+		),
+		(error: unknown) => {
+			assert.ok(error instanceof Error);
+			assert.match(error.message, /invalid_state: Agent Wait cannot await unanswered Requests targeting Dormant Agents/);
+			assert.match(error.message, new RegExp(creationRequestId));
+			assert.match(error.message, new RegExp(child.agentId));
+			assert.doesNotMatch(error.message, new RegExp(replacement.agentId));
+			assert.match(error.message, /Reactivate each responder or cancel its Request before calling agent_wait/);
+			return true;
+		},
+	);
+	assert.equal(progressObserved, false);
 
 	await harness.shutdown();
 });

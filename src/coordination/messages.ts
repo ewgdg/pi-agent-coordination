@@ -270,6 +270,17 @@ export class MessageCoordinator {
 		});
 	}
 
+	unansweredRequestRelationships(
+		callerAgentId: string,
+		requestIds: readonly string[],
+	): readonly UnresolvedAgentRequest[] {
+		const caller = this.#requireAgent(callerAgentId);
+		return this.requestRelationships(requestIds).filter(
+			({ requestId }) =>
+				this.#requestEvidence.callerWaitAnswer(caller, requestId) === undefined,
+		);
+	}
+
 	answerObligationRequestIds(responder: AgentRecord): readonly string[] {
 		return this.#requestEvidence.residualRelationshipsFor(responder)
 			.answerOwedRequestIds;

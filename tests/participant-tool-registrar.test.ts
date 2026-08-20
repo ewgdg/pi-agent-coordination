@@ -319,17 +319,21 @@ test("participant registrar contributes focused tool guides and one shared Agent
 	const message = host.session.getToolDefinition("agent_message");
 	const wait = host.session.getToolDefinition("agent_wait");
 	const spawn = host.session.getToolDefinition("agent_spawn");
+	const control = host.session.getToolDefinition("agent_control");
 	assert.ok(message);
 	assert.ok(wait);
 	assert.ok(spawn);
+	assert.ok(control);
 	assert.equal(message.promptGuidelines?.length, 2);
 	assert.equal(wait.promptGuidelines?.length, 1);
 	assert.equal(spawn.promptGuidelines?.length, 2);
+	assert.equal(control.promptGuidelines?.length, 1);
 
 	const messageGuide = message.promptGuidelines[0] ?? "";
 	const delegationGuide = message.promptGuidelines[1] ?? "";
 	const waitGuide = wait.promptGuidelines[0] ?? "";
 	const spawnGuide = spawn.promptGuidelines[0] ?? "";
+	const controlGuide = control.promptGuidelines[0] ?? "";
 	assert.equal(spawn.promptGuidelines[1], delegationGuide);
 	assert.notEqual(waitGuide, delegationGuide);
 
@@ -375,6 +379,10 @@ test("participant registrar contributes focused tool guides and one shared Agent
 		/Use agent_wait only when one next decision requires every outstanding Answer together[\s\S]*avoiding one model turn per Answer matters/,
 	);
 	assert.match(waitGuide, /Ordinary Messages do not satisfy Agent Requests/);
+	assert.doesNotMatch(
+		waitGuide,
+		/agent_wait rejects when an unanswered Request targets a Dormant Agent/,
+	);
 	assert.match(
 		waitGuide,
 		/agent_wait returns disposition "preempted"[\s\S]*call agent_wait again[\s\S]*preemption does not consume[\s\S]*Answer Delivery proof/,
@@ -394,17 +402,41 @@ test("participant registrar contributes focused tool guides and one shared Agent
 	assert.doesNotMatch(spawnGuide, /Continue only explicitly disjoint work/);
 	assert.doesNotMatch(spawnGuide, /duplicate investigation/);
 
+	assert.match(controlGuide, /^<agent_control>/);
+	assert.match(
+		controlGuide,
+		/agent_control operation "terminate" ends one exact Agent Run[\s\S]*does not remove the durable Agent[\s\S]*cancel Agent Requests[\s\S]*affect descendants/,
+	);
+	assert.match(
+		controlGuide,
+		/terminate receipt's residualRequests[\s\S]*unresolved incoming and outgoing Request counts/,
+	);
+	assert.match(
+		controlGuide,
+		/If termination abandons work from a Request you authored[\s\S]*agent_message operation "cancel"[\s\S]*before delegating replacement work or calling agent_wait/,
+	);
+	assert.match(
+		controlGuide,
+		/If the work remains needed, reactivate the same Agent with an ordinary Message/,
+	);
+
 	host.model.setResponses([(context) => {
 		observedSystemPrompt = context.systemPrompt ?? "";
 		return fauxAssistantMessage("Done.");
 	}]);
 
 	await host.session.prompt("Inspect the Agent tool guidance.");
-	for (const tag of ["agent_message", "agent_delegation", "agent_wait", "agent_spawn"]) {
+	for (const tag of [
+		"agent_message",
+		"agent_delegation",
+		"agent_wait",
+		"agent_spawn",
+		"agent_control",
+	]) {
 		assert.equal(observedSystemPrompt.split(`<${tag}>`).length - 1, 1);
 		assert.equal(observedSystemPrompt.split(`</${tag}>`).length - 1, 1);
 	}
-	assert.doesNotMatch(observedSystemPrompt, /<\/?agent_(?:control|request)>/);
+	assert.doesNotMatch(observedSystemPrompt, /<\/?agent_request>/);
 	assert.doesNotMatch(observedSystemPrompt, /Complete tiny work directly/i);
 	await host.runtime.dispose();
 });

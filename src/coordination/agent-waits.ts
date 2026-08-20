@@ -112,13 +112,27 @@ export class AgentWaitCoordinator {
 			callerAgentId,
 			call.source,
 		);
+		const requestRelationships = this.#messages.requestRelationships(requestMessageIds);
+		const dormantRelationships = this.#messages
+			.unansweredRequestRelationships(callerAgentId, requestMessageIds)
+			.filter(({ targetAgentId }) =>
+				this.#agents.get(targetAgentId)?.host.observe().phase === "dormant"
+			);
+		if (dormantRelationships.length > 0) {
+			const blockers = dormantRelationships
+				.map(({ requestId, targetAgentId }) => `${requestId} -> ${targetAgentId}`)
+				.join(", ");
+			throw new Error(
+				"invalid_state: Agent Wait cannot await unanswered Requests targeting " +
+				`Dormant Agents: ${blockers}. Reactivate each responder or cancel its ` +
+				"Request before calling agent_wait.",
+			);
+		}
 		onProgress?.({
-			waitingFor: this.#messages.requestRelationships(requestMessageIds).map(
-				({ requestId, targetAgentId }) => ({
-					requestMessageId: requestId,
-					responderAgentId: targetAgentId,
-				}),
-			),
+			waitingFor: requestRelationships.map(({ requestId, targetAgentId }) => ({
+				requestMessageId: requestId,
+				responderAgentId: targetAgentId,
+			})),
 		});
 		const completed = this.#messages.waitAnswers(
 			callerAgentId,
