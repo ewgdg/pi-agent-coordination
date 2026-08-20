@@ -212,6 +212,27 @@ test("live disposal parses final PTY output before releasing terminal state", { 
 	assert.equal(projection.disposed, true);
 });
 
+test("child exit discards terminal replies before node-pty closes", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+	const errors: unknown[][] = [];
+	const originalConsoleError = console.error;
+	console.error = (...args: unknown[]) => errors.push(args);
+	t.after(() => {
+		console.error = originalConsoleError;
+	});
+	const projection = await spawnNodeScript(String.raw`
+		process.stdout.write("\x1b[6n".repeat(100_000));
+	`);
+
+	await projection.exited;
+	await projection.dispose();
+	await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+	assert.equal(
+		errors.some((args) => args[0] === "Unhandled pty write error"),
+		false,
+	);
+});
+
 test("PTY disposal terminates stubborn descendants in the owned process group", { timeout: TEST_TIMEOUT_MS }, async () => {
 	const projection = await spawnNodeScript(String.raw`
 		const { spawn } = require("node:child_process");

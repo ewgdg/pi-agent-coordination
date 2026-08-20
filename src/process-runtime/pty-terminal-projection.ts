@@ -3,6 +3,7 @@ import xtermHeadless from "@xterm/headless";
 import * as nodePty from "node-pty";
 
 const { Terminal } = xtermHeadless;
+const GENERATED_REPLY_QUIET_MS = 10;
 
 export type TerminalCellColor =
 	| Readonly<{ kind: "default" }>
@@ -124,6 +125,8 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	#cursorBlink = false;
 	#failure: Readonly<{ error: unknown }> | undefined;
 	#pendingWrites = 0;
+	#pendingGeneratedReplies: Buffer[] = [];
+	#generatedReplyFlush: ReturnType<typeof setTimeout> | undefined;
 	#exitObserved = false;
 	#disposing = false;
 	#disposed = false;
@@ -163,6 +166,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			this.#subscriptions.push(
 				child.onExit((event) => {
 					this.#exitObserved = true;
+					this.#discardGeneratedReplies();
 					void this.#finishExit(event, resolve);
 				}),
 			);
@@ -235,6 +239,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	setPhysicalTerminalAttached(attached: boolean): void {
 		this.#requireActive();
 		this.#physicalTerminalAttached = attached;
+		if (attached) this.#discardGeneratedReplies();
 	}
 
 	pauseOutput(): void {
@@ -293,6 +298,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	dispose(): Promise<void> {
 		if (this.#disposePromise) return this.#disposePromise;
 		this.#disposing = true;
+		this.#discardGeneratedReplies();
 		this.#disposePromise = this.#dispose();
 		return this.#disposePromise;
 	}
@@ -319,12 +325,46 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	}
 
 	#writeGeneratedReply(data: string | Buffer): void {
-		if (this.#disposed || this.#exitObserved || this.#physicalTerminalAttached) return;
+		if (
+			this.#disposed ||
+			this.#disposing ||
+			this.#exitObserved ||
+			this.#physicalTerminalAttached
+		) return;
+		this.#pendingGeneratedReplies.push(Buffer.from(data));
+		if (this.#generatedReplyFlush) clearTimeout(this.#generatedReplyFlush);
+		// A short quiet period coalesces parser reply bursts and lets an exiting
+		// child publish onExit before node-pty writes to its closing descriptor.
+		this.#generatedReplyFlush = setTimeout(
+			() => this.#flushGeneratedReplies(),
+			GENERATED_REPLY_QUIET_MS,
+		);
+	}
+
+	#flushGeneratedReplies(): void {
+		this.#generatedReplyFlush = undefined;
+		if (
+			this.#disposed ||
+			this.#disposing ||
+			this.#exitObserved ||
+			this.#physicalTerminalAttached
+		) {
+			this.#pendingGeneratedReplies = [];
+			return;
+		}
+		const reply = Buffer.concat(this.#pendingGeneratedReplies);
+		this.#pendingGeneratedReplies = [];
 		try {
-			this.#child.write(data);
+			this.#child.write(reply);
 		} catch (error) {
 			this.#notifyFailure(error);
 		}
+	}
+
+	#discardGeneratedReplies(): void {
+		if (this.#generatedReplyFlush) clearTimeout(this.#generatedReplyFlush);
+		this.#generatedReplyFlush = undefined;
+		this.#pendingGeneratedReplies = [];
 	}
 
 	#settleParsedWrite(): void {
