@@ -54,7 +54,9 @@ The native status call and collapsed result identify the Agent as `label · comp
 
 ## Generation failure
 
-Coordination preserves Pi's user-configured compaction, retry, provider-retry, and transport behavior. It does not apply hidden Runtime overrides or add a separate model-generation recovery layer. If Pi's configured native behavior ultimately ends the exact Run with an unresolved Answer Obligation, ordinary Run Failure moderation applies rather than a separate generation-failure or Operation Review mechanism.
+Coordination preserves Pi's user-configured compaction, retry, provider-retry, and transport behavior. A child-local Turn Compaction Gateway cancels threshold compaction requested after a Run only when no raw Pi continuation is queued. The child releases normally and recomputes the same configured threshold before its next idle native prompt, Owner prompt, or custom Delivery. Manual compaction and overflow recovery remain Pi-native. The gateway owns only preparation and input commitment, never the model cycle, and creates no durable pending state or Runtime retention.
+
+If Pi's configured native behavior ultimately ends the exact Run with an unresolved Answer Obligation, ordinary Run Failure moderation applies rather than a separate generation-failure or Operation Review mechanism.
 
 ## Interrupt an exact Run
 

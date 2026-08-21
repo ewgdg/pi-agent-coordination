@@ -462,7 +462,7 @@ const AgentRuntimeDeliverySchema = Type.Union([
 				display: Type.Literal(true),
 			}),
 		]),
-		triggerTurn: Type.Literal(true),
+		triggerTurn: Type.Boolean(),
 		deliverAs: Type.Optional(DeliveryModeSchema),
 	}),
 	closed({

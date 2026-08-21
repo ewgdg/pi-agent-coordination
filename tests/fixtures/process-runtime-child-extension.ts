@@ -79,14 +79,10 @@ faux.setResponses(process.env.PROCESS_RUNTIME_COORDINATION_TOOLS === "1"
 		], { stopReason: "toolUse" }),
 		delayedResponse,
 	]
-	: [
-		delayedResponse,
-		delayedResponse,
-		delayedResponse,
-		delayedResponse,
-	]);
+	: Array.from({ length: 24 }, () => delayedResponse));
 
 const processRuntimeChildFixture: ExtensionFactory = (pi) => {
+	let queuedPostRunContinuation = false;
 	pi.registerProvider(PROCESS_RUNTIME_TEST_PROVIDER, {
 		name: "Offline process runtime test",
 		baseUrl: "http://127.0.0.1:1",
@@ -100,7 +96,30 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		pi.on("session_shutdown", () => new Promise<void>(() => undefined));
 	}
 
-	pi.on("input", (event, ctx) => {
+	pi.on("agent_end", (event) => {
+		if (
+			queuedPostRunContinuation ||
+			!JSON.stringify(event.messages).includes("PROCESS_RUNTIME_QUEUE_AFTER_AGENT_END")
+		) return;
+		queuedPostRunContinuation = true;
+		pi.sendMessage({
+			customType: "agent-coordination.queued-compaction-test",
+			content: `Queued only after agent_end so Pi prepares before continuing.${
+				" queued context".repeat(400)
+			}`,
+			display: false,
+			details: {},
+		}, { deliverAs: "followUp" });
+	});
+
+	pi.on("input", async (event, ctx) => {
+		if (event.text === "PROCESS_RUNTIME_DELAYED_INPUT") {
+			ctx.ui.setWidget("process-runtime-delayed-input", [
+				"PROCESS_RUNTIME_DELAYED_INPUT_STARTED",
+			]);
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			return { action: "continue" };
+		}
 		if (event.text === "PROCESS_RUNTIME_HANDLED_INPUT") {
 			ctx.ui.setWidget("process-runtime-input", ["PROCESS_RUNTIME_INPUT_HANDLED"]);
 			return { action: "handled" };

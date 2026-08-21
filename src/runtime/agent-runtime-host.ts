@@ -77,7 +77,7 @@ export type AgentRuntimeDelivery =
 			| ModelVisibleModeratorRoutineStart
 			| ModelVisibleObligationReminder
 			| ModelVisibleRunFailureRecovery;
-		triggerTurn: true;
+		triggerTurn: boolean;
 		deliverAs?: "steer" | "followUp";
 	}>
 	| Readonly<{

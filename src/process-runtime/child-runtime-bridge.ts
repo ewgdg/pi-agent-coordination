@@ -47,6 +47,7 @@ import {
 	CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE,
 } from "./child-process-environment.ts";
 import { childRuntimeInputs } from "./child-runtime-input-registry.ts";
+import { ChildTurnCompactionGateway } from "./child-turn-compaction-gateway.ts";
 import { NativeInputSubmissionIdentity } from "./native-input-submission-identity.ts";
 import {
 	TerminalInputSubmissionAcknowledger,
@@ -67,6 +68,7 @@ type ChildChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
 type ChildRuntimeBinding = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
+	turnCompaction: ChildTurnCompactionGateway;
 	activity: RemoteAgentActivitySource;
 	publishRuntimeSnapshot(): Promise<void>;
 	reinitializePresentation(): void;
@@ -139,6 +141,19 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		current.nativeInputIdentity.beginInput();
 		return { action: "continue" };
 	});
+	// Release child-local turn admission before the later participant lifecycle
+	// handler asks the Owner to admit this exact execution.
+	pi.on("agent_start", () => {
+		const current = state;
+		const sequence = current?.nativeInputIdentity.current();
+		if (!current || sequence === undefined) return;
+		if (!current.currentRunId) {
+			current.currentRunId = `native-run-${++current.nativeRunSequence}`;
+			current.latestRunId = current.currentRunId;
+			current.currentRunOutcome = "completed";
+		}
+		current.currentBinding?.turnCompaction.completeNativeTurn(sequence);
+	});
 	registerRemoteAgentsCommand(
 		pi,
 		createControlBackedChildPresentationHandlers(participantRequest),
@@ -195,6 +210,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	};
 	pi.on("model_select", deferRuntimeSnapshot);
 	pi.on("thinking_level_select", deferRuntimeSnapshot);
+	pi.on("session_before_compact", (event) =>
+		state?.currentBinding?.turnCompaction.beforeCompaction(event)
+	);
 	// Active tools have no Pi change event. This authoritative pre-generation
 	// boundary publishes extension-driven tool mutations before they can execute.
 	pi.on("before_agent_start", publishCurrentRuntimeSnapshot);
@@ -263,6 +281,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			inputSubmissionAcknowledgment.handleInput(data);
 			return undefined;
 		});
+		let binding!: ChildRuntimeBinding;
 		const inputLifecycle = {
 			async started() {
 				const sequence = currentState.nativeInputIdentity.beginInput();
@@ -270,6 +289,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				return sequence;
 			},
 			async completed(sequence: number) {
+				binding.turnCompaction.completeNativeTurn(sequence);
 				if (!currentState.nativeInputIdentity.complete(sequence)) return;
 				await currentState.channel.sendEvent("runtime.input.completed", { sequence });
 			},
@@ -281,7 +301,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			}
 			await inputLifecycle.completed(sequence);
 		};
-		const binding = createChildRuntimeBinding(
+		binding = createChildRuntimeBinding(
 			currentState,
 			runtime,
 			ctx,
@@ -301,11 +321,30 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		);
 		childRuntimeInputs.set(ctx.sessionManager, async (input, context) => {
 			const result = await participantInput(input, context);
+			if (
+				input.source === "extension" &&
+				result.action === "continue" &&
+				binding.turnCompaction.shouldDiscardActiveOwnerInput()
+			) return { action: "handled" };
+			const sequence = currentState.nativeInputIdentity.current();
+			if (
+				input.source === "interactive" &&
+				result.action === "continue" &&
+				input.streamingBehavior === undefined
+			) {
+				if (sequence === undefined) {
+					throw new Error("child_runtime_active_input_identity_unavailable");
+				}
+				await binding.turnCompaction.reserveNativeTurn(sequence);
+			}
 			// Pi queues a direct streaming steer inside the current model cycle. It
 			// produces no successor agent_start to consume this submission identity.
-			if (input.streamingBehavior === "steer") {
-				const sequence = currentState.nativeInputIdentity.current();
-				if (sequence !== undefined) await inputLifecycle.completed(sequence);
+			if (
+				input.source === "interactive" &&
+				input.streamingBehavior === "steer" &&
+				sequence !== undefined
+			) {
+				await inputLifecycle.completed(sequence);
 			}
 			return result;
 		});
@@ -345,6 +384,11 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		// Reload invalidates this extension runner but retains the exact AgentSession
 		// and process. The fresh session_start evaluation rebinds the same channel.
 		if (event.reason !== "reload") current.shutdownStarted = true;
+		const binding = current.currentBinding;
+		binding?.dispose();
+		if (event.reason !== "reload" && current.currentBinding === binding) {
+			current.currentBinding = undefined;
+		}
 		await current.channel.sendEvent("session.shutdown", { reason: event.reason })
 			.catch(() => undefined);
 	});
@@ -361,7 +405,9 @@ function createChildRuntimeBinding(
 	removeInputLifecycleObserver: () => void,
 ): ChildRuntimeBinding {
 	let binding!: ChildRuntimeBinding;
+	let disposed = false;
 	const activity = new RemoteAgentActivitySource(agentId);
+	const turnCompaction = new ChildTurnCompactionGateway(runtime.session);
 	const removeLifecycleSubscription = runtime.session.subscribe((event) => {
 		if (event.type === "compaction_start") {
 			void state.channel.sendEvent("runtime.compaction.started", {}).catch(() => undefined);
@@ -369,7 +415,7 @@ function createChildRuntimeBinding(
 		if (event.type === "compaction_end") {
 			void state.channel.sendEvent("runtime.compaction.completed", {}).catch(() => undefined);
 		}
-		void reportRuntimeLifecycle(state, runtime, activity, event).catch((error: unknown) =>
+		void reportRuntimeLifecycle(state, binding, event).catch((error: unknown) =>
 			reportFault(state.channel, "runtime_lifecycle_failed", error)
 		);
 	});
@@ -382,6 +428,7 @@ function createChildRuntimeBinding(
 	binding = {
 		context,
 		runtime,
+		turnCompaction,
 		activity,
 		publishRuntimeSnapshot,
 		reinitializePresentation,
@@ -397,9 +444,23 @@ function createChildRuntimeBinding(
 			if (state.shutdownStarted) return;
 			state.shutdownStarted = true;
 			state.waitProgressHandlers.clear();
+			binding.dispose();
+			if (state.currentBinding === binding) state.currentBinding = undefined;
 			context.shutdown();
 		},
 		dispose() {
+			if (disposed) return;
+			disposed = true;
+			turnCompaction.dispose();
+			if (
+				state.currentBinding === binding &&
+				runtime.session.isIdle &&
+				state.currentRunId
+			) {
+				const runId = state.currentRunId;
+				state.currentRunId = undefined;
+				turnCompaction.completeOwnerRun(runId);
+			}
 			removeInputLifecycleObserver();
 			inputSubmissionAcknowledgment.dispose();
 			removeInputSubmissionListener();
@@ -428,17 +489,59 @@ async function handleOwnerRequest(
 			if (state.currentRunId) {
 				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
 			}
-			state.currentRunId = request.payload.runId;
-			state.latestRunId = request.payload.runId;
-			state.currentRunOutcome = "completed";
-			let resolvePreflight!: (accepted: boolean) => void;
-			const preflight = new Promise<boolean>((resolve) => {
-				resolvePreflight = resolve;
-			});
-			void binding.runtime.session.prompt(request.payload.input, {
-				source: "extension",
-				preflightResult: resolvePreflight,
-			}).catch(async (error: unknown) => {
+			const accepted = await binding.turnCompaction.admitOwnerTurn(
+				request.payload.runId,
+				async (checkpoint) => {
+					await binding.turnCompaction.waitForCompaction();
+					if (state.currentRunId) {
+						throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
+					}
+					state.currentRunId = request.payload.runId;
+					state.latestRunId = request.payload.runId;
+					state.currentRunOutcome = "completed";
+					let resolvePreflight!: (accepted: boolean) => void;
+					const preflight = new Promise<boolean>((resolve) => {
+						resolvePreflight = resolve;
+					});
+					void binding.runtime.session.prompt(request.payload.input, {
+						source: "extension",
+						preflightResult(accepted) {
+							try {
+								checkpoint();
+							} catch (error) {
+								resolvePreflight(false);
+								throw error;
+							}
+							resolvePreflight(accepted);
+						},
+					}).catch(async (error: unknown) => {
+						if (
+							binding.turnCompaction.isOwnerRunCancelled(request.payload.runId) ||
+							binding.turnCompaction.signal.aborted
+						) return;
+						await failCurrentRun(
+							state,
+							binding.runtime,
+							binding.activity,
+							request.payload.runId,
+							error,
+						);
+					}).finally(() => {
+						if (binding.turnCompaction.isOwnerRunCancelled(request.payload.runId)) {
+							binding.turnCompaction.completeOwnerRun(request.payload.runId);
+						}
+					});
+					return preflight;
+				},
+			).catch(async (error: unknown) => {
+				if (isTurnAdmissionInvalidation(error)) {
+					if (
+						state.currentBinding === binding &&
+						binding.runtime.session.isIdle &&
+						state.currentRunId === request.payload.runId
+					) state.currentRunId = undefined;
+					throw error;
+				}
 				await failCurrentRun(
 					state,
 					binding.runtime,
@@ -446,29 +549,19 @@ async function handleOwnerRequest(
 					request.payload.runId,
 					error,
 				);
+				throw error;
 			});
-			const accepted = await preflight;
 			if (!accepted && state.currentRunId === request.payload.runId) {
 				state.currentRunId = undefined;
+				binding.turnCompaction.completeOwnerRun(request.payload.runId);
 			}
 			return { accepted };
 		}
 		case "message.deliver": {
-			admitRun(state, request.payload.runId);
-			const wasActive = !binding.runtime.session.isIdle;
-			const commit = observeDeliveryCommit(
-				binding.runtime,
-				binding.context.sessionManager,
-				request.payload.delivery,
-			);
-			const completion = wasActive
-				? sequenceQueueIntention(state, () => {
-					if (request.signal.aborted) throw requestCancellationError(request.signal);
-					return dispatchDelivery(binding.runtime, request.payload.delivery);
-				})
-				: dispatchDelivery(binding.runtime, request.payload.delivery);
+			let commit: ReturnType<typeof observeDeliveryCommit> | undefined;
 			const cancel = () => {
-				commit.reject(requestCancellationError(request.signal));
+				binding.turnCompaction.cancelOwnerRun(request.payload.runId);
+				commit?.reject(requestCancellationError(request.signal));
 				if (state.currentRunId !== request.payload.runId) return;
 				binding.runtime.session.clearQueue();
 				void binding.runtime.session.abort().catch((error: unknown) =>
@@ -477,29 +570,113 @@ async function handleOwnerRequest(
 			};
 			if (request.signal.aborted) cancel();
 			else request.signal.addEventListener("abort", cancel, { once: true });
-			if (!wasActive) {
-				void completion.then(
-					() => queueMicrotask(() => commit.settle(false)),
-					(error: unknown) => commit.reject(error),
-				);
-			}
-			void completion.catch(async (error: unknown) => {
-				commit.reject(error);
-				await failCurrentRun(
-					state,
-					binding.runtime,
-					binding.activity,
-					request.payload.runId,
-					error,
-				);
-			});
 			try {
+				const admission = await binding.turnCompaction.admitOwnerTurn(
+					request.payload.runId,
+					async (checkpoint) => {
+						if (request.signal.aborted) throw requestCancellationError(request.signal);
+						await binding.turnCompaction.waitForCompaction();
+						checkpoint();
+						admitRun(state, request.payload.runId);
+						const wasActive = !binding.runtime.session.isIdle;
+						if (
+							!wasActive &&
+							request.payload.delivery.kind === "custom" &&
+							request.payload.delivery.triggerTurn
+						) {
+							await binding.turnCompaction.prepareIdleCustomTurn();
+						}
+						checkpoint();
+						if (request.signal.aborted) {
+							throw requestCancellationError(request.signal);
+						}
+						commit = observeDeliveryCommit(
+							binding.runtime,
+							binding.context.sessionManager,
+							request.payload.delivery,
+							binding.turnCompaction.signal,
+						);
+						const dispatched = wasActive
+							? await sequenceQueueIntention(state, () => {
+								checkpoint();
+								if (request.signal.aborted) {
+									throw requestCancellationError(request.signal);
+								}
+								return dispatchDelivery(
+									binding.runtime,
+									request.payload.delivery,
+									checkpoint,
+								);
+							})
+							: dispatchDelivery(
+								binding.runtime,
+								request.payload.delivery,
+								checkpoint,
+							);
+						await dispatched.preflight;
+						checkpoint();
+						return { wasActive, commit, completion: dispatched.completion };
+					},
+				).catch(async (error: unknown) => {
+					if (request.signal.aborted || isTurnAdmissionInvalidation(error)) {
+						if (
+							!request.signal.aborted &&
+							isTurnAdmissionCancellation(error) &&
+							!binding.runtime.session.isIdle &&
+							commit
+						) {
+							return { wasActive: true, commit, completion: Promise.resolve() };
+						}
+						if (
+							state.currentBinding === binding &&
+							binding.runtime.session.isIdle &&
+							state.currentRunId === request.payload.runId
+						) state.currentRunId = undefined;
+						binding.turnCompaction.completeOwnerRun(request.payload.runId);
+						throw request.signal.aborted
+							? requestCancellationError(request.signal)
+							: error;
+					}
+					await failCurrentRun(
+						state,
+						binding.runtime,
+						binding.activity,
+						request.payload.runId,
+						error,
+					);
+					throw error;
+				});
+				const { wasActive, completion } = admission;
+				commit = admission.commit;
+				if (!wasActive) {
+					void completion.then(
+						() => queueMicrotask(() => commit?.settle(false)),
+						(error: unknown) => commit?.reject(error),
+					);
+				}
+				void completion.catch(async (error: unknown) => {
+					commit?.reject(error);
+					if (
+						binding.turnCompaction.isOwnerRunCancelled(request.payload.runId) ||
+						binding.turnCompaction.signal.aborted
+					) return;
+					await failCurrentRun(
+						state,
+						binding.runtime,
+						binding.activity,
+						request.payload.runId,
+						error,
+					);
+				});
 				const transcriptCommitted = await commit.result;
 				const modelCycleStarted = wasActive || !binding.runtime.session.isIdle;
 				if (
 					!modelCycleStarted &&
 					state.currentRunId === request.payload.runId
-				) state.currentRunId = undefined;
+				) {
+					state.currentRunId = undefined;
+					binding.turnCompaction.completeOwnerRun(request.payload.runId);
+				}
 				return {
 					accepted: true,
 					transcriptCommitted,
@@ -511,10 +688,18 @@ async function handleOwnerRequest(
 			}
 		}
 		case "queue.clear": {
+			if (
+				!state.currentRunId &&
+				(!state.latestRunId || binding.turnCompaction.hasOwnerRun(request.payload.runId))
+			) {
+				return { steering: [], followUp: [], queuedInputCount: 0 };
+			}
 			requireCurrentOrLatestRun(state, request.payload.runId);
-			const cleared = await sequenceQueueIntention(
-				state,
-				() => binding.runtime.session.clearQueue(),
+			const cleared = await binding.turnCompaction.admit(() =>
+				sequenceQueueIntention(
+					state,
+					() => binding.runtime.session.clearQueue(),
+				)
 			);
 			return {
 				...cleared,
@@ -522,11 +707,23 @@ async function handleOwnerRequest(
 			};
 		}
 		case "run.interrupt": {
-			const accepted = requireCurrentOrLatestRun(state, request.payload.runId);
-			if (accepted) {
+			const current = state.currentRunId === request.payload.runId;
+			const known = binding.turnCompaction.hasOwnerRun(request.payload.runId);
+			if (!current && !known && !state.latestRunId) {
+				state.latestRunId = request.payload.runId;
+				binding.turnCompaction.cancelOwnerRun(request.payload.runId);
+				return { accepted: true };
+			}
+			if (!current && !known) {
+				return {
+					accepted: requireCurrentOrLatestRun(state, request.payload.runId),
+				};
+			}
+			binding.turnCompaction.cancelOwnerRun(request.payload.runId);
+			if (current) {
 				await sequenceQueueIntention(state, () => binding.runtime.session.abort());
 			}
-			return { accepted };
+			return { accepted: true };
 		}
 		case "presentation.reinitialize":
 			binding.reinitializePresentation();
@@ -661,10 +858,11 @@ async function runtimeSnapshot(
 
 async function reportRuntimeLifecycle(
 	state: ChildControlState,
-	runtime: AgentSessionRuntime,
-	activity: RemoteAgentActivitySource,
+	binding: ChildRuntimeBinding,
 	event: AgentSessionEvent,
 ): Promise<void> {
+	if (state.currentBinding !== binding) return;
+	const { runtime, activity } = binding;
 	if (event.type === "agent_start") {
 		activity.setScopeFailed(false);
 		// Interactive and extension-local Pi input is admitted through the child →
@@ -707,7 +905,9 @@ async function reportRuntimeLifecycle(
 		outcome: state.currentRunOutcome,
 		queuedInputCount: runtime.session.pendingMessageCount,
 	});
+	if (state.currentBinding !== binding) return;
 	if (state.currentRunId === runId) state.currentRunId = undefined;
+	binding.turnCompaction.completeOwnerRun(runId);
 }
 
 function admitRun(state: ChildControlState, runId: string): void {
@@ -745,24 +945,53 @@ function sequenceQueueIntention<T>(
 function dispatchDelivery(
 	runtime: AgentSessionRuntime,
 	delivery: AgentRuntimeDelivery,
-): Promise<void> {
-	return delivery.kind === "custom"
-		? runtime.session.sendCustomMessage(delivery.message, {
-			triggerTurn: delivery.triggerTurn,
-			...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
-		})
-		: runtime.session.sendUserMessage(
-			typeof delivery.content === "string" ? delivery.content : [...delivery.content],
-			{
+	checkpoint: () => void,
+): Readonly<{ completion: Promise<void>; preflight: Promise<void> }> {
+	if (delivery.kind === "custom") {
+		return {
+			completion: runtime.session.sendCustomMessage(delivery.message, {
+				triggerTurn: delivery.triggerTurn,
 				...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
+			}),
+			preflight: Promise.resolve(),
+		};
+	}
+	const content = typeof delivery.content === "string"
+		? [{ type: "text" as const, text: delivery.content }]
+		: [...delivery.content];
+	const text = content.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n");
+	const images = content.flatMap((part) => part.type === "image" ? [part] : []);
+	let resolvePreflight!: () => void;
+	const preflight = new Promise<void>((resolve) => {
+		resolvePreflight = resolve;
+	});
+	return {
+		completion: runtime.session.prompt(text, {
+			expandPromptTemplates: false,
+			source: "extension",
+			...(images.length === 0 ? {} : { images }),
+			...(delivery.deliverAs === undefined
+				? {}
+				: { streamingBehavior: delivery.deliverAs }),
+			preflightResult() {
+				try {
+					checkpoint();
+				} catch (error) {
+					resolvePreflight();
+					throw error;
+				}
+				resolvePreflight();
 			},
-		);
+		}),
+		preflight,
+	};
 }
 
 function observeDeliveryCommit(
 	runtime: AgentSessionRuntime,
 	sessionManager: ExtensionContext["sessionManager"],
 	delivery: AgentRuntimeDelivery,
+	generationSignal: AbortSignal,
 ): Readonly<{
 	result: Promise<boolean>;
 	settle(committed: boolean): void;
@@ -779,12 +1008,17 @@ function observeDeliveryCommit(
 		if (settled) return;
 		settled = true;
 		unsubscribe();
+		generationSignal.removeEventListener("abort", invalidate);
 		settlement();
 	};
+	const invalidate = () => finish(() => rejectResult(
+		new Error("child_turn_compaction_gateway_disposed"),
+	));
 	const result = new Promise<boolean>((resolve, reject) => {
 		settleResult = resolve;
 		rejectResult = reject;
 	});
+	generationSignal.addEventListener("abort", invalidate, { once: true });
 	unsubscribe = runtime.session.subscribe((event) => {
 		if (
 			event.type === "message_end" &&
@@ -801,6 +1035,7 @@ function observeDeliveryCommit(
 		}
 		if (event.type === "agent_settled") finish(() => settleResult(false));
 	});
+	if (generationSignal.aborted) invalidate();
 	return {
 		result,
 		settle: (committed) => finish(() => settleResult(committed)),
@@ -895,6 +1130,7 @@ async function failCurrentRun(
 	})
 		.catch(() => undefined);
 	if (state.currentRunId === runId) state.currentRunId = undefined;
+	state.currentBinding?.turnCompaction.completeOwnerRun(runId);
 }
 
 async function reportFault(channel: ChildChannel, code: string, error: unknown): Promise<void> {
@@ -1002,6 +1238,15 @@ function errorMessage(error: unknown): string {
 
 function requestCancellationError(signal: AbortSignal): unknown {
 	return signal.reason ?? new DOMException("The Control request was cancelled", "AbortError");
+}
+
+function isTurnAdmissionCancellation(error: unknown): boolean {
+	return error instanceof Error && error.message.startsWith("child_turn_admission_cancelled:");
+}
+
+function isTurnAdmissionInvalidation(error: unknown): boolean {
+	return isTurnAdmissionCancellation(error) ||
+		(error instanceof Error && error.message === "child_turn_compaction_gateway_disposed");
 }
 
 function assertUnreachable(value: never): never {

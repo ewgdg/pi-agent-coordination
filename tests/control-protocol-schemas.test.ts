@@ -440,6 +440,21 @@ test("every version-three method and event has TypeBox payload/result schemas", 
 		delivery: {
 			kind: "custom",
 			message: {
+				customType: "agent-coordination.message-delivery",
+				content: "{\"messages\":[]}",
+				display: true,
+				details: {
+					messages: [{ agentId: "sender", entryId: "entry", toolCallId: "call" }],
+				},
+			},
+			triggerTurn: false,
+		},
+	}), true);
+	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		runId: "run-1",
+		delivery: {
+			kind: "custom",
+			message: {
 				customType: "agent-coordination.obligation-reminder",
 				content: "{\"requestMessageId\":\"request-1\",\"requestSnippet\":\"Answer now.\"}",
 				display: true,

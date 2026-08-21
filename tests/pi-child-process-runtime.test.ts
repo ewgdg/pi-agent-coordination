@@ -10,6 +10,7 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
+import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createAdmittedPiChildProcessProjection } from "../src/process-runtime/admitted-pi-child-process-projection.ts";
 import { PiChildProcessRuntime } from "../src/process-runtime/pi-child-process-runtime.ts";
 import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/remote-participant-control.ts";
@@ -353,6 +354,410 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		await assert.rejects(lstat(systemPromptArtifactPath), hasFsCode("ENOENT"));
 	} finally {
 		await projection?.dispose();
+		await runtime?.dispose();
+	}
+});
+
+test("an idle child defers threshold compaction until later work is admitted", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-compaction-gateway-test-"));
+	const cwd = join(root, "work");
+	const agentDir = join(root, "agent");
+	const sessionDirectory = join(root, "sessions");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000020";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(agentDir, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	await writeFile(join(agentDir, "settings.json"), JSON.stringify({
+		compaction: {
+			enabled: true,
+			reserveTokens: 16_000,
+			keepRecentTokens: 1,
+		},
+	}));
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+	let runtime: PiChildProcessRuntime | undefined;
+	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "process-compaction-gateway-workflow",
+			agentId: "process-compaction-gateway-agent",
+			role: "ordinary",
+			expectedSessionId,
+			sessionPath,
+			agentDir,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_MODEL,
+				},
+				thinking: "off",
+				allowedTools: [],
+				skills: [],
+				extensions: [CHILD_EXTENSION],
+				inheritProjectContext: true,
+			},
+			skillPaths: [],
+			projectTrusted: true,
+			ownerEnvironment: {
+				...process.env,
+				PI_SKIP_VERSION_CHECK: "1",
+				PROCESS_RUNTIME_RESPONSE_DELAY_MS: "100",
+			},
+			runtimeDirectory: root,
+			ownerRequestHandlers: ordinaryOwnerHandlers({
+				selectorSnapshot: processSelectorSnapshot("process-compaction-gateway-agent"),
+			}),
+		});
+		runtime.onEvent((event) => runtimeEvents.push(event));
+
+		assert.deepEqual(await runtime.prompt({
+			runId: "process-compaction-gateway-run",
+			input: "Create enough history to make threshold compaction eligible.",
+			kind: "initial",
+		}), { accepted: true });
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.settled" &&
+			event.payload.runId === "process-compaction-gateway-run"
+		));
+
+		assert.equal(
+			SessionManager.open(sessionPath).getEntries().some((entry) => entry.type === "compaction"),
+			false,
+		);
+
+		const nextPrompt = "Admit this prompt only after preparing the existing context.";
+		assert.deepEqual(await runtime.prompt({
+			runId: "process-compaction-next-prompt-run",
+			input: nextPrompt,
+			kind: "initial",
+		}), { accepted: true });
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.settled" &&
+			event.payload.runId === "process-compaction-next-prompt-run"
+		));
+		const entriesAfterPrompt = SessionManager.open(sessionPath).getEntries();
+		const promptCompactionIndex = entriesAfterPrompt.findIndex((entry) =>
+			entry.type === "compaction"
+		);
+		const nextPromptIndex = entriesAfterPrompt.findIndex((entry) =>
+			entry.type === "message" &&
+			entry.message.role === "user" &&
+			JSON.stringify(entry.message.content).includes(nextPrompt)
+		);
+		assert.notEqual(promptCompactionIndex, -1);
+		assert.equal(promptCompactionIndex < nextPromptIndex, true);
+
+		const customMessage = createMessageDelivery([{
+			source: {
+				agentId: "compaction-gateway-sender",
+				entryId: "compaction-gateway-source-entry",
+				toolCallId: "compaction-gateway-source-call",
+			},
+			projection: {
+				kind: "message",
+				messageId: "compaction-gateway-source-call",
+				fromAgentId: "compaction-gateway-sender",
+				content: "Commit this exact Delivery after deferred compaction.",
+			},
+		}]);
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "process-compaction-delivery-run",
+			delivery: {
+				kind: "custom",
+				message: {
+					...customMessage,
+					details: { messages: [...customMessage.details.messages] },
+				},
+				triggerTurn: true,
+			},
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			modelCycleStarted: true,
+			queuedInputCount: 0,
+		});
+		const entriesAfterDelivery = SessionManager.open(sessionPath).getEntries();
+		const compactionIndex = entriesAfterDelivery.findIndex((entry) =>
+			entry.type === "compaction"
+		);
+		const deliveryIndex = entriesAfterDelivery.findIndex((entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.message-delivery"
+		);
+		assert.notEqual(compactionIndex, -1);
+		assert.equal(compactionIndex < deliveryIndex, true);
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.settled" &&
+			event.payload.runId === "process-compaction-delivery-run"
+		));
+		const compactionsBeforeNativeInput = SessionManager.open(sessionPath).getEntries()
+			.filter((entry) => entry.type === "compaction").length;
+
+		const nativeInput = "Admit this native input after deferred compaction.";
+		runtime.writeInput(`${nativeInput}\r`);
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.settled" &&
+			event.payload.runId.startsWith("native-run-")
+		));
+		const entriesAfterNativeInput = SessionManager.open(sessionPath).getEntries();
+		const nativeInputIndex = entriesAfterNativeInput.findIndex((entry) =>
+			entry.type === "message" &&
+			entry.message.role === "user" &&
+			JSON.stringify(entry.message.content).includes(nativeInput)
+		);
+		const nativeCompactionIndex = entriesAfterNativeInput.findLastIndex((entry, index) =>
+			index < nativeInputIndex && entry.type === "compaction"
+		);
+		assert.notEqual(nativeInputIndex, -1);
+		assert.notEqual(nativeCompactionIndex, -1);
+		assert.equal(nativeCompactionIndex < nativeInputIndex, true);
+		assert.equal(
+			entriesAfterNativeInput.filter((entry) => entry.type === "compaction").length,
+			compactionsBeforeNativeInput + 1,
+		);
+
+		const queuedRunId = "process-queued-compaction-run";
+		const activeInput = `PROCESS_RUNTIME_QUEUE_AFTER_AGENT_END${
+			" queued context".repeat(400)
+		}`;
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: queuedRunId,
+			delivery: { kind: "user", content: activeInput },
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			modelCycleStarted: true,
+			queuedInputCount: 0,
+		});
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.settled" && event.payload.runId === queuedRunId
+		));
+		const entriesAfterQueuedContinuation = SessionManager.open(sessionPath).getEntries();
+		const activeInputIndex = entriesAfterQueuedContinuation.findIndex((entry) =>
+			entry.type === "message" &&
+			entry.message.role === "user" &&
+			JSON.stringify(entry.message.content).includes("PROCESS_RUNTIME_QUEUE_AFTER_AGENT_END")
+		);
+		const queuedDeliveryIndex = entriesAfterQueuedContinuation.findIndex((entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.queued-compaction-test"
+		);
+		assert.equal(entriesAfterQueuedContinuation.some((entry, index) =>
+			entry.type === "compaction" &&
+			index > activeInputIndex &&
+			index < queuedDeliveryIndex
+		), true);
+
+		const paddingRunId = "process-compaction-padding-run";
+		await runtime.channel.request("message.deliver", {
+			runId: paddingRunId,
+			delivery: {
+				kind: "user",
+				content: `Leave a large deferred context.${" padding context".repeat(400)}`,
+			},
+		});
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.settled" && event.payload.runId === paddingRunId
+		));
+
+		const cancelledMessage = createMessageDelivery([{
+			source: {
+				agentId: "cancelled-compaction-sender",
+				entryId: "cancelled-compaction-source-entry",
+				toolCallId: "cancelled-compaction-source-call",
+			},
+			projection: {
+				kind: "message",
+				messageId: "cancelled-compaction-source-call",
+				fromAgentId: "cancelled-compaction-sender",
+				content: "This Delivery must not survive cancelled preparation.",
+			},
+		}]);
+		const compactionStartsBeforeCancellation = runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length;
+		const compactionCompletionsBeforeCancellation = runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.completed"
+		).length;
+		const cancellation = new AbortController();
+		const cancelledDelivery = runtime.channel.request("message.deliver", {
+			runId: "process-cancelled-compaction-run",
+			delivery: {
+				kind: "custom",
+				message: {
+					...cancelledMessage,
+					details: { messages: [...cancelledMessage.details.messages] },
+				},
+				triggerTurn: true,
+			},
+		}, cancellation.signal);
+		await waitUntil(() => runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length > compactionStartsBeforeCancellation);
+		cancellation.abort();
+		await assert.rejects(cancelledDelivery, (error: unknown) =>
+			error instanceof Error && error.name === "AbortError"
+		);
+		await waitUntil(() => runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.completed"
+		).length > compactionCompletionsBeforeCancellation);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
+			entry.type === "custom_message" && entry.content === cancelledMessage.content
+		), false);
+
+		const interruptedMessage = createMessageDelivery([{
+			source: {
+				agentId: "interrupted-compaction-sender",
+				entryId: "interrupted-compaction-source-entry",
+				toolCallId: "interrupted-compaction-source-call",
+			},
+			projection: {
+				kind: "message",
+				messageId: "interrupted-compaction-source-call",
+				fromAgentId: "interrupted-compaction-sender",
+				content: "Interruption must fence this Delivery during preparation.",
+			},
+		}]);
+		const interruptedRunId = "process-interrupted-compaction-run";
+		const compactionStartsBeforeInterruption = runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length;
+		const interruptedDelivery = runtime.channel.request("message.deliver", {
+			runId: interruptedRunId,
+			delivery: {
+				kind: "custom",
+				message: {
+					...interruptedMessage,
+					details: { messages: [...interruptedMessage.details.messages] },
+				},
+				triggerTurn: true,
+			},
+		});
+		const interruptedDeliveryOutcome = interruptedDelivery.then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		await waitUntil(() => runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length > compactionStartsBeforeInterruption);
+		assert.deepEqual(await runtime.channel.request("run.interrupt", {
+			runId: interruptedRunId,
+		}), { accepted: true });
+		assert.match(String(await interruptedDeliveryOutcome), /child_turn_admission_cancelled/);
+		assert.equal(runtimeEvents.some((event) =>
+			event.event === "agent.end" &&
+			event.payload.runId === interruptedRunId &&
+			event.payload.outcome === "failed"
+		), false);
+		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
+			entry.type === "custom_message" && entry.content === interruptedMessage.content
+		), false);
+
+		const nonTurnMessage = createMessageDelivery([{
+			source: {
+				agentId: "non-turn-sender",
+				entryId: "non-turn-source-entry",
+				toolCallId: "non-turn-source-call",
+			},
+			projection: {
+				kind: "message",
+				messageId: "non-turn-source-call",
+				fromAgentId: "non-turn-sender",
+				content: "Commit without starting or aborting model work.",
+			},
+		}]);
+		const compactionStartsBeforeNonTurnDelivery = runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length;
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "process-post-cancellation-run",
+			delivery: {
+				kind: "custom",
+				message: {
+					...nonTurnMessage,
+					details: { messages: [...nonTurnMessage.details.messages] },
+				},
+				triggerTurn: false,
+			},
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			modelCycleStarted: false,
+			queuedInputCount: 0,
+		});
+		assert.equal(runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length, compactionStartsBeforeNonTurnDelivery);
+
+		const userDeliveryInput = "Prepare deferred context before this idle user Delivery.";
+		const entriesBeforeUserDelivery = SessionManager.open(sessionPath).getEntries();
+		const compactionsBeforeUserDelivery = entriesBeforeUserDelivery
+			.filter((entry) => entry.type === "compaction").length;
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "process-user-delivery-compaction-run",
+			delivery: { kind: "user", content: userDeliveryInput },
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			modelCycleStarted: true,
+			queuedInputCount: 0,
+		});
+		const entriesAfterUserDelivery = SessionManager.open(sessionPath).getEntries();
+		const userDeliveryIndex = entriesAfterUserDelivery.findIndex((entry) =>
+			entry.type === "message" &&
+			entry.message.role === "user" &&
+			JSON.stringify(entry.message.content).includes(userDeliveryInput)
+		);
+		assert.equal(
+			entriesAfterUserDelivery.filter((entry) => entry.type === "compaction").length,
+			compactionsBeforeUserDelivery + 1,
+		);
+		assert.equal(entriesAfterUserDelivery.some((entry, index) =>
+			entry.type === "compaction" &&
+			index >= entriesBeforeUserDelivery.length &&
+			index < userDeliveryIndex
+		), true);
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.settled" &&
+			event.payload.runId === "process-user-delivery-compaction-run"
+		));
+
+		const delayedRunId = "process-delayed-preflight-run";
+		const delayedDelivery = runtime.channel.request("message.deliver", {
+			runId: delayedRunId,
+			delivery: { kind: "user", content: "PROCESS_RUNTIME_DELAYED_INPUT" },
+		});
+		const delayedDeliveryOutcome = delayedDelivery.then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		await waitForFrame(runtime, "PROCESS_RUNTIME_DELAYED_INPUT_STARTED");
+		assert.deepEqual(await runtime.channel.request("run.interrupt", {
+			runId: delayedRunId,
+		}), { accepted: true });
+		assert.match(String(await delayedDeliveryOutcome), /child_turn_admission_cancelled/);
+		await new Promise((resolve) => setTimeout(resolve, 550));
+		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
+			entry.type === "message" &&
+			entry.message.role === "user" &&
+			JSON.stringify(entry.message.content).includes("PROCESS_RUNTIME_DELAYED_INPUT")
+		), false);
+		assert.equal(runtimeEvents.some((event) =>
+			event.event === "agent.start" && event.payload.runId === delayedRunId
+		), false);
+	} finally {
 		await runtime?.dispose();
 	}
 });

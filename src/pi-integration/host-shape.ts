@@ -52,6 +52,7 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"defineTool",
 		"getPackageDir",
 		"hasTrustRequiringProjectResources",
+		"shouldCompact",
 	] as const) {
 		requireFunction(host, factoryName, factoryName, version);
 	}
@@ -283,6 +284,9 @@ export function assertAgentSessionShape(
 		"dispose",
 		"getActiveToolNames",
 		"getToolDefinition",
+		"getContextUsage",
+		"compact",
+		"abortCompaction",
 	] as const) {
 		requireFunction(session, member, `AgentSession.${member}`, version);
 	}
@@ -290,11 +294,14 @@ export function assertAgentSessionShape(
 		"model",
 		"thinkingLevel",
 		"isIdle",
+		"isCompacting",
 		"sessionId",
 	] as const) {
 		requireMember(session, member, `AgentSession.${member}`, version);
 	}
 	requireRecord(session.extensionRunner, "AgentSession.extensionRunner", version);
+	const agent = requireRecord(session.agent, "AgentSession.agent", version);
+	requireFunction(agent, "hasQueuedMessages", "AgentSession.agent.hasQueuedMessages", version);
 	requireRecord(session.sessionManager, "AgentSession.sessionManager", version);
 	assertSettingsManagerShape(
 		session.settingsManager,
@@ -314,6 +321,7 @@ function assertSettingsManagerShape(
 		"getShowHardwareCursor",
 		"getThemeSetting",
 		"isProjectTrusted",
+		"getCompactionSettings",
 	] as const) {
 		requireFunction(settingsManager, member, `${name}.${member}`, version);
 	}

@@ -216,6 +216,7 @@ test("module preflight rejects every required host export and prototype seam", (
 		["defineTool"],
 		["getPackageDir"],
 		["hasTrustRequiringProjectResources"],
+		["shouldCompact"],
 		["CURRENT_SESSION_VERSION"],
 		["InteractiveMode", "prototype", "getUserInput"],
 		["AgentSessionRuntime", "prototype", "setRebindSession"],
@@ -324,6 +325,7 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"getShowHardwareCursor",
 			"getThemeSetting",
 			"isProjectTrusted",
+			"getCompactionSettings",
 		].map((member) => [
 			["services", "settingsManager", member],
 			`AgentSessionRuntime.services.settingsManager.${member}`,
@@ -346,10 +348,15 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"dispose",
 			"getActiveToolNames",
 			"getToolDefinition",
+			"getContextUsage",
+			"compact",
+			"abortCompaction",
 		].map((member) => [["session", member], `AgentSession.${member}`] as const),
-		...["model", "thinkingLevel", "isIdle", "sessionId"]
+		...["model", "thinkingLevel", "isIdle", "isCompacting", "sessionId"]
 			.map((member) => [["session", member], `AgentSession.${member}`] as const),
 		[["session", "extensionRunner"], "AgentSession.extensionRunner"],
+		[["session", "agent"], "AgentSession.agent"],
+		[["session", "agent", "hasQueuedMessages"], "AgentSession.agent.hasQueuedMessages"],
 		[["session", "sessionManager"], "AgentSession.sessionManager"],
 		[["session", "settingsManager"], "AgentSession.settingsManager"],
 		...[
@@ -357,6 +364,7 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"getShowHardwareCursor",
 			"getThemeSetting",
 			"isProjectTrusted",
+			"getCompactionSettings",
 		].map((member) => [
 			["session", "settingsManager", member],
 			`AgentSession.settingsManager.${member}`,

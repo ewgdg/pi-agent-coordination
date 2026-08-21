@@ -619,6 +619,11 @@ test("termination discards selected native input already in prompt preflight", {
 	);
 	const agentId = (spawn.details as { agentId: string }).agentId;
 	await waitForCondition(() => currentRunPhase(host, agentId).then((phase) => phase === "live"));
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"Remain live while selected input enters preflight.",
+		)
+	);
 	const opened = await openSelectedAgentView(host, agentId);
 	const childRuntime = childProcessSessionStarts(
 		await readProcessAgentViewEvidence(probe.evidencePath),
