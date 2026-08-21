@@ -3041,6 +3041,15 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 	const ownerGenerationStarted = new Promise<void>((resolve) => {
 		markOwnerGenerationStarted = resolve;
 	});
+	let markSelectedResponderStarted!: () => void;
+	const selectedResponderStarted = new Promise<void>((resolve) => {
+		markSelectedResponderStarted = resolve;
+	});
+	let releaseSelectedResponder!: () => void;
+	const selectedResponderGate = new Promise<void>((resolve) => {
+		releaseSelectedResponder = resolve;
+	});
+	t.after(() => releaseSelectedResponder());
 	const routeModelCall = async (messages: Context) => {
 		const context = JSON.stringify(messages);
 		if (context.includes("OWNER_WAIT_FOR_THIRD_PARTY_REQUEST")) {
@@ -3056,6 +3065,11 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 					),
 					{ stopReason: "toolUse" },
 				);
+		}
+		if (context.includes(selectedRequestInput.question)) {
+			markSelectedResponderStarted();
+			await selectedResponderGate;
+			return fauxAssistantMessage("The selected Request remains unanswered.");
 		}
 		if (context.includes(thirdPartyRequestToolCallId)) {
 			return fauxAssistantMessage("The independent Request was admitted.");
@@ -3076,6 +3090,40 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 		);
 	};
 	harness.host.model.setResponses(Array.from({ length: 5 }, () => routeModelCall));
+
+	const selectedRetryToolCallId = "retry-selected-request-before-third-party-wait";
+	const selectedRetryInput = {
+		operation: "retry" as const,
+		messageId: selectedRequestId,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", selectedRetryInput, {
+				id: selectedRetryToolCallId,
+			}),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const selectedRetryReceipt = await harness.view.message(
+		selectedRetryToolCallId,
+		selectedRetryInput,
+	);
+	assert.equal(
+		"messageStatus" in selectedRetryReceipt
+			? selectedRetryReceipt.messageStatus
+			: undefined,
+		"sent",
+	);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: selectedRetryToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(selectedRetryReceipt) }],
+		details: selectedRetryReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	await selectedResponderStarted;
 
 	const triggerToolCallId = "trigger-third-party-requester";
 	const triggerInput = {
@@ -3126,6 +3174,7 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 			JSON.stringify(entry.content).includes(thirdParty.agentId),
 	), true);
 
+	releaseSelectedResponder();
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
