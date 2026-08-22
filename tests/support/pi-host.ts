@@ -365,6 +365,7 @@ function createTestUi(): TestUi {
 			inputListeners.add(listener);
 			return () => { inputListeners.delete(listener); };
 		},
+		renderNow() {},
 		requestRender() {},
 		start() {},
 		stop() {},

@@ -2,11 +2,10 @@ import type { Component } from "@earendil-works/pi-tui";
 
 /** Process-child operations needed only while it owns the physical terminal. */
 export type PhysicalChildTerminal = Readonly<{
-	addOutputHandler(handler: (data: string) => void): () => void;
-	setAttached(attached: boolean): void;
+	beginAttachment(handler: (data: string) => void): Promise<() => void>;
+	endAttachment(): Promise<void>;
 	pauseOutput(): void;
 	resumeOutput(): void;
-	reinitializePresentation(): Promise<void>;
 }>;
 
 /** Complete terminal-facing surface for one Agent Runtime. */

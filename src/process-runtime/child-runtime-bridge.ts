@@ -71,7 +71,7 @@ type ChildRuntimeBinding = {
 	turnCompaction: ChildTurnCompactionGateway;
 	activity: RemoteAgentActivitySource;
 	publishRuntimeSnapshot(): Promise<void>;
-	reinitializePresentation(): void;
+	reinitializePresentation(completionMarker: string): void;
 	handleOwnerRequest(
 		request: Parameters<Parameters<ChildChannel["onRequest"]>[0]>[0],
 	): Promise<unknown>;
@@ -398,7 +398,7 @@ function createChildRuntimeBinding(
 	state: ChildControlState,
 	runtime: AgentSessionRuntime,
 	context: ExtensionContext,
-	reinitializePresentation: () => void,
+	reinitializePresentation: (completionMarker: string) => void,
 	agentId: string,
 	inputSubmissionAcknowledgment: TerminalInputSubmissionAcknowledgmentBinding,
 	removeInputSubmissionListener: () => void,
@@ -731,7 +731,7 @@ async function handleOwnerRequest(
 			return { accepted: true };
 		}
 		case "presentation.reinitialize":
-			binding.reinitializePresentation();
+			binding.reinitializePresentation(request.payload.completionMarker);
 			return {};
 		case "runtime.shutdown":
 			state.shutdownStarted = true;

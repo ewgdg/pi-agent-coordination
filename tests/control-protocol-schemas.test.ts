@@ -17,7 +17,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 3, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 4, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control Endpoint and child bootstrap descriptors are closed and versioned", () => {
 	const endpoint = { transport: "unix", address: "/tmp/control.sock" } as const;
@@ -26,7 +26,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 3,
+		protocolVersion: 4,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
@@ -82,7 +82,7 @@ test("Control frame schema is a closed hello/request/response/event/cancel union
 	}), false);
 });
 
-test("every version-three method and event has TypeBox payload/result schemas", () => {
+test("every version-four method and event has TypeBox payload/result schemas", () => {
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
 		"runtime.executionBegin",
@@ -130,8 +130,14 @@ test("every version-three method and event has TypeBox payload/result schemas", 
 	assert.equal(Check(AgentControlMethodSchema, "queue.clear"), true);
 	assert.equal(Check(AgentControlMethodSchema, "run.interrupt"), true);
 	assert.equal(Check(AgentControlMethodSchema, "presentation.reinitialize"), true);
-	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, {}), true);
-	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, { extra: true }), false);
+	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, {
+		completionMarker: "frame-123",
+	}), true);
+	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, {}), false);
+	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, {
+		completionMarker: "frame-123",
+		extra: true,
+	}), false);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.unknown"), false);
 	assert.equal(Check(AgentControlEventSchema, "runtime.snapshot.changed"), true);
 	assert.equal(Check(AgentControlEventSchema, "runtime.input.submissionAcknowledged"), true);

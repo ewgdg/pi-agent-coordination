@@ -52,7 +52,7 @@ export type InteractiveHostBridge = {
 		ui: ExtensionUIContext,
 	): Promise<Readonly<{
 		runtime: AgentSessionRuntime;
-		reinitializePresentation(): void;
+		reinitializePresentation(completionMarker: string): void;
 	}>>;
 };
 

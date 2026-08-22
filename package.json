@@ -28,6 +28,7 @@
     ]
   },
   "scripts": {
+    "benchmark:attached-terminal": "node benchmarks/attached-terminal-output.ts",
     "test": "npm run test:fast && npm run test:process",
     "test:fast": "node tests/support/run-test-suite.ts fast",
     "test:process": "node tests/support/run-test-suite.ts process",

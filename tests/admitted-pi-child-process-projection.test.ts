@@ -199,21 +199,19 @@ test("admitted process terminal projection maps terminal operations and events w
 	projection.focusEditor();
 	assert.deepEqual(runtime.inputs, [input]);
 	const physicalOutput: string[] = [];
-	const removeOutputHandler = projection.physicalTerminal.addOutputHandler((data) => {
+	const removeOutputHandler = await projection.physicalTerminal.beginAttachment((data) => {
 		physicalOutput.push(data);
 	});
-	projection.physicalTerminal.setAttached(true);
 	projection.physicalTerminal.pauseOutput();
 	projection.physicalTerminal.resumeOutput();
 	runtime.notifyOutput("raw-output");
-	await projection.physicalTerminal.reinitializePresentation();
-	projection.physicalTerminal.setAttached(false);
 	removeOutputHandler();
+	await projection.physicalTerminal.endAttachment();
 	assert.deepEqual(physicalOutput, ["raw-output"]);
 	assert.deepEqual(runtime.physicalAttachmentStates, [true, false]);
 	assert.equal(runtime.pauseOutputCount, 1);
 	assert.equal(runtime.resumeOutputCount, 1);
-	assert.equal(runtime.reinitializePresentationCount, 1);
+	assert.equal(runtime.reinitializePresentationCount, 2);
 
 	runtime.notifyChange();
 	const terminalFailure = new Error("terminal parser failed");
@@ -419,13 +417,19 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 		return () => this.#failureHandlers.delete(handler);
 	}
 
-	addOutputHandler(handler: (data: string) => void): () => void {
+	beginPhysicalTerminalAttachment(
+		handler: (data: string) => void,
+	): Promise<() => void> {
+		this.physicalAttachmentStates.push(true);
+		this.reinitializePresentationCount += 1;
 		this.#outputHandlers.add(handler);
-		return () => this.#outputHandlers.delete(handler);
+		return Promise.resolve(() => this.#outputHandlers.delete(handler));
 	}
 
-	setPhysicalTerminalAttached(attached: boolean): void {
-		this.physicalAttachmentStates.push(attached);
+	restoreDetachedTerminal(): Promise<void> {
+		this.physicalAttachmentStates.push(false);
+		this.reinitializePresentationCount += 1;
+		return Promise.resolve();
 	}
 
 	pauseOutput(): void {
@@ -434,11 +438,6 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 
 	resumeOutput(): void {
 		this.resumeOutputCount += 1;
-	}
-
-	reinitializePresentation(): Promise<void> {
-		this.reinitializePresentationCount += 1;
-		return Promise.resolve();
 	}
 
 	onEvent(handler: (event: PiChildRuntimeEvent) => void): () => void {

@@ -736,11 +736,10 @@ function createRunResource(options?: {
 	const projection: HostedAgentProjection = {
 		presentation: component,
 		physicalTerminal: {
-			addOutputHandler: () => () => undefined,
-			setAttached() {},
+			async beginAttachment() { return () => undefined; },
+			async endAttachment() {},
 			pauseOutput() {},
 			resumeOutput() {},
-			async reinitializePresentation() {},
 		},
 		resize() {},
 		dispatchInput() {},

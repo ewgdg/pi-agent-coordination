@@ -46,6 +46,7 @@ import {
 	type PtyTerminalProjection,
 	type TerminalProjectionFrame,
 } from "./pty-terminal-projection.ts";
+import { createTerminalPresentationBarrierMarker } from "./terminal-presentation-barrier.ts";
 
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
@@ -442,8 +443,20 @@ export class PiChildProcessRuntime {
 		return this.#projection.addOutputHandler(handler);
 	}
 
-	setPhysicalTerminalAttached(attached: boolean): void {
-		this.#projection.setPhysicalTerminalAttached(attached);
+	async beginPhysicalTerminalAttachment(
+		handler: (data: string) => void,
+	): Promise<() => void> {
+		return beginPhysicalTerminalAttachment(
+			this.#projection,
+			(completionMarker) => this.reinitializePresentation(completionMarker),
+			handler,
+		);
+	}
+
+	restoreDetachedTerminal(): Promise<void> {
+		return this.#projection.rebuildDetachedTerminal(
+			(completionMarker) => this.reinitializePresentation(completionMarker),
+		);
 	}
 
 	pauseOutput(): void {
@@ -454,8 +467,9 @@ export class PiChildProcessRuntime {
 		this.#projection.resumeOutput();
 	}
 
-	reinitializePresentation(): Promise<void> {
-		return this.channel.request("presentation.reinitialize", {}).then(() => undefined);
+	reinitializePresentation(completionMarker: string): Promise<void> {
+		return this.channel.request("presentation.reinitialize", { completionMarker })
+			.then(() => undefined);
 	}
 
 	writeInput(data: string | Buffer): void {
@@ -614,8 +628,20 @@ export class PiChildProcessLaunch {
 		return this.#projection.addOutputHandler(handler);
 	}
 
-	setPhysicalTerminalAttached(attached: boolean): void {
-		this.#projection.setPhysicalTerminalAttached(attached);
+	async beginPhysicalTerminalAttachment(
+		handler: (data: string) => void,
+	): Promise<() => void> {
+		return beginPhysicalTerminalAttachment(
+			this.#projection,
+			(completionMarker) => this.reinitializePresentation(completionMarker),
+			handler,
+		);
+	}
+
+	restoreDetachedTerminal(): Promise<void> {
+		return this.#projection.rebuildDetachedTerminal(
+			(completionMarker) => this.reinitializePresentation(completionMarker),
+		);
 	}
 
 	pauseOutput(): void {
@@ -626,8 +652,10 @@ export class PiChildProcessLaunch {
 		this.#projection.resumeOutput();
 	}
 
-	reinitializePresentation(): Promise<void> {
-		return this.#readiness.then((runtime) => runtime.reinitializePresentation());
+	reinitializePresentation(completionMarker: string): Promise<void> {
+		return this.#readiness.then(
+			(runtime) => runtime.reinitializePresentation(completionMarker),
+		);
 	}
 
 	writeInput(data: string | Buffer): void {
@@ -814,6 +842,23 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promis
 		]);
 	} finally {
 		if (timer) clearTimeout(timer);
+	}
+}
+
+async function beginPhysicalTerminalAttachment(
+	projection: PtyTerminalProjection,
+	reinitializePresentation: (completionMarker: string) => Promise<void>,
+	handler: (data: string) => void,
+): Promise<() => void> {
+	await projection.enterPhysicalTerminalMode();
+	const removeOutputHandler = projection.addOutputHandler(handler);
+	try {
+		await reinitializePresentation(createTerminalPresentationBarrierMarker());
+		return removeOutputHandler;
+	} catch (error) {
+		removeOutputHandler();
+		await projection.abortPhysicalTerminalMode();
+		throw error;
 	}
 }
 

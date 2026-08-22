@@ -5,6 +5,7 @@ import {
 	spawnPtyTerminalProjection,
 	type PtyTerminalProjection,
 } from "../src/process-runtime/pty-terminal-projection.ts";
+import { terminalPresentationBarrierSequence } from "../src/process-runtime/terminal-presentation-barrier.ts";
 
 const TEST_TIMEOUT_MS = 10_000;
 
@@ -134,8 +135,8 @@ test("physical attachment receives raw output and becomes the only terminal repl
 	});
 	const rawOutput: string[] = [];
 	const removeOutputHandler = projection.addOutputHandler((data) => rawOutput.push(data));
-	projection.setPhysicalTerminalAttached(true);
-	await waitForText(projection, "READY");
+	await projection.enterPhysicalTerminalMode();
+	await waitForRawOutput(rawOutput, "READY");
 
 	projection.writeInput("GO");
 	await new Promise((resolve) => setTimeout(resolve, 60));
@@ -151,9 +152,93 @@ test("physical attachment receives raw output and becomes the only terminal repl
 		rawOutput.join(""),
 		new RegExp(`GOT_HEX=${Buffer.from(physicalReply).toString("hex")}`),
 	);
-	projection.setPhysicalTerminalAttached(false);
 	removeOutputHandler();
 	await projection.dispose();
+});
+
+test("attached ANSI bursts bypass headless parsing and detach rebuilds one complete frame", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+	const projection = await spawnNodeScript(String.raw`
+		process.stdin.setRawMode(true);
+		process.stdin.resume();
+		process.stdin.on("data", input => {
+			if (input.toString() === "BURST") {
+				for (let index = 0; index < 2_000; index += 1) {
+					process.stdout.write("\x1b[2J\x1b[H\x1b[38;5;123mATTACHED_" + index + "\x1b[0m");
+				}
+				process.stdout.write("ATTACHED_DONE");
+				return;
+			}
+			if (input.toString().startsWith("REDRAW:")) {
+				const barrier = input.toString().slice("REDRAW:".length);
+				process.stdout.write("\x1b[2J\x1b[HDETACHED_REBUILT" + barrier);
+				return;
+			}
+			if (input.toString() === "EXIT") process.exit(0);
+		});
+		process.stdout.write("DETACHED_BASELINE");
+	`, 80, 8);
+	t.after(async () => {
+		if (!projection.disposed) await projection.dispose();
+	});
+	await waitForText(projection, "DETACHED_BASELINE");
+	const rawOutput: string[] = [];
+	const removeOutputHandler = projection.addOutputHandler((data) => rawOutput.push(data));
+	let changes = 0;
+	const removeChangeHandler = projection.addChangeHandler(() => changes += 1);
+
+	await projection.enterPhysicalTerminalMode();
+	const changesBeforeBurst = changes;
+	projection.writeInput("BURST");
+	await waitForRawOutput(rawOutput, "ATTACHED_DONE");
+	await projection.drain();
+	assert.equal(changes, changesBeforeBurst);
+	assert.match(projection.frame().lines[0]?.text ?? "", /DETACHED_BASELINE/);
+	assert.doesNotMatch(projection.frame().lines[0]?.text ?? "", /ATTACHED_DONE/);
+
+	await projection.rebuildDetachedTerminal(async (completionMarker) => {
+		projection.writeInput(`REDRAW:${terminalPresentationBarrierSequence(completionMarker)}`);
+	});
+	assert.equal(projection.frame().lines[0]?.text, "DETACHED_REBUILT");
+	assert.equal(changes, changesBeforeBurst + 1);
+
+	removeOutputHandler();
+	removeChangeHandler();
+	projection.writeInput("EXIT");
+	await projection.exited;
+});
+
+test("detached rebuild ignores an obsolete presentation barrier", { timeout: TEST_TIMEOUT_MS }, async (t) => {
+	const projection = await spawnNodeScript(String.raw`
+		process.stdin.setRawMode(true);
+		process.stdin.resume();
+		process.stdin.once("data", input => {
+			const [obsolete, current] = input.toString().split(":").map(value =>
+				Buffer.from(value, "base64").toString()
+			);
+			process.stdout.write("\x1b[2J\x1b[HOBSOLETE_FRAME" + obsolete);
+			setTimeout(() => process.stdout.write("\x1b[2J\x1b[HCURRENT_FRAME" + current), 30);
+		});
+	`);
+	t.after(async () => {
+		if (!projection.disposed) await projection.dispose();
+	});
+	const rawOutput: string[] = [];
+	projection.addOutputHandler((data) => rawOutput.push(data));
+	await projection.enterPhysicalTerminalMode();
+	let rebuildSettled = false;
+	const rebuild = projection.rebuildDetachedTerminal(async (completionMarker) => {
+		const obsoleteBarrier = terminalPresentationBarrierSequence("obsolete-marker");
+		const currentBarrier = terminalPresentationBarrierSequence(completionMarker);
+		projection.writeInput([
+			Buffer.from(obsoleteBarrier).toString("base64"),
+			Buffer.from(currentBarrier).toString("base64"),
+		].join(":"));
+	}).then(() => rebuildSettled = true);
+	await waitForRawOutput(rawOutput, "OBSOLETE_FRAME");
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	assert.equal(rebuildSettled, false);
+	await rebuild;
+	assert.equal(projection.frame().lines[0]?.text, "CURRENT_FRAME");
 });
 
 test("physical output backpressure pauses and resumes PTY reads", { timeout: TEST_TIMEOUT_MS }, async (t) => {

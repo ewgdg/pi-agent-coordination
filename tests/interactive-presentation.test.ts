@@ -8,6 +8,7 @@ import type {
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
 import { captureInteractivePresentation } from "../src/pi-integration/interactive-presentation.ts";
+import { terminalPresentationBarrierSequence } from "../src/process-runtime/terminal-presentation-barrier.ts";
 
 test("interactive presentation reinitializes through a public zero-line widget TUI", () => {
 	const lifecycle: string[] = [];
@@ -18,8 +19,16 @@ test("interactive presentation reinitializes through a public zero-line widget T
 		start() {
 			lifecycle.push("start");
 		},
+		renderNow(force?: boolean) {
+			lifecycle.push(`renderNow:${String(force)}`);
+		},
 		requestRender(force?: boolean) {
 			lifecycle.push(`render:${String(force)}`);
+		},
+		terminal: {
+			write(data: string) {
+				lifecycle.push(`write:${data}`);
+			},
 		},
 	} as unknown as TUI;
 	let captureWidget: Component | undefined;
@@ -35,6 +44,11 @@ test("interactive presentation reinitializes through a public zero-line widget T
 	const presentation = captureInteractivePresentation(ui);
 
 	assert.deepEqual(captureWidget?.render(80), []);
-	presentation.reinitialize();
-	assert.deepEqual(lifecycle, ["stop:true", "start", "render:true"]);
+	presentation.reinitialize("test-completion-marker");
+	assert.deepEqual(lifecycle, [
+		"stop:true",
+		"start",
+		"renderNow:true",
+		`write:${terminalPresentationBarrierSequence("test-completion-marker")}`,
+	]);
 });

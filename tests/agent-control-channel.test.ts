@@ -29,7 +29,7 @@ const protocol = {
 } as const satisfies AgentControlProtocol;
 
 const identity: AgentControlIdentity = {
-	protocolVersion: 3,
+	protocolVersion: 4,
 	workflowId: "workflow-control-channel",
 	agentId: "agent-control-channel",
 };

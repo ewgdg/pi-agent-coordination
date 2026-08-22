@@ -154,15 +154,13 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.match(frameText(runtime), /HERDR_PANE_ID=undefined/);
 
 		const reinitializedOutput: string[] = [];
-		const removeOutputHandler = runtime.addOutputHandler((data) => {
+		const removeOutputHandler = await runtime.beginPhysicalTerminalAttachment((data) => {
 			reinitializedOutput.push(data);
 		});
-		runtime.setPhysicalTerminalAttached(true);
-		await runtime.reinitializePresentation();
 		await waitUntil(() => reinitializedOutput.join("").includes("PROCESS_RUNTIME_CHILD_WIDGET"));
 		assert.match(reinitializedOutput.join(""), /\x1b\[\?1049h/);
-		runtime.setPhysicalTerminalAttached(false);
 		removeOutputHandler();
+		await runtime.restoreDetachedTerminal();
 
 		projection.dispatchInput("/agents\r");
 		await waitForFrame(runtime, "Tab views");

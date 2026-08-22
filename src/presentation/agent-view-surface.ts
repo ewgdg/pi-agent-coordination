@@ -11,7 +11,7 @@ import {
 type AgentTerminalAttachment = Readonly<{
 	attach(projection: TerminalProjection): Promise<void>;
 	dispatchInput(data: string): void;
-	close(): void;
+	close(): Promise<void>;
 }>;
 
 export type PhysicalAgentViewSurface = Readonly<{
@@ -41,8 +41,7 @@ export function startPhysicalAgentViewSurface(
 	const closeFromHost = () => {
 		if (closed) return;
 		closed = true;
-		attachment.close();
-		settleClosed();
+		void attachment.close().then(settleClosed);
 	};
 	const failFromAttachment = (error: unknown) => {
 		if (closed) return;
@@ -71,7 +70,7 @@ export function startPhysicalAgentViewSurface(
 	const cleanup = closedPromise.then(async () => {
 		removeViewChangeHandler();
 		removeViewCloseHandler();
-		attachment.close();
+		await attachment.close();
 		await view.close();
 	});
 	return {
@@ -116,9 +115,9 @@ export async function openAgentViewSurface(
 	const closeFromHost = () => {
 		if (closedByHost) return;
 		closedByHost = true;
-		attachment?.close();
 		handle?.hide();
-		settleHostClose();
+		const closedAttachment = attachment?.close() ?? Promise.resolve();
+		void closedAttachment.then(settleHostClose);
 	};
 	const failFromAttachment = (error: unknown) => {
 		if (closedByHost) return;
@@ -182,7 +181,7 @@ export async function openAgentViewSurface(
 	} finally {
 		removeViewChangeHandler();
 		removeViewCloseHandler();
-		attachment?.close();
+		await attachment?.close();
 		await view.close();
 	}
 }
@@ -238,7 +237,7 @@ class DetachedDiagnosticAttachment implements AgentTerminalAttachment {
 		}
 	}
 
-	close(): void {
+	async close(): Promise<void> {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#releaseProjection();

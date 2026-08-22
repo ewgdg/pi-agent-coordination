@@ -168,6 +168,30 @@ test("physical output backpressure pauses and resumes the selected child PTY", a
 	await opened;
 });
 
+test("retargeting waits for accepted physical output to drain before starting the next child", async () => {
+	const first = createProjectionHarness("first");
+	const second = createProjectionHarness("second");
+	const view = createViewHarness(first.projection);
+	const surface = createSurfaceHarness({ backpressureOn: "accepted-first-output" });
+
+	const opened = openAgentViewSurface(surface.ui, view.view, {
+		requestShutdown() {},
+		physicalTerminal: surface.physicalTerminal,
+	});
+	await first.finishReinitialization();
+	first.emitOutput("accepted-first-output");
+	view.replaceProjection(second.projection);
+	await first.waitForDetachment();
+	assert.deepEqual(second.attachedStates(), []);
+
+	await surface.releaseBackpressure();
+	await second.finishReinitialization();
+	assert.deepEqual(second.attachedStates(), [true]);
+
+	await view.closeFromHost();
+	await opened;
+});
+
 test("a diagnostic host keeps xterm active without reinitializing child presentation", async () => {
 	const projection = createProjectionHarness("diagnostic", undefined, true);
 	const view = createViewHarness(projection.projection);
@@ -188,8 +212,8 @@ test("a diagnostic host keeps xterm active without reinitializing child presenta
 	await opened;
 });
 
-test("retargeting switches one physical lease directly between child PTYs", async () => {
-	const first = createProjectionHarness("first");
+test("retargeting rebuilds the detached child before starting the replacement attachment", async () => {
+	const first = createProjectionHarness("first", undefined, false, true);
 	const second = createProjectionHarness("second");
 	const view = createViewHarness(first.projection);
 	const surface = createSurfaceHarness();
@@ -200,6 +224,13 @@ test("retargeting switches one physical lease directly between child PTYs", asyn
 	});
 	await first.finishReinitialization();
 	view.replaceProjection(second.projection);
+	await first.waitForDetachment();
+	surface.emitInput("late-first-terminal-reply");
+	assert.deepEqual(second.attachedStates(), []);
+	assert.equal(surface.ownerStarts(), 0);
+	await first.finishDetachment();
+	await second.waitForReinitialization();
+	surface.emitInput("input-during-second-reinitialization");
 	await second.finishReinitialization();
 
 	assert.deepEqual(first.attachedStates(), [true, false]);
@@ -236,6 +267,29 @@ test("attachment setup failure restores Owner exactly once and reports the view 
 	assert.equal(surface.physicalStarts(), 0);
 	assert.equal(surface.physicalStops(), 0);
 	assert.equal(surface.ownerStarts(), 0);
+	assert.equal(view.cleanupCount(), 1);
+});
+
+test("an existing projection failure prevents physical mode from starting", async () => {
+	const existingFailure = new Error("projection already failed");
+	const projection = createProjectionHarness(
+		"already-failed",
+		undefined,
+		false,
+		false,
+		existingFailure,
+	);
+	const view = createViewHarness(projection.projection);
+	const surface = createSurfaceHarness();
+
+	await openAgentViewSurface(surface.ui, view.view, {
+		requestShutdown() {},
+		physicalTerminal: surface.physicalTerminal,
+	});
+
+	assert.deepEqual(view.failures(), [existingFailure]);
+	assert.deepEqual(projection.attachedStates(), [false]);
+	assert.equal(surface.physicalStarts(), 0);
 	assert.equal(view.cleanupCount(), 1);
 });
 
@@ -284,10 +338,14 @@ function createProjectionHarness(
 	name: string,
 	reinitializationFailure?: Error,
 	blockReinitialization = false,
+	blockDetachment = false,
+	existingFailure?: Error,
 ): {
 	projection: TerminalProjection;
 	waitForReinitialization(): Promise<void>;
 	finishReinitialization(): Promise<void>;
+	waitForDetachment(): Promise<void>;
+	finishDetachment(): Promise<void>;
 	emitOutput(data: string): void;
 	emitFailure(error: unknown): void;
 	emitExitRequest(): void;
@@ -317,30 +375,44 @@ function createProjectionHarness(
 	const reinitializationFinished = new Promise<void>((resolve) => {
 		settleReinitializationFinished = resolve;
 	});
+	let settleDetachmentStarted!: () => void;
+	const detachmentStarted = new Promise<void>((resolve) => {
+		settleDetachmentStarted = resolve;
+	});
+	let releaseDetachment!: () => void;
+	const detachmentGate = new Promise<void>((resolve) => {
+		releaseDetachment = resolve;
+	});
+	let settleDetachmentFinished!: () => void;
+	const detachmentFinished = new Promise<void>((resolve) => {
+		settleDetachmentFinished = resolve;
+	});
 	const projection: TerminalProjection = {
 		presentation: {
 			render: () => [name],
 			invalidate() {},
 		},
 		physicalTerminal: {
-			addOutputHandler(handler) {
+			async beginAttachment(handler) {
+				attachedStates.push(true);
 				outputHandlers.add(handler);
+				settleReinitialization();
+				if (blockReinitialization) await reinitializationGate;
+				settleReinitializationFinished();
+				if (reinitializationFailure) throw reinitializationFailure;
 				return () => outputHandlers.delete(handler);
 			},
-			setAttached(attached) {
-				attachedStates.push(attached);
+			async endAttachment() {
+				attachedStates.push(false);
+				settleDetachmentStarted();
+				if (blockDetachment) await detachmentGate;
+				settleDetachmentFinished();
 			},
 			pauseOutput() {
 				outputPauses += 1;
 			},
 			resumeOutput() {
 				outputResumes += 1;
-			},
-			async reinitializePresentation() {
-				settleReinitialization();
-				if (blockReinitialization) await reinitializationGate;
-				settleReinitializationFinished();
-				if (reinitializationFailure) throw reinitializationFailure;
 			},
 		},
 		resize(columns, rows) {
@@ -353,6 +425,7 @@ function createProjectionHarness(
 		addChangeHandler: () => () => undefined,
 		addFailureHandler(handler) {
 			failureHandlers.add(handler);
+			if (existingFailure) handler(existingFailure);
 			return () => failureHandlers.delete(handler);
 		},
 		addExitRequestHandler(handler) {
@@ -366,6 +439,12 @@ function createProjectionHarness(
 		async finishReinitialization() {
 			releaseReinitialization();
 			await reinitializationFinished;
+			await Promise.resolve();
+		},
+		waitForDetachment: () => detachmentStarted,
+		async finishDetachment() {
+			releaseDetachment();
+			await detachmentFinished;
 			await Promise.resolve();
 		},
 		emitOutput(data) {

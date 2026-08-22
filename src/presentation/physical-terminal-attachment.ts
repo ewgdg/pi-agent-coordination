@@ -48,8 +48,10 @@ export class PhysicalTerminalAttachment {
 	#projection: TerminalProjection | undefined;
 	#outputRoutingActive = false;
 	#inputReady = false;
+	#inputBufferingActive = false;
 	#outputDraining = false;
 	#backpressuredProjection: TerminalProjection | undefined;
+	#physicalOutputDrain = Promise.resolve();
 	readonly #pendingInput: string[] = [];
 	readonly #pendingOutput: string[] = [];
 	readonly #outputFlushWaiters = new Set<() => void>();
@@ -59,6 +61,7 @@ export class PhysicalTerminalAttachment {
 	#operationTail = Promise.resolve();
 	#ownerSuspended = false;
 	#closed = false;
+	#closePromise: Promise<void> | undefined;
 
 	constructor(options: {
 		ownerTui: TUI;
@@ -74,21 +77,22 @@ export class PhysicalTerminalAttachment {
 
 	attach(projection: TerminalProjection): Promise<void> {
 		if (this.#closed) return Promise.resolve();
+		let releasedProjection = Promise.resolve();
 		if (this.#desiredProjection !== projection) {
 			this.#desiredProjection = projection;
 			this.#outputRoutingActive = false;
 			this.#inputReady = false;
+			this.#inputBufferingActive = false;
 			this.#pendingInput.length = 0;
 			this.#pendingOutput.length = 0;
 			if (this.#projection !== projection) {
-				try {
-					this.#releaseProjection();
-				} catch (error) {
-					return Promise.reject(error);
-				}
+				releasedProjection = this.#releaseProjection();
 			}
 		}
-		const operation = this.#operationTail.then(() => this.#attach(projection));
+		const operation = this.#operationTail.then(async () => {
+			await releasedProjection;
+			await this.#attach(projection);
+		});
 		this.#operationTail = operation.catch(() => undefined);
 		return operation;
 	}
@@ -98,14 +102,11 @@ export class PhysicalTerminalAttachment {
 		this.#desiredProjection = undefined;
 		this.#pendingInput.length = 0;
 		this.#pendingOutput.length = 0;
-		const operation = this.#operationTail.then(() => {
-			const errors: unknown[] = [];
-			try {
-				this.#releaseProjection();
-			} catch (error) {
-				errors.push(error);
-			}
-			this.#restoreOwner(errors);
+		const errors: unknown[] = [];
+		const releasedProjection = this.#releaseProjection();
+		this.#restoreOwner(errors);
+		const operation = this.#operationTail.then(async () => {
+			await releasedProjection.catch((error) => errors.push(error));
 			const combined = combinedError(errors);
 			if (combined) throw combined;
 		});
@@ -116,12 +117,11 @@ export class PhysicalTerminalAttachment {
 	dispatchInput(data: string): void {
 		if (this.#closed || !this.#desiredProjection) return;
 		const projection = this.#projection;
-		if (
-			!this.#inputReady
-			|| !projection
-			|| projection !== this.#desiredProjection
-		) {
-			this.#pendingInput.push(data);
+		if (!projection || projection !== this.#desiredProjection) return;
+		if (!this.#inputReady) {
+			// Retargeting can leave terminal-query replies from the previous child in
+			// physical stdin. Accept input only after the new native frame is complete.
+			if (this.#inputBufferingActive) this.#pendingInput.push(data);
 			return;
 		}
 		try {
@@ -131,12 +131,12 @@ export class PhysicalTerminalAttachment {
 		}
 	}
 
-	close(): void {
-		const restorationError = this.#close();
-		if (restorationError) this.#fail(restorationError);
+	close(): Promise<void> {
+		this.#closePromise ??= this.#close().catch((error) => this.#fail(error));
+		return this.#closePromise;
 	}
 
-	#close(): unknown | undefined {
+	async #close(): Promise<void> {
 		if (this.#closed) return;
 		this.#closed = true;
 		this.#desiredProjection = undefined;
@@ -144,13 +144,11 @@ export class PhysicalTerminalAttachment {
 		this.#pendingOutput.length = 0;
 		this.#settleOutputFlush();
 		const errors: unknown[] = [];
-		try {
-			this.#releaseProjection();
-		} catch (error) {
-			errors.push(error);
-		}
+		const releasedProjection = this.#releaseProjection();
 		this.#restoreOwner(errors);
-		return combinedError(errors);
+		await releasedProjection.catch((error) => errors.push(error));
+		const combined = combinedError(errors);
+		if (combined) throw combined;
 	}
 
 	#restoreOwner(errors: unknown[]): void {
@@ -173,31 +171,45 @@ export class PhysicalTerminalAttachment {
 	async #attach(projection: TerminalProjection): Promise<void> {
 		if (this.#closed || this.#desiredProjection !== projection) return;
 		if (this.#projection === projection && this.#inputReady) return;
-		if (this.#projection !== projection) this.#releaseProjection();
+		if (this.#projection !== projection) await this.#releaseProjection();
 		if (this.#closed || this.#desiredProjection !== projection) return;
 		this.#projection = projection;
-		projection.physicalTerminal.setAttached(true);
-		this.#removeOutputHandler = projection.physicalTerminal.addOutputHandler((data) => {
+		const removeFailureHandler = projection.addFailureHandler((error) => {
+			if (this.#projection === projection) this.#failAttachment(error);
+		});
+		if (this.#closed || this.#projection !== projection) {
+			removeFailureHandler();
+			return;
+		}
+		this.#removeFailureHandler = removeFailureHandler;
+		const removeExitHandler = projection.addExitRequestHandler(() => {
+			if (this.#projection !== projection || this.#closed) return;
+			void this.close().then(this.#requestExit);
+		});
+		if (this.#closed || this.#projection !== projection) {
+			removeExitHandler();
+			this.#removeFailureHandler();
+			this.#removeFailureHandler = () => undefined;
+			return;
+		}
+		this.#removeExitHandler = removeExitHandler;
+		projection.resize(
+			this.#physicalTerminal.columns(),
+			this.#physicalTerminal.rows(),
+		);
+		const removeOutputHandler = await projection.physicalTerminal.beginAttachment((data) => {
 			if (this.#projection !== projection || this.#closed) return;
 			// A partial restart can leave terminal modes and editor focus inconsistent.
 			// Publish one ordered handoff only after the child's native TUI has restarted.
 			this.#pendingOutput.push(data);
 			if (this.#outputRoutingActive) this.#drainOutput(projection);
 		});
-		this.#removeFailureHandler = projection.addFailureHandler((error) => {
-			if (this.#projection === projection) this.#failAttachment(error);
-		});
-		this.#removeExitHandler = projection.addExitRequestHandler(() => {
-			if (this.#projection !== projection || this.#closed) return;
-			this.close();
-			this.#requestExit();
-		});
-		projection.resize(
-			this.#physicalTerminal.columns(),
-			this.#physicalTerminal.rows(),
-		);
-		await projection.physicalTerminal.reinitializePresentation();
-		if (this.#closed || this.#desiredProjection !== projection) return;
+		if (this.#closed || this.#desiredProjection !== projection) {
+			removeOutputHandler();
+			return;
+		}
+		this.#removeOutputHandler = removeOutputHandler;
+		this.#inputBufferingActive = true;
 		if (!this.#ownerSuspended) this.#suspendOwner();
 		this.#outputRoutingActive = true;
 		this.#drainOutput(projection);
@@ -224,16 +236,21 @@ export class PhysicalTerminalAttachment {
 		);
 	}
 
-	#releaseProjection(): void {
+	#releaseProjection(): Promise<void> {
 		const projection = this.#projection;
 		const errors: unknown[] = [];
 		this.#projection = undefined;
 		this.#outputRoutingActive = false;
 		this.#inputReady = false;
+		this.#inputBufferingActive = false;
 		const resumeOutput = projection && this.#backpressuredProjection === projection;
+		const pendingPhysicalDrain = resumeOutput
+			? this.#physicalOutputDrain
+			: Promise.resolve();
 		if (resumeOutput) {
 			this.#backpressuredProjection = undefined;
 			this.#outputDraining = false;
+			this.#physicalOutputDrain = Promise.resolve();
 		}
 		this.#removeOutputHandler();
 		this.#removeFailureHandler();
@@ -248,16 +265,17 @@ export class PhysicalTerminalAttachment {
 				errors.push(error);
 			}
 		}
-		if (projection) {
-			try {
-				projection.physicalTerminal.setAttached(false);
-			} catch (error) {
-				errors.push(error);
-			}
-		}
+		const detached = projection
+			? projection.physicalTerminal.endAttachment()
+			: Promise.resolve();
 		this.#settleOutputFlush();
-		const error = combinedError(errors);
-		if (error) throw error;
+		return Promise.allSettled([pendingPhysicalDrain, detached]).then((results) => {
+			for (const result of results) {
+				if (result.status === "rejected") errors.push(result.reason);
+			}
+			const error = combinedError(errors);
+			if (error) throw error;
+		});
 	}
 
 	#drainOutput(projection: TerminalProjection): void {
@@ -284,7 +302,9 @@ export class PhysicalTerminalAttachment {
 				this.#failAttachment(error);
 				return;
 			}
-			void this.#physicalTerminal.waitForDrain().then(
+			const physicalOutputDrain = this.#physicalTerminal.waitForDrain();
+			this.#physicalOutputDrain = physicalOutputDrain;
+			void physicalOutputDrain.then(
 				() => this.#resumeOutputAfterDrain(projection),
 				(error) => {
 					if (this.#projection === projection) this.#failAttachment(error);
@@ -324,13 +344,14 @@ export class PhysicalTerminalAttachment {
 
 	#failAttachment(error: unknown): void {
 		if (this.#closed) return;
-		const restorationError = this.#close();
-		this.#fail(restorationError
-			? new AggregateError(
+		const closeOperation = this.#close();
+		this.#closePromise = closeOperation.then(
+			() => this.#fail(error),
+			(restorationError) => this.#fail(new AggregateError(
 				[error, restorationError],
 				`physical_terminal_attachment_failed: ${errorMessage(error)}`,
-			)
-			: error);
+			)),
+		);
 	}
 }
 

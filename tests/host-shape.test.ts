@@ -588,9 +588,11 @@ function createPresentationCaptureUi(
 	const tui = {
 		stop() {},
 		start() {},
+		renderNow() {},
 		requestRender(force?: boolean) {
 			lifecycle.push(`render:${String(force)}`);
 		},
+		terminal: { write() {} },
 	};
 	return {
 		setWidget(
