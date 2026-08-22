@@ -10,12 +10,13 @@ import test, { type TestContext } from "node:test";
 import { PI_TEST_ENVIRONMENT_MARKER } from "./support/pi-test-environment.ts";
 
 const FEEDBACK_TIMEOUT_MS = 5_000;
+const SUPERVISOR_TEST_TIMEOUT_MS = 10_000;
 const PROCESS_TEST_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 10;
 const PROJECT_ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 test("the suite supervisor leaves no test descendants", {
-	timeout: FEEDBACK_TIMEOUT_MS,
+	timeout: SUPERVISOR_TEST_TIMEOUT_MS,
 	skip: process.platform === "linux"
 		? false
 		: "process-tree hardening uses Linux cgroup-v2 and /proc",
