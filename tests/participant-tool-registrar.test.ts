@@ -351,6 +351,10 @@ test("participant registrar contributes focused tool guides and one shared Agent
 	);
 	assert.match(
 		delegationGuide,
+		/Reuse an existing Agent with agent_message operation "request"[\s\S]*acquired through its earlier work materially reduces rediscovery[\s\S]*contextPreparation with both workScale and contextDependence[\s\S]*Spawn a fresh Agent when prior context is not relevant/,
+	);
+	assert.match(
+		delegationGuide,
 		/returns requestMessageId with messageStatus "sent"[\s\S]*responder owns the delegated work until its Answer arrives or the Request is cancelled/,
 	);
 	assert.match(

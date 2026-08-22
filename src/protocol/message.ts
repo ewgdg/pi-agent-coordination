@@ -1,4 +1,5 @@
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
+import type { ContextPreparation } from "../policy/working-zone-preparation.ts";
 
 import {
 	inspectCommittedAgentWaitResult,
@@ -88,6 +89,7 @@ export type Message =
 		kind: "request";
 		origin: "agent_message" | "agent_spawn";
 		question: string;
+		contextPreparation?: ContextPreparation;
 	}>)
 	| (MessageSource & Readonly<{
 		kind: "answer";
@@ -141,6 +143,9 @@ export function resolveCommittedMessage(options: {
 			kind: "request",
 			origin: "agent_message",
 			question: committedInput.question,
+			...(committedInput.contextPreparation === undefined
+				? {}
+				: { contextPreparation: committedInput.contextPreparation }),
 		};
 }
 

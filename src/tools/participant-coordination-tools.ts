@@ -61,6 +61,8 @@ agent_message operation "send" creates no Answer expectation. Continue normally 
 const AGENT_DELEGATION_PROMPT_GUIDE = `<agent_delegation>
 When agent_message operation "request" or agent_spawn delegates work, partition it into bounded, non-overlapping work units before sending the Request.
 
+Reuse an existing Agent with agent_message operation "request" only when context acquired through its earlier work materially reduces rediscovery. When useful, set contextPreparation with both workScale and contextDependence so the idle recipient can prepare a bounded working zone before Delivery. Omit it to keep ordinary Pi compaction behavior. Spawn a fresh Agent when prior context is not relevant to the new work.
+
 After either tool returns requestMessageId with messageStatus "sent", the responder owns the delegated work until its Answer arrives or the Request is cancelled. Continue only explicitly disjoint work that would still be needed if the responder returned a complete, correct Answer. Otherwise end the turn and let the correlated Answer arrive automatically. Intentional duplicate investigation is appropriate only when the Request explicitly asks for an independent cross-check.
 </agent_delegation>`;
 
@@ -160,6 +162,22 @@ export type ParticipantCoordinationToolHandlers<
 			: SpawnParticipantCoordinationToolHandler
 );
 
+const contextPreparationParameters = Type.Object(
+	{
+		workScale: Type.Union([
+			Type.Literal("small"),
+			Type.Literal("medium"),
+			Type.Literal("large"),
+		]),
+		contextDependence: Type.Union([
+			Type.Literal("low"),
+			Type.Literal("medium"),
+			Type.Literal("high"),
+		]),
+	},
+	{ additionalProperties: false },
+);
+
 const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
@@ -186,6 +204,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 					Type.Literal("steer"),
 				]),
 			),
+			contextPreparation: Type.Optional(contextPreparationParameters),
 		},
 		{ additionalProperties: false },
 	),

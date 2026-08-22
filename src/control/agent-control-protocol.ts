@@ -434,6 +434,28 @@ const HumanRequestInputSchema = Type.Unsafe<HumanRequestInput>(
 const ModeratorControlInputSchema = Type.Unsafe<ModeratorControlInput>(
 	participantCoordinationToolSchemas.moderator_control,
 );
+const ContextPreparationSchema = closed({
+	workScale: Type.Union([
+		Type.Literal("small"),
+		Type.Literal("medium"),
+		Type.Literal("large"),
+	]),
+	contextDependence: Type.Union([
+		Type.Literal("low"),
+		Type.Literal("medium"),
+		Type.Literal("high"),
+	]),
+});
+const ProspectiveRequestSchema = closed({
+	kind: Type.Literal("request"),
+	requestMessageId: NonEmptyStringSchema,
+	fromAgentId: NonEmptyStringSchema,
+	question: Type.String(),
+});
+const WorkingZonePreparationSchema = closed({
+	intent: ContextPreparationSchema,
+	prospectiveRequest: ProspectiveRequestSchema,
+});
 const AgentRuntimeDeliverySchema = Type.Union([
 	closed({
 		kind: Type.Literal("custom"),
@@ -464,6 +486,7 @@ const AgentRuntimeDeliverySchema = Type.Union([
 		]),
 		triggerTurn: Type.Boolean(),
 		deliverAs: Type.Optional(DeliveryModeSchema),
+		workingZonePreparation: Type.Optional(WorkingZonePreparationSchema),
 	}),
 	closed({
 		kind: Type.Literal("user"),

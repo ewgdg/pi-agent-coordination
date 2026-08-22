@@ -128,6 +128,104 @@ test("Request commitment retains its requester and Delivery obligates its respon
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
+test("a prepared continuation Request crosses retry scheduling into child working-zone preparation", async (t) => {
+	const harness = await createDormantChildHarness(t, {
+		beforeDeliveryAdmission: ({ operation }) =>
+			operation === "send" ? "confirmed_failure" : undefined,
+	});
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	const childSession = SessionManager.open(childSessionFile);
+	for (const section of ["Earlier", "Later"]) {
+		childSession.appendMessage({
+			role: "user",
+			content: [{
+				type: "text",
+				text: `${section} acquired context.${" relevant history".repeat(10_500)}`,
+			}],
+			timestamp: Date.now(),
+		});
+	}
+
+	harness.host.model.setResponses([
+		fauxAssistantMessage("Existing context retained for the continuation."),
+		fauxAssistantMessage("The prepared continuation Request was delivered."),
+	]);
+	const toolCallId = "prepared-continuation-request";
+	const input = {
+		operation: "request" as const,
+		targetAgentId: harness.childId,
+		question: "Continue issue 83 using the relevant context already acquired.",
+		contextPreparation: {
+			workScale: "large" as const,
+			contextDependence: "low" as const,
+		},
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const initialReceipt = await harness.view.message(toolCallId, input);
+	assert.equal("messageStatus" in initialReceipt && initialReceipt.messageStatus, "not_sent");
+	if (!("requestMessageId" in initialReceipt)) {
+		throw new Error("Prepared Request receipt has no identity");
+	}
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(initialReceipt) }],
+		details: initialReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	const retryToolCallId = "retry-prepared-continuation-request";
+	const retryInput = {
+		operation: "retry" as const,
+		messageId: initialReceipt.requestMessageId,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", retryInput, { id: retryToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const receipt = await harness.view.message(retryToolCallId, retryInput);
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, "sent");
+	if (!("requestMessageId" in receipt)) {
+		throw new Error("Retried prepared Request receipt has no identity");
+	}
+	assert.equal(receipt.requestMessageId, initialReceipt.requestMessageId);
+
+	const entries = await waitForEntry(childSessionFile, (entry) =>
+		entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.message-delivery" &&
+		JSON.stringify(entry.content).includes(receipt.requestMessageId)
+	);
+	const compactionIndex = entries.findIndex((entry) => entry.type === "compaction");
+	const deliveryIndex = entries.findIndex((entry) =>
+		entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.message-delivery" &&
+		JSON.stringify(entry.content).includes(receipt.requestMessageId)
+	);
+	assert.notEqual(compactionIndex, -1);
+	assert.notEqual(deliveryIndex, -1);
+	assert.equal(compactionIndex < deliveryIndex, true);
+	const delivery = entries[deliveryIndex];
+	assert.ok(delivery?.type === "custom_message");
+	assert.deepEqual(JSON.parse(delivery.content as string), {
+		messages: [{
+			kind: "request",
+			requestMessageId: receipt.requestMessageId,
+			fromAgentId: harness.host.session.sessionId,
+			question: input.question,
+		}],
+	});
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
 test("an active responder rejects ordinary Message authorship to its requester while preserving structured communication", async (t) => {
 	const harness = await createDormantChildHarness(t);
 	const siblingId = await spawnDormantSibling(harness, "answer-lane-sibling");

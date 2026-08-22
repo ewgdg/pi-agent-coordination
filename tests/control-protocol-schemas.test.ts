@@ -164,6 +164,55 @@ test("every version-three method and event has TypeBox payload/result schemas", 
 		outcome: "interrupted",
 		queuedInputCount: 0,
 	}), true);
+	const preparedRequestDelivery = {
+		runId: "run-prepared-request",
+		delivery: {
+			kind: "custom",
+			message: {
+				customType: "agent-coordination.message-delivery",
+				content: JSON.stringify({ messages: [{
+					kind: "request",
+					requestMessageId: "request-1",
+					fromAgentId: "requester-1",
+					question: "Continue using prior context.",
+				}] }),
+				display: true,
+				details: { messages: [{
+					agentId: "requester-1",
+					entryId: "entry-1",
+					toolCallId: "request-1",
+				}] },
+			},
+			triggerTurn: true,
+			workingZonePreparation: {
+				intent: { workScale: "large", contextDependence: "high" },
+				prospectiveRequest: {
+					kind: "request",
+					requestMessageId: "request-1",
+					fromAgentId: "requester-1",
+					question: "Continue using prior context.",
+				},
+			},
+		},
+	};
+	assert.equal(Check(
+		agentControlMethods["message.deliver"].request,
+		preparedRequestDelivery,
+	), true);
+	assert.equal(Check(
+		agentControlMethods["message.deliver"].request,
+		{
+			...preparedRequestDelivery,
+			delivery: {
+				...preparedRequestDelivery.delivery,
+				workingZonePreparation: {
+					intent: { workScale: "large" },
+					prospectiveRequest: preparedRequestDelivery.delivery
+						.workingZonePreparation.prospectiveRequest,
+				},
+			},
+		},
+	), false);
 	assert.equal(Check(agentControlEvents["coordination.wait.progress"].payload, {
 		toolCallId: "wait-call",
 		progress: {

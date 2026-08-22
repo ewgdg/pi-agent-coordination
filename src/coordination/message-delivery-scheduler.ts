@@ -9,6 +9,7 @@ import {
 	type MessageDeliveryItem,
 } from "../protocol/message-delivery.ts";
 import type { MessageDeliveryMode } from "../protocol/message.ts";
+import type { ContextPreparation } from "../policy/working-zone-preparation.ts";
 import type {
 	AgentRunHandle,
 	AgentRunSettlement,
@@ -30,6 +31,7 @@ type ScheduledDeliveryBase = Readonly<{
 
 export type ScheduledMessageDelivery = ScheduledDeliveryBase & Readonly<{
 	deliveryItem: MessageDeliveryItem;
+	contextPreparation?: ContextPreparation;
 }>;
 
 export type ScheduledCustomDelivery = ScheduledDeliveryBase & Readonly<{
@@ -472,14 +474,16 @@ export class MessageDeliveryScheduler {
 		}
 		// A settled Run may become active before Pi processes admission. followUp
 		// preserves Deferred ordering, while triggerTurn starts a standalone Idle turn.
-		const { completion } = record.host.deliverInLane({
-			kind: "custom",
-			message: "customMessage" in delivery
-				? delivery.customMessage
-				: createMessageDelivery([delivery.deliveryItem]),
-			triggerTurn: true,
-			deliverAs: "followUp",
-		});
+		const { completion } = record.host.deliverInLane(
+			"customMessage" in delivery
+				? {
+					kind: "custom",
+					message: delivery.customMessage,
+					triggerTurn: true,
+					deliverAs: "followUp",
+				}
+				: createRuntimeMessageDelivery([delivery], "followUp"),
+		);
 		this.#activeDeferredByAgent.set(record.identity.agentId, {
 			delivery,
 			completion,
@@ -498,14 +502,16 @@ export class MessageDeliveryScheduler {
 			!this.#eligibleDeliveries(pending).includes(delivery) ||
 			this.#activeWaitPreemptionByAgent.has(record.identity.agentId)
 		) return false;
-		const { completion } = record.host.deliverInLane({
-			kind: "custom",
-			message: "customMessage" in delivery
-				? delivery.customMessage
-				: createMessageDelivery([delivery.deliveryItem]),
-			triggerTurn: true,
-			deliverAs: "steer",
-		});
+		const { completion } = record.host.deliverInLane(
+			"customMessage" in delivery
+				? {
+					kind: "custom",
+					message: delivery.customMessage,
+					triggerTurn: true,
+					deliverAs: "steer",
+				}
+				: createRuntimeMessageDelivery([delivery], "steer"),
+		);
 		this.#activeWaitPreemptionByAgent.set(record.identity.agentId, {
 			delivery,
 			completion,
@@ -533,11 +539,7 @@ export class MessageDeliveryScheduler {
 		if (!record.host.beginIsolatedResumptionInLane(reserved.hold)) return;
 		try {
 			const delivery = record.host.deliverInLane(
-				{
-					kind: "custom",
-					message: createMessageDelivery([reserved.delivery.deliveryItem]),
-					triggerTurn: true,
-				},
+				createRuntimeMessageDelivery([reserved.delivery]),
 				{ inspectCommit: () => reserved.delivery.inspectProof() !== undefined },
 			);
 			this.#activeResumeByAgent.set(record.identity.agentId, {
@@ -611,14 +613,9 @@ export class MessageDeliveryScheduler {
 		);
 		if (unprovenSteer.length === 0) return;
 		frozen.dispatched = true;
-		record.host.deliverInLane({
-			kind: "custom",
-			message: createMessageDelivery(
-				unprovenSteer.map(({ deliveryItem }) => deliveryItem),
-			),
-			triggerTurn: true,
-			deliverAs: "steer",
-		});
+		record.host.deliverInLane(
+			createRuntimeMessageDelivery(unprovenSteer, "steer"),
+		);
 	}
 
 	#removeProvenDeliveriesInLane(record: AgentRecord): void {
@@ -708,6 +705,31 @@ export class MessageDeliveryScheduler {
 		if (this.#hasPendingScheduling(record)) return;
 		record.host.removeRetentionReason("pending_delivery");
 	}
+}
+
+function createRuntimeMessageDelivery(
+	deliveries: readonly ScheduledMessageDelivery[],
+	deliverAs?: "steer" | "followUp",
+): Extract<AgentRuntimeDelivery, { kind: "custom" }> {
+	const preparedRequest = deliveries.find((delivery) =>
+		delivery.contextPreparation !== undefined &&
+		delivery.deliveryItem.projection.kind === "request"
+	);
+	return {
+		kind: "custom",
+		message: createMessageDelivery(deliveries.map(({ deliveryItem }) => deliveryItem)),
+		triggerTurn: true,
+		...(deliverAs === undefined ? {} : { deliverAs }),
+		...(preparedRequest?.contextPreparation !== undefined &&
+			preparedRequest.deliveryItem.projection.kind === "request"
+			? {
+				workingZonePreparation: {
+					intent: preparedRequest.contextPreparation,
+					prospectiveRequest: preparedRequest.deliveryItem.projection,
+				},
+			}
+			: {}),
+	};
 }
 
 function scheduledDeliveryKind(delivery: ScheduledDelivery): ScheduledDeliveryKind {

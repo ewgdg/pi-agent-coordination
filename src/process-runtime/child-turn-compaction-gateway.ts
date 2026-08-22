@@ -1,8 +1,18 @@
 import {
+	estimateTokens,
 	shouldCompact,
 	type AgentSession,
 	type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
+
+import {
+	workingZonePreparationThreshold,
+} from "../policy/working-zone-preparation.ts";
+import { isRuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
+import {
+	MESSAGE_DELIVERY_CUSTOM_TYPE,
+} from "../protocol/message-delivery.ts";
+import type { WorkingZonePreparation } from "../runtime/agent-runtime-host.ts";
 
 /** Owns turn preparation policy beside one exact child AgentSession generation. */
 export class ChildTurnCompactionGateway {
@@ -14,8 +24,16 @@ export class ChildTurnCompactionGateway {
 	readonly #knownOwnerRunIds = new Set<string>();
 	readonly #cancelledOwnerRunIds = new Set<string>();
 	readonly #nativeAdmissions = new Map<number, () => void>();
+	readonly #session: AgentSession;
+	readonly #warn: (message: string) => void;
 
-	constructor(private readonly session: AgentSession) {}
+	constructor(
+		session: AgentSession,
+		warn: (message: string) => void = (message) => console.warn(message),
+	) {
+		this.#session = session;
+		this.#warn = warn;
+	}
 
 	get signal(): AbortSignal {
 		return this.#generationAbort.signal;
@@ -25,7 +43,7 @@ export class ChildTurnCompactionGateway {
 		event: SessionBeforeCompactEvent,
 	): { cancel: true } | undefined {
 		if (this.#disposed || event.reason !== "threshold") return undefined;
-		if (this.#activeAdmissions > 0 || this.session.agent.hasQueuedMessages()) {
+		if (this.#activeAdmissions > 0 || this.#session.agent.hasQueuedMessages()) {
 			return undefined;
 		}
 		return { cancel: true };
@@ -71,8 +89,8 @@ export class ChildTurnCompactionGateway {
 
 	cancelOwnerRun(runId: string): void {
 		this.#cancelledOwnerRunIds.add(runId);
-		if (this.#activeOwnerRunId === runId && this.session.isCompacting) {
-			this.session.abortCompaction();
+		if (this.#activeOwnerRunId === runId && this.#session.isCompacting) {
+			this.#session.abortCompaction();
 		}
 	}
 
@@ -112,7 +130,7 @@ export class ChildTurnCompactionGateway {
 
 	async waitForCompaction(): Promise<void> {
 		this.#assertCurrentGeneration();
-		if (!this.session.isCompacting) return;
+		if (!this.#session.isCompacting) return;
 		await new Promise<void>((resolve, reject) => {
 			let unsubscribe: () => void = () => undefined;
 			const finish = (settlement: () => void) => {
@@ -123,44 +141,94 @@ export class ChildTurnCompactionGateway {
 			const abort = () => finish(() => reject(
 				new Error("child_turn_compaction_gateway_disposed"),
 			));
-			unsubscribe = this.session.subscribe((event) => {
+			unsubscribe = this.#session.subscribe((event) => {
 				if (event.type === "compaction_end") finish(resolve);
 			});
 			this.#generationAbort.signal.addEventListener("abort", abort, { once: true });
-			if (!this.session.isCompacting) finish(resolve);
+			if (!this.#session.isCompacting) finish(resolve);
 		});
 		this.#assertCurrentGeneration();
 	}
 
-	async prepareIdleCustomTurn(): Promise<void> {
+	async prepareIdleCustomTurn(
+		workingZonePreparation?: WorkingZonePreparation,
+	): Promise<void> {
 		this.#assertCurrentGeneration();
 		await this.waitForCompaction();
-		if (!this.session.isIdle) return;
-		const usage = this.session.getContextUsage();
+		if (!this.#session.isIdle || !this.#session.autoCompactionEnabled) return;
+		const usage = this.#session.getContextUsage();
 		if (!usage || usage.tokens === null) return;
-		const settings = this.session.settingsManager.getCompactionSettings();
-		if (!shouldCompact(usage.tokens, usage.contextWindow, settings)) return;
+		const settings = this.#session.settingsManager.getCompactionSettings();
+		if (!settings.enabled) return;
+		const nativeThresholdApplies = shouldCompact(
+			usage.tokens,
+			usage.contextWindow,
+			settings,
+		);
+
+		if (!workingZonePreparation) {
+			if (!nativeThresholdApplies) return;
+			await this.#compactAtNativeThreshold();
+			this.#assertCurrentGeneration();
+			return;
+		}
+
+		const incomingRequestTokens = estimateTokens({
+			role: "custom",
+			customType: MESSAGE_DELIVERY_CUSTOM_TYPE,
+			content: JSON.stringify({
+				messages: [workingZonePreparation.prospectiveRequest],
+			}),
+			display: true,
+			timestamp: 0,
+		});
+		const effectiveThreshold = workingZonePreparationThreshold({
+			...workingZonePreparation.intent,
+			...(isRuntimeThinkingLevel(this.#session.thinkingLevel)
+				? { thinking: this.#session.thinkingLevel }
+				: {}),
+			contextWindow: usage.contextWindow,
+			incomingRequestTokens,
+		});
+		if (usage.tokens <= effectiveThreshold) return;
+
 		try {
-			await this.session.compact();
+			await this.#session.compact(
+				workingZoneCompactionInstructions(
+					workingZonePreparation.prospectiveRequest.question,
+				),
+			);
 		} catch (error) {
-			// Threshold usage can be dominated by unsummarizable system/recent context.
-			// Pi's native auto path treats the same public preparation result as no work.
-			if (
-				error instanceof Error &&
-				(error.message === "Nothing to compact (session too small)" ||
-					error.message === "Already compacted")
-			) return;
-			throw error;
+			if (nativeThresholdApplies) {
+				if (isNoCompactionWork(error)) return;
+				throw error;
+			}
+			this.#warn(
+				`Working-Zone Preparation failed; continuing Request Delivery: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
 		}
 		this.#assertCurrentGeneration();
+	}
+
+	async #compactAtNativeThreshold(): Promise<void> {
+		try {
+			await this.#session.compact();
+		} catch (error) {
+			// Existing custom-Delivery threshold preparation treats an
+			// unsummarizable branch as Pi having no native work to perform.
+			if (isNoCompactionWork(error)) return;
+			throw error;
+		}
 	}
 
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
 		this.#generationAbort.abort();
-		if (this.#activeAdmissions > 0 && this.session.isCompacting) {
-			this.session.abortCompaction();
+		if (this.#activeAdmissions > 0 && this.#session.isCompacting) {
+			this.#session.abortCompaction();
 		}
 		for (const release of this.#nativeAdmissions.values()) release();
 		this.#nativeAdmissions.clear();
@@ -211,4 +279,27 @@ export class ChildTurnCompactionGateway {
 			throw new Error("child_turn_compaction_gateway_disposed");
 		}
 	}
+}
+
+function isNoCompactionWork(error: unknown): boolean {
+	return error instanceof Error &&
+		(error.message === "Nothing to compact (session too small)" ||
+			error.message === "Already compacted");
+}
+
+function workingZoneCompactionInstructions(prospectiveQuestion: string): string {
+	return [
+		"Use the prospective Request below only to choose which existing context to preserve.",
+		"<prospective_request>",
+		escapeXmlText(prospectiveQuestion),
+		"</prospective_request>",
+		"The Request has not committed to this transcript. Do not include or paraphrase it in the summary, and do not state or imply that this Agent received it.",
+	].join("\n");
+}
+
+function escapeXmlText(value: string): string {
+	return value
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;");
 }

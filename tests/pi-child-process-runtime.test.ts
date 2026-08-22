@@ -19,6 +19,7 @@ import {
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
 	PROCESS_RUNTIME_TEST_RESPONSE,
+	PROCESS_RUNTIME_TEST_WORKING_ZONE_MODEL,
 } from "./fixtures/process-runtime-child-extension.ts";
 
 const TEST_TIMEOUT_MS = 30_000;
@@ -354,6 +355,323 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		await assert.rejects(lstat(systemPromptArtifactPath), hasFsCode("ENOENT"));
 	} finally {
 		await projection?.dispose();
+		await runtime?.dispose();
+	}
+});
+
+test("an idle prepared Request creates a working zone before exact Delivery commitment", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-working-zone-test-"));
+	const cwd = join(root, "work");
+	const agentDir = join(root, "agent");
+	const sessionDirectory = join(root, "sessions");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000083";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(agentDir, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	await writeFile(join(agentDir, "settings.json"), JSON.stringify({
+		compaction: {
+			enabled: true,
+			reserveTokens: 16_000,
+			keepRecentTokens: 1_000,
+		},
+	}));
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+	const seededSession = SessionManager.open(sessionPath);
+	for (const section of ["Earlier", "Later"]) {
+		seededSession.appendMessage({
+			role: "user",
+			content: [{
+				type: "text",
+				text: `${section} acquired context.${" relevant history".repeat(11_000)}`,
+			}],
+			timestamp: Date.now(),
+		});
+	}
+
+	let runtime: PiChildProcessRuntime | undefined;
+	const runtimeEvents: ControlEvent<typeof agentControlProtocol>[] = [];
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "process-working-zone-workflow",
+			agentId: "process-working-zone-agent",
+			role: "ordinary",
+			expectedSessionId,
+			sessionPath,
+			agentDir,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_WORKING_ZONE_MODEL,
+				},
+				thinking: "high",
+				allowedTools: [],
+				skills: [],
+				extensions: [CHILD_EXTENSION],
+				inheritProjectContext: true,
+			},
+			skillPaths: [],
+			projectTrusted: true,
+			ownerEnvironment: {
+				...process.env,
+				PI_SKIP_VERSION_CHECK: "1",
+				PROCESS_RUNTIME_RESPONSE_DELAY_MS: "300",
+				PROCESS_RUNTIME_WORKING_ZONE_COMPACTION: "extension",
+				PROCESS_RUNTIME_WORKING_ZONE_DELAY_MS: "200",
+			},
+			runtimeDirectory: root,
+			ownerRequestHandlers: ordinaryOwnerHandlers({
+				selectorSnapshot: processSelectorSnapshot("process-working-zone-agent"),
+			}),
+		});
+		runtime.onEvent((event) => runtimeEvents.push(event));
+
+		const omittedItem = {
+			source: {
+				agentId: "working-zone-requester",
+				entryId: "omitted-request-entry",
+				toolCallId: "omitted-request-call",
+			},
+			projection: {
+				kind: "request" as const,
+				requestMessageId: "omitted-request-call",
+				fromAgentId: "working-zone-requester",
+				question: "Use ordinary compaction behavior for this Request.",
+			},
+		};
+		const omittedMessage = createMessageDelivery([omittedItem]);
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "omitted-working-zone-run",
+			delivery: {
+				kind: "custom",
+				message: {
+					...omittedMessage,
+					details: { messages: [...omittedMessage.details.messages] },
+				},
+				triggerTurn: true,
+			},
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			modelCycleStarted: true,
+			queuedInputCount: 0,
+		});
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.start" &&
+			event.payload.runId === "omitted-working-zone-run"
+		));
+		const activeSteerItem = {
+			source: {
+				agentId: "working-zone-requester",
+				entryId: "active-steer-entry",
+				toolCallId: "active-steer-call",
+			},
+			projection: {
+				kind: "request" as const,
+				requestMessageId: "active-steer-call",
+				fromAgentId: "working-zone-requester",
+				question: "Preserve active Steer ordering without proactive preparation.",
+			},
+		};
+		const activeSteerMessage = createMessageDelivery([activeSteerItem]);
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "omitted-working-zone-run",
+			delivery: {
+				kind: "custom",
+				message: {
+					...activeSteerMessage,
+					details: { messages: [...activeSteerMessage.details.messages] },
+				},
+				triggerTurn: true,
+				deliverAs: "steer",
+				workingZonePreparation: {
+					intent: { workScale: "large", contextDependence: "low" },
+					prospectiveRequest: activeSteerItem.projection,
+				},
+			},
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			modelCycleStarted: true,
+			queuedInputCount: 0,
+		});
+		assert.equal(runtimeEvents.some((event) =>
+			event.event === "runtime.compaction.started"
+		), false);
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.settled" &&
+			event.payload.runId === "omitted-working-zone-run"
+		));
+		assert.equal(
+			SessionManager.open(sessionPath).getEntries()
+				.some((entry) => entry.type === "compaction"),
+			false,
+		);
+
+		const optionalFailureItem = {
+			source: {
+				agentId: "working-zone-requester",
+				entryId: "optional-failure-entry",
+				toolCallId: "optional-failure-call",
+			},
+			projection: {
+				kind: "request" as const,
+				requestMessageId: "optional-failure-call",
+				fromAgentId: "working-zone-requester",
+				question: "OPTIONAL_FAILURE must warn and continue below the native threshold.",
+			},
+		};
+		const optionalFailureMessage = createMessageDelivery([optionalFailureItem]);
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "optional-failure-working-zone-run",
+			delivery: {
+				kind: "custom",
+				message: {
+					...optionalFailureMessage,
+					details: { messages: [...optionalFailureMessage.details.messages] },
+				},
+				triggerTurn: true,
+				workingZonePreparation: {
+					intent: { workScale: "large", contextDependence: "low" },
+					prospectiveRequest: optionalFailureItem.projection,
+				},
+			},
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			modelCycleStarted: true,
+			queuedInputCount: 0,
+		});
+		await waitUntil(() => runtimeEvents.some((event) =>
+			event.event === "agent.settled" &&
+			event.payload.runId === "optional-failure-working-zone-run"
+		));
+		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
+			entry.type === "custom_message" &&
+			entry.content === optionalFailureMessage.content
+		), true);
+		assert.match(frameText(runtime), /Working-Zone Preparation failed/);
+
+		const cancelledItem = {
+			source: {
+				agentId: "working-zone-requester",
+				entryId: "cancelled-preparation-entry",
+				toolCallId: "cancelled-preparation-call",
+			},
+			projection: {
+				kind: "request" as const,
+				requestMessageId: "cancelled-preparation-call",
+				fromAgentId: "working-zone-requester",
+				question: "Cancel this exact Request while its working zone is preparing.",
+			},
+		};
+		const cancelledMessage = createMessageDelivery([cancelledItem]);
+		const compactionStartsBeforeCancellation = runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length;
+		const compactionCompletionsBeforeCancellation = runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.completed"
+		).length;
+		const cancellation = new AbortController();
+		const cancelledDelivery = runtime.channel.request("message.deliver", {
+			runId: "cancelled-working-zone-run",
+			delivery: {
+				kind: "custom",
+				message: {
+					...cancelledMessage,
+					details: { messages: [...cancelledMessage.details.messages] },
+				},
+				triggerTurn: true,
+				workingZonePreparation: {
+					intent: { workScale: "large", contextDependence: "low" },
+					prospectiveRequest: cancelledItem.projection,
+				},
+			},
+		}, cancellation.signal);
+		await waitUntil(() => runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length > compactionStartsBeforeCancellation);
+		cancellation.abort();
+		await assert.rejects(cancelledDelivery, (error: unknown) =>
+			error instanceof Error && error.name === "AbortError"
+		);
+		await waitUntil(() => runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.completed"
+		).length > compactionCompletionsBeforeCancellation);
+		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
+			entry.type === "custom_message" && entry.content === cancelledMessage.content
+		), false);
+
+		const preparedItem = {
+			source: {
+				agentId: "working-zone-requester",
+				entryId: "prepared-request-entry",
+				toolCallId: "prepared-request-call",
+			},
+			projection: {
+				kind: "request" as const,
+				requestMessageId: "prepared-request-call",
+				fromAgentId: "working-zone-requester",
+				question: "Use the previously acquired relevant history to finish issue 83.",
+			},
+		};
+		const preparedMessage = createMessageDelivery([preparedItem]);
+		const compactionStartsBeforePreparedRequest = runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length;
+		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			runId: "prepared-working-zone-run",
+			delivery: {
+				kind: "custom",
+				message: {
+					...preparedMessage,
+					details: { messages: [...preparedMessage.details.messages] },
+				},
+				triggerTurn: true,
+				workingZonePreparation: {
+					intent: { workScale: "large", contextDependence: "low" },
+					prospectiveRequest: preparedItem.projection,
+				},
+			},
+		}), {
+			accepted: true,
+			transcriptCommitted: true,
+			modelCycleStarted: true,
+			queuedInputCount: 0,
+		});
+
+		assert.equal(runtimeEvents.filter((event) =>
+			event.event === "runtime.compaction.started"
+		).length, compactionStartsBeforePreparedRequest + 1);
+		const entries = SessionManager.open(sessionPath).getEntries();
+		const compactionIndex = entries.findIndex((entry) => entry.type === "compaction");
+		const preparedDeliveryIndex = entries.findIndex((entry) =>
+			entry.type === "custom_message" && entry.content === preparedMessage.content
+		);
+		assert.notEqual(compactionIndex, -1);
+		assert.notEqual(preparedDeliveryIndex, -1);
+		assert.equal(compactionIndex < preparedDeliveryIndex, true);
+		const compaction = entries[compactionIndex];
+		assert.ok(compaction?.type === "compaction");
+		assert.equal(compaction.summary, "Extension-provided working-zone compaction summary.");
+		const instructions = (compaction.details as { customInstructions?: string } | undefined)
+			?.customInstructions;
+		assert.match(instructions ?? "", /previously acquired relevant history/);
+		assert.match(instructions ?? "", /has not committed to this transcript/);
+		assert.match(instructions ?? "", /Do not include or paraphrase it/);
+		assert.doesNotMatch(compaction.summary, /previously acquired relevant history/);
+	} finally {
+		await runtime?.shutdown("working-zone test complete");
 		await runtime?.dispose();
 	}
 });

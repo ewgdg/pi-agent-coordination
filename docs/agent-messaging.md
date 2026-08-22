@@ -87,6 +87,26 @@ An Agent Request can ask for existing information or a decision without delegati
 
 After Delivery admission, the responder owns the delegated work until its Answer arrives or the Request is cancelled. Continue only disjoint work that would remain necessary if the responder returned a complete, correct Answer. Otherwise end the turn and let ordinary Answer Delivery reactivate the Agent. Duplicate investigation is appropriate only when the Request explicitly asks for an independent cross-check.
 
+Reuse an existing Agent only when context acquired through its earlier work materially reduces rediscovery. Spawn a fresh Agent when that context is not relevant. A continuation Request may ask the idle recipient to prepare its existing context before Delivery:
+
+```json
+{
+  "operation": "request",
+  "targetAgentId": "existing-agent-id",
+  "question": "Continue the implementation using the constraints you already verified.",
+  "contextPreparation": {
+    "workScale": "medium",
+    "contextDependence": "high"
+  }
+}
+```
+
+`workScale` estimates expected context growth as `small`, `medium`, or `large`. `contextDependence` estimates the value of exact prior context as `low`, `medium`, or `high`. Both fields are required inside `contextPreparation`. The committed Request owns these estimates; retry accepts only the Request identity and cannot replace them. The recipient sees the ordinary Request projection without preparation metadata.
+
+Omit `contextPreparation` to retain ordinary Pi compaction behavior. When it is present, an idle child with automatic compaction enabled compares current context usage with the cost and runway threshold in [ADR 0003](adr/0003-continuation-working-zone-preparation.md). If preparation is warranted, the child calls the active public compaction strategy once before committing the Request. Pi summarization receives the prospective question only as relevance guidance and is told not to include, paraphrase, or claim receipt of the uncommitted Request. Extension-owned strategies may ignore that guidance and still provide the compaction result.
+
+Unknown context usage and disabled automatic compaction skip the optional attempt. Active Steer Delivery keeps its exact queue order and skips proactive preparation. A below-native optional failure warns in the child and continues Delivery; failure at Pi's native threshold remains blocking. Cancellation or Runtime replacement during preparation fences the exact Delivery.
+
 ## Retrieve an Answer
 
 Retrying a Request selects one authoritative outcome:
@@ -223,7 +243,7 @@ See [Workflow Policy](workflow-policy.md) for strict file validation and prospec
 
 Agent identity and a selected Agent Runtime can outlive any individual Run. When a child has no work and no Run Retention Reason, its current Run is released and the Agent becomes dormant. A Message, Request, Answer, or Cancellation to that Agent activates a successor Run in its prepared Runtime when available, commits at the first boundary allowed by its authored mode, and releases the successor again when no Run Retention Reason remains.
 
-Before an idle model-starting custom Delivery commits, the child recomputes Pi's current context threshold and performs any required compaction. This preparation preserves the exact custom message and completes before Delivery transcript commitment. A custom Delivery that does not trigger a model turn commits without compaction or interruption. Streaming Steer and Follow-up Delivery uses Pi's raw queue; when work is queued after `agent_end`, Pi's native threshold compaction proceeds before the continuation.
+Before an idle model-starting custom Delivery commits, the child Turn Compaction Gateway recomputes Pi's current native threshold. A continuation Request with `contextPreparation` also applies its working-zone threshold. The gateway calls the active public strategy at most once for that exact admission, preserves the exact custom message, and completes preparation before Delivery transcript commitment. A custom Delivery that does not trigger a model turn commits without compaction or interruption. Active Steer and Follow-up Delivery uses Pi's raw queue; when work is queued after `agent_end`, Pi's native threshold compaction proceeds before the continuation.
 
 Live scheduling, including the per-responder waiting Request order, is intentionally disposable. Run failure, exact Run termination, or Workflow shutdown discards every uncommitted item for that host. A successor reconstructs only the one active Request proved by durable Delivery and resolution evidence; it does not reconstruct waiting queue order. Receipts are not rewritten, Messages are not replayed automatically, and backlog is not transferred to a successor Run. Poll and explicit same-identity retry are the recovery path.
 

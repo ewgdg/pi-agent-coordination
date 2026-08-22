@@ -1000,6 +1000,9 @@ export class MessageCoordinator {
 			messageId: message.messageId,
 			deliveryMode: message.deliveryMode,
 			deliveryItem: createMessageDeliveryItem(message),
+			...(message.kind === "request" && message.contextPreparation !== undefined
+				? { contextPreparation: message.contextPreparation }
+				: {}),
 			inspectProof: () => message.kind === "answer"
 				? inspectAnswerDelivery({
 					requesterAgentId: recipient.identity.agentId,

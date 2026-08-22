@@ -24,6 +24,7 @@ export const PROCESS_RUNTIME_TEST_AGENT_DIR =
 export const PROCESS_RUNTIME_TEST_PROVIDER = "process-runtime-test";
 export const PROCESS_RUNTIME_TEST_MODEL = "offline-child";
 export const PROCESS_RUNTIME_TEST_ALTERNATE_MODEL = "offline-child-alternate";
+export const PROCESS_RUNTIME_TEST_WORKING_ZONE_MODEL = "offline-child-working-zone";
 export const PROCESS_RUNTIME_TEST_RESPONSE = "PROCESS_RUNTIME_PROMPT_OK";
 
 const faux = createFauxCore({
@@ -46,6 +47,15 @@ const faux = createFauxCore({
 			input: ["text"],
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 16_384,
+			maxTokens: 256,
+		},
+		{
+			id: PROCESS_RUNTIME_TEST_WORKING_ZONE_MODEL,
+			name: "Working-zone offline process child",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
 			maxTokens: 256,
 		},
 	],
@@ -96,6 +106,28 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		pi.on("session_shutdown", () => new Promise<void>(() => undefined));
 	}
 
+	if (process.env.PROCESS_RUNTIME_WORKING_ZONE_COMPACTION === "extension") {
+		pi.on("session_before_compact", async (event) => {
+			if (!event.customInstructions?.includes("prospective Request")) return;
+			if (event.customInstructions.includes("OPTIONAL_FAILURE")) {
+				return { cancel: true };
+			}
+			const delayMilliseconds = Number(
+				process.env.PROCESS_RUNTIME_WORKING_ZONE_DELAY_MS ?? 0,
+			);
+			if (delayMilliseconds > 0) {
+				await new Promise((resolve) => setTimeout(resolve, delayMilliseconds));
+			}
+			return {
+				compaction: {
+					summary: "Extension-provided working-zone compaction summary.",
+					firstKeptEntryId: event.preparation.firstKeptEntryId,
+					tokensBefore: event.preparation.tokensBefore,
+					details: { customInstructions: event.customInstructions },
+				},
+			};
+		});
+	}
 	pi.on("agent_end", (event) => {
 		if (
 			queuedPostRunContinuation ||

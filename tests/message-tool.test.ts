@@ -35,6 +35,26 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		parameters.anyOf?.map((candidate) => candidate.properties?.operation?.const),
 		["send", "request", "answer", "cancel", "poll", "retry"],
 	);
+	const requestSchema = parameters.anyOf?.find(
+		(candidate) => candidate.properties?.operation?.const === "request",
+	);
+	const contextPreparationSchema = requestSchema?.properties?.contextPreparation as unknown as {
+		properties?: Record<string, { anyOf?: Array<{ const?: unknown }> }>;
+		required?: string[];
+	};
+	assert.deepEqual(contextPreparationSchema.required?.slice().sort(), [
+		"contextDependence",
+		"workScale",
+	]);
+	assert.deepEqual(
+		contextPreparationSchema.properties?.workScale?.anyOf?.map(({ const: value }) => value),
+		["small", "medium", "large"],
+	);
+	assert.deepEqual(
+		contextPreparationSchema.properties?.contextDependence?.anyOf
+			?.map(({ const: value }) => value),
+		["low", "medium", "high"],
+	);
 	const cancelSchema = parameters.anyOf?.find(
 		(candidate) => candidate.properties?.operation?.const === "cancel",
 	);

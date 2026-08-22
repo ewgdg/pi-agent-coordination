@@ -2,7 +2,11 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
 import type { ModelVisibleRunFailureRecovery } from "../protocol/run-failure-recovery.ts";
-import type { ModelVisibleMessageDelivery } from "../protocol/message-delivery.ts";
+import type {
+	ModelVisibleMessage,
+	ModelVisibleMessageDelivery,
+} from "../protocol/message-delivery.ts";
+import type { ContextPreparation } from "../policy/working-zone-preparation.ts";
 import type { ModelVisibleModeratorRoutineStart } from "../protocol/moderator-input.ts";
 import type { ModelVisibleObligationReminder } from "../protocol/obligation-reminder.ts";
 import type {
@@ -69,6 +73,11 @@ export type EffectiveRuntimeSnapshot = Readonly<{
 export type AgentRuntimeWorkState = "active" | "settled" | "unavailable";
 export type ToolBatchClassification = "blocking" | "asynchronous";
 
+export type WorkingZonePreparation = Readonly<{
+	intent: ContextPreparation;
+	prospectiveRequest: Extract<ModelVisibleMessage, { kind: "request" }>;
+}>;
+
 export type AgentRuntimeDelivery =
 	| Readonly<{
 		kind: "custom";
@@ -79,6 +88,7 @@ export type AgentRuntimeDelivery =
 			| ModelVisibleRunFailureRecovery;
 		triggerTurn: boolean;
 		deliverAs?: "steer" | "followUp";
+		workingZonePreparation?: WorkingZonePreparation;
 	}>
 	| Readonly<{
 		kind: "user";

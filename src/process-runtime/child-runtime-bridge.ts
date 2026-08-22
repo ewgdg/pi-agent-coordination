@@ -407,7 +407,10 @@ function createChildRuntimeBinding(
 	let binding!: ChildRuntimeBinding;
 	let disposed = false;
 	const activity = new RemoteAgentActivitySource(agentId);
-	const turnCompaction = new ChildTurnCompactionGateway(runtime.session);
+	const turnCompaction = new ChildTurnCompactionGateway(
+		runtime.session,
+		(message) => context.ui.notify(message, "warning"),
+	);
 	const removeLifecycleSubscription = runtime.session.subscribe((event) => {
 		if (event.type === "compaction_start") {
 			void state.channel.sendEvent("runtime.compaction.started", {}).catch(() => undefined);
@@ -584,7 +587,9 @@ async function handleOwnerRequest(
 							request.payload.delivery.kind === "custom" &&
 							request.payload.delivery.triggerTurn
 						) {
-							await binding.turnCompaction.prepareIdleCustomTurn();
+							await binding.turnCompaction.prepareIdleCustomTurn(
+								request.payload.delivery.workingZonePreparation,
+							);
 						}
 						checkpoint();
 						if (request.signal.aborted) {

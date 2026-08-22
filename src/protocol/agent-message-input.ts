@@ -1,3 +1,9 @@
+import {
+	CONTEXT_DEPENDENCE_LEVELS,
+	CONTINUATION_WORK_SCALES,
+	type ContextPreparation,
+} from "../policy/working-zone-preparation.ts";
+
 export type MessageDeliveryMode = "deferred" | "steer";
 
 export type MessageSendInput = Readonly<{
@@ -12,6 +18,7 @@ export type RequestSendInput = Readonly<{
 	targetAgentId: string;
 	question: string;
 	deliveryMode?: MessageDeliveryMode;
+	contextPreparation?: ContextPreparation;
 }>;
 
 export type MessagePollInput = Readonly<{
@@ -59,7 +66,11 @@ export function sameAgentMessageInput(
 				left.targetAgentId === right.targetAgentId &&
 				left.question === right.question &&
 				(left.deliveryMode ?? "deferred") ===
-					(right.deliveryMode ?? "deferred");
+					(right.deliveryMode ?? "deferred") &&
+				left.contextPreparation?.workScale ===
+					right.contextPreparation?.workScale &&
+				left.contextPreparation?.contextDependence ===
+					right.contextPreparation?.contextDependence;
 		case "answer":
 			return right.operation === "answer" && left.answer === right.answer;
 		case "cancel":
@@ -125,9 +136,13 @@ export function validateAgentMessageInput(
 
 function validateRequestSendInput(value: Record<string, unknown>): RequestSendInput {
 	const keys = Object.keys(value).sort();
-	const expectedKeys = value.deliveryMode === undefined
-		? ["operation", "question", "targetAgentId"]
-		: ["deliveryMode", "operation", "question", "targetAgentId"];
+	const expectedKeys = [
+		...(value.contextPreparation === undefined ? [] : ["contextPreparation"]),
+		...(value.deliveryMode === undefined ? [] : ["deliveryMode"]),
+		"operation",
+		"question",
+		"targetAgentId",
+	].sort();
 	if (!sameStringList(keys, expectedKeys)) {
 		throw new Error("invalid_input: Agent Request input has an invalid shape");
 	}
@@ -144,6 +159,9 @@ function validateRequestSendInput(value: Record<string, unknown>): RequestSendIn
 	) {
 		throw new Error("invalid_input: Agent Request deliveryMode is unavailable");
 	}
+	const contextPreparation = value.contextPreparation === undefined
+		? undefined
+		: validateContextPreparation(value.contextPreparation);
 	return {
 		operation: "request",
 		targetAgentId: value.targetAgentId,
@@ -151,6 +169,29 @@ function validateRequestSendInput(value: Record<string, unknown>): RequestSendIn
 		...(value.deliveryMode === undefined
 			? {}
 			: { deliveryMode: value.deliveryMode }),
+		...(contextPreparation === undefined ? {} : { contextPreparation }),
+	};
+}
+
+function validateContextPreparation(value: unknown): ContextPreparation {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		throw new Error("invalid_input: Agent Request contextPreparation has an invalid shape");
+	}
+	const preparation = value as Record<string, unknown>;
+	if (!sameStringList(Object.keys(preparation).sort(), ["contextDependence", "workScale"])) {
+		throw new Error("invalid_input: Agent Request contextPreparation has an invalid shape");
+	}
+	if (!CONTINUATION_WORK_SCALES.includes(preparation.workScale as never)) {
+		throw new Error("invalid_input: Agent Request contextPreparation workScale is unavailable");
+	}
+	if (!CONTEXT_DEPENDENCE_LEVELS.includes(preparation.contextDependence as never)) {
+		throw new Error(
+			"invalid_input: Agent Request contextPreparation contextDependence is unavailable",
+		);
+	}
+	return {
+		workScale: preparation.workScale as ContextPreparation["workScale"],
+		contextDependence: preparation.contextDependence as ContextPreparation["contextDependence"],
 	};
 }
 

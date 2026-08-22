@@ -391,5 +391,15 @@ function serializeDelivery(delivery: AgentRuntimeDelivery) {
 			: { ...delivery.message },
 		triggerTurn: delivery.triggerTurn,
 		...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
+		...(delivery.workingZonePreparation === undefined
+			? {}
+			: {
+				workingZonePreparation: {
+					intent: { ...delivery.workingZonePreparation.intent },
+					prospectiveRequest: {
+						...delivery.workingZonePreparation.prospectiveRequest,
+					},
+				},
+			}),
 	};
 }
