@@ -62,6 +62,21 @@ The ordinary Agent Request authored by an Agent Spawn invocation as its child's 
 **Agent Delegation**:
 Assignment of one bounded work unit to another Agent through an Agent Request or an Agent Spawn Creation Request. A Request for existing information or a decision need not delegate work. Once admitted, the responder owns delegated work until its Agent Answer commits or the Request is cancelled; the requester and concurrent delegates keep their work disjoint unless the Request explicitly asks for an independent cross-check.
 
+**Continuation Delegation**:
+A delegating Agent's assignment of a new bounded work unit to an existing Agent because context that Agent acquired through earlier work materially reduces rediscovery. The delegating Agent decides relevance and uses an ordinary Agent Request; reuse adds no eligibility rule, routing behavior, authority, or lifecycle state.
+
+**Continuation Work Scale**:
+The delegating Agent's ordinal estimate of expected growth: Small for one localized follow-up, Medium for a normal bounded sequence of investigation, edits, tests, or review, and Large for extended multi-stage work that remains one delegation. It describes growth rather than difficulty, importance, risk, or a token count.
+
+**Prior-Context Dependence**:
+The delegating Agent's ordinal estimate of the value of exact earlier context: Low when a good summary is sufficient, Medium when decisions and work history matter but can mostly be summarized, and High when exact recent reasoning, outputs, or nuanced constraints remain materially valuable. Even Low materially reduces rediscovery, while High delays only proactive compaction and never Pi's native safety behavior.
+
+**Working-Zone Preparation**:
+A delegating Agent's optional non-model-visible Request intent for an idle Continuation Delegation recipient to use Continuation Work Scale and Prior-Context Dependence when deciding whether the Active Compaction Strategy would control repeated context cost without discarding valuable prior work. It respects user-disabled automatic compaction, never changes Delivery mode or authority, makes at most one stateless attempt per admission, and lets optional failure below Pi's native safety threshold continue normally.
+
+**Active Compaction Strategy**:
+The compaction behavior selected through an Agent Runtime's public session lifecycle, including Pi summarization or an extension-owned provider checkpoint. It owns the retained-context target, instruction support, persistence, diagnostics, and fallback behavior while accepting prospective relevance guidance when supported.
+
 **Agent Template**:
 A user-authored named partial Agent Runtime configuration selected by name during Agent Spawn. Its current complete definition is re-resolved whenever a new Runtime is prepared. It overlays the current resolved configuration of the Direct Spawner, remains overridable by the canonical Agent Spawn configuration, and changes neither protocol identity nor role relationships. Project-scoped Template discovery follows the current parent Runtime working directory. A retained Runtime keeps its already resolved configuration across its exact Runs.
 _Avoid_: Agent profile, Agent role
