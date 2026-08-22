@@ -17,6 +17,7 @@ import type { OwnerParticipantRequestHandlers } from "../src/process-runtime/rem
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import {
+	PROCESS_RUNTIME_TEST_AGENT_DIR,
 	PROCESS_RUNTIME_TEST_ALTERNATE_MODEL,
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
@@ -53,6 +54,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 		role: "ordinary",
 		expectedSessionId,
 		sessionPath,
+		agentDir: PROCESS_RUNTIME_TEST_AGENT_DIR,
 		configuration: {
 			cwd,
 			model: {

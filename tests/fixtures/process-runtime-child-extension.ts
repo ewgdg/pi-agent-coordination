@@ -8,18 +8,10 @@ import type {
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
-const TEST_AGENT_DIR_ENVIRONMENT_VARIABLE = "PI_CODING_AGENT_DIR";
-if (process.env.PI_AGENT_COORDINATION_BOOTSTRAP === undefined) {
-	const testAgentDir = mkdtempSync(join(tmpdir(), "pi-process-runtime-agent-"));
-	process.env[TEST_AGENT_DIR_ENVIRONMENT_VARIABLE] = testAgentDir;
-	process.once("exit", () => rmSync(testAgentDir, { recursive: true, force: true }));
-}
-export const PROCESS_RUNTIME_TEST_AGENT_DIR =
-	process.env[TEST_AGENT_DIR_ENVIRONMENT_VARIABLE]!;
+import { PI_TEST_AGENT_DIR } from "../support/pi-test-environment.ts";
+
+export const PROCESS_RUNTIME_TEST_AGENT_DIR = PI_TEST_AGENT_DIR;
 
 export const PROCESS_RUNTIME_TEST_PROVIDER = "process-runtime-test";
 export const PROCESS_RUNTIME_TEST_MODEL = "offline-child";

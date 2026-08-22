@@ -1,8 +1,8 @@
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import "./pi-test-environment.ts";
 import { runTestProcess } from "./test-process-supervisor.ts";
 
 const FAST_TEST_CONCURRENCY = 4;
@@ -83,19 +83,11 @@ const concurrency = suite === "fast"
 const timeoutMs = suite === "fast"
 	? FAST_TEST_TIMEOUT_MS
 	: PROCESS_TEST_TIMEOUT_MS;
-// A suite may itself be launched by a production Agent and inherit its bootstrap
-// marker. Establish test ownership here so persistent Pi APIs never reach user settings.
-const testAgentDir = mkdtempSync(join(tmpdir(), "pi-test-agent-"));
-process.env.PI_CODING_AGENT_DIR = testAgentDir;
-try {
-	process.exitCode = await runTestProcess([
-		"--test",
-		`--test-concurrency=${concurrency}`,
-		`--test-timeout=${timeoutMs}`,
-		"--test-reporter=dot",
-		...forwardedArguments,
-		...selectedFiles,
-	]);
-} finally {
-	rmSync(testAgentDir, { recursive: true, force: true });
-}
+process.exitCode = await runTestProcess([
+	"--test",
+	`--test-concurrency=${concurrency}`,
+	`--test-timeout=${timeoutMs}`,
+	"--test-reporter=dot",
+	...forwardedArguments,
+	...selectedFiles,
+]);

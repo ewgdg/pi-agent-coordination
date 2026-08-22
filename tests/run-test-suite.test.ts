@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { type TestContext } from "node:test";
 
+import { PI_TEST_ENVIRONMENT_MARKER } from "./support/pi-test-environment.ts";
+
 const FEEDBACK_TIMEOUT_MS = 5_000;
 const PROCESS_TEST_TIMEOUT_MS = 30_000;
 const POLL_INTERVAL_MS = 10;
@@ -55,6 +57,31 @@ test("the suite isolates Pi settings inherited from a spawned Agent", {
 	timeout: PROCESS_TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
 }, async (t) => {
+	await assertPiSettingsRemainUnchanged(t, [
+		"tests/support/run-test-suite.ts",
+		"process",
+		"--file=pi-child-hosted-runtime.test.ts",
+		"--test-name-pattern=the common Runtime Host supervises",
+	]);
+});
+
+test("direct process-test execution isolates Pi settings inherited from a spawned Agent", {
+	timeout: PROCESS_TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async (t) => {
+	await assertPiSettingsRemainUnchanged(t, [
+		"--test",
+		"--test-concurrency=1",
+		"--test-reporter=spec",
+		"--test-name-pattern=the common Runtime Host supervises",
+		"tests/pi-child-hosted-runtime.test.ts",
+	]);
+});
+
+async function assertPiSettingsRemainUnchanged(
+	t: TestContext,
+	arguments_: readonly string[],
+): Promise<void> {
 	const inheritedAgentDir = await mkdtemp(join(tmpdir(), "pi-inherited-agent-dir-"));
 	const settingsPath = join(inheritedAgentDir, "settings.json");
 	const originalSettings = `${JSON.stringify({
@@ -72,20 +99,16 @@ test("the suite isolates Pi settings inherited from a spawned Agent", {
 		PI_SKIP_VERSION_CHECK: "1",
 	};
 	delete environment.NODE_TEST_CONTEXT;
-	const outcome = await runCommand(
-		process.execPath,
-		[
-			"tests/support/run-test-suite.ts",
-			"process",
-			"--file=pi-child-hosted-runtime.test.ts",
-			"--test-name-pattern=the common Runtime Host supervises",
-		],
-		{ cwd: PROJECT_ROOT, env: environment },
-	);
+	// Model a production Agent launching tests, not the test process that launches this probe.
+	delete environment[PI_TEST_ENVIRONMENT_MARKER];
+	const outcome = await runCommand(process.execPath, arguments_, {
+		cwd: PROJECT_ROOT,
+		env: environment,
+	});
 
 	assert.equal(outcome.code, 0, outcome.output);
 	assert.equal(await readFile(settingsPath, "utf8"), originalSettings);
-});
+}
 
 type ProcessEvidence = Readonly<{
 	testRunnerPid: number;
