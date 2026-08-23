@@ -80,6 +80,10 @@ A successful agent_spawn returns spawnStatus "created", confirming that the chil
 Use agent_spawn \`conversation: "fork"\` only for a cache-affine continuation of the completed current conversation. A conversation fork cannot select a template or provide config.
 </agent_spawn>`;
 
+const AGENT_OBSERVE_PROMPT_GUIDE = `<agent_observe>
+To locate the transcript for the caller or an authorized Agent, use primaryEvidence.transcriptPath from an operation "status" result. A null path means the session is not file-backed.
+</agent_observe>`;
+
 const AGENT_CONTROL_PROMPT_GUIDE = `<agent_control>
 agent_control operation "terminate" ends one exact Agent Run. It does not remove the durable Agent, cancel Agent Requests, affect descendants, or prevent a later successor Run. A terminate receipt's residualRequests reports the unresolved incoming and outgoing Request counts left on that Agent.
 
@@ -382,7 +386,10 @@ const agentObserveParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("status"),
-			agentId: Type.Optional(Type.String({ minLength: 1 })),
+			agentId: Type.Optional(Type.String({
+				minLength: 1,
+				description: "Agent to observe. Omit to observe the calling Agent.",
+			})),
 		},
 		{ additionalProperties: false },
 	),
@@ -587,6 +594,7 @@ export function registerParticipantCoordinationTools<
 		promptSnippet: role === "moderator"
 			? "Pull bounded status or search results for Workflow Agents relevant to diagnosis."
 			: "Observe exact status or search authorized Agents by metadata and Run phase.",
+		promptGuidelines: [AGENT_OBSERVE_PROMPT_GUIDE],
 		executionMode: "sequential",
 		parameters: agentObserveParameters,
 		renderCall: (args, theme) =>

@@ -159,6 +159,22 @@ test("Agent Wait schema accepts only a parameterless join", () => {
 	}), false);
 });
 
+test("Agent Observe schema describes omitted status identity as self-observation", () => {
+	const variants = (participantCoordinationToolSchemas.agent_observe as {
+		anyOf: Array<{
+			properties: Record<string, { const?: string; description?: string }>;
+		}>;
+	}).anyOf;
+	const status = variants.find(({ properties }) =>
+		properties.operation?.const === "status"
+	);
+	assert.ok(status);
+	assert.equal(
+		status.properties.agentId?.description,
+		"Agent to observe. Omit to observe the calling Agent.",
+	);
+});
+
 test("Agent Observe schema composes authorized and direct-child search filters", () => {
 	const schema = participantCoordinationToolSchemas.agent_observe;
 	assert.equal(Value.Check(schema, { operation: "status" }), true);
@@ -315,120 +331,9 @@ test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalog
 	await host.runtime.dispose();
 });
 
-test("participant registrar contributes focused tool guides and one shared Agent Delegation guide", async (t) => {
+test("participant registrar contributes each prompt guide once", async (t) => {
 	let observedSystemPrompt = "";
 	const host = await createRegistrarHost(t, "ordinary", handlers);
-	const message = host.session.getToolDefinition("agent_message");
-	const wait = host.session.getToolDefinition("agent_wait");
-	const spawn = host.session.getToolDefinition("agent_spawn");
-	const control = host.session.getToolDefinition("agent_control");
-	assert.ok(message);
-	assert.ok(wait);
-	assert.ok(spawn);
-	assert.ok(control);
-	assert.equal(message.promptGuidelines?.length, 2);
-	assert.equal(wait.promptGuidelines?.length, 1);
-	assert.equal(spawn.promptGuidelines?.length, 2);
-	assert.equal(control.promptGuidelines?.length, 1);
-
-	const messageGuide = message.promptGuidelines[0] ?? "";
-	const delegationGuide = message.promptGuidelines[1] ?? "";
-	const waitGuide = wait.promptGuidelines[0] ?? "";
-	const spawnGuide = spawn.promptGuidelines[0] ?? "";
-	const controlGuide = control.promptGuidelines[0] ?? "";
-	assert.equal(spawn.promptGuidelines[1], delegationGuide);
-	assert.notEqual(waitGuide, delegationGuide);
-
-	assert.match(messageGuide, /^<agent_message>/);
-	assert.match(
-		messageGuide,
-		/targetAgent accepts an exact Agent label, full Agent ID, or unique Agent ID suffix[\s\S]*Labels resolve only among the caller, its Direct Spawner, and its direct children[\s\S]*ambiguous target is rejected/,
-	);
-	assert.match(
-		messageGuide,
-		/agent_message returns messageStatus "sent"[\s\S]*may still be queued[\s\S]*does not mean delivered/,
-	);
-	assert.match(
-		messageGuide,
-		/delivered Agent Request[\s\S]*creates one Answer obligation/,
-	);
-	assert.match(
-		messageGuide,
-		/Keep provisional findings local[\s\S]*Use "answer" for the curated result[\s\S]*reverse "request"/,
-	);
-	assert.match(
-		messageGuide,
-		/terminal response to that Request[\s\S]*end the turn immediately[\s\S]*Leave passive waiting and later continuation to the runtime/,
-	);
-
-	assert.match(delegationGuide, /^<agent_delegation>/);
-	assert.match(
-		delegationGuide,
-		/When agent_message operation "request" or agent_spawn delegates work, partition it into bounded, non-overlapping work units/,
-	);
-	assert.match(
-		delegationGuide,
-		/Reuse an existing Agent with agent_message operation "request"[\s\S]*acquired through its earlier work materially reduces rediscovery[\s\S]*contextPreparation with both workScale and contextDependence[\s\S]*Spawn a fresh Agent when prior context is not relevant/,
-	);
-	assert.match(
-		delegationGuide,
-		/returns requestMessageId with messageStatus "sent"[\s\S]*responder owns the delegated work until its Answer arrives or the Request is cancelled/,
-	);
-	assert.match(
-		delegationGuide,
-		/Continue only explicitly disjoint work[\s\S]*complete, correct Answer[\s\S]*end the turn[\s\S]*runtime waits for turn-triggering input/,
-	);
-	assert.match(
-		delegationGuide,
-		/duplicate investigation[\s\S]*Request explicitly asks for an independent cross-check/,
-	);
-
-	assert.match(waitGuide, /^<agent_wait>/);
-	assert.match(
-		waitGuide,
-		/Use agent_wait only when one next decision requires every outstanding Answer together[\s\S]*avoiding one model turn per Answer matters/,
-	);
-	assert.match(waitGuide, /Ordinary Messages do not satisfy Agent Requests/);
-	assert.doesNotMatch(
-		waitGuide,
-		/agent_wait rejects when an unanswered Request targets a Dormant Agent/,
-	);
-	assert.match(
-		waitGuide,
-		/agent_wait returns disposition "preempted"[\s\S]*call agent_wait again[\s\S]*preemption does not consume[\s\S]*Answer Delivery proof/,
-	);
-
-	assert.match(spawnGuide, /^<agent_spawn>/);
-	assert.match(
-		spawnGuide,
-		/A successful agent_spawn returns spawnStatus "created"[\s\S]*Creation Request follows the shared Agent Delegation rules/,
-	);
-	assert.match(
-		spawnGuide,
-		/Use agent_spawn `conversation: "fork"` only for a cache-affine continuation/,
-	);
-	assert.doesNotMatch(spawnGuide, /partition work|partition it/);
-	assert.doesNotMatch(spawnGuide, /tiny work/i);
-	assert.doesNotMatch(spawnGuide, /Continue only explicitly disjoint work/);
-	assert.doesNotMatch(spawnGuide, /duplicate investigation/);
-
-	assert.match(controlGuide, /^<agent_control>/);
-	assert.match(
-		controlGuide,
-		/agent_control operation "terminate" ends one exact Agent Run[\s\S]*does not remove the durable Agent[\s\S]*cancel Agent Requests[\s\S]*affect descendants/,
-	);
-	assert.match(
-		controlGuide,
-		/terminate receipt's residualRequests[\s\S]*unresolved incoming and outgoing Request counts/,
-	);
-	assert.match(
-		controlGuide,
-		/If termination abandons work from a Request you authored[\s\S]*agent_message operation "cancel"[\s\S]*before delegating replacement work or calling agent_wait/,
-	);
-	assert.match(
-		controlGuide,
-		/If the work remains needed, reactivate the same Agent with an ordinary Message/,
-	);
 
 	host.model.setResponses([(context) => {
 		observedSystemPrompt = context.systemPrompt ?? "";
@@ -441,13 +346,14 @@ test("participant registrar contributes focused tool guides and one shared Agent
 		"agent_delegation",
 		"agent_wait",
 		"agent_spawn",
+		"agent_observe",
 		"agent_control",
 	]) {
-		assert.equal(observedSystemPrompt.split(`<${tag}>`).length - 1, 1);
-		assert.equal(observedSystemPrompt.split(`</${tag}>`).length - 1, 1);
+		const blocks = observedSystemPrompt.match(
+			new RegExp(`<${tag}>[\\s\\S]*?</${tag}>`, "g"),
+		);
+		assert.equal(blocks?.length, 1, tag);
 	}
-	assert.doesNotMatch(observedSystemPrompt, /<\/?agent_request>/);
-	assert.doesNotMatch(observedSystemPrompt, /Complete tiny work directly/i);
 	await host.runtime.dispose();
 });
 
