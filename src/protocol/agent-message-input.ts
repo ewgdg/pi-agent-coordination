@@ -8,14 +8,14 @@ export type MessageDeliveryMode = "deferred" | "steer";
 
 export type MessageSendInput = Readonly<{
 	operation: "send";
-	targetAgentId: string;
+	targetAgent: string;
 	content: string;
 	deliveryMode?: MessageDeliveryMode;
 }>;
 
 export type RequestSendInput = Readonly<{
 	operation: "request";
-	targetAgentId: string;
+	targetAgent: string;
 	question: string;
 	deliveryMode?: MessageDeliveryMode;
 	contextPreparation?: ContextPreparation;
@@ -57,13 +57,13 @@ export function sameAgentMessageInput(
 	switch (left.operation) {
 		case "send":
 			return right.operation === "send" &&
-				left.targetAgentId === right.targetAgentId &&
+				left.targetAgent === right.targetAgent &&
 				left.content === right.content &&
 				(left.deliveryMode ?? "deferred") ===
 					(right.deliveryMode ?? "deferred");
 		case "request":
 			return right.operation === "request" &&
-				left.targetAgentId === right.targetAgentId &&
+				left.targetAgent === right.targetAgent &&
 				left.question === right.question &&
 				(left.deliveryMode ?? "deferred") ===
 					(right.deliveryMode ?? "deferred") &&
@@ -141,13 +141,13 @@ function validateRequestSendInput(value: Record<string, unknown>): RequestSendIn
 		...(value.deliveryMode === undefined ? [] : ["deliveryMode"]),
 		"operation",
 		"question",
-		"targetAgentId",
+		"targetAgent",
 	].sort();
 	if (!sameStringList(keys, expectedKeys)) {
 		throw new Error("invalid_input: Agent Request input has an invalid shape");
 	}
-	if (typeof value.targetAgentId !== "string" || value.targetAgentId.length === 0) {
-		throw new Error("invalid_input: Agent Request targetAgentId must not be empty");
+	if (typeof value.targetAgent !== "string" || value.targetAgent.length === 0) {
+		throw new Error("invalid_input: Agent Request targetAgent must not be empty");
 	}
 	if (typeof value.question !== "string" || value.question.length === 0) {
 		throw new Error("invalid_input: Agent Request question must not be empty");
@@ -164,7 +164,7 @@ function validateRequestSendInput(value: Record<string, unknown>): RequestSendIn
 		: validateContextPreparation(value.contextPreparation);
 	return {
 		operation: "request",
-		targetAgentId: value.targetAgentId,
+		targetAgent: value.targetAgent,
 		question: value.question,
 		...(value.deliveryMode === undefined
 			? {}
@@ -200,13 +200,13 @@ function validateMessageSendInput(
 ): MessageSendInput {
 	const keys = Object.keys(value).sort();
 	const expectedKeys = value.deliveryMode === undefined
-		? ["content", "operation", "targetAgentId"]
-		: ["content", "deliveryMode", "operation", "targetAgentId"];
+		? ["content", "operation", "targetAgent"]
+		: ["content", "deliveryMode", "operation", "targetAgent"];
 	if (!sameStringList(keys, expectedKeys)) {
 		throw new Error("invalid_input: Agent Message send input has an invalid shape");
 	}
-	if (typeof value.targetAgentId !== "string" || value.targetAgentId.length === 0) {
-		throw new Error("invalid_input: Agent Message targetAgentId must not be empty");
+	if (typeof value.targetAgent !== "string" || value.targetAgent.length === 0) {
+		throw new Error("invalid_input: Agent Message targetAgent must not be empty");
 	}
 	if (typeof value.content !== "string" || value.content.length === 0) {
 		throw new Error("invalid_input: Agent Message content must not be empty");
@@ -220,7 +220,7 @@ function validateMessageSendInput(
 	}
 	return {
 		operation: "send",
-		targetAgentId: value.targetAgentId,
+		targetAgent: value.targetAgent,
 		content: value.content,
 		...(value.deliveryMode === undefined
 			? {}

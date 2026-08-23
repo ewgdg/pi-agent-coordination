@@ -325,7 +325,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	const ownerTranscript = SessionManager.open(ownerSessionFile);
 	const outboundRequestInput = {
 		operation: "request" as const,
-		targetAgentId: first.agentId,
+		targetAgent: first.agentId,
 		question: "Remain waiting even when the responder transcript is quarantined.",
 	};
 	const outboundEntryId = ownerTranscript.appendMessage(
@@ -344,6 +344,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	const outboundRequestId = deriveMessageIdentity(outboundSource);
 	const outboundReceipt = {
 		requestMessageId: outboundRequestId,
+		targetAgentId: first.agentId,
 		messageStatus: "sent" as const,
 	};
 	ownerTranscript.appendMessage({
@@ -383,7 +384,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	const firstTranscript = SessionManager.open(firstFile);
 	const inboundRequestInput = {
 		operation: "request" as const,
-		targetAgentId: host.session.sessionId,
+		targetAgent: host.session.sessionId,
 		question: "Remain answer-owed even when the requester transcript is quarantined.",
 	};
 	const inboundEntryId = firstTranscript.appendMessage(
@@ -709,7 +710,7 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 	]);
 	await executeTool(reopened, "agent_message", "start-residual-child", {
 		operation: "send",
-		targetAgentId: spawned.agentId,
+		targetAgent: spawned.agentId,
 		content: "Start a successor Run without resolving the Creation Request.",
 	});
 	await waitForCondition(async () => {
@@ -750,7 +751,7 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 	]);
 	const request = await executeTool(host, "agent_message", "self-request-before-branch", {
 		operation: "request",
-		targetAgentId: host.session.sessionId,
+		targetAgent: host.session.sessionId,
 		question: "Remain unresolved on an abandoned physical branch.",
 	}) as { requestMessageId: string };
 	await host.session.waitForIdle();
@@ -974,7 +975,7 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 		"route-to-recovered-moderator",
 		{
 			operation: "send",
-			targetAgentId: moderator.agentId,
+			targetAgent: moderator.agentId,
 			content: "Inspect post-mortem evidence without reconstructing handling.",
 		},
 	);

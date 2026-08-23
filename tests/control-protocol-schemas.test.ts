@@ -263,8 +263,12 @@ test("every version-four method and event has TypeBox payload/result schemas", (
 	}), false);
 	assert.equal(Check(agentControlMethods["coordination.message"].request, {
 		toolCallId: "call-message",
-		input: { operation: "send", targetAgentId: "target", content: "hello" },
+		input: { operation: "send", targetAgent: "target", content: "hello" },
 	}), true);
+	assert.equal(Check(agentControlMethods["coordination.message"].request, {
+		toolCallId: "call-message-with-removed-target-field",
+		input: { operation: "send", targetAgentId: "target", content: "hello" },
+	}), false);
 	assert.equal(Check(agentControlMethods["coordination.message"].request, {
 		toolCallId: "call-cancel",
 		input: {
@@ -283,12 +287,18 @@ test("every version-four method and event has TypeBox payload/result schemas", (
 	}), false);
 	assert.equal(Check(agentControlMethods["coordination.message"].response, {
 		messageId: "message",
+		targetAgentId: "target",
 		messageStatus: "sent",
 	}), true);
 	assert.equal(Check(agentControlMethods["coordination.message"].response, {
 		requestMessageId: "request-message",
+		targetAgentId: "target",
 		messageStatus: "sent",
 	}), true);
+	assert.equal(Check(agentControlMethods["coordination.message"].response, {
+		messageId: "message-without-target",
+		messageStatus: "sent",
+	}), false);
 	assert.equal(Check(agentControlMethods["coordination.message"].response, {
 		disposition: "rejected",
 		reason: "answer_required",

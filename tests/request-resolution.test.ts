@@ -245,7 +245,7 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
 				operation: "request",
-				targetAgentId: answerSource.agentId,
+				targetAgent: answerSource.agentId,
 				question: "Return one Answer through Agent Wait.",
 			}, { id: requestToolCallId }),
 			{ stopReason: "toolUse" },
@@ -306,7 +306,7 @@ test("a completed Agent Wait rejects a Request authored after its call", () => {
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
 				operation: "request",
-				targetAgentId: "later-responder",
+				targetAgent: "later-responder",
 				question: "This Request is outside the prior Wait snapshot.",
 			}, { id: laterRequestToolCallId }),
 			{ stopReason: "toolUse" },
@@ -432,7 +432,7 @@ test("an answer-required rejection does not author a retryable Message", () => {
 	const toolCallId = "send-provisional-answer";
 	const input = {
 		operation: "send" as const,
-		targetAgentId: "requester-agent",
+		targetAgent: "requester-agent",
 		content: "This provisional finding must remain local.",
 	};
 	const sessionManager = SessionManager.inMemory(process.cwd(), { id: agentId });
@@ -462,5 +462,47 @@ test("an answer-required rejection does not author a retryable Message", () => {
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		source: { agentId, entryId, toolCallId },
 		input,
+		resolvedTargetAgentId: input.targetAgent,
 	}), "not_created");
+});
+
+test("selector-authored Message inspection accepts its resolved target identity", () => {
+	const agentId = "selector-message-author";
+	const targetAgentId = "agent-research-983c81e3";
+	const toolCallId = "send-by-label";
+	const input = {
+		operation: "send" as const,
+		targetAgent: "Researcher",
+		content: "Inspect the canonical target binding.",
+	};
+	const sessionManager = SessionManager.inMemory(process.cwd(), { id: agentId });
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
+	const entryId = sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const source = { agentId, entryId, toolCallId };
+	sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Message admitted." }],
+		details: {
+			messageId: deriveMessageIdentity(source),
+			targetAgentId,
+			messageStatus: "sent",
+		},
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	assert.equal(inspectAgentMessageAuthorResult({
+		authorAgentId: agentId,
+		transcript: transcriptFromSessionManager(sessionManager).inspect(),
+		source,
+		input,
+		resolvedTargetAgentId: targetAgentId,
+	}), "canonical");
 });

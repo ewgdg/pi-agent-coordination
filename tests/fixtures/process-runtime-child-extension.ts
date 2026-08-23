@@ -75,7 +75,7 @@ faux.setResponses(process.env.PROCESS_RUNTIME_COORDINATION_TOOLS === "1"
 			}),
 			fauxToolCall("agent_message", {
 				operation: "send",
-				targetAgentId: "process-target-agent",
+				targetAgent: "process-target-agent",
 				content: "Exact process message",
 			}, { id: "process-message-call" }),
 		], { stopReason: "toolUse" }),

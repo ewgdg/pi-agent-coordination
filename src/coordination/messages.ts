@@ -52,6 +52,7 @@ import type { ToolCallPointer } from "../protocol/identities.ts";
 import type { InterruptionHoldHandle } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import type { UnresolvedAgentRequest } from "./dependency-deadlock.ts";
+import { resolveCommittedAgentMessageTargetId } from "./agent-message-target.ts";
 
 export type { AgentMessageInput } from "../protocol/message.ts";
 export type {
@@ -94,10 +95,12 @@ export class MessageCoordinator {
 	readonly #deliveryScheduler: MessageDeliveryScheduler;
 	readonly #requestEvidence: RequestEvidence;
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
+	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
 		quarantinedAgentIds?: ReadonlySet<string>;
+		quarantinedWorkflowAgentIds?: ReadonlySet<string>;
 		isShuttingDown(): boolean;
 		boundaryHooks?: MessageBoundaryHooks;
 		preemptAgentWait?: IncomingRequestWaitPreemptor;
@@ -105,11 +108,14 @@ export class MessageCoordinator {
 	}) {
 		this.#agents = options.agents;
 		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
+		this.#quarantinedWorkflowAgentIds =
+			options.quarantinedWorkflowAgentIds ?? this.#quarantinedAgentIds;
 		this.#isShuttingDown = options.isShuttingDown;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#requestEvidence = new RequestEvidence(
 			this.#agents,
 			this.#quarantinedAgentIds,
+			this.#quarantinedWorkflowAgentIds,
 		);
 		this.#deliveryScheduler = new MessageDeliveryScheduler({
 			scheduleReleaseEvaluation: this.#boundaryHooks.scheduleReleaseEvaluation,
@@ -300,14 +306,24 @@ export class MessageCoordinator {
 		input: Extract<AgentMessageInput, { operation: "send" | "request" }>,
 	): Promise<AgentMessageSendReceipt | AgentRequestReceipt> {
 		const sender = this.#requireAgent(callerAgentId);
+		const senderTranscript = sender.transcript.inspect();
+		const resolvedTargetAgentId = resolveCommittedAgentMessageTargetId({
+			agents: this.#agents,
+			quarantinedWorkflowAgentIds: this.#quarantinedWorkflowAgentIds,
+			authorAgentId: callerAgentId,
+			authorTranscript: senderTranscript,
+			toolCallId,
+			targetAgent: input.targetAgent,
+		});
+		const recipient = this.#requireAgent(resolvedTargetAgentId);
 		const message = resolveCommittedMessage({
 			fromAgentId: callerAgentId,
 			workflowId: sender.identity.workflowId,
-			transcript: sender.transcript.inspect(),
+			transcript: senderTranscript,
 			toolCallId,
 			providedInput: input,
+			resolvedTargetAgentId,
 		});
-		const recipient = this.#requireAgent(message.targetAgentId);
 		if (recipient.identity.workflowId !== message.workflowId) {
 			throw new Error("wrong_workflow: Message recipient is outside the sender Workflow");
 		}
@@ -327,8 +343,14 @@ export class MessageCoordinator {
 			}
 		}
 		const identity = message.kind === "request"
-			? { requestMessageId: message.messageId }
-			: { messageId: message.messageId };
+			? {
+				requestMessageId: message.messageId,
+				targetAgentId: message.targetAgentId,
+			}
+			: {
+				messageId: message.messageId,
+				targetAgentId: message.targetAgentId,
+			};
 		if (this.#isShuttingDown()) {
 			return {
 				...identity,
@@ -675,7 +697,10 @@ export class MessageCoordinator {
 			};
 		}
 		const { cancellation, responder } = admitted;
-		const identity = { messageId: cancellation.messageId };
+		const identity = {
+			messageId: cancellation.messageId,
+			targetAgentId: cancellation.targetAgentId,
+		};
 		if (this.#isShuttingDown()) {
 			return {
 				...identity,
@@ -725,6 +750,10 @@ export class MessageCoordinator {
 			return this.#retryRequest(caller, message);
 		}
 		const recipient = this.#requireAgent(message.targetAgentId);
+		const retryIdentity = {
+			messageId: message.messageId,
+			targetAgentId: message.targetAgentId,
+		};
 		return recipient.host.lane.run(async () => {
 			if (
 				this.#boundaryHooks.beforeRecipientInspection?.({
@@ -734,7 +763,7 @@ export class MessageCoordinator {
 				}) === "inspection_incomplete"
 			) {
 				return {
-					messageId: message.messageId,
+					...retryIdentity,
 					messageStatus: "not_sent",
 					reason: "evidence_unavailable",
 				};
@@ -754,7 +783,7 @@ export class MessageCoordinator {
 			}
 			if (canonical.state === "indeterminate") {
 				return {
-					messageId: message.messageId,
+					...retryIdentity,
 					messageStatus: "unknown",
 					reason: "inspection_incomplete",
 				};
@@ -768,7 +797,7 @@ export class MessageCoordinator {
 			}
 			if (this.#isShuttingDown()) {
 				return {
-					messageId: message.messageId,
+					...retryIdentity,
 					messageStatus: "not_sent",
 					reason: "host_shutting_down",
 				};
@@ -784,14 +813,14 @@ export class MessageCoordinator {
 					operation: "retry",
 				}) === "confirmation_lost"
 					? {
-						messageId: message.messageId,
+						...retryIdentity,
 						messageStatus: "unknown",
 						reason: "confirmation_lost",
 					}
-					: { messageId: message.messageId, messageStatus: "sent" };
+					: { ...retryIdentity, messageStatus: "sent" };
 			}
 			return {
-				messageId: message.messageId,
+				...retryIdentity,
 				messageStatus: "not_sent",
 				reason: admission,
 			};
@@ -803,9 +832,13 @@ export class MessageCoordinator {
 		request: Extract<Message, { kind: "request" }>,
 	): Promise<AgentRequestRetryReceipt> {
 		const responder = this.#requireAgent(request.targetAgentId);
+		const retryIdentity = {
+			requestMessageId: request.messageId,
+			targetAgentId: request.targetAgentId,
+		};
 		if (this.#requestEvidence.findCancellation(request)) {
 			return {
-				requestMessageId: request.messageId,
+				...retryIdentity,
 				messageStatus: "not_sent",
 				reason: "policy_rejected",
 			};
@@ -819,7 +852,7 @@ export class MessageCoordinator {
 				}) === "inspection_incomplete"
 			) {
 				return {
-					requestMessageId: request.messageId,
+					...retryIdentity,
 					messageStatus: "not_sent",
 					reason: "evidence_unavailable",
 				};
@@ -839,7 +872,7 @@ export class MessageCoordinator {
 			}
 			if (canonicalRequest.state === "indeterminate") {
 				return {
-					requestMessageId: request.messageId,
+					...retryIdentity,
 					messageStatus: "unknown",
 					reason: "inspection_incomplete",
 				};
@@ -858,7 +891,7 @@ export class MessageCoordinator {
 				});
 				if (canonicalAnswer.state !== "canonical") {
 					return {
-						requestMessageId: request.messageId,
+						...retryIdentity,
 						messageStatus: "unknown",
 						reason: "inspection_incomplete",
 					};
@@ -871,7 +904,7 @@ export class MessageCoordinator {
 					)
 				) {
 					return {
-						requestMessageId: request.messageId,
+						...retryIdentity,
 						messageStatus: "unknown",
 						reason: "inspection_incomplete",
 					};
@@ -901,7 +934,7 @@ export class MessageCoordinator {
 			}
 			if (this.#isShuttingDown()) {
 				return {
-					requestMessageId: request.messageId,
+					...retryIdentity,
 					messageStatus: "not_sent",
 					reason: "host_shutting_down",
 				};
@@ -917,17 +950,17 @@ export class MessageCoordinator {
 					operation: "retry",
 				}) === "confirmation_lost"
 					? {
-						requestMessageId: request.messageId,
+						...retryIdentity,
 						messageStatus: "unknown",
 						reason: "confirmation_lost",
 					}
 					: {
-						requestMessageId: request.messageId,
+						...retryIdentity,
 						messageStatus: "sent",
 					};
 			}
 			return {
-				requestMessageId: request.messageId,
+				...retryIdentity,
 				messageStatus: "not_sent",
 				reason: admission,
 			};

@@ -38,6 +38,8 @@ import {
 } from "../protocol/request-resolution.ts";
 import type { AgentWaitAnswer } from "../protocol/agent-wait.ts";
 import type { ResidualRequestRelationships } from "../runtime/agent-runtime-host.ts";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
+import { resolveCommittedAgentMessageTargetId } from "./agent-message-target.ts";
 
 type Request = Extract<Message, { kind: "request" }>;
 type Answer = Extract<Message, { kind: "answer" }>;
@@ -46,6 +48,7 @@ type Cancellation = Extract<Message, { kind: "request_cancellation" }>;
 export class RequestEvidence {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
+	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	// The transcript is authoritative. These entries only bridge the interval after
 	// lane admission and before Pi appends the native tool result.
 	readonly #admittedAnswersByRequest = new Map<string, Answer>();
@@ -54,9 +57,11 @@ export class RequestEvidence {
 	constructor(
 		agents: Map<string, AgentRecord>,
 		quarantinedAgentIds: ReadonlySet<string> = new Set(),
+		quarantinedWorkflowAgentIds: ReadonlySet<string> = quarantinedAgentIds,
 	) {
 		this.#agents = agents;
 		this.#quarantinedAgentIds = quarantinedAgentIds;
+		this.#quarantinedWorkflowAgentIds = quarantinedWorkflowAgentIds;
 	}
 
 	rememberAdmittedAnswer(answer: Answer): void {
@@ -154,12 +159,20 @@ export class RequestEvidence {
 			if (authored.input.operation !== "request") {
 				throw new Error(`wrong_message_kind: Message ${requestId} is not a Request`);
 			}
+			const authorTranscript = author.transcript.inspect();
+			const resolvedTargetAgentId = this.#resolveMessageTargetId(
+				author,
+				authorTranscript,
+				authored.source.toolCallId,
+				authored.input.targetAgent,
+			);
 			const request = resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
-				transcript: author.transcript.inspect(),
+				transcript: authorTranscript,
 				toolCallId: authored.source.toolCallId,
 				providedInput: authored.input,
+				resolvedTargetAgentId,
 			});
 			if (request.kind !== "request") {
 				throw new Error(`wrong_message_kind: Message ${requestId} is not a Request`);
@@ -182,12 +195,20 @@ export class RequestEvidence {
 			authorAgentId: author.identity.agentId,
 			transcript: author.transcript.inspect(),
 		}).map(({ source, input }) => {
+			const authorTranscript = author.transcript.inspect();
+			const resolvedTargetAgentId = this.#resolveMessageTargetId(
+				author,
+				authorTranscript,
+				source.toolCallId,
+				input.targetAgent,
+			);
 			const message = resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
-				transcript: author.transcript.inspect(),
+				transcript: authorTranscript,
 				toolCallId: source.toolCallId,
 				providedInput: input,
+				resolvedTargetAgentId,
 			});
 			if (message.kind !== "request") {
 				throw new Error(
@@ -474,26 +495,37 @@ export class RequestEvidence {
 		const canonical = findAuthoredAgentMessageSources({
 			authorAgentId: author.identity.agentId,
 			transcript: author.transcript.inspect(),
-		}).filter(({ source, input }) =>
-			((operation === "answer" &&
-				input.operation === "answer" &&
-				(
-					answerSourceResultRequestId({
-						transcript: author.transcript.inspect(),
-						source,
-					}) ?? requestId
-				) === requestId) ||
-				(operation === "cancel" &&
-					input.operation === "cancel" &&
-					input.requestMessageId === requestId)) &&
-			inspectAgentMessageAuthorResult({
+		}).filter(({ source, input }) => {
+			if (operation === "answer") {
+				if (
+					input.operation !== "answer" ||
+					(
+						answerSourceResultRequestId({
+							transcript: author.transcript.inspect(),
+							source,
+						}) ?? requestId
+					) !== requestId
+				) return false;
+				return inspectAgentMessageAuthorResult({
+					authorAgentId: author.identity.agentId,
+					transcript: author.transcript.inspect(),
+					source,
+					input,
+					requestId,
+				}) === "canonical";
+			}
+			if (
+				input.operation !== "cancel" ||
+				input.requestMessageId !== requestId
+			) return false;
+			return inspectAgentMessageAuthorResult({
 				authorAgentId: author.identity.agentId,
 				transcript: author.transcript.inspect(),
 				source,
 				input,
-				...(input.operation === "answer" ? { requestId } : {}),
-			}) === "canonical"
-		);
+				resolvedTargetAgentId: this.requireRequest(requestId).targetAgentId,
+			}) === "canonical";
+		});
 		if (canonical.length > 1) {
 			throw new Error(
 				`invariant_violation: Request ${requestId} has multiple canonical ${operation === "answer" ? "Answers" : "Cancellations"}`,
@@ -551,12 +583,20 @@ export class RequestEvidence {
 		});
 		if (!authored) return undefined;
 		if (authored.input.operation === "send" || authored.input.operation === "request") {
+			const authorTranscript = author.transcript.inspect();
+			const resolvedTargetAgentId = this.#resolveMessageTargetId(
+				author,
+				authorTranscript,
+				authored.source.toolCallId,
+				authored.input.targetAgent,
+			);
 			return resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
-				transcript: author.transcript.inspect(),
+				transcript: authorTranscript,
 				toolCallId: authored.source.toolCallId,
 				providedInput: authored.input,
+				resolvedTargetAgentId,
 			});
 		}
 		if (authored.input.operation === "answer") {
@@ -651,6 +691,22 @@ export class RequestEvidence {
 				(request) => request.targetAgentId === responder.identity.agentId,
 			)
 		);
+	}
+
+	#resolveMessageTargetId(
+		author: AgentRecord,
+		authorTranscript: TranscriptInspection,
+		toolCallId: string,
+		targetAgent: string,
+	): string {
+		return resolveCommittedAgentMessageTargetId({
+			agents: this.#agents,
+			quarantinedWorkflowAgentIds: this.#quarantinedWorkflowAgentIds,
+			authorAgentId: author.identity.agentId,
+			authorTranscript,
+			toolCallId,
+			targetAgent,
+		});
 	}
 
 	#requireAgent(agentId: string): AgentRecord {

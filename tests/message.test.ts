@@ -58,7 +58,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 	const childId = findSpawnedAgentId(host.session.sessionManager);
 	const sourceInput = {
 		operation: "send" as const,
-		targetAgentId: childId,
+		targetAgent: childId,
 		content: "Inspect the first-proof-wins boundary.",
 	};
 	const toolCallId = "send-deferred-message";
@@ -102,6 +102,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 	);
 	assert.deepEqual(result.details, {
 		messageId: expectedMessageId,
+		targetAgentId: childId,
 		messageStatus: "sent",
 	});
 	host.session.sessionManager.appendMessage({
@@ -212,7 +213,7 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 	assert.ok(agentMessage);
 	const absentInput = {
 		operation: "send" as const,
-		targetAgentId: childId,
+		targetAgent: childId,
 		content: "This canonical Message is deliberately not scheduled.",
 	};
 	const absentToolCallId = "author-not-observed-message";
@@ -243,6 +244,7 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 		content: [{ type: "text", text: "Message scheduling was rejected." }],
 		details: {
 			messageId: absentMessageId,
+			targetAgentId: childId,
 			messageStatus: "not_sent",
 			reason: "target_unavailable",
 		},
@@ -276,7 +278,7 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 	const unresolvedToolCallId = "author-unresolved-message";
 	const unresolvedInput = {
 		operation: "send" as const,
-		targetAgentId: childId,
+		targetAgent: childId,
 		content: "This source has neither author result nor recipient Delivery.",
 	};
 	host.session.sessionManager.appendMessage(
@@ -366,7 +368,7 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 	const sendToolCallId = "send-before-racing-retries";
 	const sendInput = {
 		operation: "send" as const,
-		targetAgentId: childId,
+		targetAgent: childId,
 		content: "Deliver this identity exactly once after the active work settles.",
 	};
 	host.session.sessionManager.appendMessage(
@@ -435,8 +437,8 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 	assert.deepEqual(
 		retryResults.map(({ details }) => details),
 		[
-			{ messageId, messageStatus: "sent" },
-			{ messageId, messageStatus: "sent" },
+			{ messageId, targetAgentId: childId, messageStatus: "sent" },
+			{ messageId, targetAgentId: childId, messageStatus: "sent" },
 		],
 	);
 
@@ -508,7 +510,7 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 	const sendToolCallId = "message-starts-successor";
 	const input = {
 		operation: "send" as const,
-		targetAgentId: spawn.agentId,
+		targetAgent: spawn.agentId,
 		content: "Start a successor and inspect this Message.",
 	};
 	host.session.sessionManager.appendMessage(
@@ -552,6 +554,273 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 	assert.equal(view.status(spawn.agentId).run.phase, "dormant");
 
 	await coordinator.shutdown(async () => host.runtime.dispose());
+});
+
+test("Messages and Requests accept an exact label or unique Agent ID suffix", async (t) => {
+	const admittedRecipientIds: string[] = [];
+	const harness = await createDormantChildHarness(t, {
+		beforeDeliveryAdmission: ({ recipientAgentId }) => {
+			admittedRecipientIds.push(recipientAgentId);
+			return "confirmed_failure";
+		},
+	});
+	const label = harness.view.status(harness.childId).label;
+	const targets = [
+		{
+			operation: "send" as const,
+			targetAgent: label,
+			content: "Resolve this exact Agent label.",
+		},
+		{
+			operation: "request" as const,
+			targetAgent: harness.childId.slice(-8),
+			question: "Resolve this unique Agent ID suffix.",
+		},
+	];
+
+	for (const [index, input] of targets.entries()) {
+		const toolCallId = `target-selector-${index}`;
+		harness.host.session.sessionManager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall("agent_message", input, { id: toolCallId }),
+				{ stopReason: "toolUse" },
+			),
+		);
+		const receipt = await harness.view.message(toolCallId, input);
+		assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
+		assert.equal("reason" in receipt && receipt.reason, "target_unavailable");
+		assert.equal("targetAgentId" in receipt && receipt.targetAgentId, harness.childId);
+	}
+	assert.deepEqual(admittedRecipientIds, [harness.childId, harness.childId]);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("ordinary Agent labels use its coordination neighborhood while ID suffixes stay global", async (t) => {
+	const admittedRecipientIds: string[] = [];
+	const harness = await createDormantChildHarness(t, {
+		beforeDeliveryAdmission: ({ recipientAgentId }) => {
+			admittedRecipientIds.push(recipientAgentId);
+			return "confirmed_failure";
+		},
+	});
+	const siblingSpawnCallId = "spawn-owner-labeled-sibling";
+	const siblingSpawnInput = {
+		request: "Remain outside the caller's label neighborhood.",
+		label: "Owner",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", siblingSpawnInput, { id: siblingSpawnCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const sibling = await harness.view.spawn(siblingSpawnCallId, siblingSpawnInput);
+	if (!("agentId" in sibling)) throw new Error("Sibling spawn has no Agent identity");
+
+	const childView = harness.coordinator.forAgent(harness.childId);
+	const childSession = SessionManager.open(harness.childSessionFile);
+	const inputs = [
+		{
+			operation: "send" as const,
+			targetAgent: "Owner",
+			content: "Resolve the Direct Spawner's local label.",
+		},
+		{
+			operation: "send" as const,
+			targetAgent: sibling.agentId.slice(-8),
+			content: "Resolve the sibling's Workflow-global ID suffix.",
+		},
+	];
+	for (const [index, input] of inputs.entries()) {
+		const toolCallId = `child-addressing-${index}`;
+		childSession.appendMessage(fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		));
+		const receipt = await childView.message(toolCallId, input);
+		assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
+	}
+	assert.deepEqual(admittedRecipientIds, [
+		harness.host.session.sessionId,
+		sibling.agentId,
+	]);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("Agent Message rejects duplicate labels instead of choosing one recipient", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
+	const duplicateLabel = harness.view.status(harness.childId).label;
+	const spawnToolCallId = "spawn-duplicate-label-recipient";
+	const spawnInput = {
+		request: "Remain dormant as the duplicate-label target.",
+		label: duplicateLabel,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, { id: spawnToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const second = await harness.view.spawn(spawnToolCallId, spawnInput);
+	assert.equal(second.spawnStatus, "created");
+
+	const toolCallId = "reject-duplicate-label-target";
+	const input = {
+		operation: "send" as const,
+		targetAgent: duplicateLabel,
+		content: "Do not choose either duplicate label.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	await assert.rejects(
+		() => harness.view.message(toolCallId, input),
+		/ambiguous_target: Agent label .* matches 2 addressable Agents/,
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("retry keeps the Agent resolved by the original selector after labels become ambiguous", async (t) => {
+	const admittedRecipientIds: string[] = [];
+	const harness = await createDormantChildHarness(t, {
+		beforeDeliveryAdmission: ({ recipientAgentId }) => {
+			admittedRecipientIds.push(recipientAgentId);
+			return "confirmed_failure";
+		},
+	});
+	const label = harness.view.status(harness.childId).label;
+	const sourceToolCallId = "author-before-label-becomes-ambiguous";
+	const sourceInput = {
+		operation: "send" as const,
+		targetAgent: label,
+		content: "Keep this recipient fixed across retry.",
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", sourceInput, { id: sourceToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const sourceEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(sourceEntry);
+	const source = {
+		agentId: harness.host.session.sessionId,
+		entryId: sourceEntry.id,
+		toolCallId: sourceToolCallId,
+	};
+	const sourceReceipt = await harness.view.message(sourceToolCallId, sourceInput);
+	assert.equal("targetAgentId" in sourceReceipt && sourceReceipt.targetAgentId, harness.childId);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: sourceToolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(sourceReceipt) }],
+		details: sourceReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+
+	const spawnToolCallId = "spawn-later-duplicate-label";
+	const spawnInput = {
+		request: "Create ambiguity after the target is fixed.",
+		label,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, { id: spawnToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const second = await harness.view.spawn(spawnToolCallId, spawnInput);
+	assert.equal(second.spawnStatus, "created");
+	if (!("agentId" in second)) throw new Error("Spawn receipt has no Agent identity");
+
+	if (!("messageId" in sourceReceipt)) throw new Error("Message receipt has no identity");
+	const retryToolCallId = "retry-after-label-becomes-ambiguous";
+	const retryInput = {
+		operation: "retry" as const,
+		messageId: sourceReceipt.messageId,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", retryInput, { id: retryToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	harness.host.model.setResponses([
+		fauxAssistantMessage("The retry stayed bound to the original Agent."),
+	]);
+	const retryReceipt = await harness.view.message(retryToolCallId, retryInput);
+	assert.equal("messageStatus" in retryReceipt && retryReceipt.messageStatus, "sent");
+	await waitForEntry(
+		harness.childSessionFile,
+		(entry) =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.message-delivery" &&
+			deliveryContainsSource(entry.details, source),
+	);
+	const secondSessionFile = await waitForChildSessionFile(harness.host, second.agentId);
+	assert.equal(
+		hasDelivery(SessionManager.open(secondSessionFile).getEntries(), source),
+		false,
+	);
+	assert.deepEqual(admittedRecipientIds, [harness.childId]);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
+test("recipient Delivery keeps a selector target fixed when the author result is missing", async (t) => {
+	const harness = await createDormantChildHarness(t, {});
+	const label = harness.view.status(harness.childId).label;
+	harness.host.model.setResponses([
+		fauxAssistantMessage("The selector Message reached its original Agent."),
+	]);
+	const authored = await authorMessage(
+		harness,
+		"selector-delivered-without-author-result",
+		"Let recipient proof retain this target.",
+		{ appendResult: false, targetAgentId: label },
+	);
+	await waitForDelivery(harness, authored.source);
+
+	const spawnToolCallId = "spawn-duplicate-after-result-loss";
+	const spawnInput = {
+		request: "Duplicate the label after recipient proof exists.",
+		label,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_spawn", spawnInput, { id: spawnToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	assert.equal((await harness.view.spawn(spawnToolCallId, spawnInput)).spawnStatus, "created");
+
+	const pollToolCallId = "poll-selector-after-result-loss";
+	const pollInput = {
+		operation: "poll" as const,
+		messageId: authored.receipt.messageId,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", pollInput, { id: pollToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const pollReceipt = await harness.view.message(pollToolCallId, pollInput);
+	assert.equal("disposition" in pollReceipt && pollReceipt.disposition, "delivered");
+	assert.deepEqual(
+		"deliveryEvidence" in pollReceipt && pollReceipt.deliveryEvidence.agentId,
+		harness.childId,
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
 test("the recipient lane resolves delivery-first, close-first, and stale close candidates against exact Runs", async (t) => {
@@ -768,7 +1037,7 @@ test("poll rejects malformed committed Agent Message source evidence", async (t)
 				"agent_message",
 				{
 					operation: "send",
-					targetAgentId: harness.childId,
+					targetAgent: harness.childId,
 					content: "",
 				},
 				{ id: "malformed-committed-agent-message-source" },
@@ -1022,7 +1291,7 @@ test("only the original sender can poll a Message", async (t) => {
 	const sendToolCallId = "send-poll-authorization-message";
 	const sendInput = {
 		operation: "send" as const,
-		targetAgentId: childId,
+		targetAgent: childId,
 		content: "Only my sender identity may poll this Message.",
 	};
 	host.session.sessionManager.appendMessage(
@@ -1241,6 +1510,7 @@ test("send reports indeterminate when admission confirmation is lost without can
 
 	assert.deepEqual(sent.receipt, {
 		messageId: sent.receipt.messageId,
+		targetAgentId: harness.childId,
 		messageStatus: "unknown",
 		reason: "confirmation_lost",
 	});
@@ -1297,6 +1567,7 @@ test("retry reports indeterminate when admission confirmation is lost without ca
 	const receipt = await harness.view.message(retryToolCallId, retryInput);
 	assert.deepEqual(receipt, {
 		messageId: retried.receipt.messageId,
+		targetAgentId: harness.childId,
 		messageStatus: "unknown",
 		reason: "confirmation_lost",
 	});
@@ -1382,6 +1653,7 @@ test("recipient capacity counts distinct pending identities without evicting adm
 	);
 	assert.deepEqual(exhausted.receipt, {
 		messageId: exhausted.receipt.messageId,
+		targetAgentId: harness.childId,
 		messageStatus: "not_sent",
 		reason: "capacity_exhausted",
 	});
@@ -1401,7 +1673,11 @@ test("recipient capacity counts distinct pending identities without evicting adm
 	);
 	assert.deepEqual(
 		await harness.view.message(coalescedRetryId, coalescedRetryInput),
-		{ messageId: admitted.receipt.messageId, messageStatus: "sent" },
+		{
+			messageId: admitted.receipt.messageId,
+			targetAgentId: harness.childId,
+			messageStatus: "sent",
+		},
 	);
 
 	releaseActiveWork();
@@ -1430,7 +1706,11 @@ test("recipient capacity counts distinct pending identities without evicting adm
 	);
 	assert.deepEqual(
 		await harness.view.message(retryExhaustedId, retryExhaustedInput),
-		{ messageId: exhausted.receipt.messageId, messageStatus: "sent" },
+		{
+			messageId: exhausted.receipt.messageId,
+			targetAgentId: harness.childId,
+			messageStatus: "sent",
+		},
 	);
 	await waitForDelivery(harness, exhausted.source);
 
@@ -1593,7 +1873,7 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 	const lateToolCallId = "admit-steer-after-freeze";
 	const lateInput = {
 		operation: "send" as const,
-		targetAgentId: harness.childId,
+		targetAgent: harness.childId,
 		content: "Wait for the following safe boundary.",
 		deliveryMode: "steer" as const,
 	};
@@ -1699,6 +1979,7 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 	}
 	assert.deepEqual(lateReceipt, {
 		messageId: lateReceipt.messageId,
+		targetAgentId: harness.childId,
 		messageStatus: "sent",
 	});
 	harness.host.session.sessionManager.appendMessage({
@@ -2006,11 +2287,12 @@ async function authorMessage(
 	options: {
 		appendResult?: boolean;
 		deliveryMode?: "deferred" | "steer";
+		targetAgentId?: string;
 	} = {},
 ) {
 	const input = {
 		operation: "send" as const,
-		targetAgentId: harness.childId,
+		targetAgent: options.targetAgentId ?? harness.childId,
 		content,
 		...(options.deliveryMode === undefined
 			? {}

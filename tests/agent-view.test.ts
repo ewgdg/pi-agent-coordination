@@ -1353,7 +1353,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 	await owner.control("terminate-unselected-startup-worker", terminateInput);
 	const messageInput = {
 		operation: "send" as const,
-		targetAgentId: agentId,
+		targetAgent: agentId,
 		content: "Start an unselected successor and wait in startup UI.",
 	};
 	appendToolSource("agent_message", "message-starts-unselected-ui", messageInput);
@@ -1871,7 +1871,7 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 		"message-starts-viewed-successor",
 		{
 			operation: "send",
-			targetAgentId: agentId,
+			targetAgent: agentId,
 			content: "Start the successor through ordinary Message delivery.",
 		},
 	);

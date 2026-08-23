@@ -47,6 +47,8 @@ import { renderAgentTemplatePromptGuide } from "./agent-template-prompt-guide.ts
 export type ParticipantCoordinationRole = "ordinary" | "moderator" | "owner";
 
 const AGENT_MESSAGE_PROMPT_GUIDE = `<agent_message>
+For send and request, targetAgent accepts an exact Agent label, full Agent ID, or unique Agent ID suffix. Full IDs and suffixes resolve Workflow-wide. Labels resolve only among the caller, its Direct Spawner, and its direct children; Owner and Moderator labels resolve Workflow-wide. An ambiguous target is rejected rather than guessed.
+
 When agent_message returns messageStatus "sent", the Message was admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
 
 A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
@@ -182,7 +184,10 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("send"),
-			targetAgentId: Type.String({ minLength: 1 }),
+			targetAgent: Type.String({
+				minLength: 1,
+				description: "Exact Agent label, full Agent ID, or unique Agent ID suffix",
+			}),
 			content: Type.String({ minLength: 1 }),
 			deliveryMode: Type.Optional(
 				Type.Union([
@@ -196,7 +201,10 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("request"),
-			targetAgentId: Type.String({ minLength: 1 }),
+			targetAgent: Type.String({
+				minLength: 1,
+				description: "Exact Agent label, full Agent ID, or unique Agent ID suffix",
+			}),
 			question: Type.String({ minLength: 1 }),
 			deliveryMode: Type.Optional(
 				Type.Union([

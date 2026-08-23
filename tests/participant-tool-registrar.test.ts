@@ -66,7 +66,11 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	ParticipantCoordinationToolHandlers<"moderator"> &
 	ParticipantCoordinationToolHandlers<"owner"> = {
 	async message() {
-		return { messageId: "message-1", messageStatus: "sent" };
+		return {
+			messageId: "message-1",
+			targetAgentId: "child-agent",
+			messageStatus: "sent",
+		};
 	},
 	async wait() {
 		return { answers: [] };
@@ -136,6 +140,15 @@ test("Agent Message schema correlates Answer implicitly and Cancellation explici
 	assert.ok(cancellation);
 	assert.equal("requestMessageId" in cancellation.properties, true);
 	assert.equal("requestId" in cancellation.properties, false);
+
+	for (const operation of ["send", "request"]) {
+		const targetVariant = variants.find(({ properties }) =>
+			properties.operation?.const === operation
+		);
+		assert.ok(targetVariant);
+		assert.equal("targetAgent" in targetVariant.properties, true);
+		assert.equal("targetAgentId" in targetVariant.properties, false);
+	}
 });
 
 test("Agent Wait schema accepts only a parameterless join", () => {
@@ -327,6 +340,10 @@ test("participant registrar contributes focused tool guides and one shared Agent
 	assert.notEqual(waitGuide, delegationGuide);
 
 	assert.match(messageGuide, /^<agent_message>/);
+	assert.match(
+		messageGuide,
+		/targetAgent accepts an exact Agent label, full Agent ID, or unique Agent ID suffix[\s\S]*Labels resolve only among the caller, its Direct Spawner, and its direct children[\s\S]*ambiguous target is rejected/,
+	);
 	assert.match(
 		messageGuide,
 		/agent_message returns messageStatus "sent"[\s\S]*may still be queued[\s\S]*does not mean delivered/,
@@ -525,7 +542,11 @@ test("participant registrar routes intents and returns exact handler receipts", 
 			responderAgentId: "child-agent",
 		}],
 	} as const;
-	const messageReceipt = { messageId: "message-2", messageStatus: "sent" } as const;
+	const messageReceipt = {
+		messageId: "message-2",
+		targetAgentId: "child-agent",
+		messageStatus: "sent",
+	} as const;
 	const waitReceipt = { answers: [] } as const;
 	const spawnReceipt = {
 		spawnStatus: "not_created",

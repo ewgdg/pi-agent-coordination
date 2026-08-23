@@ -16,7 +16,7 @@ import {
 test("context preparation is an exact optional Agent Request field", () => {
 	const request = {
 		operation: "request" as const,
-		targetAgentId: "recipient-agent",
+		targetAgent: "recipient-agent",
 		question: "Continue the bounded implementation work.",
 		contextPreparation: {
 			workScale: "large" as const,
@@ -26,11 +26,11 @@ test("context preparation is an exact optional Agent Request field", () => {
 	assert.deepEqual(validateAgentMessageInput(request), request);
 	assert.deepEqual(validateAgentMessageInput({
 		operation: "request",
-		targetAgentId: "recipient-agent",
+		targetAgent: "recipient-agent",
 		question: "Use ordinary Pi compaction behavior.",
 	}), {
 		operation: "request",
-		targetAgentId: "recipient-agent",
+		targetAgent: "recipient-agent",
 		question: "Use ordinary Pi compaction behavior.",
 	});
 
@@ -43,7 +43,7 @@ test("context preparation is an exact optional Agent Request field", () => {
 	]) {
 		assert.throws(() => validateAgentMessageInput({
 			operation: "request",
-			targetAgentId: "recipient-agent",
+			targetAgent: "recipient-agent",
 			question: "Reject incomplete preparation intent.",
 			contextPreparation,
 		}), /contextPreparation|invalid shape/);
@@ -57,7 +57,7 @@ test("context preparation is an exact optional Agent Request field", () => {
 
 	assert.throws(() => validateAgentMessageInput({
 		operation: "send",
-		targetAgentId: "recipient-agent",
+		targetAgent: "recipient-agent",
 		content: "Preparation is unavailable for Messages.",
 		contextPreparation: request.contextPreparation,
 	}), /invalid shape/);
@@ -69,7 +69,7 @@ test("context preparation is an exact optional Agent Request field", () => {
 	}), false);
 	assert.equal(sameAgentMessageInput(request, {
 		operation: "request",
-		targetAgentId: request.targetAgentId,
+		targetAgent: request.targetAgent,
 		question: request.question,
 	}), false);
 });
@@ -80,7 +80,7 @@ test("committed preparation intent stays outside the model-visible Request proje
 	const toolCallId = "prepared-request-call";
 	const input = {
 		operation: "request" as const,
-		targetAgentId: "recipient-agent",
+		targetAgent: "recipient-agent",
 		question: "Continue from the context you already acquired.",
 		contextPreparation: {
 			workScale: "medium" as const,
@@ -99,6 +99,7 @@ test("committed preparation intent stays outside the model-visible Request proje
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		toolCallId,
 		providedInput: input,
+		resolvedTargetAgentId: input.targetAgent,
 	});
 
 	assert.equal(message.kind, "request");

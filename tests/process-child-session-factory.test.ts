@@ -328,7 +328,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		]);
 		const successorInput = {
 			operation: "send" as const,
-			targetAgentId: receipt.agentId,
+			targetAgent: receipt.agentId,
 			content: "Start one successor after re-resolving current resources.",
 		};
 		host.session.sessionManager.appendMessage(

@@ -56,6 +56,7 @@ export type ColdWorkflowRecovery = Readonly<{
 	transcriptPathByAgentId: ReadonlyMap<string, string>;
 	agentIdBySpawnSource: ReadonlyMap<string, string>;
 	quarantinedAgentIds: ReadonlySet<string>;
+	quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	quarantinedCandidateCount: number;
 }>;
 
@@ -287,6 +288,21 @@ export async function discoverColdWorkflow(options: {
 	for (const candidate of moderators) {
 		transcriptPathByAgentId.set(candidate.identity.agentId, candidate.path);
 	}
+	const currentWorkflowCandidateIds = new Set(
+		candidates
+			.filter(({ identity }) => identity.workflowId === ownerIdentity.workflowId)
+			.map(({ identity }) => identity.agentId),
+	);
+	const foreignCandidateIds = new Set(
+		candidates
+			.filter(({ identity }) => identity.workflowId !== ownerIdentity.workflowId)
+			.map(({ identity }) => identity.agentId),
+	);
+	const quarantinedWorkflowAgentIds = new Set(
+		[...quarantinedAgentIds].filter((agentId) =>
+			currentWorkflowCandidateIds.has(agentId) || !foreignCandidateIds.has(agentId)
+		),
+	);
 	return {
 		agents: [
 			...ordered.map((candidate) => ({
@@ -304,6 +320,7 @@ export async function discoverColdWorkflow(options: {
 		transcriptPathByAgentId,
 		agentIdBySpawnSource,
 		quarantinedAgentIds,
+		quarantinedWorkflowAgentIds,
 		quarantinedCandidateCount:
 			unreadableCandidateCount + candidates.filter(({ invalid }) => invalid).length,
 	};
@@ -506,6 +523,7 @@ function emptyRecovery(): ColdWorkflowRecovery {
 		transcriptPathByAgentId: new Map(),
 		agentIdBySpawnSource: new Map(),
 		quarantinedAgentIds: new Set(),
+		quarantinedWorkflowAgentIds: new Set(),
 		quarantinedCandidateCount: 0,
 	};
 }

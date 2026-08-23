@@ -233,6 +233,7 @@ export class WorkflowCoordinator {
 		Readonly<{ handle: AgentRunHandle; permit: WorkflowExecutionPermit }>
 	>();
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
+	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	readonly #agentIdBySpawnSource: Map<string, string>;
 	#shutdownPromise: Promise<void> | undefined;
 	#shuttingDown = false;
@@ -263,6 +264,8 @@ export class WorkflowCoordinator {
 		this.#ownerDiagnostics = runtime.services.diagnostics;
 		this.#postMortemAgentPresenter = options.postMortemAgentPresenter;
 		this.#quarantinedAgentIds = options.recoveredWorkflow?.quarantinedAgentIds ?? new Set();
+		this.#quarantinedWorkflowAgentIds =
+			options.recoveredWorkflow?.quarantinedWorkflowAgentIds ?? new Set();
 		this.#agentIdBySpawnSource = new Map(
 			options.recoveredWorkflow?.agentIdBySpawnSource ?? [],
 		);
@@ -343,6 +346,7 @@ export class WorkflowCoordinator {
 		this.#messages = new MessageCoordinator({
 			agents: this.#agents,
 			quarantinedAgentIds: this.#quarantinedAgentIds,
+			quarantinedWorkflowAgentIds: this.#quarantinedWorkflowAgentIds,
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
 			preemptAgentWait: (record, reserveDelivery) =>

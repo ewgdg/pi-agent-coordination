@@ -721,7 +721,7 @@ async function sendChildMessage(
 	const toolCallId = `human-request-direction-${childMessageSequence++}`;
 	const input = {
 		operation: "send" as const,
-		targetAgentId: child.agentId,
+		targetAgent: child.agentId,
 		content,
 	};
 	host.session.sessionManager.appendMessage(

@@ -354,7 +354,7 @@ test("copied coordination evidence grants no authority or obligations to a conve
 	const parentTranscript = harness.host.session.sessionManager;
 	const historicalInput = {
 		operation: "request" as const,
-		targetAgentId: harness.host.session.sessionId,
+		targetAgent: harness.host.session.sessionId,
 		question: "Historical parent Request evidence.",
 	};
 	const historicalEntryId = parentTranscript.appendMessage(
@@ -697,7 +697,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 	]);
 	const successorInput = {
 		operation: "send" as const,
-		targetAgentId: agentId,
+		targetAgent: agentId,
 		content: "Start a successor from current configuration and resources.",
 	};
 	host.session.sessionManager.appendMessage(

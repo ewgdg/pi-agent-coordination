@@ -7,6 +7,42 @@ Every authenticated ordinary Agent can send an immutable free-form Message or co
 
 Omitting `deliveryMode` selects Deferred.
 
+## Select a recipient
+
+For `send` and `request`, `targetAgent` accepts any of:
+
+- an exact Agent label;
+- a full Agent ID; or
+- a unique suffix of an Agent ID.
+
+```json
+{
+  "operation": "send",
+  "targetAgent": "Researcher",
+  "content": "Report the evidence you found."
+}
+```
+
+```json
+{
+  "operation": "request",
+  "targetAgent": "983c81e3",
+  "question": "Which invariant should the fix preserve?"
+}
+```
+
+Resolution follows one fixed order:
+
+1. An exact full Agent ID resolves across the Workflow.
+2. An Agent ID suffix resolves across the Workflow and must match exactly one Agent.
+3. An exact label resolves within the caller's coordination neighborhood and must match exactly one addressable Agent.
+
+An ordinary Agent's label neighborhood contains itself, its Direct Spawner, and its direct children. Owner and Moderator labels resolve across the whole Workflow. This keeps common local labels useful without weakening identity-based routing to other known Agents.
+
+Selectors are exact and case-sensitive. Leading and trailing whitespace is ignored. Unknown and ambiguous selectors are rejected rather than resolved by roster order.
+
+The initial author receipt includes the resolved full `targetAgentId`. Retry scheduling receipts repeat that canonical identity. The durable binding fixes the recipient for poll, retry, Run replacement, and cold recovery even if a later Agent creates the same label or suffix match.
+
 ## Send a Message
 
 Call `agent_message` with the recipient and content:
@@ -14,7 +50,7 @@ Call `agent_message` with the recipient and content:
 ```json
 {
   "operation": "send",
-  "targetAgentId": "recipient-agent-id",
+  "targetAgent": "recipient-agent-id",
   "content": "Inspect the failing integration and report the smallest safe fix."
 }
 ```
@@ -28,7 +64,7 @@ Use Steer only when the next model turn needs exceptional direction:
 ```json
 {
   "operation": "send",
-  "targetAgentId": "recipient-agent-id",
+  "targetAgent": "recipient-agent-id",
   "content": "Re-evaluate the fix against the newly discovered invariant.",
   "deliveryMode": "steer"
 }
@@ -44,7 +80,7 @@ The initial receipt reports live sending only:
 | `not_sent` | This invocation was not admitted. `reason` distinguishes target availability, shutdown, and capacity exhaustion. | Retry the same Message identity after correcting the problem. |
 | `unknown` | Admission may have happened, but confirmation was lost. | Poll the same Message identity before retrying. |
 
-An ordinary Message receipt returns its source-derived `messageId`. An Agent Request receipt instead returns `requestMessageId`, the Request Message's source-derived identity.
+An ordinary Message receipt returns its source-derived `messageId`. An Agent Request receipt instead returns `requestMessageId`, the Request Message's source-derived identity. Initial author receipts and later retry scheduling receipts also return the resolved full `targetAgentId`.
 
 ## Delivery presentation
 
@@ -57,7 +93,7 @@ Use a Request when the recipient owes one mechanically correlated Answer:
 ```json
 {
   "operation": "request",
-  "targetAgentId": "responder-agent-id",
+  "targetAgent": "responder-agent-id",
   "question": "Which transcript entry proves the release handoff?"
 }
 ```
@@ -92,7 +128,7 @@ Reuse an existing Agent only when context acquired through its earlier work mate
 ```json
 {
   "operation": "request",
-  "targetAgentId": "existing-agent-id",
+  "targetAgent": "existing-agent-id",
   "question": "Continue the implementation using the constraints you already verified.",
   "contextPreparation": {
     "workScale": "medium",
@@ -150,11 +186,11 @@ Interruption, exact-Run fencing, termination, or shutdown ends the live wait wit
 An Agent may send two Requests, continue disjoint inspection outside both requested work units, and join only when its next decision needs both Answers:
 
 ```json
-{ "operation": "request", "targetAgentId": "design-agent", "question": "Which invariant should the interface preserve?" }
+{ "operation": "request", "targetAgent": "design-agent", "question": "Which invariant should the interface preserve?" }
 ```
 
 ```json
-{ "operation": "request", "targetAgentId": "test-agent", "question": "Which observable regression must the test cover?" }
+{ "operation": "request", "targetAgent": "test-agent", "question": "Which observable regression must the test cover?" }
 ```
 
 After completing that disjoint work, call `agent_wait` with `{}` if the implementation decision requires both outstanding Answers. If either Answer can be handled independently, settle instead and let each Answer activate an ordinary model turn.
@@ -164,7 +200,7 @@ After completing that disjoint work, call `agent_wait` with `{}` if the implemen
 Suppose the requester calls `agent_wait`, but the responder needs a decision before it can produce its curated Answer. The responder keeps provisional findings local and authors a reverse Request instead of sending an ordinary Message:
 
 ```json
-{ "operation": "request", "targetAgentId": "original-requester", "question": "Should the interface fail or skip unavailable evidence?" }
+{ "operation": "request", "targetAgent": "original-requester", "question": "Should the interface fail or skip unavailable evidence?" }
 ```
 
 The reverse Request preempts the original requester's Wait. The original requester handles its new Answer obligation with `agent_message` operation `answer`, then calls `agent_wait` again only if its next decision still needs every outstanding Answer. The fresh Wait includes the unresolved original Request; the preempted Wait consumed no Answer Delivery.
@@ -181,7 +217,7 @@ Only the requester may abandon its exact Request:
 }
 ```
 
-`requestMessageId` names the Request Message being withdrawn. A newly committed Cancellation receipt returns its own `messageId` and Delivery outcome. If the Request was already resolved, the receipt instead returns `already_cancelled` with `cancellationMessageId` or `already_answered` with `answerMessageId`; it does not repeat the Request identity from the call.
+`requestMessageId` names the Request Message being withdrawn. A newly committed Cancellation receipt returns its own `messageId`, canonical `targetAgentId`, and Delivery outcome. If the Request was already resolved, the receipt instead returns `already_cancelled` with `cancellationMessageId` or `already_answered` with `answerMessageId`; it does not repeat the Request identity from the call.
 
 Cancellation commitment ends only that requester wait. Fixed-Steer Cancellation Delivery ends only that responder obligation, makes the next waiting Request eligible, and supplies actionable context; it does not abort tools, retract facts, undo effects, or terminate a Run. Cancellation delivered before a waiting Request suppresses that Request without waking the responder for obsolete work.
 

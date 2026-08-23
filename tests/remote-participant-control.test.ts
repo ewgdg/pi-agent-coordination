@@ -48,7 +48,11 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 				return (payload as { operation: string }).operation === "search"
 					? { matches: [status], hasMore: false }
 					: status;
-			case "coordination.message": return { messageId: "message-1", messageStatus: "sent" };
+			case "coordination.message": return {
+				messageId: "message-1",
+				targetAgentId: "target",
+				messageStatus: "sent",
+			};
 			case "coordination.wait":
 				waitProgressHandler?.(waitProgress);
 				return { disposition: "preempted" };
@@ -103,10 +107,10 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 	assert.deepEqual(
 		await proxies.coordination.message("message-call", {
 			operation: "send",
-			targetAgentId: "target",
+			targetAgent: "target",
 			content: "hello",
 		}),
-		{ messageId: "message-1", messageStatus: "sent" },
+		{ messageId: "message-1", targetAgentId: "target", messageStatus: "sent" },
 	);
 	assert.deepEqual(
 		await proxies.coordination.wait(
@@ -147,7 +151,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		}, undefined],
 		["coordination.message", {
 			toolCallId: "message-call",
-			input: { operation: "send", targetAgentId: "target", content: "hello" },
+			input: { operation: "send", targetAgent: "target", content: "hello" },
 		}, undefined],
 		["coordination.wait", {
 			toolCallId: "wait-call",
@@ -247,7 +251,11 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 			},
 			async message(toolCallId, input) {
 				calls.push(["message", toolCallId, input]);
-				return { messageId: "message-owner", messageStatus: "sent" };
+				return {
+					messageId: "message-owner",
+					targetAgentId: "owner-target",
+					messageStatus: "sent",
+				};
 			},
 			async wait() { return { answers: [] }; },
 			async control(toolCallId, input) {
@@ -276,6 +284,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 
 	assert.deepEqual(await dispatchParticipantRequestToOwner(handlers, request), {
 		messageId: "message-owner",
+		targetAgentId: "owner-target",
 		messageStatus: "sent",
 	});
 	assert.deepEqual(calls, [[

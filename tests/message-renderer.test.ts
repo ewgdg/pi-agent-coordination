@@ -21,6 +21,7 @@ const plainTheme = {
 } as unknown as Theme;
 
 const targetAgentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+const targetAgent = targetAgentId;
 const resolveLabel = (agentId: string) =>
 	agentId === targetAgentId ? "Researcher" : undefined;
 
@@ -49,7 +50,7 @@ function renderResult(
 test("send call shows the [Send] badge, compact target identity, and bounded content preview", () => {
 	const rendered = renderCall({
 		operation: "send",
-		targetAgentId,
+		targetAgent,
 		content: "Context ".repeat(100) + "Distinctive ending.",
 	});
 	assert.match(rendered, /\[Send\]/);
@@ -64,7 +65,7 @@ test("send call shows the [Send] badge, compact target identity, and bounded con
 test("collapsed send call preserves formatting within ten visible body rows", () => {
 	const rendered = renderCall({
 		operation: "send",
-		targetAgentId,
+		targetAgent,
 		content: "First line.\n\nThird line.",
 	});
 	assert.match(rendered, /First line\.\n\nThird line\.$/);
@@ -74,7 +75,7 @@ test("collapsed send call preserves formatting within ten visible body rows", ()
 test("send call marks steer delivery", () => {
 	const rendered = renderCall({
 		operation: "send",
-		targetAgentId,
+		targetAgent,
 		content: "Act now.",
 		deliveryMode: "steer",
 	});
@@ -86,7 +87,7 @@ test("send call marks steer delivery", () => {
 test("request call shows the [Request] badge and question preview", () => {
 	const rendered = renderCall({
 		operation: "request",
-		targetAgentId,
+		targetAgent,
 		question: "Please review the design proposal.",
 	});
 	assert.match(rendered, /\[Request\]/);
@@ -98,7 +99,7 @@ test("request call shows the [Request] badge and question preview", () => {
 test("request call marks steer delivery", () => {
 	const rendered = renderCall({
 		operation: "request",
-		targetAgentId,
+		targetAgent,
 		question: "Please proceed immediately.",
 		deliveryMode: "steer",
 	});
@@ -111,7 +112,7 @@ test("expanded call shows the complete payload without an ellipsis", () => {
 	initTheme("dark");
 	const body = "Context ".repeat(30) + "Distinctive ending.";
 	const rendered = renderAgentMessageCall(
-		{ operation: "send", targetAgentId, content: body },
+		{ operation: "send", targetAgent, content: body },
 		plainTheme,
 		resolveLabel,
 		true,
@@ -202,6 +203,7 @@ test("not_sent result surfaces the rejection reason", () => {
 		messageStatus: "not_sent",
 		reason: "target_unavailable",
 		messageId: "message-two",
+		targetAgentId,
 	}, false);
 	assert.match(rendered, /not_sent/);
 	assert.match(rendered, /target_unavailable/);
@@ -220,7 +222,7 @@ test("badges and reason lines use the delivered-message theme roles", () => {
 	} as unknown as Theme;
 
 	renderAgentMessageCall(
-		{ operation: "send", targetAgentId, content: "Act now." },
+		{ operation: "send", targetAgent, content: "Act now." },
 		recordingTheme,
 		resolveLabel,
 	).render(60);
@@ -237,6 +239,7 @@ test("badges and reason lines use the delivered-message theme roles", () => {
 				messageStatus: "not_sent",
 				reason: "target_unavailable",
 				messageId: "message-two",
+				targetAgentId,
 			},
 		},
 		{ expanded: false, isPartial: false },
@@ -255,6 +258,7 @@ test("badges and reason lines use the delivered-message theme roles", () => {
 				messageStatus: "unknown",
 				reason: "confirmation_lost",
 				messageId: "message-three",
+				targetAgentId,
 			},
 		},
 		{ expanded: false, isPartial: false },

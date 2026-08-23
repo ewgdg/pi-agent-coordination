@@ -21,8 +21,13 @@ type MessageSendOutcome<
 		reason: UnknownReason;
 	}>;
 
+type MessageDeliveryReceipt = Readonly<{
+	messageId: string;
+	targetAgentId: string;
+}> & MessageSendOutcome;
+
 export type AgentMessageSendReceipt =
-	| (Readonly<{ messageId: string }> & MessageSendOutcome)
+	| (Readonly<{ messageId: string; targetAgentId: string }> & MessageSendOutcome)
 	| Readonly<{
 		disposition: "rejected";
 		reason: "answer_required";
@@ -30,7 +35,7 @@ export type AgentMessageSendReceipt =
 	}>;
 
 export type AgentRequestReceipt =
-	Readonly<{ requestMessageId: string }> & MessageSendOutcome;
+	Readonly<{ requestMessageId: string; targetAgentId: string }> & MessageSendOutcome;
 
 export type AgentAnswerReceipt =
 	| (Readonly<{
@@ -51,7 +56,7 @@ export type AgentAnswerReceipt =
 	}>;
 
 export type RequestCancellationReceipt =
-	| AgentMessageSendReceipt
+	| MessageDeliveryReceipt
 	| Readonly<{
 		disposition: "already_cancelled";
 		cancellationMessageId: string;
@@ -84,7 +89,7 @@ export type AgentMessageRetryReceipt =
 		messageId: string;
 		deliveryEvidence: Readonly<{ agentId: string; entryId: string }>;
 	}>
-	| (Readonly<{ messageId: string }> & MessageSendOutcome<
+	| (Readonly<{ messageId: string; targetAgentId: string }> & MessageSendOutcome<
 		| MessageSendRejectionReason
 		| "evidence_unavailable"
 		| "policy_rejected",
@@ -111,7 +116,7 @@ export type AgentRequestRetryReceipt =
 		requestMessageId: string;
 		deliveryEvidence: Readonly<{ agentId: string; entryId: string }>;
 	}>
-	| (Readonly<{ requestMessageId: string }> & MessageSendOutcome<
+	| (Readonly<{ requestMessageId: string; targetAgentId: string }> & MessageSendOutcome<
 		| MessageSendRejectionReason
 		| "evidence_unavailable"
 		| "policy_rejected",

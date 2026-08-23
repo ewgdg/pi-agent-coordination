@@ -232,7 +232,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			"request-source-child-before-clone",
 			{
 				operation: "request",
-				targetAgentId: directChildId,
+				targetAgent: directChildId,
 				question: "What source-only result should remain unresolved?",
 			},
 		);
@@ -430,7 +430,7 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 			"continue-reopened-source-workflow",
 			{
 				operation: "send",
-				targetAgentId: sourceChildId,
+				targetAgent: sourceChildId,
 				content: "Continue only in the reopened source Workflow.",
 			},
 		) as { messageStatus: string };
@@ -549,7 +549,7 @@ async function assertSourceIdentityIsUnavailable(
 			tool: "agent_message" as const,
 			input: {
 				operation: "send",
-				targetAgentId: options.directChildId,
+				targetAgent: options.directChildId,
 				content: "Do not cross the Workflow cutoff.",
 			},
 		},

@@ -284,7 +284,7 @@ test("a resumed Owner admits coordination evidence after its Identity cutoff", a
 				"agent_message",
 				{
 					operation: "send",
-					targetAgentId: host.session.sessionId,
+					targetAgent: host.session.sessionId,
 					content: "Persist legitimate current-scope coordination evidence.",
 				},
 				{ id: "owner-self-message-before-reopen" },
@@ -298,7 +298,7 @@ test("a resumed Owner admits coordination evidence after its Identity cutoff", a
 		"owner-self-message-before-reopen",
 		{
 			operation: "send",
-			targetAgentId: host.session.sessionId,
+			targetAgent: host.session.sessionId,
 			content: "Persist legitimate current-scope coordination evidence.",
 		},
 		undefined,
@@ -474,7 +474,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 	});
 	const first = await executeOwnerTool(host, "agent_message", "first-policy-message", {
 		operation: "send",
-		targetAgentId: childAgentId,
+		targetAgent: childAgentId,
 		content: "Occupy the initial policy capacity.",
 	});
 	assert.equal((first as { messageStatus: string }).messageStatus, "sent");
@@ -484,7 +484,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 		"initially-rejected-policy-message",
 		{
 			operation: "send",
-			targetAgentId: childAgentId,
+			targetAgent: childAgentId,
 			content: "Remain canonical after initial capacity rejection.",
 		},
 	);
@@ -503,7 +503,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 		"admitted-after-policy-raise",
 		{
 			operation: "send",
-			targetAgentId: childAgentId,
+			targetAgent: childAgentId,
 			content: "Use the newly published second slot.",
 		},
 	);
@@ -521,7 +521,7 @@ test("Owner reload publishes one prospective policy or preserves the prior snaps
 		"rejected-after-invalid-policy-reload",
 		{
 			operation: "send",
-			targetAgentId: childAgentId,
+			targetAgent: childAgentId,
 			content: "The preserved two-slot snapshot remains exhausted.",
 		},
 	);

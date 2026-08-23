@@ -632,7 +632,7 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 					"agent_message",
 					{
 						operation: "request",
-						targetAgentId: host.session.sessionId,
+						targetAgent: host.session.sessionId,
 						question: "What outcome should I preserve?",
 					},
 					{ id: "request-owner-outcome" },
@@ -922,7 +922,7 @@ test("a failed successor startup does not clear Run Failure handling", async (t)
 	try {
 		const input = {
 			operation: "send" as const,
-			targetAgentId: affected.agentId,
+			targetAgent: affected.agentId,
 			content: "Attempt a successor Run while its model is unavailable.",
 		};
 		const toolCallId = "attempt-unavailable-successor";
@@ -1264,7 +1264,7 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 					"agent_message",
 					{
 						operation: "request",
-						targetAgentId: host.session.sessionId,
+						targetAgent: host.session.sessionId,
 						question: "Should restoring this work take priority over current Owner work?",
 					},
 					{ id: "moderator-request-owner-judgment" },
@@ -1678,7 +1678,7 @@ assert.equal(target.messageStatus, "not_sent");
 					"agent_message",
 					{
 						operation: "request",
-						targetAgentId: target.agentId,
+						targetAgent: target.agentId,
 						question: "Make progress while I remain obligated to the Owner.",
 					},
 					{ id: "request-external-progress" },
@@ -1782,7 +1782,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 						"agent_message",
 						{
 							operation: "request",
-							targetAgentId: second.agentId,
+							targetAgent: second.agentId,
 							question: "Wait for my Answer while I wait for yours.",
 						},
 						{ id: "request-first-to-second" },
@@ -1799,7 +1799,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 						"agent_message",
 						{
 							operation: "request",
-							targetAgentId: first.agentId,
+							targetAgent: first.agentId,
 							question: "Return an Answer only after my dependency resolves.",
 						},
 						{ id: "request-second-to-first" },
@@ -1964,7 +1964,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 					"agent_message",
 					{
 						operation: "request",
-						targetAgentId: second.agentId,
+						targetAgent: second.agentId,
 						question: "Create the return dependency, then remain active.",
 					},
 					{ id: "request-first-active-cycle" },
@@ -1981,7 +1981,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 					"agent_message",
 					{
 						operation: "request",
-						targetAgentId: first.agentId,
+						targetAgent: first.agentId,
 						question: "Wait while my Run remains active.",
 					},
 					{ id: "request-second-active-cycle" },
@@ -2082,7 +2082,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 						"agent_message",
 						{
 							operation: "request",
-							targetAgentId: participant.agentId,
+							targetAgent: participant.agentId,
 							question: "Wait for this same Run to resolve itself.",
 						},
 						{ id: "request-self-cycle" },
@@ -2800,7 +2800,7 @@ async function sendMessageFromView(
 	targetAgentId: string,
 	content: string,
 ): Promise<void> {
-	const input = { operation: "send" as const, targetAgentId, content };
+	const input = { operation: "send" as const, targetAgent: targetAgentId, content };
 	session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", input, { id: toolCallId }),
@@ -2925,7 +2925,7 @@ async function sendOwnerMessage(
 	content: string,
 	toolCallId: string,
 ): Promise<void> {
-	const input = { operation: "send" as const, targetAgentId, content };
+	const input = { operation: "send" as const, targetAgent: targetAgentId, content };
 	host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", input, { id: toolCallId }),

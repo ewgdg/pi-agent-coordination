@@ -67,7 +67,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	const receiverAgentId = host.session.sessionId;
 	const args = {
 		operation: "send" as const,
-		targetAgentId: receiverAgentId,
+		targetAgent: receiverAgentId,
 		content: longContent,
 		deliveryMode: "steer" as const,
 	};
@@ -108,13 +108,13 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	const deferredText = tool.renderCall(
 		{
 			operation: "send",
-			targetAgentId: "recipient-agent",
+			targetAgent: "recipient-agent",
 			content: "Routine direction.",
 		},
 		plainTheme,
 		{ ...renderContext, args: {
 			operation: "send",
-			targetAgentId: "recipient-agent",
+			targetAgent: "recipient-agent",
 			content: "Routine direction.",
 		} },
 	).render(160).join("\n");
@@ -123,13 +123,13 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	const requestText = tool.renderCall(
 		{
 			operation: "request",
-			targetAgentId: receiverAgentId,
+			targetAgent: receiverAgentId,
 			question: "Which boundary owns this result?",
 		},
 		plainTheme,
 		{ ...renderContext, args: {
 			operation: "request",
-			targetAgentId: receiverAgentId,
+			targetAgent: receiverAgentId,
 			question: "Which boundary owns this result?",
 		} },
 	).render(160).join("\n");

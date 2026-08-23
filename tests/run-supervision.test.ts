@@ -285,7 +285,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 	const heldCancellationText = "This Cancellation must wait behind the exact Hold.";
 	const heldRequest = await harness.messageAs(owner, "request-admitted-while-held", {
 		operation: "request",
-		targetAgentId: child.agentId,
+		targetAgent: child.agentId,
 		question: heldRequestText,
 	});
 	const heldAnswer = await harness.messageAs(owner, "answer-admitted-while-held", {
@@ -887,6 +887,7 @@ test("the one resume reservation remains available when ordinary capacity is exh
 	assert.ok("messageId" in exhausted && "messageStatus" in exhausted);
 	assert.deepEqual(exhausted, {
 		messageId: exhausted.messageId,
+		targetAgentId: child.agentId,
 		messageStatus: "not_sent",
 		reason: "capacity_exhausted",
 	});
@@ -1260,7 +1261,7 @@ async function createRunSupervisionHarness(
 					const toolCallId = `process-prompt-${promptSequence}`;
 					const input = {
 						operation: "send" as const,
-						targetAgentId: agentId,
+						targetAgent: agentId,
 						content: text,
 					};
 					host.session.sessionManager.appendMessage(
@@ -1294,7 +1295,7 @@ async function createRunSupervisionHarness(
 				const toolCallId = `process-queued-input-${promptSequence}`;
 				const input = {
 					operation: "send" as const,
-					targetAgentId: agentId,
+					targetAgent: agentId,
 					content: text,
 					deliveryMode: "steer" as const,
 				};
@@ -1416,7 +1417,7 @@ async function createRunSupervisionHarness(
 			return ownerView.control(toolCallId, input);
 		},
 		async sendMessage(toolCallId: string, targetAgentId: string, content: string) {
-			const input = { operation: "send" as const, targetAgentId, content };
+			const input = { operation: "send" as const, targetAgent: targetAgentId, content };
 			host.session.sessionManager.appendMessage(
 				fauxAssistantMessage(
 					fauxToolCall("agent_message", input, { id: toolCallId }),
@@ -1431,7 +1432,7 @@ async function createRunSupervisionHarness(
 			targetAgentId: string,
 			content: string,
 		) {
-			const input = { operation: "send" as const, targetAgentId, content };
+			const input = { operation: "send" as const, targetAgent: targetAgentId, content };
 			caller.appendToolCall("agent_message", toolCallId, input);
 			return caller.view.message(toolCallId, input);
 		},
@@ -1461,7 +1462,7 @@ async function createRunSupervisionHarness(
 		) {
 			const input = {
 				operation: "request" as const,
-				targetAgentId: ownerIdentity.agentId,
+				targetAgent: ownerIdentity.agentId,
 				question,
 			};
 			child.appendToolCall("agent_message", toolCallId, input);
@@ -1473,7 +1474,7 @@ async function createRunSupervisionHarness(
 			targetAgentId: string,
 			question: string,
 		) {
-			const input = { operation: "request" as const, targetAgentId, question };
+			const input = { operation: "request" as const, targetAgent: targetAgentId, question };
 			appendCallerToolCall(caller, "agent_message", toolCallId, input);
 			return caller.view.message(toolCallId, input);
 		},

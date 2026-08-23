@@ -74,7 +74,7 @@ function renderMessageCallHeader(
 	if (args.operation === "send" || args.operation === "request") {
 		text += theme.fg(
 			"muted",
-			` to ${formatAgentIdentity(args.targetAgentId, resolveAgentLabel)}`,
+			` to ${formatAgentIdentity(args.targetAgent, resolveAgentLabel)}`,
 		);
 		if (args.deliveryMode === "steer") {
 			text += theme.fg("warning", " · steer");

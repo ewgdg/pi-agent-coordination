@@ -61,13 +61,14 @@ export type AnswerRetrievalEvidence = Readonly<{
 }>;
 
 type MessageResultIdentity =
-	| Readonly<{ kind: "message"; messageId: string }>
-	| Readonly<{ kind: "request"; messageId: string }>
+	| Readonly<{ kind: "message"; messageId: string; targetAgentId: string }>
+	| Readonly<{ kind: "request"; messageId: string; targetAgentId: string }>
 	| Readonly<{ kind: "answer"; messageId: string; requestId: string }>
 	| Readonly<{
 		kind: "request_cancellation";
 		messageId: string;
 		requestId: string;
+		targetAgentId: string;
 	}>;
 
 type MessageSource = Readonly<{
@@ -108,8 +109,16 @@ export function resolveCommittedMessage(options: {
 	transcript: TranscriptInspection;
 	toolCallId: string;
 	providedInput: MessageSendInput | RequestSendInput;
+	resolvedTargetAgentId: string;
 }): Message {
-	const { fromAgentId, workflowId, transcript, toolCallId, providedInput } = options;
+	const {
+		fromAgentId,
+		workflowId,
+		transcript,
+		toolCallId,
+		providedInput,
+		resolvedTargetAgentId,
+	} = options;
 	const { source, input } = resolveCommittedToolCall({
 		agentId: fromAgentId,
 		transcript,
@@ -127,7 +136,7 @@ export function resolveCommittedMessage(options: {
 		messageId: deriveMessageIdentity(source),
 		workflowId,
 		fromAgentId,
-		targetAgentId: committedInput.targetAgentId,
+		targetAgentId: resolvedTargetAgentId,
 		deliveryMode: committedInput.deliveryMode ?? "deferred",
 		source,
 	};
@@ -264,14 +273,39 @@ export function inspectCanonicalMessage(options: {
 	};
 }
 
-export function inspectAgentMessageAuthorResult(options: {
+type AgentMessageAuthorInspectionOptions = Readonly<{
 	authorAgentId: string;
 	transcript: TranscriptInspection;
 	source: ToolCallPointer;
-	input: Exclude<AgentMessageInput, { operation: "poll" | "retry" }>;
-	requestId?: string;
-}): MessageAuthorResultState {
-	const { authorAgentId, transcript, source, input, requestId } = options;
+}> & (
+	| Readonly<{
+		input: MessageSendInput | RequestSendInput;
+		resolvedTargetAgentId: string;
+		requestId?: never;
+	}>
+	| Readonly<{
+		input: AnswerInput;
+		requestId: string;
+		resolvedTargetAgentId?: never;
+	}>
+	| Readonly<{
+		input: CancellationInput;
+		resolvedTargetAgentId: string;
+		requestId?: never;
+	}>
+);
+
+export function inspectAgentMessageAuthorResult(
+	options: AgentMessageAuthorInspectionOptions,
+): MessageAuthorResultState {
+	const {
+		authorAgentId,
+		transcript,
+		source,
+		input,
+		requestId,
+		resolvedTargetAgentId,
+	} = options;
 	if (source.agentId !== authorAgentId) {
 		throw new ProtocolInvariantError("Agent Message source names another author");
 	}
@@ -279,16 +313,30 @@ export function inspectAgentMessageAuthorResult(options: {
 	if (input.operation === "answer" && requestId === undefined) {
 		throw new Error("invariant_violation: Agent Answer inspection requires its Request");
 	}
+	if (input.operation === "cancel" && resolvedTargetAgentId === undefined) {
+		throw new Error(
+			"invariant_violation: Request Cancellation inspection requires its resolved target",
+		);
+	}
 	const identity: MessageResultIdentity = input.operation === "send"
-		? { kind: "message", messageId }
+		? {
+			kind: "message",
+			messageId,
+			targetAgentId: resolvedTargetAgentId!,
+		}
 		: input.operation === "request"
-			? { kind: "request", messageId }
+			? {
+				kind: "request",
+				messageId,
+				targetAgentId: resolvedTargetAgentId!,
+			}
 			: input.operation === "answer"
 				? { kind: "answer", messageId, requestId: requestId! }
 				: {
 					kind: "request_cancellation",
 					messageId,
 					requestId: input.requestMessageId,
+					targetAgentId: resolvedTargetAgentId!,
 				};
 	return inspectMessageAuthorResult({
 		authorAgentId,
@@ -413,7 +461,11 @@ function validateMessageAuthorResult(
 	const identityKey = message.kind === "request" ? "requestMessageId" : "messageId";
 	const correlationKeys = message.kind === "answer"
 		? ["requestMessageId"]
-		: [];
+		: message.kind === "message" ||
+				message.kind === "request" ||
+				message.kind === "request_cancellation"
+			? ["targetAgentId"]
+			: [];
 	if (value.messageStatus === "sent") {
 		if (!sameStringList(keys, ["messageStatus", identityKey, ...correlationKeys].sort())) {
 			throw new Error(
@@ -459,6 +511,16 @@ function validateMessageAuthorResult(
 	if (message.kind === "answer" && value.requestMessageId !== message.requestId) {
 		throw new Error(
 			`invariant_violation: Answer ${messageId} author result has the wrong Request`,
+		);
+	}
+	if (
+		(message.kind === "message" ||
+			message.kind === "request" ||
+			message.kind === "request_cancellation") &&
+		value.targetAgentId !== message.targetAgentId
+	) {
+		throw new Error(
+			`invariant_violation: Message ${messageId} author result has the wrong target`,
 		);
 	}
 }
