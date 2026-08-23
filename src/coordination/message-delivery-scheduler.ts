@@ -118,6 +118,7 @@ export class MessageDeliveryScheduler {
 	readonly #reservedResumeByAgent = new Map<string, ReservedResume>();
 	readonly #activeResumeByAgent = new Map<string, ActiveResume>();
 	readonly #deferredResumeByAgent = new Set<string>();
+	readonly #parkedRunByAgent = new Map<string, AgentRunHandle>();
 	readonly #integratedAgentIds = new Set<string>();
 	readonly #scheduleReleaseEvaluationHook: ScheduleReleaseEvaluation | undefined;
 	readonly #scheduleDeliveryDispatchHook: ScheduleDeliveryDispatch | undefined;
@@ -255,6 +256,34 @@ export class MessageDeliveryScheduler {
 		return this.#drainInLane(record);
 	}
 
+	async beginParkingInLane(
+		record: AgentRecord,
+		handle: AgentRunHandle,
+	): Promise<boolean> {
+		if (!record.host.isCurrent(handle)) {
+			throw new Error("stale_run: Owner parking does not target the current Agent Run");
+		}
+		this.#parkedRunByAgent.set(record.identity.agentId, handle);
+		try {
+			if (!this.#completeProvenPromptOwnedDeliveriesInLane(record)) {
+				this.endParkingInLane(record, handle);
+				return false;
+			}
+			this.#removeProvenDeliveriesInLane(record);
+			await this.#drainInLane(record);
+			return true;
+		} catch (error) {
+			this.endParkingInLane(record, handle);
+			throw error;
+		}
+	}
+
+	endParkingInLane(record: AgentRecord, handle: AgentRunHandle): void {
+		if (this.#parkedRunByAgent.get(record.identity.agentId) === handle) {
+			this.#parkedRunByAgent.delete(record.identity.agentId);
+		}
+	}
+
 	hasDispatchReservation(recipientAgentId: string, messageId: string): boolean {
 		return this.#activeDeferredByAgent.get(recipientAgentId)?.delivery.messageId ===
 			messageId ||
@@ -286,6 +315,7 @@ export class MessageDeliveryScheduler {
 		this.#reservedResumeByAgent.delete(record.identity.agentId);
 		this.#activeResumeByAgent.delete(record.identity.agentId);
 		this.#deferredResumeByAgent.delete(record.identity.agentId);
+		this.#parkedRunByAgent.delete(record.identity.agentId);
 		this.#pendingByAgent.delete(record.identity.agentId);
 		record.host.removeRetentionReason("pending_delivery");
 	}
@@ -326,6 +356,7 @@ export class MessageDeliveryScheduler {
 		handle: AgentRunHandle,
 		settlement: AgentRunSettlement,
 	): Promise<void> {
+		this.endParkingInLane(record, handle);
 		const activeResume = this.#activeResumeByAgent.get(record.identity.agentId);
 		if (activeResume) {
 			let failed = false;
@@ -448,7 +479,7 @@ export class MessageDeliveryScheduler {
 			this.#activeDeferredByAgent.has(record.identity.agentId) ||
 			this.#hasUnprovenFrozenBatch(record)
 		) return;
-		if (record.host.currentWorkState() !== "settled") return;
+		if (!this.#isDeliveryBoundary(record)) return;
 		const steer = this.#eligibleSteerDeliveries(eligible);
 		const selected = steer.length > 0 ? steer : eligible.slice(0, 1);
 		const delivery = selected[0];
@@ -489,6 +520,35 @@ export class MessageDeliveryScheduler {
 			completion,
 			deliveryCommitted: false,
 		});
+	}
+
+	#completeProvenPromptOwnedDeliveriesInLane(record: AgentRecord): boolean {
+		for (const [activeByAgent, active] of [
+			[this.#activeDeferredByAgent, this.#activeDeferredByAgent.get(record.identity.agentId)],
+			[
+				this.#activeWaitPreemptionByAgent,
+				this.#activeWaitPreemptionByAgent.get(record.identity.agentId),
+			],
+		] as const) {
+			if (!active) continue;
+			const proof = active.delivery.inspectProof();
+			if (!proof) return false;
+			// An idle Deferred dispatch owns the whole Pi prompt Promise. Its custom
+			// message proof commits before the model response, but the Promise cannot
+			// resolve until native settlement, which this listener is delaying.
+			activeByAgent.delete(record.identity.agentId);
+			this.#pendingByAgent
+				.get(record.identity.agentId)
+				?.delete(active.delivery.messageId);
+			if (!active.deliveryCommitted) active.delivery.afterCommit?.();
+		}
+		return true;
+	}
+
+	#isDeliveryBoundary(record: AgentRecord): boolean {
+		const parked = this.#parkedRunByAgent.get(record.identity.agentId);
+		return record.host.currentWorkState() === "settled" ||
+			(parked !== undefined && record.host.isCurrent(parked));
 	}
 
 	#reservePreemptingRequestInLane(

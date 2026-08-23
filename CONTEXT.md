@@ -139,6 +139,9 @@ The volatile Pi session, configured resources, and interactive presentation curr
 **Turn Compaction Gateway**:
 The child-local, Runtime-generation-bound admission boundary that serializes only turn preparation and commitment. It cancels unused post-Run threshold compaction, recomputes threshold preparation before later idle work, preserves Pi-native manual and overflow compaction, and releases before the model cycle. Deferral is not durable state and does not retain a Run or Agent Runtime.
 
+**Owner Settlement Parking**:
+The volatile wait at a normally completed low-level Workflow Owner boundary while canonical outbound Agent Requests remain outstanding. One awaited Agent-core listener runs after Pi and extension `agent_end` handling, delays native settlement and threshold compaction, and wakes only after turn-triggering input enters an active Agent queue or the exact Run is fenced. Parking is settled-equivalent for serialized Message Delivery but keeps Pi's Owner session active, uses its existing continuation, and creates no transcript evidence. Child and Moderator settlement is unchanged.
+
 **Run**:
 One exact transient epoch of admitted Agent work within an Agent Runtime. Initial creation work, model-starting human or extension input, and coordination Delivery can start a Run; navigation and UI-only commands cannot. Exact Run identity fences interruption, termination, failure, Human Requests, Delivery scheduling, and Operational Incident evaluation. Releasing, failing, or terminating a Run does not remove its durable Agent Identity and need not replace a selected Agent Runtime.
 

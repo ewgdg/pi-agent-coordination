@@ -34,6 +34,14 @@ Agent views suspend Owner rendering and attach the physical terminal directly to
 
 Coordination roles are trusted protocol participants, not a security boundary. Role-scoped tools constrain the intended workflow and keep caller identity out of model-supplied arguments; they do not isolate mutually hostile code or users.
 
+## Passive Request waiting
+
+After a successful Owner response, the runtime keeps Pi's current low-level Run active when canonical transcript evidence still contains an outbound Agent Request without Cancellation or requester-side Answer Delivery proof. Child and Moderator settlement is unchanged. The Owner remains working to session observers, but Message Delivery treats this boundary as idle: queued Deferred work and safe Steer batches can enter Pi's active queues immediately.
+
+The first turn-triggering human, Agent, or extension message admitted to Agent core's steering or follow-up queue resumes Pi's existing continuation. `deliverAs: "nextTurn"` does not resume it. The parking boundary adds no transcript entry, assistant message, tool call, tool result, or Answer proof.
+
+Pi still owns retry, overflow recovery, compaction, and final settlement. Error, aborted, and length responses bypass parking. Threshold compaction waits behind a parked successful response, then Pi runs its normal post-response compaction check before the next model request. Shutdown, session replacement, or exact-Run abort releases the in-memory waiter without rejecting an Agent listener.
+
 See [Human Requests](human-requests.md) for the request and Answer shapes, transcript presentation, editor behavior, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and Agent-view retention.
 
 ## Activation modes
@@ -52,7 +60,7 @@ Pi's version is diagnostic information, not an allowlist. Package builds use a p
 
 Pi transcripts are the durable authority for Agent identity, authored Messages and Requests, committed Deliveries and Answers, and recovery evidence. Agent Templates and Workflow Policy are resolved from current trusted resources; policy reload publishes complete snapshots but does not write them to transcripts.
 
-Delivery scheduling, execution permits, Human Request attention and Answer mode, Operational Attention, exact Run handles, Holds, and the open Agent-view attachment are volatile and bounded where their owning feature specifies a limit. They are not replayed as durable work after process loss. Polling, explicit retry, and transcript-based cold recovery are the supported recovery paths.
+Delivery scheduling, Owner settlement parking, execution permits, Human Request attention and Answer mode, Operational Attention, exact Run handles, Holds, and the open Agent-view attachment are volatile and bounded where their owning feature specifies a limit. They are not replayed as durable work after process loss. Polling, explicit retry, and transcript-based cold recovery are the supported recovery paths.
 
 ## Shutdown
 

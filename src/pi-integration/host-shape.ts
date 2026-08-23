@@ -301,7 +301,9 @@ export function assertAgentSessionShape(
 	}
 	requireRecord(session.extensionRunner, "AgentSession.extensionRunner", version);
 	const agent = requireRecord(session.agent, "AgentSession.agent", version);
-	requireFunction(agent, "hasQueuedMessages", "AgentSession.agent.hasQueuedMessages", version);
+	for (const member of ["subscribe", "steer", "followUp", "hasQueuedMessages"] as const) {
+		requireFunction(agent, member, `AgentSession.agent.${member}`, version);
+	}
 	requireRecord(session.sessionManager, "AgentSession.sessionManager", version);
 	assertSettingsManagerShape(
 		session.settingsManager,

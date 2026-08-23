@@ -352,7 +352,19 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 	let resumedSource: TestOwnerHost | undefined;
 	try {
 		host.model.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{
+						operation: "answer",
+						answer: "The source child is durable across branch selection.",
+					},
+					{ id: "answer-source-branch-creation" },
+				),
+				{ stopReason: "toolUse" },
+			),
 			fauxAssistantMessage("The source child is durable across branch selection."),
+			fauxAssistantMessage("The source child Answer reached its Owner."),
 		]);
 		const spawn = await executeTool(
 			host,

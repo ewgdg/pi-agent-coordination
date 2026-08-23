@@ -61,7 +61,19 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("The child has been created."),
-		fauxAssistantMessage("I received isolated initial work."),
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{
+					operation: "answer",
+					answer: "The isolated coordination boundary was observed.",
+				},
+				{ id: "answer-default-creation-request" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The Creation Request Answer was committed."),
+		fauxAssistantMessage("The child Answer reached the Owner."),
 	]);
 	const spawn = host.session.getToolDefinition("agent_spawn");
 	assert.ok(spawn);

@@ -49,7 +49,10 @@ import {
 } from "../protocol/creation-request.ts";
 import type { AgentWaitResult } from "../protocol/agent-wait.ts";
 import type { ToolCallPointer } from "../protocol/identities.ts";
-import type { InterruptionHoldHandle } from "../runtime/agent-runtime-host.ts";
+import type {
+	AgentRunHandle,
+	InterruptionHoldHandle,
+} from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import type { UnresolvedAgentRequest } from "./dependency-deadlock.ts";
 import { resolveCommittedAgentMessageTargetId } from "./agent-message-target.ts";
@@ -292,6 +295,11 @@ export class MessageCoordinator {
 			.answerOwedRequestIds;
 	}
 
+	outstandingRequestIdsFor(requester: AgentRecord): readonly string[] {
+		return this.#requestEvidence.residualRelationshipsFor(requester)
+			.awaitingAnswerRequestIds;
+	}
+
 	hasUnsettledAnswerObligation(
 		responder: AgentRecord,
 		requestIds: readonly string[],
@@ -448,6 +456,24 @@ export class MessageCoordinator {
 
 	agentWaitStarted(record: AgentRecord): Promise<void> {
 		return this.#deliveryScheduler.requestQueueAdvanced(record);
+	}
+
+	async beginParkingInLane(
+		record: AgentRecord,
+		handle: AgentRunHandle,
+	): Promise<boolean> {
+		this.#reconcileAnswerDeliveries(record);
+		if (this.#reconcileCommittedAnswerAuthorship(record)) {
+			await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
+		}
+		// Reconciliation can commit the last Answer Delivery after the listener's
+		// first candidate inspection. Do not retain an obsolete parking boundary.
+		if (this.outstandingRequestIdsFor(record).length === 0) return false;
+		return this.#deliveryScheduler.beginParkingInLane(record, handle);
+	}
+
+	endParkingInLane(record: AgentRecord, handle: AgentRunHandle): void {
+		this.#deliveryScheduler.endParkingInLane(record, handle);
 	}
 
 	async reachSafeBoundary(agentId: string): Promise<void> {

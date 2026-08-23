@@ -55,7 +55,7 @@ A delivered Agent Request, including a Creation Request, creates one Answer obli
 
 While an Answer Obligation is active, agent_message operation "send" to that Request's requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
 
-agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request. After the operation returns, the Answer is the terminal response to that Request. Do not add an assistant-message recap or summary. Unless another obligation or independent task remains, end the turn immediately so the Agent Run settles.
+agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request. After the operation returns, the Answer is the terminal response to that Request. Do not add an assistant-message recap or summary. Unless another obligation or independent task remains, end the turn immediately. Leave passive waiting and later continuation to the runtime.
 
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
 </agent_message>`;
@@ -65,7 +65,7 @@ When agent_message operation "request" or agent_spawn delegates work, partition 
 
 Reuse an existing Agent with agent_message operation "request" only when context acquired through its earlier work materially reduces rediscovery. When useful, set contextPreparation with both workScale and contextDependence so the idle recipient can prepare a bounded working zone before Delivery. Omit it to keep ordinary Pi compaction behavior. Spawn a fresh Agent when prior context is not relevant to the new work.
 
-After either tool returns requestMessageId with messageStatus "sent", the responder owns the delegated work until its Answer arrives or the Request is cancelled. Continue only explicitly disjoint work that would still be needed if the responder returned a complete, correct Answer. Otherwise end the turn and let the correlated Answer arrive automatically. Intentional duplicate investigation is appropriate only when the Request explicitly asks for an independent cross-check.
+After either tool returns requestMessageId with messageStatus "sent", the responder owns the delegated work until its Answer arrives or the Request is cancelled. Continue only explicitly disjoint work that would still be needed if the responder returned a complete, correct Answer. Otherwise end the turn. The runtime waits for turn-triggering input and continues the existing flow when it arrives. Intentional duplicate investigation is appropriate only when the Request explicitly asks for an independent cross-check.
 </agent_delegation>`;
 
 const AGENT_WAIT_PROMPT_GUIDE = `<agent_wait>

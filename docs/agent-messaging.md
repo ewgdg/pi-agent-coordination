@@ -115,13 +115,13 @@ Answer commitment correlates the immutable Answer to the active Request, ends th
 
 After Answer commitment, ordinary Message authorship to the former requester is available again. Request Cancellation restores it only when Cancellation Delivery ends the responder's obligation.
 
-The Answer tool call is the responder's terminal response to that Request. The responder does not add an assistant-message recap or summary after it. Unless another obligation or independent task remains, the responder ends the turn immediately so its Run settles.
+The Answer tool call is the responder's terminal response to that Request. The responder does not add an assistant-message recap or summary after it. Unless another obligation or independent task remains, the responder ends the turn immediately and leaves passive waiting or later continuation to the runtime.
 
 ## Agent delegation
 
 An Agent Request can ask for existing information or a decision without delegating work. When `agent_message` operation `request` or `agent_spawn` delegates work, partition it into bounded, non-overlapping work units before sending the Request.
 
-After Delivery admission, the responder owns the delegated work until its Answer arrives or the Request is cancelled. Continue only disjoint work that would remain necessary if the responder returned a complete, correct Answer. Otherwise end the turn and let ordinary Answer Delivery reactivate the Agent. Duplicate investigation is appropriate only when the Request explicitly asks for an independent cross-check.
+After Delivery admission, the responder owns the delegated work until its Answer arrives or the Request is cancelled. Continue only disjoint work that would remain necessary if the responder returned a complete, correct Answer. Otherwise end the turn. The runtime waits for turn-triggering input and resumes the existing continuation when it arrives. Duplicate investigation is appropriate only when the Request explicitly asks for an independent cross-check.
 
 Reuse an existing Agent only when context acquired through its earlier work materially reduces rediscovery. Spawn a fresh Agent when that context is not relevant. A continuation Request may ask the idle recipient to prepare its existing context before Delivery:
 

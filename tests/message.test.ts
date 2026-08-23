@@ -50,7 +50,16 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("The recipient is ready."),
-		fauxAssistantMessage("I am waiting for direct coordination."),
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "answer", answer: "The recipient is ready." },
+				{ id: "answer-message-recipient-creation" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The Creation Request Answer was committed."),
+		fauxAssistantMessage("The recipient readiness Answer was delivered."),
 	]);
 	await host.session.prompt("Create a recipient Agent.");
 	await host.session.waitForIdle();
@@ -202,7 +211,16 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("The polling recipient exists."),
-		fauxAssistantMessage("I am waiting while Message evidence is inspected."),
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "answer", answer: "The polling recipient is ready." },
+				{ id: "answer-poll-recipient-creation" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("The Creation Request Answer was committed."),
+		fauxAssistantMessage("The polling readiness Answer was delivered."),
 	]);
 	await host.session.prompt("Create a polling recipient.");
 	await host.session.waitForIdle();
@@ -267,13 +285,24 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 		undefined,
 		host.session.extensionRunner.createContext(),
 	);
-	const recipientTail = SessionManager.open(childSessionFile).getEntries().at(-1);
-	assert.ok(recipientTail);
-	assert.deepEqual(notObserved.details, {
-		disposition: "not_observed",
-		messageId: absentMessageId,
-		inspectedThrough: { agentId: childId, entryId: recipientTail.id },
-	});
+	assert.equal(
+		(notObserved.details as { disposition: string }).disposition,
+		"not_observed",
+	);
+	assert.equal(
+		(notObserved.details as { messageId: string }).messageId,
+		absentMessageId,
+	);
+	const inspectedThrough = (notObserved.details as {
+		inspectedThrough: { agentId: string; entryId: string };
+	}).inspectedThrough;
+	assert.equal(inspectedThrough.agentId, childId);
+	assert.equal(
+		SessionManager.open(childSessionFile).getEntries().some(
+			(entry) => entry.id === inspectedThrough.entryId,
+		),
+		true,
+	);
 
 	const unresolvedToolCallId = "author-unresolved-message";
 	const unresolvedInput = {
@@ -338,6 +367,23 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 		processVisibleModel: true,
 	});
 	const routeRecipientResponse = async (context: { messages: Array<{ role: string }> }) => {
+		const serialized = JSON.stringify(context.messages);
+		const childCreationRequest = serialized.includes("requestMessageId") &&
+			!serialized.includes("spawn-busy-recipient");
+		if (
+			childCreationRequest &&
+			!serialized.includes("answer-busy-recipient-creation")
+		) {
+			await recipientGate;
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "answer", answer: "The retry race was admitted." },
+					{ id: "answer-busy-recipient-creation" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		}
 		if (context.messages.at(-1)?.role === "custom") {
 			await recipientGate;
 			return fauxAssistantMessage("The recipient processed one Deferred input.");
@@ -357,9 +403,19 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 		routeRecipientResponse,
 		routeRecipientResponse,
 		routeRecipientResponse,
+		routeRecipientResponse,
+		routeRecipientResponse,
 	]);
-	await host.session.prompt("Create a recipient and leave its first turn active.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt(
+		"Create a recipient and leave its first turn active.",
+	);
+	await waitForCondition(() =>
+		host.session.sessionManager.getEntries().some(
+			(entry) => entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolName === "agent_spawn",
+		)
+	);
 
 	const childId = findSpawnedAgentId(host.session.sessionManager);
 	const childSessionFile = await waitForChildSessionFile(host, childId);
@@ -443,6 +499,8 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 	);
 
 	releaseRecipient();
+	await ownerPrompt;
+	await host.session.waitForIdle();
 	const entries = await waitForEntry(
 		childSessionFile,
 		(entry) =>

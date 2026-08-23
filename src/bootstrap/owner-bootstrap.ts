@@ -11,6 +11,10 @@ import {
 	WorkflowCoordinator,
 } from "../coordination/workflow-coordinator.ts";
 import type { InteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
+import {
+	installOwnerSettlementParker,
+	type OwnerSettlementParkingBinding,
+} from "../pi-integration/owner-settlement-parker.ts";
 import { adoptOrValidateOwnerIdentity } from "../protocol/owner-identity.ts";
 import { OperationalIncidentSurface } from "../presentation/operational-incident-surface.ts";
 import { OwnerPostMortemAgentPresenter } from "../presentation/post-mortem-agent-view-surface.ts";
@@ -102,11 +106,13 @@ export async function initializeOwnerWorkflow(options: {
 		workflowPolicy: policy,
 		recoveredWorkflow,
 	});
+	let parkingBinding: OwnerSettlementParkingBinding | undefined;
 	let ownerReplacementPreparation: Promise<void> | undefined;
 	const prepareOwnerReplacement = () => {
 		if (ownerReplacementPreparation) return ownerReplacementPreparation;
 		// Pi owns native Runtime disposal after awaited session shutdown handlers.
-		ownerReplacementPreparation = coordinator.shutdown(async () => undefined);
+		ownerReplacementPreparation = coordinator.shutdown(async () => undefined)
+			.finally(() => parkingBinding?.dispose());
 		return ownerReplacementPreparation;
 	};
 	await coordinator.refreshAgentTemplateSnapshot(identity.agentId);
@@ -118,6 +124,22 @@ export async function initializeOwnerWorkflow(options: {
 		bootstrapHandler,
 		resolveView,
 		prepareOwnerReplacement,
+	});
+	parkingBinding = installOwnerSettlementParker({
+		agent: runtime.session.agent,
+		session: runtime.session,
+		hasOutstandingRequests: () => coordinator.hasOutstandingOwnerRequests(),
+		beginParking: (runSignal) =>
+			coordinator.beginOwnerSettlementParking(runSignal),
+		shutdownSignal: coordinator.ownerShutdownSignal(),
+		reportError: (error) => {
+			runtime.services.diagnostics.push({
+				type: "error",
+				message: `Owner settlement parking failed: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			});
+		},
 	});
 	initializedWorkflows.set(runtime.session, {
 		coordinator,

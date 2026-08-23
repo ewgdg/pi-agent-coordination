@@ -237,6 +237,7 @@ export class WorkflowCoordinator {
 	readonly #quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	readonly #agentIdBySpawnSource: Map<string, string>;
 	#shutdownPromise: Promise<void> | undefined;
+	readonly #shutdownController = new AbortController();
 	#shuttingDown = false;
 
 	constructor(
@@ -537,8 +538,45 @@ export class WorkflowCoordinator {
 		};
 	}
 
+	hasOutstandingOwnerRequests(): boolean {
+		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
+		return this.#messages.outstandingRequestIdsFor(owner).length > 0;
+	}
+
+	ownerShutdownSignal(): AbortSignal {
+		return this.#shutdownController.signal;
+	}
+
+	async beginOwnerSettlementParking(
+		runSignal: AbortSignal,
+	): Promise<(() => Promise<void>) | undefined> {
+		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
+		const handle = owner.host.currentHandle();
+		if (!handle || runSignal.aborted || this.#shuttingDown) return undefined;
+		let entered = false;
+		await owner.host.lane.run(async () => {
+			if (
+				runSignal.aborted ||
+				this.#shuttingDown ||
+				!owner.host.isCurrent(handle) ||
+				owner.host.exactRunCancellationSignal(handle) !== runSignal
+			) return;
+			entered = await this.#messages.beginParkingInLane(owner, handle);
+		});
+		if (!entered) return undefined;
+		let left = false;
+		return async () => {
+			if (left) return;
+			left = true;
+			await owner.host.lane.run(() => {
+				this.#messages.endParkingInLane(owner, handle);
+			});
+		};
+	}
+
 	shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
 		this.#shuttingDown = true;
+		this.#shutdownController.abort();
 		this.#shutdownPromise ??= this.#shutdown(disposeNativeRuntime);
 		return this.#shutdownPromise;
 	}

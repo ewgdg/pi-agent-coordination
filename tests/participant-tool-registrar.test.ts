@@ -358,7 +358,7 @@ test("participant registrar contributes focused tool guides and one shared Agent
 	);
 	assert.match(
 		messageGuide,
-		/terminal response to that Request[\s\S]*end the turn immediately[\s\S]*Agent Run settles/,
+		/terminal response to that Request[\s\S]*end the turn immediately[\s\S]*Leave passive waiting and later continuation to the runtime/,
 	);
 
 	assert.match(delegationGuide, /^<agent_delegation>/);
@@ -376,7 +376,7 @@ test("participant registrar contributes focused tool guides and one shared Agent
 	);
 	assert.match(
 		delegationGuide,
-		/Continue only explicitly disjoint work[\s\S]*complete, correct Answer[\s\S]*end the turn[\s\S]*arrive automatically/,
+		/Continue only explicitly disjoint work[\s\S]*complete, correct Answer[\s\S]*end the turn[\s\S]*runtime waits for turn-triggering input/,
 	);
 	assert.match(
 		delegationGuide,

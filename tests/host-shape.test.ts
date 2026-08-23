@@ -356,7 +356,10 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			.map((member) => [["session", member], `AgentSession.${member}`] as const),
 		[["session", "extensionRunner"], "AgentSession.extensionRunner"],
 		[["session", "agent"], "AgentSession.agent"],
-		[["session", "agent", "hasQueuedMessages"], "AgentSession.agent.hasQueuedMessages"],
+		...["subscribe", "steer", "followUp", "hasQueuedMessages"].map((member) => [
+			["session", "agent", member],
+			`AgentSession.agent.${member}`,
+		] as const),
 		[["session", "sessionManager"], "AgentSession.sessionManager"],
 		[["session", "settingsManager"], "AgentSession.settingsManager"],
 		...[
