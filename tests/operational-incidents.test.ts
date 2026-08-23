@@ -71,8 +71,9 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		},
 	]);
 
-	await host.session.prompt("Create an Agent that will demonstrate a Stall.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt(
+		"Create an Agent that will demonstrate a Stall.",
+	);
 
 	const moderator = await waitForModerator(host);
 	const spawnSourceEntry = host.session.sessionManager.getEntries().find(
@@ -233,6 +234,8 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	assert.equal((await observeStatus(host, moderator.id)).run.phase, "dormant");
 	assert.equal(host.runtime.session, ownerSession);
 	await returnAgentViewToOwner(host, dormantView);
+	await host.session.abort();
+	await ownerPrompt;
 });
 
 test("an Answer triggered by the runtime reminder avoids Obligation Stall moderation", async (t) => {
@@ -571,8 +574,11 @@ test("one failed provider request creates Run Failure without regenerating an an
 		...routedResponses,
 	]);
 
-	await host.session.prompt("Create an answer-obligated Run Failure.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt("Create an answer-obligated Run Failure.");
+	t.after(async () => {
+		await host.session.abort();
+		await ownerPrompt;
+	});
 
 	const moderator = await waitForModeratorKind(host, "run_failure");
 	const moderatorInput = SessionManager.open(moderator.path).getEntries().find(
@@ -657,8 +663,9 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 		...Array.from({ length: 8 }, () => routeOwnerRequest),
 	]);
 
-	await host.session.prompt("Create an Agent that will request Owner guidance.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt(
+		"Create an Agent that will request Owner guidance.",
+	);
 	await waitForCondition(async () => {
 		const owner = await observeStatus(host, host.session.sessionId);
 		return owner.run.retentionReasons.some(({ reason }) => reason === "answer_owed");
@@ -677,7 +684,11 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 		},
 		() => terminalOwnerFailure,
 	));
-	await host.session.prompt("Fail this Owner Run before answering the Request.");
+	await host.session.prompt(
+		"Fail this Owner Run before answering the Request.",
+		{ streamingBehavior: "steer" },
+	);
+	await ownerPrompt;
 	await host.session.waitForIdle();
 
 	const moderator = await waitForModeratorKind(host, "run_failure");
@@ -1027,8 +1038,11 @@ test("Moderator Resolution is blocked while the Obligation Stall remains", async
 		fauxAssistantMessage("Resolution remains blocked."),
 	]);
 
-	await host.session.prompt("Create a blocked moderation case.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt("Create a blocked moderation case.");
+	t.after(async () => {
+		await host.session.abort();
+		await ownerPrompt;
+	});
 	const moderator = await waitForModerator(host);
 	const result = await waitForTranscriptEntry(
 		moderator.path,
@@ -1114,8 +1128,11 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 		fauxAssistantMessage("Moderation resolved after restoring progress."),
 	]);
 
-	await host.session.prompt("Create a Moderator supervision case.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt("Create a Moderator supervision case.");
+	t.after(async () => {
+		await host.session.abort();
+		await ownerPrompt;
+	});
 	const moderator = await waitForModerator(host);
 	const observed = await waitForTranscriptEntry(
 		moderator.path,
@@ -1218,8 +1235,11 @@ test("terminating the affected Run does not erase its durable Answer obligation"
 		fauxAssistantMessage("The terminated attempt is resolved."),
 	]);
 
-	await host.session.prompt("Create a terminated Obligation Stall.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt("Create a terminated Obligation Stall.");
+	t.after(async () => {
+		await host.session.abort();
+		await ownerPrompt;
+	});
 	const moderator = await waitForModerator(host);
 	const termination = await waitForTranscriptEntry(
 		moderator.path,
@@ -1288,8 +1308,11 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 		fauxAssistantMessage("I will wait for the Owner Answer."),
 	]);
 
-	await host.session.prompt("Create a moderation escalation case.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt("Create a moderation escalation case.");
+	t.after(async () => {
+		await host.session.abort();
+		await ownerPrompt;
+	});
 	const moderator = await waitForModerator(host);
 	const requestResult = await waitForTranscriptEntry(
 		moderator.path,
@@ -1380,8 +1403,11 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 		fauxAssistantMessage("I am inspecting while the obligation remains."),
 	]);
 
-	await host.session.prompt("Create an externally cleared Stall.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt("Create an externally cleared Stall.");
+	t.after(async () => {
+		await host.session.abort();
+		await ownerPrompt;
+	});
 	const moderator = await waitForModerator(host);
 	await waitForTranscriptEntry(
 		moderator.path,
@@ -1526,8 +1552,11 @@ test("a cleared Stall can recur with the same obligations and receive a fresh Mo
 		fauxAssistantMessage("I am handling the first continuous Stall."),
 	]);
 
-	await host.session.prompt("Create a recurring Obligation Stall.");
-	await host.session.waitForIdle();
+	const ownerPrompt = host.session.prompt("Create a recurring Obligation Stall.");
+	t.after(async () => {
+		await host.session.abort();
+		await ownerPrompt;
+	});
 	const firstModerator = await waitForModerator(host);
 	await waitForTranscriptEntry(
 		firstModerator.path,

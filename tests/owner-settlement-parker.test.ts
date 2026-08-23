@@ -99,21 +99,12 @@ test("queue observation is installed once, closes the waiter race, and restores 
 	const agent = new TestAgent();
 	const nativeSteer = agent.steer;
 	const nativeFollowUp = agent.followUp;
-	const customDeliveries: Array<unknown> = [];
-	const session = {
-		sendCustomMessage: async (_message: unknown, deliveryOptions?: unknown) => {
-			customDeliveries.push(deliveryOptions);
-		},
-	};
-	const nativeSendCustomMessage = session.sendCustomMessage;
 	let parkingEntries = 0;
 	const options = {
 		agent: agent.asAgent(),
-		session: session as never,
 		hasOutstandingRequests: () => true,
 		async beginParking() {
 			parkingEntries += 1;
-			await session.sendCustomMessage({ customType: "stored" });
 			agent.followUp(customMessage("admitted-during-entry"));
 			return () => undefined;
 		},
@@ -127,13 +118,11 @@ test("queue observation is installed once, closes the waiter race, and restores 
 
 	await agent.emit(cleanAgentEnd(), new AbortController().signal);
 	assert.equal(parkingEntries, 1);
-	assert.deepEqual(customDeliveries, [{ deliverAs: "nextTurn" }]);
 	first.dispose();
 	assert.equal(agent.steer, installedSteer);
 	second.dispose();
 	assert.equal(agent.steer, nativeSteer);
 	assert.equal(agent.followUp, nativeFollowUp);
-	assert.equal(session.sendCustomMessage, nativeSendCustomMessage);
 });
 
 test("a reconciled final Answer and parking setup failure both leave Agent listeners non-rejecting", async () => {

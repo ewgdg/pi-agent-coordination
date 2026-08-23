@@ -38,7 +38,7 @@ Coordination roles are trusted protocol participants, not a security boundary. R
 
 After a successful Owner response, the runtime keeps Pi's current low-level Run active when canonical transcript evidence still contains an outbound Agent Request without Cancellation or requester-side Answer Delivery proof. Child and Moderator settlement is unchanged. The Owner remains working to session observers, but Message Delivery treats this boundary as idle: queued Deferred work and safe Steer batches can enter Pi's active queues immediately.
 
-The first turn-triggering human, Agent, or extension message admitted to Agent core's steering or follow-up queue resumes Pi's existing continuation. `deliverAs: "nextTurn"` does not resume it. The parking boundary adds no transcript entry, assistant message, tool call, tool result, or Answer proof.
+The first human, Agent, or extension message admitted to Agent core's steering or follow-up queue resumes Pi's existing continuation. Because the parked Owner is natively active, a custom message without an explicit delivery mode keeps Pi's active-Agent behavior and enters the steering queue even when `triggerTurn` is false. Only explicit `deliverAs: "nextTurn"` waits for a later fresh prompt. The parking boundary adds no transcript entry, assistant message, tool call, tool result, or Answer proof.
 
 Pi still owns retry, overflow recovery, compaction, and final settlement. Error, aborted, and length responses bypass parking. Threshold compaction waits behind a parked successful response, then Pi runs its normal post-response compaction check before the next model request. Shutdown, session replacement, or exact-Run abort releases the in-memory waiter without rejecting an Agent listener.
 

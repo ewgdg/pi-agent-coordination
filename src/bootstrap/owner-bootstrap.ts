@@ -127,7 +127,6 @@ export async function initializeOwnerWorkflow(options: {
 	});
 	parkingBinding = installOwnerSettlementParker({
 		agent: runtime.session.agent,
-		session: runtime.session,
 		hasOutstandingRequests: () => coordinator.hasOutstandingOwnerRequests(),
 		beginParking: (runSignal) =>
 			coordinator.beginOwnerSettlementParking(runSignal),

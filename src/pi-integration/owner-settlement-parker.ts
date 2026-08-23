@@ -3,15 +3,12 @@ import type {
 	AgentEvent,
 	AgentMessage,
 } from "@earendil-works/pi-agent-core";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
-
 export type OwnerSettlementParkingBinding = Readonly<{
 	dispose(): void;
 }>;
 
 type OwnerSettlementParkingOptions = Readonly<{
 	agent: Agent;
-	session?: Pick<AgentSession, "sendCustomMessage">;
 	hasOutstandingRequests(): boolean;
 	beginParking(
 		runSignal: AbortSignal,
@@ -33,7 +30,6 @@ type InstalledParking = {
 	referenceCount: number;
 	disposed: AbortController;
 	waiters: Set<() => void>;
-	parkingDepth: number;
 	unsubscribe(): void;
 	restoreObservedMethods(): void;
 };
@@ -79,20 +75,13 @@ function createInstalledParking(
 		referenceCount: 1,
 		disposed: new AbortController(),
 		waiters: new Set(),
-		parkingDepth: 0,
 		unsubscribe: () => undefined,
 		restoreObservedMethods: () => undefined,
 	};
 	const restoreQueueMethods = observeQueueAdmissions(options.agent, () => {
 		for (const wake of [...installed.waiters]) wake();
 	});
-	const restoreCustomMessages = options.session
-		? preserveNonTriggeringCustomMessages(options.session, installed)
-		: () => undefined;
-	installed.restoreObservedMethods = () => {
-		restoreCustomMessages();
-		restoreQueueMethods();
-	};
+	installed.restoreObservedMethods = restoreQueueMethods;
 	installed.unsubscribe = options.agent.subscribe((event, signal) =>
 		parkAtCandidateBoundary(installed, event, signal)
 	);
@@ -122,7 +111,6 @@ async function parkAtCandidateBoundary(
 		installed.disposed.signal,
 	]);
 	let leaveParking: (() => void | Promise<void>) | undefined;
-	installed.parkingDepth += 1;
 	try {
 		// The waiter exists before parking entry re-drains scheduler-held Delivery.
 		// The authoritative queue check below closes admission before installation.
@@ -137,8 +125,6 @@ async function parkAtCandidateBoundary(
 			await leaveParking?.();
 		} catch (error) {
 			reportParkingError(installed, error);
-		} finally {
-			installed.parkingDepth -= 1;
 		}
 	}
 }
@@ -217,32 +203,6 @@ function observeQueueAdmissions(agent: Agent, notify: () => void): () => void {
 		restoreMethod(agent, "steer", steerDescriptor);
 		restoreMethod(agent, "followUp", followUpDescriptor);
 	};
-}
-
-function preserveNonTriggeringCustomMessages(
-	session: Pick<AgentSession, "sendCustomMessage">,
-	installed: InstalledParking,
-): () => void {
-	const descriptor = Object.getOwnPropertyDescriptor(session, "sendCustomMessage");
-	const sendCustomMessage = session.sendCustomMessage;
-	// Parking intentionally keeps Agent core active. Route a custom message that
-	// would be non-triggering at native idle through Pi's next-turn store so that
-	// the active-core implementation does not accidentally turn it into Steer.
-	session.sendCustomMessage = function parkedCustomMessage(
-		message,
-		options,
-	): Promise<void> {
-		const nonTriggering = options?.triggerTurn !== true &&
-			options?.deliverAs === undefined;
-		return sendCustomMessage.call(
-			session,
-			message,
-			installed.parkingDepth > 0 && nonTriggering
-				? { ...options, deliverAs: "nextTurn" }
-				: options,
-		);
-	};
-	return () => restoreMethod(session, "sendCustomMessage", descriptor);
 }
 
 function restoreMethod<
