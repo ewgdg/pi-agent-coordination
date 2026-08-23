@@ -11,7 +11,7 @@ Agent selection prepares the target mode before dismissing the roster. The selec
 Live uses one continuous list across two adjacent sections:
 
 - **Attention Inbox** contains Owner-visible Human `DECIDE` items and exhausted Operational `ATTENTION` items. A `DECIDE` row identifies the requesting Agent and shows a bounded one-line question preview. The first attention item receives initial focus. Selecting `DECIDE` opens that Agent's full-window view at its pending request and focuses its native editor. Selecting an Operational `ATTENTION` item with exactly one affected Agent opens that Agent's full-window view without changing the incident. Multi-Agent attention remains informational, and Enter leaves the selector open.
-- **Agents** contains the current scope's direct ordinary children in creation order. Live Moderators appear at the Owner scope as standalone participants.
+- **Agents** contains the current scope's direct ordinary children in creation order. Live Moderators appear at the Owner scope as standalone participants. Each row uses the human-facing work status: `active`, `idle`, `waiting` with its reason, `starting`, or `ending`.
 
 Right Arrow or `l` enters the focused ordinary Agent's child scope. Left Arrow or `h` returns to its parent and refocuses that Agent. Breadcrumbs omit Owner, retain the newest three Agent scopes, and tighten to the available width.
 

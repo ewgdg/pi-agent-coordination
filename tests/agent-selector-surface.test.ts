@@ -335,6 +335,35 @@ test("Live shows direct children and navigates Agent scopes", async () => {
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "researcher" });
 });
 
+test("Agent rows show the human-facing work status", async () => {
+	const harness = surfaceHarness(30);
+	const waitingAgent = {
+		...agentStatus("waiting-agent", "Waiting Agent", "owner"),
+		run: {
+			phase: "live" as const,
+			work: "active" as const,
+			attention: "input_required" as const,
+			retentionReasons: [],
+		},
+	};
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null), waitingAgent],
+		dormant: [],
+		selectedAgentId: "owner",
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+
+	const waitingRow = harness.component.render(80).find((line) =>
+		line.includes("Waiting Agent")
+	) ?? "";
+	assert.match(waitingRow, /waiting \(human input\)/);
+	assert.doesNotMatch(waitingRow, /live\/active/);
+
+	harness.component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
 test("focused Agent details use a stable four-row budget", async () => {
 	const harness = surfaceHarness(30);
 	const owner = selectorAgent({

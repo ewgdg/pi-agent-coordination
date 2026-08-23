@@ -22,6 +22,10 @@ import {
 	operationalIncidentRequestEvidence,
 } from "./operational-incident-surface.ts";
 import { boundedToolPreview } from "../tools/bounded-preview.ts";
+import {
+	formatAgentWorkStatus,
+	selectedAgentWorkStatus,
+} from "./selected-agent-status.ts";
 
 const AGENT_SELECTOR_OVERLAY_WIDTH = 80;
 const AGENT_SELECTOR_OVERLAY_MARGIN = 1;
@@ -426,7 +430,7 @@ class AgentSelectorSurface implements Component {
 			value: status.agentId,
 			label: status.label,
 			description: [
-				formatRun(status),
+				formatRun(status, this.#theme),
 				moderator ? status.description : undefined,
 				children,
 			].filter(Boolean).join(" · "),
@@ -659,10 +663,8 @@ function frameLine(
 	return `${border("│")}${" ".repeat(leftMargin)}${content}${contentPadding}${" ".repeat(rightMargin)}${border("│")}`;
 }
 
-function formatRun(status: AgentRosterStatus): string {
-	const run = status.run;
-	const work = "work" in run && run.work ? `/${run.work}` : "";
-	return `${run.phase}${work}`;
+function formatRun(status: AgentRosterStatus, theme: Theme): string {
+	return formatAgentWorkStatus(selectedAgentWorkStatus(status.run, false), theme);
 }
 
 function formatDetailedRun(status: AgentRosterStatus): string {
