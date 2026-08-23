@@ -133,7 +133,7 @@ export function renderAgentMessageResult(
 	const disposition = "messageStatus" in receipt
 		? receipt.messageStatus
 		: receipt.disposition;
-	let text = theme.fg(dispositionColor(disposition), disposition);
+	let text = theme.fg(messageReceiptStatusColor(disposition), disposition);
 	if ("messageId" in receipt) {
 		text += theme.fg("dim", ` · ${receipt.messageId}`);
 	} else if ("requestMessageId" in receipt) {
@@ -183,7 +183,7 @@ export function renderAgentMessageResult(
 	return container;
 }
 
-function dispositionColor(disposition: string): ThemeColor {
+export function messageReceiptStatusColor(disposition: string): ThemeColor {
 	switch (disposition) {
 		case "delivered":
 		case "answer_delivered":

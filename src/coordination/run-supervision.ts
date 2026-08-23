@@ -111,7 +111,7 @@ export class RunSupervisor {
 					return { ...identity, delivery: "rejected", rejectionReason: "not_held" };
 				}
 				const admission = await this.#messages.admitResumeInLane(target, message, hold);
-				if (admission === "pending") return { ...identity, delivery: "pending" };
+				if (admission === "pending") return { ...identity, messageStatus: "sent" };
 				return {
 					...identity,
 					delivery: "rejected",

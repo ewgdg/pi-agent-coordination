@@ -2,6 +2,7 @@ import {
 	getMarkdownTheme,
 	type AgentToolResult,
 	type Theme,
+	type ThemeColor,
 	type ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -38,6 +39,7 @@ import type { AgentRunState } from "../runtime/agent-runtime-host.ts";
 import type { AgentObserveInput } from "./participant-coordination-tools.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 import { renderMessageProjection } from "./message-delivery-renderer.ts";
+import { messageReceiptStatusColor } from "./message-renderer.ts";
 
 export function renderAgentWaitCall(
 	_args: AgentWaitInput,
@@ -213,16 +215,25 @@ export function renderAgentControlResult(
 ): Text {
 	if (options.isPartial || result.details === undefined) return pending(theme, "controlling");
 	const details = result.details;
-	const disposition = "disposition" in details ? details.disposition : details.delivery;
+	const disposition = "disposition" in details
+		? details.disposition
+		: "messageStatus" in details
+			? details.messageStatus
+			: details.delivery;
+	const color = "messageStatus" in details || "delivery" in details
+		? messageReceiptStatusColor(disposition)
+		: "success";
 	return receipt(
 		theme,
-		`${disposition} · ${formatAgentIdentity(
+		disposition,
+		details,
+		options,
+		color,
+		` · ${formatAgentIdentity(
 			details.agentId,
 			resolveAgentLabel,
 			options.expanded ? "full" : "compact",
 		)}`,
-		details,
-		options,
 	);
 }
 
@@ -309,8 +320,11 @@ function receipt(
 	summary: string,
 	details: unknown,
 	options: ToolRenderResultOptions,
+	color: ThemeColor = "success",
+	dimmedSuffix?: string,
 ): Text {
-	let text = theme.fg("success", summary);
+	let text = theme.fg(color, summary);
+	if (dimmedSuffix) text += theme.fg("dim", dimmedSuffix);
 	if (options.expanded) text += theme.fg("dim", `\n${JSON.stringify(details, null, 2)}`);
 	return new Text(text, 0, 0);
 }

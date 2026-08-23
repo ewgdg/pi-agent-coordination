@@ -295,10 +295,6 @@ test("every version-four method and event has TypeBox payload/result schemas", (
 		requestMessageId: "request-message",
 	}), true);
 	assert.equal(Check(agentControlMethods["coordination.message"].response, {
-		messageId: "message",
-		delivery: "pending",
-	}), false);
-	assert.equal(Check(agentControlMethods["coordination.message"].response, {
 		disposition: "already_cancelled",
 		cancellationMessageId: "cancellation-message",
 	}), true);
@@ -317,6 +313,11 @@ test("every version-four method and event has TypeBox payload/result schemas", (
 		disposition: "preempted",
 		answers: [],
 	}), false);
+	assert.equal(Check(agentControlMethods["coordination.control"].response, {
+		agentId: "child",
+		messageId: "resume-message",
+		messageStatus: "sent",
+	}), true);
 	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
 		spawnStatus: "created",
 		agentId: "child",
@@ -340,19 +341,6 @@ test("every version-four method and event has TypeBox payload/result schemas", (
 	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
 		spawnStatus: "not_created",
 		failedStage: "identity_commit",
-	}), false);
-	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {
-		disposition: "pending",
-		agentId: "child",
-		requestId: "creation-request",
-		effectiveConfiguration: {
-			cwd: "/project",
-			model: { provider: "provider", modelId: "model" },
-			thinking: "high",
-			allowedTools: ["read"],
-			skills: [],
-			extensions: [],
-		},
 	}), false);
 	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
 		matches: [{

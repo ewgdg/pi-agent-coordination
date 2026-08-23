@@ -329,6 +329,30 @@ test("Agent Control rendering consistently shows labels with compact identities"
 	assert.match(expandedResult, new RegExp(`held · Researcher · ${agentId}`));
 });
 
+test("Agent Control renders a sent Resume receipt in the Message receipt language", () => {
+	const colors: Array<[string, string]> = [];
+	const trackingTheme = {
+		fg(color: string, text: string) {
+			colors.push([color, text]);
+			return text;
+		},
+		bold: (text: string) => text,
+	} as unknown as Theme;
+	const agentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+	const rendered = renderAgentControlResult(
+		{
+			content: [{ type: "text", text: "sent" }],
+			details: { agentId, messageId: "resume-message", messageStatus: "sent" },
+		},
+		{ expanded: false, isPartial: false },
+		trackingTheme,
+		() => "Researcher",
+	).render(120).join("\n");
+
+	assert.match(rendered, /sent · Researcher · 983c81e3/);
+	assert.ok(colors.some(([color, text]) => color === "success" && text === "sent"));
+});
+
 test("Human Request owns a transcript-native question and Answer shell", async (t) => {
 	initTheme("dark");
 	const unavailableView = () => {

@@ -353,8 +353,8 @@ test("one Supervisory Resume Message commits alone before ordinary held backlog"
 		content: "Resume this exact held Run with explicit direction.",
 	});
 	assert.equal(resumed.agentId, child.agentId);
-	assert.ok("delivery" in resumed && "messageId" in resumed);
-	assert.equal(resumed.delivery, "pending");
+	assert.ok("messageStatus" in resumed && "messageId" in resumed);
+	assert.equal(resumed.messageStatus, "sent");
 	assert.equal(typeof resumed.messageId, "string");
 	await child.waitForIdle();
 	await waitForCondition(() =>
@@ -440,8 +440,8 @@ test("a failed Supervisory Resume dispatch leaves its exact Hold retryable", asy
 		agentId: child.agentId,
 		content: "Retry the exact Hold after dispatch recovery.",
 	});
-	assert.ok("delivery" in retried);
-	assert.equal(retried.delivery, "pending");
+	assert.ok("messageStatus" in retried);
+	assert.equal(retried.messageStatus, "sent");
 	await child.waitForIdle();
 	assert.equal(
 		harness.ownerView.status(child.agentId).run.retentionReasons.some(
@@ -900,8 +900,8 @@ test("the one resume reservation remains available when ordinary capacity is exh
 		agentId: child.agentId,
 		content: "Use the reserved resumption slot.",
 	});
-	assert.ok("delivery" in resumed);
-	assert.equal(resumed.delivery, "pending");
+	assert.ok("messageStatus" in resumed);
+	assert.equal(resumed.messageStatus, "sent");
 	await child.waitForIdle();
 	await waitForCondition(() =>
 		child.entries().some(
@@ -932,8 +932,8 @@ test("a resume bound to an earlier Hold becomes ordinary direction and cannot cl
 		agentId: child.agentId,
 		content: "This resume is bound only to the earlier Hold.",
 	});
-	assert.ok("delivery" in stale);
-	assert.equal(stale.delivery, "pending");
+	assert.ok("messageStatus" in stale);
+	assert.equal(stale.messageStatus, "sent");
 	assert.equal(
 		child.entries().some(
 			(entry) =>
@@ -977,8 +977,8 @@ test("a resume bound to an earlier Hold becomes ordinary direction and cannot cl
 		agentId: child.agentId,
 		content: "Resume the later exact Hold.",
 	});
-	assert.ok("delivery" in current);
-	assert.equal(current.delivery, "pending");
+	assert.ok("messageStatus" in current);
+	assert.equal(current.messageStatus, "sent");
 	await child.waitForIdle();
 	await waitForCondition(() =>
 		child.entries().some(

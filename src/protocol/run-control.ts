@@ -31,7 +31,7 @@ export type RunResumeReceipt = Readonly<{
 	agentId: string;
 	messageId: string;
 }> & (
-	| Readonly<{ delivery: "pending" }>
+	| Readonly<{ messageStatus: "sent" }>
 	| Readonly<{
 		delivery: "rejected";
 		rejectionReason: "not_held" | "resume_slot_occupied" | "target_unavailable";

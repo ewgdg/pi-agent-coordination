@@ -355,7 +355,7 @@ const RunControlReceiptSchema = Type.Union([
 		agentId: NonEmptyStringSchema,
 		disposition: Type.Union([Type.Literal("held"), Type.Literal("already_held"), Type.Literal("not_running")]),
 	}),
-	closed({ agentId: NonEmptyStringSchema, messageId: NonEmptyStringSchema, delivery: Type.Literal("pending") }),
+	closed({ agentId: NonEmptyStringSchema, messageId: NonEmptyStringSchema, messageStatus: Type.Literal("sent") }),
 	closed({
 		agentId: NonEmptyStringSchema, messageId: NonEmptyStringSchema, delivery: Type.Literal("rejected"),
 		rejectionReason: Type.Union([

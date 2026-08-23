@@ -89,7 +89,7 @@ An authorized supervisor resumes through a model-visible Message:
 }
 ```
 
-Each held Agent has one reserved Supervisory Resume slot outside its ordinary Message capacity. The resume Delivery commits alone, clears only the exact Hold to which it was admitted, and receives one isolated model turn before the ordinary coordination backlog can proceed. The receipt returns the source-derived `messageId` and either `delivery: "pending"` or a rejection reason: `not_held`, `resume_slot_occupied`, or `target_unavailable`.
+Each held Agent has one reserved Supervisory Resume slot outside its ordinary Message capacity. The resume Delivery commits alone, clears only the exact Hold to which it was admitted, and receives one isolated model turn before the ordinary coordination backlog can proceed. A successful receipt returns the source-derived `messageId` with `messageStatus: "sent"`, matching other asynchronously admitted Messages. A rejected receipt reports `not_held`, `resume_slot_occupied`, or `target_unavailable`.
 
 A resume that loses its bound Hold before Delivery becomes an ordinary Steer Message. It remains useful direction, but cannot clear a later Hold.
 
