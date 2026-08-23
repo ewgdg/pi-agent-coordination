@@ -52,6 +52,27 @@ test("Pi child CLI launch uses the exact session and immutable explicit resource
 	);
 });
 
+test("Pi child CLI launch lets Pi select its default thinking when preparation leaves it unset", () => {
+	const launch = buildPiChildCliLaunch({
+		cliPath: "/package/pi/dist/cli.js",
+		sessionPath: "/sessions/moderator.jsonl",
+		configuration: {
+			cwd: "/work/project",
+			model: { provider: "anthropic", modelId: "claude-test" },
+			allowedTools: ["moderator_control"],
+			skills: [],
+			extensions: [],
+			inheritProjectContext: true,
+		},
+		skillPaths: [],
+		bridgeExtensionPath: "/package/src/process-runtime/child-runtime-bridge.ts",
+		inputExtensionPath: "/package/src/process-runtime/child-runtime-input.ts",
+		projectTrusted: true,
+	});
+
+	assert.equal(launch.arguments.includes("--thinking"), false);
+});
+
 test("Pi child CLI launch fails before spawn when resolved resources are ambiguous", () => {
 	const common = {
 		cliPath: "/package/pi/dist/cli.js",

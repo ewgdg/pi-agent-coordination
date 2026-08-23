@@ -727,10 +727,11 @@ export class WorkflowCoordinator {
 		const transcript = record.transcript.inspect();
 		const transcriptContext = transcript.context;
 		const configured = record.effectiveConfiguration;
+		const prepared = record.launchConfiguration;
 		const ownerSnapshot = this.#agents.get(this.#ownerIdentity.agentId)
 			?.host.effectiveRuntimeSnapshot();
 		const model = runtimeSnapshot?.model ?? transcriptContext.model ?? configured?.model ??
-			ownerSnapshot?.model;
+			prepared?.model ?? ownerSnapshot?.model;
 		if (!model) {
 			throw new Error(`invariant_violation: Agent ${status.agentId} has no resolvable model`);
 		}
@@ -739,7 +740,7 @@ export class WorkflowCoordinator {
 		);
 		const thinking = runtimeSnapshot?.thinking ??
 			(hasRecordedThinking ? transcriptContext.thinkingLevel : undefined) ??
-			configured?.thinking ?? ownerSnapshot?.thinking;
+			configured?.thinking ?? prepared?.thinking ?? ownerSnapshot?.thinking;
 		if (!isRuntimeThinkingLevel(thinking)) {
 			throw new Error(`invariant_violation: Agent ${status.agentId} has invalid thinking level`);
 		}

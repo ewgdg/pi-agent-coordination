@@ -13,6 +13,7 @@ import type {
 } from "../protocol/runtime-configuration.ts";
 import {
 	resolveAgentRunConfiguration,
+	type AgentRunLaunchConfiguration,
 	type AgentSpawnConfigurationInput,
 	type EffectiveAgentRunConfiguration,
 } from "../templates/agent-configuration.ts";
@@ -52,17 +53,27 @@ export type ResolvedParentRuntime = Readonly<{
 	skillSources: readonly Readonly<Pick<Skill, "name" | "filePath">>[];
 }>;
 
-export type PreparedChildRuntime = Readonly<{
+type PreparedRuntimeFields = Readonly<{
 	agentId: string;
-	role: AgentRuntimeRole;
-	configuration: EffectiveAgentRunConfiguration;
 	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot;
 	initialTools?: readonly string[];
 	projectTrusted: boolean;
 	skillSources: readonly Readonly<{ name: string; path: string }>[];
 }>;
 
-export async function prepareChildRuntime(options: {
+export type PreparedOrdinaryChildRuntime = PreparedRuntimeFields & Readonly<{
+	role: "ordinary";
+	configuration: EffectiveAgentRunConfiguration;
+}>;
+
+export type PreparedModeratorRuntime = PreparedRuntimeFields & Readonly<{
+	role: "moderator";
+	configuration: AgentRunLaunchConfiguration;
+}>;
+
+export type PreparedChildRuntime = PreparedOrdinaryChildRuntime | PreparedModeratorRuntime;
+
+type PrepareChildRuntimeOptions = {
 	agentId: string;
 	role: AgentRuntimeRole;
 	agentDir: string;
@@ -70,7 +81,17 @@ export async function prepareChildRuntime(options: {
 	template?: AgentTemplate;
 	overrides?: AgentSpawnConfigurationInput;
 	isModelAvailable?(model: ModelReference): boolean;
-}): Promise<PreparedChildRuntime> {
+};
+
+export function prepareChildRuntime(
+	options: PrepareChildRuntimeOptions & { role: "ordinary" },
+): Promise<PreparedOrdinaryChildRuntime>;
+export function prepareChildRuntime(
+	options: PrepareChildRuntimeOptions & { role: "moderator" },
+): Promise<PreparedModeratorRuntime>;
+export async function prepareChildRuntime(
+	options: PrepareChildRuntimeOptions,
+): Promise<PreparedChildRuntime> {
 	validateParentSkillSources(options.parentRuntime);
 	const inheritedExtensions = inheritsParentExtensions(
 		options.template?.extensions,
@@ -88,10 +109,15 @@ export async function prepareChildRuntime(options: {
 		fixedAllowedTools: [],
 		isModelAvailable: options.isModelAvailable ?? (() => true),
 	});
+	// Pi owns its shared default and model-capability clamp. Keep an absent
+	// Moderator selection unresolved until Pi starts instead of copying the Owner.
+	const launchConfiguration = usesPiDefaultThinking(options)
+		? withoutThinking(resolvedConfiguration)
+		: resolvedConfiguration;
 	const configuration = {
-		...resolvedConfiguration,
+		...launchConfiguration,
 		allowedTools: [
-			...resolvedConfiguration.allowedTools.filter(
+			...launchConfiguration.allowedTools.filter(
 				(name) => !COORDINATION_TOOL_NAMES.has(name),
 			),
 			...COORDINATION_TOOLS_BY_ROLE[options.role],
@@ -130,16 +156,52 @@ export async function prepareChildRuntime(options: {
 		configuration.skills,
 		resourceLoader.getSkills(),
 	);
-	return {
+	const preparedFields: PreparedRuntimeFields = {
 		agentId: options.agentId,
-		role: options.role,
-		configuration,
 		projectTrusted,
 		skillSources: selectedSkills.map(({ name, filePath }) => ({
 			name,
 			path: filePath,
 		})),
 	};
+	if (options.role === "ordinary") {
+		return {
+			...preparedFields,
+			role: "ordinary",
+			configuration: requireExplicitThinking(configuration),
+		};
+	}
+	return {
+		...preparedFields,
+		role: "moderator",
+		configuration,
+	};
+}
+
+function usesPiDefaultThinking(options: Readonly<{
+	role: AgentRuntimeRole;
+	template?: AgentTemplate;
+	overrides?: AgentSpawnConfigurationInput;
+}>): boolean {
+	return options.role === "moderator" &&
+		options.template?.models === undefined &&
+		options.overrides?.model === undefined;
+}
+
+function withoutThinking(
+	configuration: EffectiveAgentRunConfiguration,
+): AgentRunLaunchConfiguration {
+	const { thinking: _, ...remaining } = configuration;
+	return remaining;
+}
+
+function requireExplicitThinking(
+	configuration: AgentRunLaunchConfiguration,
+): EffectiveAgentRunConfiguration {
+	if (configuration.thinking === undefined) {
+		throw new Error("invariant_violation: ordinary Agent thinking is unresolved");
+	}
+	return { ...configuration, thinking: configuration.thinking };
 }
 
 function inheritsParentExtensions(

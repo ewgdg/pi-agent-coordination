@@ -30,7 +30,7 @@ import {
 	AGENT_CONTROL_PROTOCOL_VERSION,
 	type ChildProcessBootstrap,
 } from "../control/control-protocol-schemas.ts";
-import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
+import type { AgentRunLaunchConfiguration } from "../templates/agent-configuration.ts";
 import {
 	buildChildProcessEnvironment,
 } from "./child-process-environment.ts";
@@ -74,7 +74,7 @@ export type StartPiChildProcessRuntimeOptions = Readonly<{
 	role: ChildProcessBootstrap["role"];
 	expectedSessionId: string;
 	sessionPath: string;
-	configuration: EffectiveAgentRunConfiguration;
+	configuration: AgentRunLaunchConfiguration;
 	initialTools?: readonly string[];
 	skillPaths: readonly string[];
 	projectTrusted: boolean;
@@ -719,7 +719,7 @@ export function resolveInstalledPiCliPath(): string {
 
 async function assertRuntimeSnapshot(
 	actual: PiChildRuntimeSnapshot,
-	expected: EffectiveAgentRunConfiguration,
+	expected: AgentRunLaunchConfiguration,
 	skillPaths: readonly string[],
 	projectTrusted: boolean,
 	expectedSessionId: string,
@@ -733,7 +733,8 @@ async function assertRuntimeSnapshot(
 	const expectedSnapshot: PiChildRuntimeSnapshot = {
 		cwd: expected.cwd,
 		model: expected.model,
-		thinking: expected.thinking,
+		// An unset selection deliberately delegates this one value to Pi.
+		thinking: expected.thinking ?? actual.thinking,
 		tools: [...actual.tools],
 		skills: [...expected.skills],
 		skillSources: await Promise.all(expected.skills.map(async (name, index) => ({

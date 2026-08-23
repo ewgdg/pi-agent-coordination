@@ -27,6 +27,64 @@ const CHILD_EXTENSION = fileURLToPath(
 	new URL("./fixtures/process-runtime-child-extension.ts", import.meta.url),
 );
 
+test("real Pi CLI resolves unset Moderator thinking from the shared Pi default", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-moderator-default-thinking-"));
+	const agentDir = join(root, "agent");
+	const cwd = join(root, "work");
+	const sessionDirectory = join(root, "sessions");
+	const sessionId = "019a6b4d-1b22-7000-8000-000000000000";
+	await Promise.all([
+		mkdir(agentDir, { recursive: true }),
+		mkdir(cwd, { recursive: true }),
+		mkdir(sessionDirectory, { recursive: true }),
+	]);
+	await writeFile(
+		join(agentDir, "settings.json"),
+		`${JSON.stringify({ defaultThinkingLevel: "low" })}\n`,
+	);
+	const sessionPath = join(sessionDirectory, "moderator.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: sessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+
+	let runtime: PiChildProcessRuntime | undefined;
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "moderator-default-thinking-workflow",
+			agentId: sessionId,
+			role: "moderator",
+			expectedSessionId: sessionId,
+			sessionPath,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_WORKING_ZONE_MODEL,
+				},
+				allowedTools: [],
+				skills: [],
+				extensions: [CHILD_EXTENSION],
+				inheritProjectContext: true,
+			},
+			skillPaths: [],
+			projectTrusted: true,
+			agentDir,
+			ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
+			runtimeDirectory: root,
+		});
+		assert.equal(runtime.snapshot.thinking, "low");
+	} finally {
+		await runtime?.dispose();
+	}
+});
+
 test("real Pi CLI runs one exact TUI session through the process Runtime Bridge", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",

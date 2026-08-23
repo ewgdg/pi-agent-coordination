@@ -223,7 +223,6 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 	assert.deepEqual(sameCwd.configuration, {
 		cwd: parentCwd,
 		model: { provider: "parent", modelId: "model" },
-		thinking: "minimal",
 		allowedTools: [
 			"read",
 			"agent_message",
@@ -238,6 +237,36 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		systemPrompt: { mode: "replace", body: "Moderator-only context" },
 		inheritProjectContext: false,
 	});
+
+	const explicitlyConfiguredModerator = await prepareChildRuntime({
+		agentId: "configured-moderator-child",
+		role: "moderator",
+		agentDir,
+		parentRuntime,
+		template: {
+			name: "moderator",
+			models: [{
+				model: { provider: "parent", modelId: "model" },
+				thinking: "high",
+			}],
+			systemPromptMode: "append",
+			inheritProjectContext: true,
+			systemPrompt: "",
+			sourcePath: join(fixture, "configured-moderator.md"),
+		},
+	});
+	assert.equal(explicitlyConfiguredModerator.configuration.thinking, "high");
+
+	const callerConfiguredModerator = await prepareChildRuntime({
+		agentId: "caller-configured-moderator-child",
+		role: "moderator",
+		agentDir,
+		parentRuntime,
+		overrides: {
+			model: { id: "inherit", thinking: "low" },
+		},
+	});
+	assert.equal(callerConfiguredModerator.configuration.thinking, "low");
 
 	const sameCwdAlias = await prepareChildRuntime({
 		agentId: "ordinary-same-cwd-alias",

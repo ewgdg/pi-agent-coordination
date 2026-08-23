@@ -6,7 +6,10 @@ import type {
 	AgentRunState,
 	AgentRuntimeHost,
 } from "../runtime/agent-runtime-host.ts";
-import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
+import type {
+	AgentRunLaunchConfiguration,
+	EffectiveAgentRunConfiguration,
+} from "../templates/agent-configuration.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import type { AgentTranscript } from "../transcript/agent-transcript.ts";
 
@@ -15,6 +18,8 @@ export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdenti
 export type AgentRecord = {
 	identity: AgentIdentity;
 	creationInput?: AgentSpawnInput;
+	/** Preserves pre-admission model selection while Pi resolves any default thinking level. */
+	launchConfiguration?: AgentRunLaunchConfiguration;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
 	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot;
 	host: AgentRuntimeHost;

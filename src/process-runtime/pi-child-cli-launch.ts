@@ -1,6 +1,6 @@
 import { isAbsolute } from "node:path";
 
-import type { EffectiveAgentRunConfiguration } from "../templates/agent-configuration.ts";
+import type { AgentRunLaunchConfiguration } from "../templates/agent-configuration.ts";
 
 export type PiChildCliLaunch = Readonly<{
 	command: string;
@@ -11,7 +11,7 @@ export type PiChildCliLaunch = Readonly<{
 export function buildPiChildCliLaunch(options: {
 	cliPath: string;
 	sessionPath: string;
-	configuration: EffectiveAgentRunConfiguration;
+	configuration: AgentRunLaunchConfiguration;
 	initialTools?: readonly string[];
 	skillPaths: readonly string[];
 	bridgeExtensionPath: string;
@@ -96,8 +96,9 @@ export function buildPiChildCliLaunch(options: {
 		sessionPath,
 		"--model",
 		`${configuration.model.provider}/${configuration.model.modelId}`,
-		"--thinking",
-		configuration.thinking,
+		...(configuration.thinking === undefined
+			? []
+			: ["--thinking", configuration.thinking]),
 		...(initialTools.length === 0
 			? ["--no-tools"]
 			: ["--tools", initialTools.join(",")]),

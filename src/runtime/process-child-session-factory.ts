@@ -39,6 +39,8 @@ import {
 	prepareChildRuntime,
 	type AgentRuntimeRole,
 	type PreparedChildRuntime,
+	type PreparedModeratorRuntime,
+	type PreparedOrdinaryChildRuntime,
 	type ResolvedParentRuntime,
 } from "./child-runtime-preparation.ts";
 import { workflowSessionDirectory } from "./workflow-session-directory.ts";
@@ -49,8 +51,6 @@ const COORDINATION_EXTENSION_PREFIXES = [
 	"<inline:pi-agent-coordination-activity:",
 ] as const;
 const INLINE_PUBLIC_EXTENSION_PATH = "<inline:pi-agent-coordination>";
-
-export type ProcessChildRunPreparation = PreparedChildRuntime;
 
 type ParticipantHandlers =
 	| OwnerParticipantRequestHandlers<"ordinary">
@@ -111,13 +111,13 @@ export class ProcessChildSessionFactory {
 		parent: AgentRecord;
 		spawnInput: AgentSpawnInput;
 		preserveParentPromptSurface?: boolean;
-	}): Promise<ProcessChildRunPreparation> {
+	}): Promise<PreparedOrdinaryChildRuntime> {
 		return this.#prepareOrdinaryRun(options, new Set());
 	}
 
 	async prepareModeratorRun(options: {
 		agentId: string;
-	}): Promise<ProcessChildRunPreparation> {
+	}): Promise<PreparedModeratorRuntime> {
 		const owner = this.#resolveAgent(this.#ownerIdentity.agentId);
 		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
 		const parentRuntime = await this.#resolveCurrentRuntime(owner, new Set());
@@ -144,7 +144,7 @@ export class ProcessChildSessionFactory {
 		identity: ChildAgentIdentity;
 		spawnInput: AgentSpawnInput;
 		parent: AgentRecord;
-		initialPreparation?: PreparedChildRuntime;
+		initialPreparation?: PreparedOrdinaryChildRuntime;
 		sessionPath: string;
 	}): AgentRecord {
 		const { identity, spawnInput, parent, sessionPath } = options;
@@ -182,7 +182,7 @@ export class ProcessChildSessionFactory {
 
 	createModeratorRecord(options: {
 		identity: ModeratorIdentity;
-		initialPreparation?: PreparedChildRuntime;
+		initialPreparation?: PreparedModeratorRuntime;
 		sessionPath: string;
 	}): AgentRecord {
 		const { identity, sessionPath } = options;
@@ -195,15 +195,26 @@ export class ProcessChildSessionFactory {
 					agentId: identity.agentId,
 				});
 				firstPreparation = undefined;
-				record.effectiveConfiguration = prepared.configuration;
-				return this.#launchPreparedRuntime(identity, prepared, sessionPath);
+				record.launchConfiguration = prepared.configuration;
+				const launched = await this.#launchPreparedRuntime(identity, prepared, sessionPath);
+				return {
+					runtime: launched.runtime,
+					ready: launched.ready.then(() => {
+						const snapshot = launched.runtime.snapshot();
+						record.effectiveConfiguration = {
+							...prepared.configuration,
+							model: snapshot.model,
+							thinking: snapshot.thinking,
+						};
+					}),
+				};
 			},
 		});
 		record = {
 			identity,
 			...(options.initialPreparation === undefined
 				? {}
-				: { effectiveConfiguration: options.initialPreparation.configuration }),
+				: { launchConfiguration: options.initialPreparation.configuration }),
 			host,
 			transcript: transcriptFromSessionFile(sessionPath),
 			children: [],
@@ -280,7 +291,7 @@ export class ProcessChildSessionFactory {
 			preserveParentPromptSurface?: boolean;
 		},
 		resolving: Set<string>,
-	): Promise<PreparedChildRuntime> {
+	): Promise<PreparedOrdinaryChildRuntime> {
 		const parentRuntime = await this.#resolveCurrentRuntime(options.parent, resolving);
 		const template = await this.#resolveSelectedTemplate(
 			parentRuntime,
@@ -297,7 +308,7 @@ export class ProcessChildSessionFactory {
 				? {}
 				: { overrides: options.spawnInput.config }),
 		});
-		const prepared: PreparedChildRuntime = {
+		const prepared: PreparedOrdinaryChildRuntime = {
 			...preparedRuntime,
 			agentTemplateSnapshot: await this.#captureTemplateSnapshotForRuntime({
 				cwd: preparedRuntime.configuration.cwd,
@@ -482,7 +493,7 @@ export class ProcessChildSessionFactory {
 }
 
 function requireAgentTemplateSnapshot(
-	prepared: PreparedChildRuntime,
+	prepared: PreparedOrdinaryChildRuntime,
 ): AgentTemplateCatalogueSnapshot {
 	if (!prepared.agentTemplateSnapshot) {
 		throw new Error(

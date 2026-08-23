@@ -38,6 +38,13 @@ export type EffectiveAgentRunConfiguration = Readonly<{
 	inheritProjectContext: boolean;
 }>;
 
+/** Launch input may delegate thinking selection to Pi while all other values stay explicit. */
+export type AgentRunLaunchConfiguration = Readonly<
+	Omit<EffectiveAgentRunConfiguration, "thinking"> & {
+		thinking?: RuntimeThinkingLevel;
+	}
+>;
+
 export function resolveAgentRunConfiguration(options: {
 	inherited: InheritableRuntimeConfiguration;
 	template?: AgentTemplate;
