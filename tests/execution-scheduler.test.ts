@@ -20,25 +20,25 @@ import {
 	createUnboundTestOwnerHost,
 } from "./support/pi-host.ts";
 
-test("ordinary executions enter and leave one Workflow-wide FIFO capacity", async () => {
+test("maxConcurrentAgentRuns counts child executions only in FIFO order", async () => {
 	const policy = new WorkflowPolicyStore(
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 2}'),
 	);
 	const scheduler = new WorkflowExecutionScheduler(policy);
 	const admitted: string[] = [];
-	const first = scheduler.admit("ordinary").then((permit) => {
+	const first = scheduler.admit("child").then((permit) => {
 		admitted.push("first");
 		return permit;
 	});
-	const second = scheduler.admit("ordinary").then((permit) => {
+	const second = scheduler.admit("child").then((permit) => {
 		admitted.push("second");
 		return permit;
 	});
-	const third = scheduler.admit("ordinary").then((permit) => {
+	const third = scheduler.admit("child").then((permit) => {
 		admitted.push("third");
 		return permit;
 	});
-	const fourth = scheduler.admit("ordinary").then((permit) => {
+	const fourth = scheduler.admit("child").then((permit) => {
 		admitted.push("fourth");
 		return permit;
 	});
@@ -61,20 +61,20 @@ test("queued executions keep captured limits across prospective policy reload", 
 	const initial = parseWorkflowPolicy('{"maxConcurrentAgentRuns": 2}');
 	const policy = new WorkflowPolicyStore(initial);
 	const scheduler = new WorkflowExecutionScheduler(policy);
-	const first = await scheduler.admit("ordinary");
-	const second = await scheduler.admit("ordinary");
+	const first = await scheduler.admit("child");
+	const second = await scheduler.admit("child");
 
 	const reduced = parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}');
 	policy.publish(reduced);
 	let reducedAdmitted = false;
-	const underReducedLimit = scheduler.admit("ordinary").then((permit) => {
+	const underReducedLimit = scheduler.admit("child").then((permit) => {
 		reducedAdmitted = true;
 		return permit;
 	});
 	const raised = parseWorkflowPolicy('{"maxConcurrentAgentRuns": 3}');
 	policy.publish(raised);
 	let raisedAdmitted = false;
-	const afterRaise = scheduler.admit("ordinary").then((permit) => {
+	const afterRaise = scheduler.admit("child").then((permit) => {
 		raisedAdmitted = true;
 		return permit;
 	});
@@ -98,11 +98,11 @@ test("an aborted queued execution leaves FIFO without consuming capacity", async
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);
 	const scheduler = new WorkflowExecutionScheduler(policy);
-	const active = await scheduler.admit("ordinary");
+	const active = await scheduler.admit("child");
 	const aborted = new AbortController();
-	const removed = scheduler.admit("ordinary", aborted.signal);
+	const removed = scheduler.admit("child", aborted.signal);
 	let followingAdmitted = false;
-	const following = scheduler.admit("ordinary").then((permit) => {
+	const following = scheduler.admit("child").then((permit) => {
 		followingAdmitted = true;
 		return permit;
 	});
@@ -116,21 +116,51 @@ test("an aborted queued execution leaves FIFO without consuming capacity", async
 	followingPermit?.release();
 });
 
-test("Moderator execution is exempt and does not release an ordinary waiter", async () => {
+test("Owner execution bypasses full child capacity and the FIFO child backlog", async () => {
 	const policy = new WorkflowPolicyStore(
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);
 	const scheduler = new WorkflowExecutionScheduler(policy);
-	const active = await scheduler.admit("ordinary");
+	const activeChild = await scheduler.admit("child");
+	let waitingChildAdmitted = false;
+	const waitingChild = scheduler.admit("child").then((permit) => {
+		waitingChildAdmitted = true;
+		return permit;
+	});
+
+	let ownerPermit: Awaited<ReturnType<typeof scheduler.admit>>;
+	void scheduler.admit("owner").then((permit) => {
+		ownerPermit = permit;
+	});
+	await Promise.resolve();
+	assert.ok(ownerPermit);
+	ownerPermit.release();
+	ownerPermit.release();
+	await Promise.resolve();
+	assert.equal(waitingChildAdmitted, false);
+
+	activeChild?.release();
+	const waitingChildPermit = await waitingChild;
+	assert.equal(waitingChildAdmitted, true);
+	waitingChildPermit?.release();
+});
+
+test("Moderator execution is exempt and does not release a child waiter", async () => {
+	const policy = new WorkflowPolicyStore(
+		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
+	);
+	const scheduler = new WorkflowExecutionScheduler(policy);
+	const active = await scheduler.admit("child");
 	let waitingAdmitted = false;
-	const waiting = scheduler.admit("ordinary").then((permit) => {
+	const waiting = scheduler.admit("child").then((permit) => {
 		waitingAdmitted = true;
 		return permit;
 	});
 
 	const moderator = await scheduler.admit("moderator");
 	assert.ok(moderator);
-	moderator?.release();
+	moderator.release();
+	moderator.release();
 	await Promise.resolve();
 	assert.equal(waitingAdmitted, false);
 
@@ -140,7 +170,7 @@ test("Moderator execution is exempt and does not release an ordinary waiter", as
 	waitingPermit?.release();
 });
 
-test("real ordinary child Runs share fair execution capacity before generation and tools", async (t) => {
+test("the coordinator derives Owner and child roles from canonical Workflow identity", { timeout: 5_000 }, async (t) => {
 	let firstGenerationStarted!: () => void;
 	const firstGenerationStart = new Promise<void>((resolve) => {
 		firstGenerationStarted = resolve;
@@ -190,9 +220,12 @@ test("real ordinary child Runs share fair execution capacity before generation a
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	assert.equal(generations, 1);
 
+	await owner.beginExecution();
+	assert.equal(generations, 1);
 	releaseFirstGeneration();
 	await secondGenerationStart;
 	assert.equal(generations, 2);
+	owner.endExecution();
 	await waitForCondition(() => owner.children().every(
 		({ run }) => "work" in run && run.work === "settled",
 	));
@@ -210,6 +243,91 @@ test("real ordinary child Runs share fair execution capacity before generation a
 	assert.equal(policy.current().maxConcurrentAgentRuns, 1);
 	assert.deepEqual(SessionManager.open(childSessionFile).getEntries(), childTranscript);
 
+});
+
+test("a child Agent Wait releases and reacquires child execution capacity", { timeout: 5_000 }, async (t) => {
+	let secondChildHoldingCapacity!: () => void;
+	const secondChildCapacityHeld = new Promise<void>((resolve) => {
+		secondChildHoldingCapacity = resolve;
+	});
+	let releaseSecondChild!: () => void;
+	const secondChildRelease = new Promise<void>((resolve) => {
+		releaseSecondChild = resolve;
+	});
+	let firstChildResumed = false;
+	let firstChildDidResume!: () => void;
+	const firstChildResume = new Promise<void>((resolve) => {
+		firstChildDidResume = resolve;
+	});
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	await bindTestOwnerHost(host, "tui");
+	const identity = adoptOrValidateOwnerIdentity(host.runtime);
+	const coordinator = createTestWorkflowCoordinator(host, identity, {
+		entryModulePath: "<inline:pi-agent-coordination>",
+		workflowPolicy: new WorkflowPolicyStore(
+			parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
+		),
+	});
+	const owner = coordinator.forAgent(identity.agentId);
+	host.model.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_spawn",
+				{ request: "Answer after starting your Run." },
+				{ id: "spawn-wait-responder" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(
+			fauxToolCall("agent_wait", {}, { id: "wait-for-responder" }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage(
+			fauxToolCall(
+				"agent_message",
+				{ operation: "answer", answer: "The responder committed its Answer." },
+				{ id: "answer-waiting-child" },
+			),
+			{ stopReason: "toolUse" },
+		),
+		async () => {
+			secondChildHoldingCapacity();
+			await secondChildRelease;
+			return fauxAssistantMessage("The responder Run completed.");
+		},
+		() => {
+			firstChildResumed = true;
+			firstChildDidResume();
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "answer", answer: "The delegated work completed." },
+					{ id: "answer-parent-after-wait" },
+				),
+				{ stopReason: "toolUse" },
+			);
+		},
+		fauxAssistantMessage("The waiting child Run completed."),
+	]);
+
+	await spawnChild(owner, host, "spawn-capacity-waiter");
+	await secondChildCapacityHeld;
+	const [firstChild] = owner.children();
+	assert.ok(firstChild);
+	assert.equal(firstChildResumed, false);
+
+	releaseSecondChild();
+	await firstChildResume;
+	await waitForCondition(() => {
+		const descendants = [firstChild, ...owner.children(firstChild.agentId)];
+		return descendants.every(({ agentId }) => {
+			const run = owner.status(agentId).run;
+			return run.phase === "dormant" || ("work" in run && run.work === "settled");
+		});
+	});
 });
 
 test("an exact Run ending releases capacity without a participant execution-end boundary", async (t) => {
@@ -257,7 +375,7 @@ test("an exact Run ending releases capacity without a participant execution-end 
 	childView.endExecution();
 });
 
-test("an input-required ordinary Run releases capacity until work can resume", async (t) => {
+test("an input-required child Run releases capacity until work can resume", async (t) => {
 	let secondGenerationStarted!: () => void;
 	const secondGenerationStart = new Promise<void>((resolve) => {
 		secondGenerationStarted = resolve;

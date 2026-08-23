@@ -20,11 +20,13 @@ An omitted file or field uses the shown default. Unknown fields, duplicate keys,
 
 Invalid initial policy prevents coordination from creating the Workflow runtime. Owner resource reload reads the file again: a valid file atomically publishes one frozen complete snapshot, while an invalid file reports a diagnostic and preserves the previous snapshot. Reloading child resources does not reload Workflow Policy. Policy is volatile Owner-scoped configuration; it is not written to any Agent transcript.
 
-## Ordinary execution
+## Child execution
 
-`maxConcurrentAgentRuns` limits ordinary Workflow Owner and child execution across the complete Workflow. A Run consumes one slot only while Pi is generating or executing its tools. A ready Run that cannot enter waits in Workflow-wide FIFO order before generation starts.
+`maxConcurrentAgentRuns` is the maximum number of child Agent Runs that may execute concurrently across the Workflow. A child Run consumes one slot only while Pi is generating or executing its tools. A ready child Run that cannot enter waits in Workflow-wide FIFO order before generation starts.
 
-Queued, settled, held, input-required, Agent-Answer-waiting, ending, and dormant Runs consume no execution slot. A pending `agent_wait` reacquires capacity before its aggregate tool result can commit. Moderators are exempt. A reduced limit does not preempt active work: each ready execution keeps the complete policy snapshot captured at its admission and enters when current usage falls below that captured limit.
+The single Workflow Owner Run always enters immediately and consumes no child slot. Moderator Runs are also immediate and consume no child slot. Total concurrent work may therefore include the configured number of child Agent Runs, the Owner Run, and exempt Moderator work.
+
+Queued, settled, held, input-required, Agent-Answer-waiting, ending, and dormant child Runs consume no execution slot. A pending child `agent_wait` reacquires capacity before its aggregate tool result can commit. A reduced limit does not preempt active child work: each ready child execution keeps the complete policy snapshot captured at its admission and enters when current child usage falls below that captured limit.
 
 ## Pending Message delivery
 

@@ -352,7 +352,7 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 	}
 });
 
-test("an overdue answer-obligated root call creates one minimal Operation Review Moderator", async (t) => {
+test("an overdue root call starts a Moderator outside full child capacity", async (t) => {
 	const cwd = await mkdtemp(join(tmpdir(), "pi-operation-review-"));
 	const toolStartedPath = join(cwd, "execution-gate.started");
 	const toolReleasePath = join(cwd, "execution-gate.released");
@@ -385,7 +385,9 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: new WorkflowPolicyStore(
-			parseWorkflowPolicy('{"operationReviewIntervalMs":1000}'),
+			parseWorkflowPolicy(
+				'{"maxConcurrentAgentRuns":1,"operationReviewIntervalMs":1000}',
+			),
 		),
 		operationReviewClock: clock,
 	});
@@ -439,6 +441,7 @@ test("an overdue answer-obligated root call creates one minimal Operation Review
 	await coordinator.forAgent(child.agentId).reachSafeBoundary();
 
 	const moderator = await waitForModeratorKind(host, "operation_review");
+	assert.equal(await fileExists(toolReleasePath), false);
 	const agentView = await owner.openAgentView(child.agentId);
 	assert.ok(agentView);
 	const childTranscriptPathBeforeReview = owner.status(child.agentId)

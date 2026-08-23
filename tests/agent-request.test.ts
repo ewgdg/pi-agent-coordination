@@ -2691,7 +2691,7 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("Agent Wait parks requester execution capacity until the pending Answer commits", async (t) => {
+test("Agent Wait parks the Owner Run until the pending Answer commits", async (t) => {
 	const policy = new WorkflowPolicyStore(
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}'),
 	);
@@ -2748,11 +2748,11 @@ test("Agent Wait parks requester execution capacity until the pending Answer com
 		reason: "target_unavailable",
 	});
 
-	const retryToolCallId = "retry-while-owner-holds-capacity";
-	const waitToolCallId = "park-for-capacity-answer";
+	const retryToolCallId = "retry-before-owner-waits";
+	const waitToolCallId = "park-owner-for-answer";
 	const waitInput = {};
-	const answerToolCallId = "answer-after-requester-parks";
-	const answerText = "The responder ran after Agent Wait released capacity.";
+	const answerToolCallId = "answer-after-owner-parks";
+	const answerText = "The responder answered while the Owner waited.";
 	let responderStarted!: () => void;
 	const responderStart = new Promise<void>((resolve) => {
 		responderStarted = resolve;
@@ -2800,7 +2800,7 @@ test("Agent Wait parks requester execution capacity until the pending Answer com
 			prompt,
 			new Promise<never>((_resolve, reject) => {
 				timeout = setTimeout(
-					() => reject(new Error("Agent Wait did not release Workflow execution capacity")),
+					() => reject(new Error("Agent Wait did not complete after the Answer")),
 					4_000,
 				);
 			}),

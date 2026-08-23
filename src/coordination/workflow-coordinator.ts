@@ -69,6 +69,7 @@ import type {
 import { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
 import {
 	WorkflowExecutionScheduler,
+	type AgentExecutionRole,
 	type WorkflowExecutionPermit,
 } from "./workflow-execution-scheduler.ts";
 import type { ColdWorkflowRecovery } from "../bootstrap/cold-host-discovery.ts";
@@ -803,6 +804,11 @@ export class WorkflowCoordinator {
 		return identity !== undefined && isModeratorIdentity(identity);
 	}
 
+	#executionRole(agentId: string): AgentExecutionRole {
+		if (agentId === this.#ownerIdentity.agentId) return "owner";
+		return this.#isModerator(agentId) ? "moderator" : "child";
+	}
+
 	#integrateAgent(record: AgentRecord): void {
 		record.host.addStateChangeHandler(() => this.#notifyAgentActivityChanged());
 		record.host.addSettledHandler(() => this.#notifyAgentActivityChanged());
@@ -1192,9 +1198,12 @@ export class WorkflowCoordinator {
 		if (run.phase !== "live" || run.attention === "input_required") return;
 		const handle = record.host.currentHandle();
 		if (!handle) return;
+		const role = this.#executionRole(agentId);
 		const permit = await this.#executionScheduler.admit(
-			this.#isModerator(agentId) ? "moderator" : "ordinary",
-			record.host.exactRunCancellationSignal(handle),
+			role,
+			role === "child"
+				? record.host.exactRunCancellationSignal(handle)
+				: undefined,
 		);
 		if (!permit) return;
 		if (this.#shuttingDown) {
