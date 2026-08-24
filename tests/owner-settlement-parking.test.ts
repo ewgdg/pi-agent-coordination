@@ -10,6 +10,155 @@ import {
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
+test("primary Owner input preempts Agent Wait before the next model turn", {
+	timeout: 10_000,
+}, async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	let releaseAnswer!: () => void;
+	const answerGate = new Promise<void>((resolve) => {
+		releaseAnswer = resolve;
+	});
+	const requestMarker = "OWNER_HUMAN_PREEMPT_REQUEST";
+	const queuedFollowUp = "Handle this only after the current wait has ended.";
+	const userDirection = "Change direction before the background Answer arrives.";
+	const answerText = "The preserved background Answer arrived.";
+	const spawnCallId = "spawn-before-owner-human-preemption";
+	const waitCallId = "wait-before-owner-human-preemption";
+	const answerCallId = "answer-after-owner-human-preemption";
+	let ownerRanBeforeHumanInput = false;
+	let preemptedResultReachedDirectedTurn = false;
+	const routeResponse = async (context: Context) => {
+		const serialized = JSON.stringify(context.messages);
+		const isResponder = serialized.includes(requestMarker) &&
+			serialized.includes("requestMessageId") &&
+			!serialized.includes(spawnCallId);
+		if (isResponder) {
+			if (serialized.includes(answerCallId)) {
+				return fauxAssistantMessage("The preserved Answer was committed.");
+			}
+			await answerGate;
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_message",
+					{ operation: "answer", answer: answerText },
+					{ id: answerCallId },
+				),
+				{ stopReason: "toolUse" },
+			);
+		}
+		if (serialized.includes(answerText)) {
+			return fauxAssistantMessage("The Owner later received the preserved Answer.");
+		}
+		if (serialized.includes(queuedFollowUp)) {
+			return fauxAssistantMessage("The Owner processed the explicitly queued follow-up.");
+		}
+		if (serialized.includes(userDirection)) {
+			preemptedResultReachedDirectedTurn = serialized.includes(
+				'"disposition":"preempted"',
+			);
+			return fauxAssistantMessage("The Owner acted on the new human direction.");
+		}
+		if (serialized.includes('"disposition":"preempted"')) {
+			ownerRanBeforeHumanInput = true;
+			return fauxAssistantMessage("The Wait resumed before human input was admitted.");
+		}
+		if (!serialized.includes(spawnCallId)) {
+			return fauxAssistantMessage(
+				fauxToolCall(
+					"agent_spawn",
+					{ request: requestMarker },
+					{ id: spawnCallId },
+				),
+				{ stopReason: "toolUse" },
+			);
+		}
+		if (!serialized.includes(waitCallId)) {
+			return fauxAssistantMessage(
+				fauxToolCall("agent_wait", {}, { id: waitCallId }),
+				{ stopReason: "toolUse" },
+			);
+		}
+		return fauxAssistantMessage("The Owner is still waiting for human input.");
+	};
+	host.model.setResponses(Array.from({ length: 10 }, () => routeResponse));
+
+	const initialPrompt = host.session.prompt(requestMarker);
+	await waitUntil(() => host.session.sessionManager.getEntries().some((entry) =>
+		entry.type === "message" &&
+		entry.message.role === "assistant" &&
+		entry.message.content.some((part) =>
+			part.type === "toolCall" && part.id === waitCallId
+		)
+	));
+	const followUpPrompt = host.session.prompt(queuedFollowUp, {
+		streamingBehavior: "followUp",
+	});
+	await waitUntil(() => host.session.pendingMessageCount === 1);
+	const observe = host.session.getToolDefinition("agent_observe");
+	assert.ok(observe);
+	const waitingStatus = await observe.execute(
+		"observe-wait-after-explicit-follow-up",
+		{ operation: "status" },
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	assert.equal(
+		(waitingStatus.details as { run: { attention: string } }).run.attention,
+		"agent_wait",
+	);
+	assert.equal(host.session.sessionManager.getEntries().some((entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === waitCallId
+	), false);
+
+	const directedPrompt = host.session.prompt(userDirection, {
+		streamingBehavior: "steer",
+	});
+	await waitUntil(() => ownerAssistantTexts(host).includes(
+		"The Owner processed the explicitly queued follow-up.",
+	));
+	const ownerTexts = ownerAssistantTexts(host);
+	assert.equal(
+		ownerTexts.indexOf("The Owner acted on the new human direction.") <
+			ownerTexts.indexOf("The Owner processed the explicitly queued follow-up."),
+		true,
+	);
+
+	assert.equal(ownerRanBeforeHumanInput, false);
+	assert.equal(preemptedResultReachedDirectedTurn, true);
+	const waitResult = host.session.sessionManager.getEntries().find((entry) =>
+		entry.type === "message" &&
+		entry.message.role === "toolResult" &&
+		entry.message.toolCallId === waitCallId
+	);
+	assert.ok(waitResult?.type === "message" && waitResult.message.role === "toolResult");
+	assert.deepEqual(waitResult.message.details, { disposition: "preempted" });
+	const status = await observe.execute(
+		"observe-request-preserved-after-human-preemption",
+		{ operation: "status" },
+		undefined,
+		undefined,
+		host.session.extensionRunner.createContext(),
+	);
+	assert.deepEqual(
+		(status.details as { run: { retentionReasons: Array<{ reason: string }> } })
+			.run.retentionReasons.some(({ reason }) => reason === "awaiting_answer"),
+		true,
+	);
+
+	releaseAnswer();
+	await withTimeout(
+		Promise.all([initialPrompt, followUpPrompt, directedPrompt]).then(() => undefined),
+		5_000,
+		"Owner did not settle after its preserved Answer arrived",
+	);
+});
+
 test("Owner and Herdr remain working until the Creation Request Answer arrives, then settle once", {
 	timeout: 10_000,
 }, async (t) => {

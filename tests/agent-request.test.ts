@@ -2835,6 +2835,101 @@ test("Agent Wait parks the Owner Run until the pending Answer commits", async (t
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
+test("primary input in a selected child preempts Agent Wait before its next model turn", async (t) => {
+	let ownerAgentId: string | undefined;
+	const harness = await createDormantChildHarness(t, {
+		beforeDeliveryAdmission: ({ recipientAgentId }) =>
+			recipientAgentId === ownerAgentId ? "confirmed_failure" : undefined,
+	});
+	await cancelHarnessCreationRequest(harness, "cancel-creation-before-child-human-preemption");
+	ownerAgentId = harness.host.session.sessionId;
+	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
+	const directionMarker = "CHILD_WAIT_FOR_PRIMARY_HUMAN_INPUT";
+	const humanDirection = "Redirect the selected child before its Answer arrives.";
+	const requestCallId = "child-request-before-human-preemption";
+	const waitCallId = "child-wait-before-human-preemption";
+	let childRanBeforeHumanInput = false;
+	let preemptedResultReachedDirectedTurn = false;
+	const routeResponse = async (messages: Context) => {
+		const serialized = JSON.stringify(messages);
+		if (serialized.includes(humanDirection)) {
+			preemptedResultReachedDirectedTurn = serialized.includes(
+				'"disposition":"preempted"',
+			);
+			return fauxAssistantMessage("The selected child acted on the human direction.");
+		}
+		if (serialized.includes('"disposition":"preempted"')) {
+			childRanBeforeHumanInput = true;
+			return fauxAssistantMessage("The child resumed before human input was admitted.");
+		}
+		if (!serialized.includes(requestCallId)) {
+			return fauxAssistantMessage([
+				fauxToolCall(
+					"agent_message",
+					{
+						operation: "request",
+						targetAgent: ownerAgentId!,
+						question: "Remain unanswered while the child receives human direction.",
+					},
+					{ id: requestCallId },
+				),
+				fauxToolCall("agent_wait", {}, { id: waitCallId }),
+			], { stopReason: "toolUse" });
+		}
+		return fauxAssistantMessage("The child is still waiting.");
+	};
+	harness.host.model.setResponses(Array.from({ length: 6 }, () => routeResponse));
+	const directionCallId = "direct-child-into-human-preempted-wait";
+	const directionInput = {
+		operation: "send" as const,
+		targetAgent: harness.childId,
+		content: directionMarker,
+	};
+	harness.host.session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", directionInput, { id: directionCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const directionReceipt = await harness.view.message(directionCallId, directionInput);
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: directionCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(directionReceipt) }],
+		details: directionReceipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+	await waitForCondition(() => {
+		const run = harness.view.status(harness.childId).run;
+		return "attention" in run && run.attention === "agent_wait";
+	});
+
+	const selected = await harness.view.openAgentView(harness.childId);
+	assert.ok(selected);
+	selected.projection().dispatchInput(`${humanDirection}\r`);
+	const entries = await waitForEntry(childSessionFile, (entry) =>
+		entry.type === "message" &&
+		entry.message.role === "assistant" &&
+		entry.message.content.some((part) =>
+			part.type === "text" &&
+			part.text === "The selected child acted on the human direction."
+		)
+	);
+
+	assert.equal(childRanBeforeHumanInput, false);
+	assert.equal(preemptedResultReachedDirectedTurn, true);
+	const waitResult = requireToolResult(entries, waitCallId);
+	assert.deepEqual(waitResult.message.details, { disposition: "preempted" });
+	assert.equal(
+		retentionCount(harness.view.status(harness.childId).run, "awaiting_answer"),
+		1,
+	);
+
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
 test("an inbound reverse Request preempts Agent Wait and the requester can re-wait", async (t) => {
 	let responderAgentId: string | undefined;
 	let rejectInitialRequest = true;
@@ -3294,7 +3389,7 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 		},
 		undefined,
 		{
-			beforeInboundRequestPreemptionDecision: () => {
+			beforePreemptionDecision: () => {
 				raceBoundaryChecks += 1;
 			},
 		},

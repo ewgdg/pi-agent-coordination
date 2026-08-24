@@ -377,9 +377,9 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	assert.deepEqual(toolMetadata(ordinary, "agent_wait"), {
 		label: "Wait for Answers",
 		description:
-			"Wait until every outstanding outbound Agent Request has a committed Answer, unless an inbound Agent Request preempts the wait for attention.",
+			"Wait until every outstanding outbound Agent Request has a committed Answer, unless primary human input or an inbound Agent Request preempts the wait for attention.",
 		promptSnippet:
-			"Join all outstanding Agent Request Answers unless an inbound Agent Request preempts the wait.",
+			"Join all outstanding Agent Request Answers unless primary human input or an inbound Agent Request preempts the wait.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(ordinary, "agent_spawn"), {

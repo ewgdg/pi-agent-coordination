@@ -30,7 +30,7 @@ export const SYSTEM_AGENT_WAIT_CLOCK: AgentWaitClock = {
 };
 
 export type AgentWaitBoundaryHooks = Readonly<{
-	beforeInboundRequestPreemptionDecision?(context: Readonly<{
+	beforePreemptionDecision?(context: Readonly<{
 		agentId: string;
 		toolCallId: string;
 	}>): void;
@@ -198,9 +198,20 @@ export class AgentWaitCoordinator {
 		return result;
 	}
 
-	async preemptForInboundRequest(
+	preemptForInboundRequest(
 		record: AgentRecord,
 		reserveDelivery: () => boolean,
+	): Promise<void> {
+		return this.#preempt(record, reserveDelivery);
+	}
+
+	preemptForHumanInput(record: AgentRecord): Promise<void> {
+		return this.#preempt(record);
+	}
+
+	async #preempt(
+		record: AgentRecord,
+		reservePreemptingDelivery?: () => boolean,
 	): Promise<void> {
 		const pending = [...this.#pendingByKey.values()].find(
 			(candidate) =>
@@ -210,12 +221,12 @@ export class AgentWaitCoordinator {
 		if (!pending) return;
 		let completed: AgentWaitResult | undefined;
 		try {
-			this.#boundaryHooks.beforeInboundRequestPreemptionDecision?.({
+			this.#boundaryHooks.beforePreemptionDecision?.({
 				agentId: pending.callerAgentId,
 				toolCallId: pending.toolCallId,
 			});
 			// This is the race boundary: the complete outstanding snapshot wins
-			// before the inbound Request acquires the parked Run.
+			// before new direction acquires the parked Run.
 			completed = this.#messages.waitAnswers(
 				pending.callerAgentId,
 				pending.requestMessageIds,
@@ -233,18 +244,20 @@ export class AgentWaitCoordinator {
 			return;
 		}
 		if (!record.host.isCurrent(pending.handle)) return;
-		let reserved: boolean;
-		try {
-			reserved = reserveDelivery();
-		} catch (error) {
-			this.#fence(
-				pending.callerAgentId,
-				pending.toolCallId,
-				error instanceof Error ? error.message : String(error),
-			);
-			return;
+		if (reservePreemptingDelivery) {
+			let reserved: boolean;
+			try {
+				reserved = reservePreemptingDelivery();
+			} catch (error) {
+				this.#fence(
+					pending.callerAgentId,
+					pending.toolCallId,
+					error instanceof Error ? error.message : String(error),
+				);
+				return;
+			}
+			if (!reserved) return;
 		}
-		if (!reserved) return;
 		await this.#resumeWithResult(pending, PREEMPTED_RESULT);
 	}
 
