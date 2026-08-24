@@ -29,7 +29,8 @@ function expectedThreshold(options: {
 		0,
 		options.contextWindow - options.incomingRequestTokens - desiredRunway,
 	);
-	return Math.min(cost, 0.75 * cost + 0.25 * runwayThreshold);
+	const runwayWeight = runwayThreshold < cost ? 0.3 : 0.15;
+	return (1 - runwayWeight) * cost + runwayWeight * runwayThreshold;
 }
 
 test("working-zone threshold implements every work, dependence, and thinking combination", () => {
@@ -53,7 +54,7 @@ test("working-zone threshold implements every work, dependence, and thinking com
 	}
 });
 
-test("working-zone threshold stays bounded and monotonic across the full matrix", () => {
+test("working-zone threshold stays between its anchors and monotonic across the full matrix", () => {
 	for (const contextWindow of [128_000, 200_000, 1_000_000]) {
 		for (const incomingRequestTokens of [0, 4_000, 100_000]) {
 			for (const contextDependence of contextDependences) {
@@ -61,6 +62,12 @@ test("working-zone threshold stays bounded and monotonic across the full matrix"
 				for (const workScale of workScales) {
 					let previousThinkingThreshold = Number.POSITIVE_INFINITY;
 					for (const thinking of RUNTIME_THINKING_LEVELS) {
+						const desiredRunway = CONTINUATION_WORK_SCALE_RUNWAY_TOKENS[workScale] *
+							THINKING_RUNWAY_MULTIPLIER[thinking];
+						const runwayThreshold = Math.max(
+							0,
+							contextWindow - incomingRequestTokens - desiredRunway,
+						);
 						const threshold = workingZonePreparationThreshold({
 							workScale,
 							contextDependence,
@@ -68,8 +75,8 @@ test("working-zone threshold stays bounded and monotonic across the full matrix"
 							contextWindow,
 							incomingRequestTokens,
 						});
-						assert.ok(threshold >= 0.75 * cost);
-						assert.ok(threshold <= cost);
+						assert.ok(threshold >= Math.min(cost, runwayThreshold));
+						assert.ok(threshold <= Math.max(cost, runwayThreshold));
 						assert.ok(threshold <= previousThinkingThreshold);
 						previousThinkingThreshold = threshold;
 					}
@@ -132,19 +139,19 @@ test("working-zone threshold handles representative 128k, 200k, and 1M windows",
 		thinking: "max",
 		contextWindow: 128_000,
 		incomingRequestTokens: 0,
-	}), 71_250);
+	}), 66_500);
 	assert.equal(workingZonePreparationThreshold({
 		workScale: "medium",
 		contextDependence: "medium",
 		thinking: "max",
 		contextWindow: 200_000,
 		incomingRequestTokens: 1_000,
-	}), 121_000);
+	}), 119_800);
 	assert.equal(workingZonePreparationThreshold({
 		workScale: "large",
 		contextDependence: "high",
 		thinking: "max",
 		contextWindow: 1_000_000,
 		incomingRequestTokens: 100_000,
-	}), 159_000);
+	}), 241_350);
 });

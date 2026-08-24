@@ -33,6 +33,9 @@ export const THINKING_RUNWAY_MULTIPLIER = Object.freeze({
 	max: 3,
 } satisfies Record<RuntimeThinkingLevel, number>);
 
+const RUNWAY_SHRINKAGE_WEIGHT = 0.3;
+const RUNWAY_EXPANSION_WEIGHT = 0.15;
+
 export function workingZonePreparationThreshold(options: ContextPreparation & Readonly<{
 	thinking?: RuntimeThinkingLevel;
 	contextWindow?: number;
@@ -51,6 +54,8 @@ export function workingZonePreparationThreshold(options: ContextPreparation & Re
 		0,
 		options.contextWindow - options.incomingRequestTokens - desiredRunway,
 	);
-	const weightedThreshold = 0.75 * costThreshold + 0.25 * runwayThreshold;
-	return Math.min(costThreshold, weightedThreshold);
+	const runwayWeight = runwayThreshold < costThreshold
+		? RUNWAY_SHRINKAGE_WEIGHT
+		: RUNWAY_EXPANSION_WEIGHT;
+	return (1 - runwayWeight) * costThreshold + runwayWeight * runwayThreshold;
 }
