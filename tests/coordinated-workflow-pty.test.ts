@@ -16,11 +16,13 @@ import {
 } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
+import { PI_CLI_READY_EVIDENCE_ENV } from "./fixtures/pi-cli-startup-ready-extension.ts";
 import { createProcessModelBroker } from "./support/process-model-broker.ts";
 
 const SCRIPT = "/usr/bin/script";
 const PTY_WAIT_TIMEOUT_MS = 20_000;
 const SCREEN_POLL_INTERVAL_MS = 10;
+const PI_CLI_READY_EVIDENCE_FILE = "pi-cli-startup-ready";
 const FIXTURE = fileURLToPath(
 	new URL("./fixtures/coordinated-workflow-pty-fixture.ts", import.meta.url),
 );
@@ -36,6 +38,9 @@ const PI_CLI = fileURLToPath(
 );
 const COORDINATION_EXTENSION = fileURLToPath(
 	new URL("../src/index.ts", import.meta.url),
+);
+const PI_CLI_READY_EXTENSION = fileURLToPath(
+	new URL("./fixtures/pi-cli-startup-ready-extension.ts", import.meta.url),
 );
 
 test("real fullscreen PTY /agents view mouse-scrolls and returns to the exact Owner", {
@@ -545,6 +550,7 @@ test("real Pi CLI can return to Owner and attach the same Agent again", {
 		model: broker.modelId,
 	});
 	try {
+		await waitForPiCliReady(agentDir);
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("deterministic-owner"))
 		);
@@ -622,6 +628,7 @@ test("interactive /reload keeps a selected process child alive after inherited e
 			provider: activeBroker.providerId,
 			model: activeBroker.modelId,
 		});
+		await waitForPiCliReady(agentDir);
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("deterministic-owner"))
 		);
@@ -741,6 +748,7 @@ test("interactive /resume retains the compact historical agent_spawn renderer", 
 
 	const terminal = launchPiCli({ agentDir, sessionDir });
 	try {
+		await waitForPiCliReady(agentDir);
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("pi-agent-coordination")) &&
 			frame.some((line) => line.includes("gpt-4o-mini"))
@@ -791,12 +799,15 @@ async function attachCliRepeatWorker(
 		selector = await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Tab views"))
 		);
-		if (selector.some(isCliRepeatWorkerRow)) break;
+		if (
+			!expectDormantStartupSpinner &&
+			selector.some(isCliRepeatWorkerRow)
+		) break;
 		terminal.write("\t");
-		selector = await terminal.waitForScreen((frame) =>
-			frame.some(isCliRepeatWorkerRow) &&
+		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("Dormant Agents"))
 		);
+		selector = await terminal.screen();
 		if (selector.some(isCliRepeatWorkerRow)) break;
 		terminal.write("\x1b");
 		await terminal.waitForScreen((frame) =>
@@ -839,7 +850,7 @@ function normalizedFrameText(frame: readonly string[]): string {
 }
 
 function isCliRepeatWorkerRow(line: string): boolean {
-	return /CLI Repeat Worker\s+(?:live\/|dormant)/.test(line);
+	return line.includes("→ CLI Repeat Worker");
 }
 
 function routeCliRepeatResponse(context: Context): AssistantMessage {
@@ -928,6 +939,8 @@ function launchPiCli(options: {
 		"--extension",
 		COORDINATION_EXTENSION,
 		...(options.additionalExtensionPaths ?? []).flatMap((path) => ["--extension", path]),
+		"--extension",
+		PI_CLI_READY_EXTENSION,
 		"--approve",
 		"--tui-mode",
 		"fullscreen",
@@ -947,6 +960,10 @@ function launchPiCli(options: {
 				...process.env,
 				OPENAI_API_KEY: "test",
 				PI_CODING_AGENT_DIR: options.agentDir,
+				[PI_CLI_READY_EVIDENCE_ENV]: join(
+					options.agentDir,
+					PI_CLI_READY_EVIDENCE_FILE,
+				),
 				PI_OFFLINE: "1",
 				TERM: "xterm-256color",
 			},
@@ -954,6 +971,12 @@ function launchPiCli(options: {
 		},
 	);
 	return new PtyFixture(child, 80, 24);
+}
+
+async function waitForPiCliReady(agentDir: string): Promise<void> {
+	// The readiness extension records resources_discover, Pi's public lifecycle
+	// event immediately after session_start has completed.
+	await waitForFile(join(agentDir, PI_CLI_READY_EVIDENCE_FILE));
 }
 
 function launchFixture(
