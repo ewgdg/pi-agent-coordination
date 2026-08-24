@@ -140,7 +140,9 @@ type CommonParticipantCoordinationToolHandlers = Readonly<{
 
 type SpawnParticipantCoordinationToolHandler = Readonly<{
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
-	agentTemplateSnapshot(): AgentTemplateCatalogueSnapshot | Promise<AgentTemplateCatalogueSnapshot>;
+	agentTemplateSnapshot(
+		refresh?: boolean,
+	): AgentTemplateCatalogueSnapshot | Promise<AgentTemplateCatalogueSnapshot>;
 }>;
 
 type HumanParticipantCoordinationToolHandler = Readonly<{

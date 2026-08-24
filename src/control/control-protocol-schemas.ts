@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
-export const AGENT_CONTROL_PROTOCOL_VERSION = 4 as const;
+export const AGENT_CONTROL_PROTOCOL_VERSION = 5 as const;
 
 const NonEmptyStringSchema = Type.String({ minLength: 1 });
 const ControlIdentityProperties = {

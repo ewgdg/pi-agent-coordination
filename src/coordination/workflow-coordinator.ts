@@ -203,6 +203,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 export type OrdinaryAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
 	agentTemplateSnapshot(): AgentTemplateCatalogueSnapshot;
+	refreshAgentTemplateSnapshot(): Promise<AgentTemplateCatalogueSnapshot>;
 }>;
 
 export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
@@ -425,8 +426,8 @@ export class WorkflowCoordinator {
 		});
 	}
 
-	async refreshAgentTemplateSnapshot(agentId: string): Promise<void> {
-		await this.#sessionFactory.captureTemplateSnapshotFor(this.#requireAgent(agentId));
+	async refreshAgentTemplateSnapshot(agentId: string): Promise<AgentTemplateCatalogueSnapshot> {
+		return this.#sessionFactory.captureTemplateSnapshotFor(this.#requireAgent(agentId));
 	}
 
 	forAgent(agentId: string): OrdinaryAgentCoordinatorView {
@@ -437,6 +438,7 @@ export class WorkflowCoordinator {
 			agentTemplateSnapshot: () => this.#sessionFactory.agentTemplateSnapshotFor(
 				this.#requireAgent(agentId),
 			),
+			refreshAgentTemplateSnapshot: () => this.refreshAgentTemplateSnapshot(agentId),
 		});
 	}
 

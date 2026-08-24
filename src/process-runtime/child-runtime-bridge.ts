@@ -159,7 +159,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		createControlBackedChildPresentationHandlers(participantRequest),
 	);
 	let participantLifecycle: ParticipantLifecycleHandlers;
-	let refreshOrdinaryAgentTools: (() => Promise<void>) | undefined;
+	let refreshOrdinaryAgentTools: ((refresh?: boolean) => Promise<void>) | undefined;
 	if (bootstrap.role === "ordinary") {
 		const participant = createControlBackedChildParticipantHandlers(
 			"ordinary",
@@ -175,12 +175,12 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			participant.coordination,
 			resolveAgentLabel,
 		);
-		refreshOrdinaryAgentTools = async () => registerParticipantCoordinationTools(
+		refreshOrdinaryAgentTools = async (refresh = false) => registerParticipantCoordinationTools(
 			pi,
 			"ordinary",
 			participant.coordination,
 			resolveAgentLabel,
-			await participant.coordination.agentTemplateSnapshot(),
+			await participant.coordination.agentTemplateSnapshot(refresh),
 		);
 	} else {
 		const participant = createControlBackedChildParticipantHandlers(
@@ -357,7 +357,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 					expectedSessionId: bootstrap.expectedSessionId,
 				});
 			}
-			if (bootstrap.ownerPresentation) await refreshOrdinaryAgentTools?.();
+			if (bootstrap.ownerPresentation) {
+				await refreshOrdinaryAgentTools?.(event.reason === "reload");
+			}
 			if (bootstrap.ownerPresentation) {
 				binding.activity.update(
 					await participantRequest("presentation.agents.snapshot", {}),

@@ -12,16 +12,11 @@ export function renderAgentTemplatePromptGuide(
 			...(template.useWhen === undefined
 				? []
 				: [`  useWhen: ${JSON.stringify(template.useWhen)}`]),
-			...(template.models === undefined
+			...(template.models?.[0] === undefined
 				? []
 				: [
-					"  models:",
-					...template.models.flatMap(
-						({ model, thinking }) => [
-							`    - id: ${model.provider}/${model.modelId}`,
-							`      thinking: ${thinking}`,
-						],
-					),
+					`  model: ${template.models[0].model.provider}/${template.models[0].model.modelId}`,
+					`  thinking: ${template.models[0].thinking}`,
 				]),
 			...(template.allowedTools === undefined
 				? []
@@ -35,8 +30,8 @@ export function renderAgentTemplatePromptGuide(
 		].join("\n"))
 		.join("\n");
 	return [
-		"## Available Agent Templates",
-		"Use `agent_spawn.template` when a Template fits the task. `useWhen`, when present, explains when to choose it. Its `config` fields override the listed Template configuration.",
+		"## Available Agent Templates Snapshot",
+		"Use `agent_spawn.template` when a Template fits the task. `agent_spawn.config` overrides the listed Template configuration.",
 		...(templates.length === 0 ? ["None."] : [templates]),
 	].join("\n\n");
 }

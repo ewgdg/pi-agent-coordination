@@ -159,7 +159,10 @@ export function createControlBackedChildParticipantHandlers(
 	if (role === "ordinary") {
 		const coordination: ParticipantCoordinationToolHandlers<"ordinary"> = {
 			...common,
-			agentTemplateSnapshot: () => request("coordination.templateSnapshot", {}),
+			agentTemplateSnapshot: (refresh = false) => request(
+				"coordination.templateSnapshot",
+				{ refresh },
+			),
 			spawn: (toolCallId, input) =>
 				request("coordination.spawn", { toolCallId, input }),
 			askUserQuestion: (toolCallId, input, signal) =>
@@ -261,7 +264,7 @@ export async function dispatchParticipantRequestToOwner(
 			if (!("agentTemplateSnapshot" in handlers.coordination)) {
 				throw unavailableForRole(request.method);
 			}
-			response = await handlers.coordination.agentTemplateSnapshot();
+			response = await handlers.coordination.agentTemplateSnapshot(request.payload.refresh);
 			break;
 		case "coordination.askHuman":
 			if (!("askUserQuestion" in handlers.coordination)) throw unavailableForRole(request.method);

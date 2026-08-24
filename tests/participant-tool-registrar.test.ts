@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 
 import {
+	participantCoordinatorHandlers,
 	registerOrdinaryAgentSurfaces,
 } from "../src/tools/owner-surfaces.ts";
 import {
@@ -280,7 +281,11 @@ test("Template catalogue shows available Template configuration without Runtime 
 
 	assert.match(catalogue ?? "", /integration-researcher/);
 	assert.match(catalogue ?? "", /Use for integration research requiring primary sources\./);
-	assert.match(catalogue ?? "", /anthropic\/claude-sonnet-4-5/);
+	assert.match(catalogue ?? "", /^## Available Agent Templates Snapshot/);
+	assert.match(catalogue ?? "", /  model: anthropic\/claude-sonnet-4-5\n  thinking: high/);
+	assert.doesNotMatch(catalogue ?? "", /deepseek\/deepseek-v4-flash/);
+	assert.doesNotMatch(catalogue ?? "", /models:|snapshot:/);
+	assert.doesNotMatch(catalogue ?? "", /explains when to choose/);
 	assert.match(catalogue ?? "", /systemPromptMode: replace/);
 	assert.match(catalogue ?? "", /- name: plain-agent\n  systemPromptMode: append/);
 	assert.doesNotMatch(catalogue, /Current Agent Runtime/);
@@ -325,9 +330,9 @@ test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalog
 	}]);
 
 	await host.session.prompt("Choose an Agent Template if appropriate.");
-	assert.match(observedSystemPrompt, /## Available Agent Templates/);
+	assert.match(observedSystemPrompt, /## Available Agent Templates Snapshot/);
 	assert.match(observedSystemPrompt, /integration-researcher/);
-	assert.match(observedSystemPrompt, /thinking: high/);
+	assert.match(observedSystemPrompt, /  model: anthropic\/claude-sonnet-4-5\n  thinking: high/);
 	await host.runtime.dispose();
 });
 
@@ -572,6 +577,29 @@ test("participant registrar preserves handler errors and Moderator control routi
 		{ type: "text", text: JSON.stringify(moderatorReceipt) },
 	]);
 	await host.runtime.dispose();
+});
+
+test("ordinary participant snapshot requests refresh the retained Runtime snapshot", async () => {
+	const preparedSnapshot = { templates: [] };
+	const refreshedSnapshot = {
+		templates: [{
+			name: "reloaded-template",
+			systemPromptMode: "append" as const,
+			inheritProjectContext: true,
+		}],
+	};
+	let refreshCount = 0;
+	const view = {
+		agentTemplateSnapshot: () => preparedSnapshot,
+		async refreshAgentTemplateSnapshot() {
+			refreshCount += 1;
+			return refreshedSnapshot;
+		},
+	} as unknown as OrdinaryAgentCoordinatorView;
+	const routed = participantCoordinatorHandlers("ordinary", () => view);
+
+	assert.equal(await routed.agentTemplateSnapshot(true), refreshedSnapshot);
+	assert.equal(refreshCount, 1);
 });
 
 test("ordinary surface composes its prepared Template snapshot and /agents with the participant registrar", async (t) => {

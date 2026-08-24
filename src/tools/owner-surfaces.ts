@@ -232,7 +232,9 @@ export function participantCoordinatorHandlers(
 	const ordinaryView = resolveView as () => OrdinaryAgentCoordinatorView;
 	const spawn = (toolCallId: string, input: Parameters<OrdinaryAgentCoordinatorView["spawn"]>[1]) =>
 		ordinaryView().spawn(toolCallId, input);
-	const agentTemplateSnapshot = () => ordinaryView().agentTemplateSnapshot();
+	const agentTemplateSnapshot = (refresh = false) => refresh
+		? ordinaryView().refreshAgentTemplateSnapshot()
+		: ordinaryView().agentTemplateSnapshot();
 	return role === "ordinary"
 		? {
 			...common,

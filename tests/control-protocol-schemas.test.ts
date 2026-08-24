@@ -17,7 +17,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 4, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 5, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control Endpoint and child bootstrap descriptors are closed and versioned", () => {
 	const endpoint = { transport: "unix", address: "/tmp/control.sock" } as const;
@@ -26,7 +26,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 4,
+		protocolVersion: 5,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
@@ -82,7 +82,7 @@ test("Control frame schema is a closed hello/request/response/event/cancel union
 	}), false);
 });
 
-test("every version-four method and event has TypeBox payload/result schemas", () => {
+test("every version-five method and event has TypeBox payload/result schemas", () => {
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
 		"runtime.executionBegin",
