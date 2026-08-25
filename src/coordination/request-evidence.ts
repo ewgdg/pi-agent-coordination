@@ -39,7 +39,10 @@ import {
 import type { AgentWaitAnswer } from "../protocol/agent-wait.ts";
 import type { ResidualRequestRelationships } from "../runtime/agent-runtime-host.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
-import { resolveCommittedAgentMessageTargetId } from "./agent-message-target.ts";
+import {
+	inspectCommittedAgentMessageTarget,
+	resolveCommittedAgentMessageTargetId,
+} from "./agent-message-target.ts";
 
 type Request = Extract<Message, { kind: "request" }>;
 type Answer = Extract<Message, { kind: "answer" }>;
@@ -160,12 +163,21 @@ export class RequestEvidence {
 				throw new Error(`wrong_message_kind: Message ${requestId} is not a Request`);
 			}
 			const authorTranscript = author.transcript.inspect();
-			const resolvedTargetAgentId = this.#resolveMessageTargetId(
+			const target = this.#inspectMessageTarget(
 				author,
 				authorTranscript,
 				authored.source.toolCallId,
 				authored.input.targetAgent,
 			);
+			if (target.state === "not_created") continue;
+			const resolvedTargetAgentId = target.state === "resolved"
+				? target.targetAgentId
+				: this.#resolveMessageTargetId(
+					author,
+					authorTranscript,
+					authored.source.toolCallId,
+					authored.input.targetAgent,
+				);
 			const request = resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
@@ -194,28 +206,29 @@ export class RequestEvidence {
 		const requests = findAuthoredRequestSources({
 			authorAgentId: author.identity.agentId,
 			transcript: author.transcript.inspect(),
-		}).map(({ source, input }) => {
+		}).flatMap(({ source, input }) => {
 			const authorTranscript = author.transcript.inspect();
-			const resolvedTargetAgentId = this.#resolveMessageTargetId(
+			const target = this.#inspectMessageTarget(
 				author,
 				authorTranscript,
 				source.toolCallId,
 				input.targetAgent,
 			);
+			if (target.state !== "resolved") return [];
 			const message = resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
 				transcript: authorTranscript,
 				toolCallId: source.toolCallId,
 				providedInput: input,
-				resolvedTargetAgentId,
+				resolvedTargetAgentId: target.targetAgentId,
 			});
 			if (message.kind !== "request") {
 				throw new Error(
 					`invariant_violation: Request source ${source.toolCallId} resolved as another Message kind`,
 				);
 			}
-			return message;
+			return [message];
 		});
 		for (const child of this.#agents.values()) {
 			if (
@@ -584,12 +597,21 @@ export class RequestEvidence {
 		if (!authored) return undefined;
 		if (authored.input.operation === "send" || authored.input.operation === "request") {
 			const authorTranscript = author.transcript.inspect();
-			const resolvedTargetAgentId = this.#resolveMessageTargetId(
+			const target = this.#inspectMessageTarget(
 				author,
 				authorTranscript,
 				authored.source.toolCallId,
 				authored.input.targetAgent,
 			);
+			if (target.state === "not_created") return undefined;
+			const resolvedTargetAgentId = target.state === "resolved"
+				? target.targetAgentId
+				: this.#resolveMessageTargetId(
+					author,
+					authorTranscript,
+					authored.source.toolCallId,
+					authored.input.targetAgent,
+				);
 			return resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
@@ -691,6 +713,22 @@ export class RequestEvidence {
 				(request) => request.targetAgentId === responder.identity.agentId,
 			)
 		);
+	}
+
+	#inspectMessageTarget(
+		author: AgentRecord,
+		authorTranscript: TranscriptInspection,
+		toolCallId: string,
+		targetAgent: string,
+	) {
+		return inspectCommittedAgentMessageTarget({
+			agents: this.#agents,
+			quarantinedWorkflowAgentIds: this.#quarantinedWorkflowAgentIds,
+			authorAgentId: author.identity.agentId,
+			authorTranscript,
+			toolCallId,
+			targetAgent,
+		});
 	}
 
 	#resolveMessageTargetId(

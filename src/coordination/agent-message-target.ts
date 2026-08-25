@@ -55,14 +55,34 @@ function resolveIdentityCandidate<Candidate extends AgentMessageTargetCandidate>
 	return undefined;
 }
 
-export function resolveCommittedAgentMessageTargetId(options: {
+type CommittedAgentMessageTargetInspection =
+	| Readonly<{ state: "resolved"; targetAgentId: string }>
+	| Readonly<{ state: "not_created" }>
+	| Readonly<{ state: "indeterminate" }>;
+
+type CommittedAgentMessageTargetOptions = Readonly<{
 	agents: ReadonlyMap<string, AgentRecord>;
 	quarantinedWorkflowAgentIds: ReadonlySet<string>;
 	authorAgentId: string;
 	authorTranscript: TranscriptInspection;
 	toolCallId: string;
 	targetAgent: string;
-}): string {
+}>;
+
+export function resolveCommittedAgentMessageTargetId(
+	options: CommittedAgentMessageTargetOptions,
+): string {
+	const inspection = inspectCommittedAgentMessageTarget(options);
+	if (inspection.state === "resolved") return inspection.targetAgentId;
+	if (inspection.state === "not_created") {
+		throw new Error("not_created: Agent Message authoring failed");
+	}
+	return resolveCurrentAgentMessageTargetId(options);
+}
+
+export function inspectCommittedAgentMessageTarget(
+	options: CommittedAgentMessageTargetOptions,
+): CommittedAgentMessageTargetInspection {
 	const {
 		agents,
 		quarantinedWorkflowAgentIds,
@@ -71,24 +91,24 @@ export function resolveCommittedAgentMessageTargetId(options: {
 		toolCallId,
 		targetAgent,
 	} = options;
-	const persistedTargetAgentId = inspectPersistedTargetAgentId({
+	const persistedResult = inspectPersistedTargetResult({
 		authorAgentId,
 		transcript: authorTranscript,
 		toolCallId,
 	});
-	if (persistedTargetAgentId !== undefined) {
-		const target = agents.get(persistedTargetAgentId);
+	if (persistedResult.state === "resolved") {
+		const target = agents.get(persistedResult.targetAgentId);
 		if (target) {
 			validateTargetMatchesSelector(target, targetAgent);
-			return persistedTargetAgentId;
+			return persistedResult;
 		}
-		if (quarantinedWorkflowAgentIds.has(persistedTargetAgentId)) {
+		if (quarantinedWorkflowAgentIds.has(persistedResult.targetAgentId)) {
 			// The binding remains canonical when cold recovery quarantines the target;
 			// availability is a separate decision at the operation boundary.
-			return persistedTargetAgentId;
+			return persistedResult;
 		}
 		throw new Error(
-			`invariant_violation: Agent Message author result names unknown target ${persistedTargetAgentId}`,
+			`invariant_violation: Agent Message author result names unknown target ${persistedResult.targetAgentId}`,
 		);
 	}
 
@@ -97,7 +117,7 @@ export function resolveCommittedAgentMessageTargetId(options: {
 		throw new Error("invalid_input: Agent Message targetAgent must not be blank");
 	}
 
-	// Delivery is canonical target-binding evidence when Pi lost the author result.
+	// Delivery fixes the target even when the author result is missing or contradictory.
 	// It must win before a later roster change can reinterpret the selector.
 	const { source } = resolveCommittedToolCall({
 		agentId: authorAgentId,
@@ -118,9 +138,32 @@ export function resolveCommittedAgentMessageTargetId(options: {
 	}
 	if (deliveredTargets[0]) {
 		validateTargetMatchesSelector(deliveredTargets[0], targetAgent);
-		return deliveredTargets[0].identity.agentId;
+		return {
+			state: "resolved",
+			targetAgentId: deliveredTargets[0].identity.agentId,
+		};
 	}
+	if (persistedResult.state === "not_created") {
+		if (quarantinedWorkflowAgentIds.size > 0) {
+			throw new EvidenceUnavailableError(
+				`Agent Message target ${selector} depends on quarantined Agent proof`,
+			);
+		}
+		return persistedResult;
+	}
+	return { state: "indeterminate" };
+}
 
+function resolveCurrentAgentMessageTargetId(
+	options: CommittedAgentMessageTargetOptions,
+): string {
+	const {
+		agents,
+		quarantinedWorkflowAgentIds,
+		authorAgentId,
+		targetAgent,
+	} = options;
+	const selector = targetAgent.trim();
 	const knownCandidates = [...agents.values()].map((record) => ({
 		agentId: record.identity.agentId,
 		label: record.identity.metadata.label,
@@ -179,11 +222,11 @@ function validateTargetMatchesSelector(
 	}
 }
 
-function inspectPersistedTargetAgentId(options: {
+function inspectPersistedTargetResult(options: {
 	authorAgentId: string;
 	transcript: TranscriptInspection;
 	toolCallId: string;
-}): string | undefined {
+}): CommittedAgentMessageTargetInspection {
 	const results = currentCoordinationScope(
 		options.transcript,
 		options.authorAgentId,
@@ -203,17 +246,19 @@ function inspectPersistedTargetAgentId(options: {
 	if (
 		!result ||
 		result.type !== "message" ||
-		result.message.role !== "toolResult" ||
-		result.message.isError ||
+		result.message.role !== "toolResult"
+	) return { state: "indeterminate" };
+	if (result.message.isError) return { state: "not_created" };
+	if (
 		typeof result.message.details !== "object" ||
 		result.message.details === null ||
 		!("targetAgentId" in result.message.details)
-	) return undefined;
+	) return { state: "indeterminate" };
 	const targetAgentId = result.message.details.targetAgentId;
 	if (typeof targetAgentId !== "string" || targetAgentId.length === 0) {
 		throw new Error(
 			"invariant_violation: Agent Message author result has an invalid targetAgentId",
 		);
 	}
-	return targetAgentId;
+	return { state: "resolved", targetAgentId };
 }

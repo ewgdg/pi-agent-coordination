@@ -9,6 +9,7 @@ import {
 	resolveCommittedAgentMessageTargetId,
 } from "../src/coordination/agent-message-target.ts";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
+import { RequestEvidence } from "../src/coordination/request-evidence.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
@@ -229,6 +230,122 @@ test("a healthy unique ID suffix still resolves when other Workflow evidence is 
 		toolCallId,
 		targetAgent: "81e3",
 	}), target.identity.agentId);
+});
+
+test("a rejected ambiguous Request is not retained as canonical Request evidence", () => {
+	const authorAgentId = "workflow-owner";
+	const toolCallId = "ambiguous-request";
+	const authorSession = session(authorAgentId);
+	authorSession.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_message", {
+			operation: "request",
+			targetAgent: "native-input-review",
+			question: "Review native input handling.",
+		}, { id: toolCallId }),
+		{ stopReason: "toolUse" },
+	));
+	authorSession.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{
+			type: "text",
+			text:
+				"ambiguous_target: Agent label native-input-review matches 2 addressable Agents",
+		}],
+		details: {},
+		isError: true,
+		timestamp: Date.now(),
+	});
+	const author = record(authorAgentId, "Owner", authorSession);
+	const first = record("first-review-agent", "native-input-review");
+	const second = record("second-review-agent", "native-input-review");
+	const evidence = new RequestEvidence(new Map([
+		[authorAgentId, author],
+		[first.identity.agentId, first],
+		[second.identity.agentId, second],
+	]));
+
+	assert.deepEqual(evidence.findRequestsAuthoredBy(author), []);
+});
+
+test("an unresolved ambiguous Request stays out of relationship reconciliation", () => {
+	const authorAgentId = "workflow-owner";
+	const toolCallId = "unresolved-ambiguous-request";
+	const authorSession = session(authorAgentId);
+	authorSession.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_message", {
+			operation: "request",
+			targetAgent: "native-input-review",
+			question: "Review native input handling.",
+		}, { id: toolCallId }),
+		{ stopReason: "toolUse" },
+	));
+	const author = record(authorAgentId, "Owner", authorSession);
+	const first = record("first-review-agent", "native-input-review");
+	const second = record("second-review-agent", "native-input-review");
+	const evidence = new RequestEvidence(new Map([
+		[authorAgentId, author],
+		[first.identity.agentId, first],
+		[second.identity.agentId, second],
+	]));
+
+	assert.deepEqual(evidence.findRequestsAuthoredBy(author), []);
+});
+
+test("an error result plus Request Delivery remains contradictory evidence", () => {
+	const authorAgentId = "workflow-owner";
+	const targetAgentId = "first-review-agent";
+	const toolCallId = "contradictory-request";
+	const input = {
+		operation: "request" as const,
+		targetAgent: "native-input-review",
+		question: "Review native input handling.",
+	};
+	const authorSession = session(authorAgentId);
+	const entryId = authorSession.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_message", input, { id: toolCallId }),
+		{ stopReason: "toolUse" },
+	));
+	authorSession.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Scheduling failed." }],
+		details: {},
+		isError: true,
+		timestamp: Date.now(),
+	});
+	const source = { agentId: authorAgentId, entryId, toolCallId };
+	const targetSession = session(targetAgentId);
+	const delivery = createMessageDelivery([{
+		source,
+		projection: {
+			kind: "request",
+			requestMessageId: deriveMessageIdentity(source),
+			fromAgentId: authorAgentId,
+			question: input.question,
+		},
+	}]);
+	targetSession.appendCustomMessageEntry(
+		delivery.customType,
+		delivery.content,
+		delivery.display,
+		delivery.details,
+	);
+	const author = record(authorAgentId, "Owner", authorSession);
+	const first = record(targetAgentId, "native-input-review", targetSession);
+	const second = record("second-review-agent", "native-input-review");
+	const evidence = new RequestEvidence(new Map([
+		[authorAgentId, author],
+		[first.identity.agentId, first],
+		[second.identity.agentId, second],
+	]));
+
+	assert.throws(
+		() => evidence.residualRelationshipsFor(author),
+		/error result and Delivery/,
+	);
 });
 
 test("persisted selector results must name a known or quarantined full identity", () => {
