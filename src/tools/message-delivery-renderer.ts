@@ -93,6 +93,7 @@ export function renderMessageProjection(
 		container.addChild(new BodyPreview(
 			messageBody(projection),
 			(content) => theme.fg("customMessageText", content),
+			(content) => theme.fg("dim", content),
 		));
 	}
 	return container;

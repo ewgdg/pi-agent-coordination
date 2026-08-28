@@ -52,12 +52,17 @@ test("collapsed Message Delivery shows type, sender label, compact identity, and
 	assert.doesNotMatch(rendered, /\{"messages"/);
 	assert.equal(
 		rendered.split("\n").filter((line) => line.trim().length > 0).length,
-		11,
+		12,
 	);
 });
 
-test("collapsed Message Delivery preserves the head and truncates after ten visible body rows", () => {
+test("collapsed Message Delivery puts a dim truncation hint after ten visible body rows", () => {
 	initTheme("dark");
+	const hintTheme = {
+		...plainTheme,
+		fg: (color: string, text: string) =>
+			color === "dim" ? `\x1b[2m${text}\x1b[22m` : text,
+	} as unknown as Theme;
 	const rendered = renderMessageDelivery(
 		customDelivery([{
 			kind: "message",
@@ -69,15 +74,15 @@ test("collapsed Message Delivery preserves the head and truncates after ten visi
 			).join("\n"),
 		}]),
 		{ expanded: false, outputPad: 1 },
-		plainTheme,
+		hintTheme,
 	).render(60).join("\n");
 
 	assert.match(rendered, /Line 1\./);
-	assert.match(rendered, /Line 9\.\s*\n\s*Line 10\.\s*…/);
+	assert.match(rendered, /Line 9\.\s*\n\s*Line 10\.\s*\n\s*\x1b\[2m…\x1b\[22m/);
 	assert.doesNotMatch(rendered, /Line 11\./);
 	assert.equal(
 		rendered.split("\n").filter((line) => line.trim().length > 0).length,
-		11,
+		12,
 	);
 });
 

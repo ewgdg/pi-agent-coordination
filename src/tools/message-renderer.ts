@@ -56,6 +56,7 @@ export function renderAgentMessageBody(
 	return new BodyPreview(
 		body,
 		(content) => theme.fg("customMessageText", content),
+		(content) => theme.fg("dim", content),
 	);
 }
 
@@ -158,6 +159,7 @@ export function renderAgentMessageResult(
 		container.addChild(new BodyPreview(
 			receipt.answer,
 			(content) => theme.fg("customMessageText", content),
+			(content) => theme.fg("dim", content),
 		));
 	}
 	if (!options.expanded && "reason" in receipt) {
