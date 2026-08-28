@@ -22,10 +22,16 @@ export function renderAgentMessageCall(
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 	expanded = false,
+	answerTargetAgentId?: string,
 ): Component {
 	const container = new Container();
 	container.addChild(new Text(
-		renderMessageCallHeader(args, theme, resolveAgentLabel),
+		renderMessageCallHeader(
+			args,
+			theme,
+			resolveAgentLabel,
+			answerTargetAgentId,
+		),
 		0,
 		0,
 	));
@@ -64,6 +70,7 @@ function renderMessageCallHeader(
 	args: AgentMessageInput,
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver,
+	answerTargetAgentId: string | undefined,
 ): string {
 	// Badge and body reuse the delivered-message theme roles (customMessageLabel /
 	// customMessageText) so sent and delivered coordination content speak one visual
@@ -72,12 +79,20 @@ function renderMessageCallHeader(
 		"customMessageLabel",
 		theme.bold(`[${messageCallOperationLabel(args.operation)}]`),
 	);
-	if (args.operation === "send" || args.operation === "request") {
+	const targetAgentId = args.operation === "send" || args.operation === "request"
+		? args.targetAgent
+		: args.operation === "answer"
+			? answerTargetAgentId
+			: undefined;
+	if (targetAgentId !== undefined) {
 		text += theme.fg(
 			"muted",
-			` to ${formatAgentIdentity(args.targetAgent, resolveAgentLabel)}`,
+			` to ${formatAgentIdentity(targetAgentId, resolveAgentLabel)}`,
 		);
-		if (args.deliveryMode === "steer") {
+		if (
+			(args.operation === "send" || args.operation === "request") &&
+			args.deliveryMode === "steer"
+		) {
 			text += theme.fg("warning", " · steer");
 		}
 	} else if (args.operation === "cancel") {

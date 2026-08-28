@@ -123,11 +123,19 @@ test("expanded call shows the complete payload without an ellipsis", () => {
 });
 
 test("answer and cancel calls show their own badges with payload and correlation", () => {
-	const answer = renderCall({
-		operation: "answer",
-		answer: "The answer is accepted.",
-	});
+	initTheme("dark");
+	const answer = renderAgentMessageCall(
+		{
+			operation: "answer",
+			answer: "The answer is accepted.",
+		},
+		plainTheme,
+		resolveLabel,
+		false,
+		targetAgentId,
+	).render(60).join("\n");
 	assert.match(answer, /\[Answer\]/);
+	assert.match(answer, /to Researcher · 983c81e3/);
 	assert.match(answer, /answer is accepted/);
 
 	const cancel = renderCall({

@@ -147,6 +147,8 @@ export function registerOrdinaryAgentSurfaces(
 		"ordinary",
 		handlers,
 		resolveAgentLabel,
+		undefined,
+		(toolCallId) => resolveView().answerTargetAgent(toolCallId),
 	);
 	pi.on("session_start", () => registerParticipantCoordinationTools(
 		pi,
@@ -154,6 +156,7 @@ export function registerOrdinaryAgentSurfaces(
 		handlers,
 		resolveAgentLabel,
 		resolveView().agentTemplateSnapshot(),
+		(toolCallId) => resolveView().answerTargetAgent(toolCallId),
 	));
 	registerAgentsCommand(pi, resolveView);
 }
@@ -169,6 +172,7 @@ export function registerOwnerAgentTools(
 		participantCoordinatorHandlers("owner", resolveView),
 		(agentId) => resolveView().agentLabel(agentId),
 		agentTemplateSnapshot,
+		(toolCallId) => resolveView().answerTargetAgent(toolCallId),
 	);
 }
 
@@ -181,6 +185,8 @@ export function registerModeratorAgentSurfaces(
 		"moderator",
 		participantCoordinatorHandlers("moderator", resolveView),
 		(agentId) => resolveView().agentLabel(agentId),
+		undefined,
+		(toolCallId) => resolveView().answerTargetAgent(toolCallId),
 	);
 	registerAgentsCommand(pi, resolveView);
 }

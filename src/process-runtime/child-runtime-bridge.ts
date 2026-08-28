@@ -25,6 +25,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../control/control-protocol-schemas.ts";
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
+import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import {
 	installAgentActivityDock,
 	type AgentActivitySnapshot,
@@ -41,6 +42,7 @@ import { registerParticipantCoordinationTools } from "../tools/participant-coord
 import { registerMessageDeliveryRenderer } from "../tools/message-delivery-renderer.ts";
 import type { AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
+import { answerCallTargetAgentId } from "../protocol/request-resolution.ts";
 import {
 	CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE,
 	CHILD_PROCESS_INHERIT_PROJECT_CONTEXT_ENVIRONMENT_VARIABLE,
@@ -111,6 +113,18 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		state?.currentBinding?.activity.agentLabel(agentId);
 	registerMessageDeliveryRenderer(pi, resolveAgentLabel);
 	const bootstrap = await readBootstrapDescriptor();
+	const resolveAnswerTargetAgent = (toolCallId: string) => {
+		const runtime = state?.currentBinding?.runtime;
+		return runtime === undefined
+			? undefined
+			: answerCallTargetAgentId({
+				responderAgentId: bootstrap.agentId,
+				transcript: transcriptFromSessionManager(
+					runtime.session.sessionManager,
+				).inspect(),
+				toolCallId,
+			});
+	};
 	const interactiveBridge = installInteractiveHostBridge(hostPi);
 	const participantRequest: ChildParticipantControlRequester = (method, payload, signal) => {
 		if (!state) throw new Error("child_runtime_control_unavailable: Runtime is not connected");
@@ -175,6 +189,8 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			"ordinary",
 			participant.coordination,
 			resolveAgentLabel,
+			undefined,
+			resolveAnswerTargetAgent,
 		);
 		refreshOrdinaryAgentTools = async (refresh = false) => registerParticipantCoordinationTools(
 			pi,
@@ -182,6 +198,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			participant.coordination,
 			resolveAgentLabel,
 			await participant.coordination.agentTemplateSnapshot(refresh),
+			resolveAnswerTargetAgent,
 		);
 	} else {
 		const participant = createControlBackedChildParticipantHandlers(
@@ -197,6 +214,8 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			"moderator",
 			participant.coordination,
 			resolveAgentLabel,
+			undefined,
+			resolveAnswerTargetAgent,
 		);
 	}
 	registerParticipantNativeSessionPolicy(pi);

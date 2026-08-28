@@ -96,6 +96,7 @@ import type {
 	AgentSearchInput,
 	AgentSearchResult,
 } from "../tools/participant-coordination-tools.ts";
+import { answerCallTargetAgentId } from "../protocol/request-resolution.ts";
 import { createOwnerAgentPresentationHandlers } from "../process-runtime/remote-agent-selector.ts";
 import type {
 	DurableAgentView,
@@ -174,6 +175,7 @@ type AgentViewTarget = Readonly<{
 }>;
 
 type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
+	answerTargetAgent(toolCallId: string): string | undefined;
 	children(agentId?: string): readonly AgentStatus[];
 	search(input: AgentSearchInput): AgentSearchResult;
 	message(toolCallId: string, input: AgentMessageInput): Promise<AgentMessageReceipt>;
@@ -463,6 +465,11 @@ export class WorkflowCoordinator {
 			status: (targetAgentId?: string) => this.#statusFor(agentId, targetAgentId),
 			agentLabel: (targetAgentId) =>
 				this.#agents.get(targetAgentId)?.identity.metadata.label,
+			answerTargetAgent: (toolCallId) => answerCallTargetAgentId({
+				responderAgentId: agentId,
+				transcript: this.#requireAgent(agentId).transcript.inspect(),
+				toolCallId,
+			}),
 			agentActivity: () => this.#agentActivity(agentId),
 			addAgentActivityChangeHandler: (handler) => {
 				this.#agentActivityChangeHandlers.add(handler);

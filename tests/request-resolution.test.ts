@@ -16,11 +16,53 @@ import {
 } from "../src/protocol/message.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
 import {
+	answerCallTargetAgentId,
 	answerSourceDeliveryRequestId,
 	answerSourceResultRequestId,
 	findAuthoredAgentMessageSources,
 	inspectCanonicalRequestResolution,
 } from "../src/protocol/request-resolution.ts";
+
+test("an Answer call resolves its target from the correlated delivered Request", () => {
+	const responderAgentId = "answer-render-responder";
+	const requesterAgentId = "answer-render-requester";
+	const responder = SessionManager.inMemory(process.cwd(), { id: responderAgentId });
+	responder.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: responderAgentId });
+	const requestSource = {
+		agentId: requesterAgentId,
+		entryId: "request-entry",
+		toolCallId: "request-call",
+	};
+	responder.appendCustomMessageEntry(
+		"agent-coordination.message-delivery",
+		JSON.stringify({
+			messages: [{
+				kind: "request",
+				requestMessageId: deriveMessageIdentity(requestSource),
+				fromAgentId: requesterAgentId,
+				question: "Return the rendered Answer.",
+			}],
+		}),
+		true,
+		{ messages: [requestSource] },
+	);
+	const answerToolCallId = "rendered-answer-call";
+	responder.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", {
+				operation: "answer",
+				answer: "The rendered Answer.",
+			}, { id: answerToolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+
+	assert.equal(answerCallTargetAgentId({
+		responderAgentId,
+		transcript: transcriptFromSessionManager(responder).inspect(),
+		toolCallId: answerToolCallId,
+	}), requesterAgentId);
+});
 
 test("Answer result and Delivery cannot correlate one source to different Requests", () => {
 	const responderAgentId = "answer-correlation-responder";

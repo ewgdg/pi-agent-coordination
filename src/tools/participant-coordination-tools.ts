@@ -503,6 +503,7 @@ export function registerParticipantCoordinationTools<
 	handlers: ParticipantCoordinationToolHandlers<Role>,
 	resolveAgentLabel: AgentLabelResolver = () => undefined,
 	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot,
+	resolveAnswerTargetAgent?: (toolCallId: string) => string | undefined,
 ): void {
 	const availableHandlers = handlers as AvailableHandlers;
 	pi.registerTool<typeof agentMessageParameters, AgentMessageReceipt>({
@@ -518,7 +519,15 @@ export function registerParticipantCoordinationTools<
 		executionMode: "sequential",
 		parameters: agentMessageParameters,
 		renderCall: (args, _theme, context) =>
-			renderAgentMessageCall(args, _theme, resolveAgentLabel, context.expanded),
+			renderAgentMessageCall(
+				args,
+				_theme,
+				resolveAgentLabel,
+				context.expanded,
+				args.operation === "answer"
+					? resolveAnswerTargetAgent?.(context.toolCallId)
+					: undefined,
+			),
 		renderResult: renderAgentMessageResult,
 		async execute(toolCallId, parameters) {
 			return toolResult(await availableHandlers.message(toolCallId, parameters));
