@@ -448,7 +448,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 			role: "user",
 			content: [{
 				type: "text",
-				text: `${section} acquired context.${" relevant history".repeat(11_000)}`,
+				text: `${section} acquired context.${" relevant history".repeat(15_000)}`,
 			}],
 			timestamp: Date.now(),
 		});
