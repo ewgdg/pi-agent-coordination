@@ -27,6 +27,7 @@ test("primary Owner input preempts Agent Wait before the next model turn", {
 	const answerText = "The preserved background Answer arrived.";
 	const spawnCallId = "spawn-before-owner-human-preemption";
 	const waitCallId = "wait-before-owner-human-preemption";
+	const stuckWaitCallId = "wait-reissued-before-owner-input-delivery";
 	const answerCallId = "answer-after-owner-human-preemption";
 	let ownerRanBeforeHumanInput = false;
 	let preemptedResultReachedDirectedTurn = false;
@@ -63,7 +64,10 @@ test("primary Owner input preempts Agent Wait before the next model turn", {
 		}
 		if (serialized.includes('"disposition":"preempted"')) {
 			ownerRanBeforeHumanInput = true;
-			return fauxAssistantMessage("The Wait resumed before human input was admitted.");
+			return fauxAssistantMessage(
+				fauxToolCall("agent_wait", {}, { id: stuckWaitCallId }),
+				{ stopReason: "toolUse" },
+			);
 		}
 		if (!serialized.includes(spawnCallId)) {
 			return fauxAssistantMessage(
@@ -131,6 +135,13 @@ test("primary Owner input preempts Agent Wait before the next model turn", {
 
 	assert.equal(ownerRanBeforeHumanInput, false);
 	assert.equal(preemptedResultReachedDirectedTurn, true);
+	assert.equal(host.session.sessionManager.getEntries().some((entry) =>
+		entry.type === "message" &&
+		entry.message.role === "assistant" &&
+		entry.message.content.some((part) =>
+			part.type === "toolCall" && part.id === stuckWaitCallId
+		)
+	), false);
 	const waitResult = host.session.sessionManager.getEntries().find((entry) =>
 		entry.type === "message" &&
 		entry.message.role === "toolResult" &&

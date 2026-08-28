@@ -161,6 +161,7 @@ export function participantLifecycleHandlers(
 				input.images,
 				input.submissionSequence,
 			),
+		primaryInputQueued: () => resolveView().primaryInputQueued(),
 		async humanInputMode() {
 			return resolveView().agentActivity().answerMode ? "answer" : "agent";
 		},

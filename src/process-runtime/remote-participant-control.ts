@@ -123,6 +123,9 @@ export function createControlBackedChildParticipantHandlers(
 				submissionSequence,
 			})).disposition;
 		},
+		async primaryInputQueued() {
+			await request("runtime.primaryInputQueued", {});
+		},
 		async humanInputMode() {
 			return (await request("runtime.humanInputMode", {})).mode;
 		},
@@ -207,6 +210,10 @@ export async function dispatchParticipantRequestToOwner(
 					submissionSequence: request.payload.submissionSequence,
 				}),
 			};
+			break;
+		case "runtime.primaryInputQueued":
+			await handlers.lifecycle.primaryInputQueued();
+			response = {};
 			break;
 		case "runtime.humanInputMode":
 			response = { mode: await handlers.lifecycle.humanInputMode() };

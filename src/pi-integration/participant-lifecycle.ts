@@ -32,6 +32,7 @@ export type GuardedParticipantToolResult = Readonly<{
 export type ParticipantLifecycleHandlers = Readonly<{
 	executionStarted(submissionSequence?: number): Promise<void>;
 	humanInputSubmitted(input: ParticipantHumanInput): Promise<ParticipantHumanInputDisposition>;
+	primaryInputQueued(): Promise<void>;
 	humanInputMode(): Promise<"agent" | "answer">;
 	toolResultCommitting(
 		input: ParticipantToolResult,
@@ -99,6 +100,7 @@ export function registerParticipantInputLifecycle(
 export function createParticipantInputHandler(
 	handlers: ParticipantLifecycleHandlers,
 	onDiscarded: () => Promise<void> = () => Promise.resolve(),
+	options: Readonly<{ deferPrimaryInputQueued?: boolean }> = {},
 ): (event: InputEvent, ctx: ExtensionContext) => Promise<InputEventResult> {
 	return async (event, ctx) => {
 		if (event.source !== "interactive") return { action: "continue" };
@@ -109,6 +111,11 @@ export function createParticipantInputHandler(
 				images: event.images,
 			});
 			if (disposition === "discarded") await onDiscarded();
+			if (
+				disposition === "continue" &&
+				event.streamingBehavior === "steer" &&
+				options.deferPrimaryInputQueued !== false
+			) deferPrimaryInputQueued(handlers, ctx);
 			return disposition === "continue"
 				? { action: "continue" }
 				: { action: "handled" };
@@ -122,4 +129,20 @@ export function createParticipantInputHandler(
 			return { action: "handled" };
 		}
 	};
+}
+
+export function deferPrimaryInputQueued(
+	handlers: ParticipantLifecycleHandlers,
+	ctx: ExtensionContext,
+): void {
+	// Pi queues steering only after every input handler returns. Defer the wait
+	// preemption so its tool result cannot outrun this user message.
+	setImmediate(() => {
+		void handlers.primaryInputQueued().catch((error: unknown) => {
+			ctx.ui.notify(
+				`Agent input failed: ${error instanceof Error ? error.message : String(error)}`,
+				"error",
+			);
+		});
+	});
 }

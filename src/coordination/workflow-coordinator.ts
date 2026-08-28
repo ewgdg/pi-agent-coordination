@@ -145,6 +145,7 @@ export type HumanPresentationCoordinatorView = Readonly<{
 		images: readonly ImageContent[] | undefined,
 		submissionSequence?: number,
 	): Promise<HumanInputDisposition>;
+	primaryInputQueued(): Promise<void>;
 	selectionRoster(): Readonly<{
 		live: readonly AgentRosterStatus[];
 		dormant: readonly AgentRosterStatus[];
@@ -482,6 +483,10 @@ export class WorkflowCoordinator {
 			resumeFromHuman: (text, images, submissionSequence) => {
 				this.#assertAdmissionOpen();
 				return this.#handleHumanInput(agentId, text, images, submissionSequence);
+			},
+			primaryInputQueued: () => {
+				this.#assertAdmissionOpen();
+				return this.#agentWaits.preemptForHumanInput(this.#requireAgent(agentId));
 			},
 			selectionRoster: () => this.#selectionRoster(),
 			openAgentPresentation: (targetAgentId) => {
@@ -1277,12 +1282,6 @@ export class WorkflowCoordinator {
 		}
 		if (this.#humanRequests.submitAnswer(agentId, text, (images?.length ?? 0) > 0)) {
 			return Promise.resolve("submitted");
-		}
-		const run = record.host.observe();
-		if (run.phase !== "dormant" && run.attention === "agent_wait") {
-			// Return control to Pi immediately so it can admit the native steering
-			// message while Agent Wait reacquires execution capacity in parallel.
-			void this.#agentWaits.preemptForHumanInput(record);
 		}
 		return this.#agentViewLane.run(async () => {
 			const active = this.#activeAgentView;

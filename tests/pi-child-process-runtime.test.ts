@@ -1670,6 +1670,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 					? "submitted"
 					: "continue";
 			},
+			async primaryInputQueued() {},
 			async humanInputMode() { return "agent"; },
 			async toolResultCommitting() { return undefined; },
 			async toolExecutionStarted() {},

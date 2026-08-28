@@ -87,6 +87,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		await proxies.lifecycle.humanInputSubmitted({ text: "resume", images: undefined }),
 		"submitted",
 	);
+	await proxies.lifecycle.primaryInputQueued();
 	assert.equal(await proxies.lifecycle.humanInputMode(), "answer");
 	assert.equal(await proxies.lifecycle.toolResultCommitting({
 		message: { role: "user", content: "candidate", timestamp: 1 },
@@ -135,6 +136,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 	assert.deepEqual(calls, [
 		["runtime.executionBegin", {}, undefined],
 		["runtime.humanInput", { text: "resume", submissionSequence: 7 }, undefined],
+		["runtime.primaryInputQueued", {}, undefined],
 		["runtime.humanInputMode", {}, undefined],
 		["runtime.guardToolResult", {
 			message: { role: "user", content: "candidate", timestamp: 1 },
@@ -238,6 +240,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 		lifecycle: {
 			async executionStarted() { calls.push(["begin"]); },
 			async humanInputSubmitted(input) { calls.push(["input", input]); return "submitted"; },
+			async primaryInputQueued() { calls.push(["input-queued"]); },
 			async humanInputMode() { calls.push(["mode"]); return "agent"; },
 			async toolResultCommitting(input) { calls.push(["guard", input]); return undefined; },
 			async toolExecutionStarted(input) { calls.push(["tool", input]); },

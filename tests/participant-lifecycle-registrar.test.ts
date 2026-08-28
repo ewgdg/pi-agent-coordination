@@ -198,6 +198,39 @@ test("ordinary and Moderator extensions preserve local lifecycle operation order
 	}
 });
 
+test("primary steering notifies coordination only after Pi can queue the input", async () => {
+	const calls: string[] = [];
+	const handlers = lifecycleHandlers({
+		async humanInputSubmitted() {
+			calls.push("input-checked");
+			return "continue";
+		},
+		async primaryInputQueued() {
+			calls.push("queue-notified");
+		},
+	});
+	const pi = new CapturedExtensionApi();
+	registerParticipantLifecycle(pi.api, handlers);
+
+	assert.deepEqual(
+		await pi.emit("input", {
+			type: "input",
+			text: "redirect the waiting agent",
+			source: "interactive",
+			streamingBehavior: "steer",
+		}, createExtensionContext()),
+		{ action: "continue" },
+	);
+	calls.push("native-input-can-queue");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+
+	assert.deepEqual(calls, [
+		"input-checked",
+		"native-input-can-queue",
+		"queue-notified",
+	]);
+});
+
 test("participant input registration can follow inherited extension preflights", async () => {
 	let submitted = 0;
 	const handlers = lifecycleHandlers({
@@ -360,6 +393,7 @@ function lifecycleHandlers(
 		async humanInputMode() {
 			return "agent";
 		},
+		async primaryInputQueued() {},
 		async toolResultCommitting() {},
 		async toolExecutionStarted() {},
 		async safeBoundaryReached() {},

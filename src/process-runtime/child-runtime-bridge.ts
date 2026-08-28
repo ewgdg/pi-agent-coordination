@@ -32,6 +32,7 @@ import {
 } from "../presentation/agent-activity-surface.ts";
 import {
 	createParticipantInputHandler,
+	deferPrimaryInputQueued,
 	type ParticipantLifecycleHandlers,
 	registerParticipantLifecycle,
 } from "../pi-integration/participant-lifecycle.ts";
@@ -318,6 +319,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 		const participantInput = createParticipantInputHandler(
 			participantLifecycle,
 			completeDiscardedInput,
+			{ deferPrimaryInputQueued: false },
 		);
 		childRuntimeInputs.set(ctx.sessionManager, async (input, context) => {
 			const result = await participantInput(input, context);
@@ -346,6 +348,11 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			) {
 				await inputLifecycle.completed(sequence);
 			}
+			if (
+				input.source === "interactive" &&
+				input.streamingBehavior === "steer" &&
+				result.action === "continue"
+			) deferPrimaryInputQueued(participantLifecycle, context);
 			return result;
 		});
 		const channel = currentState.channel;
@@ -741,6 +748,7 @@ async function handleOwnerRequest(
 			return { accepted: true };
 		case "runtime.executionBegin":
 		case "runtime.humanInput":
+		case "runtime.primaryInputQueued":
 		case "runtime.humanInputMode":
 		case "runtime.guardToolResult":
 		case "runtime.toolExecutionStart":

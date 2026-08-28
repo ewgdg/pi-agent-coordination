@@ -624,7 +624,7 @@ export const RuntimeSnapshotSchema = closed({
 	inheritProjectContext: Type.Boolean(),
 });
 
-/** Bridge-proven version-five method payload/result map. */
+/** Bridge-proven version-six method payload/result map. */
 export const agentControlMethods = {
 	"runtime.snapshot": { request: EmptySchema, response: RuntimeSnapshotSchema },
 	"runtime.executionBegin": {
@@ -646,6 +646,10 @@ export const agentControlMethods = {
 				Type.Literal("discarded"),
 			]),
 		}),
+	},
+	"runtime.primaryInputQueued": {
+		request: EmptySchema,
+		response: EmptyResponseSchema,
 	},
 	"runtime.humanInputMode": {
 		request: EmptySchema,
@@ -745,7 +749,7 @@ export const agentControlMethods = {
 	},
 } as const satisfies AgentControlProtocol["methods"];
 
-/** Bridge-proven version-five event payload map. */
+/** Bridge-proven version-six event payload map. */
 export const agentControlEvents = {
 	"runtime.ready": {
 		payload: closed({ sessionId: NonEmptyStringSchema, mode: Type.Literal("tui"), hasUI: Type.Literal(true) }),

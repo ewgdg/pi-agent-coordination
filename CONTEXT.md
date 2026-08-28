@@ -124,7 +124,7 @@ One explicit parameterless join over the caller's outstanding Agent Requests. Wh
 _Avoid_: Answer cache, Request retry, durable Wait
 
 **Agent Wait Preemption**:
-The non-error completion of one Agent Wait when primary interactive human input redirects the waiting Agent or an eligible inbound Agent Request requires its parked exact Run. Human input continues through Pi's native steering path, while an inbound Request reserves and commits its Delivery before the next model generation. Preemption reacquires child execution capacity when the caller is a child and leaves every Answer available for ordinary Delivery or a fresh later Wait. Any inbound Agent Request may qualify independently of the outstanding snapshot's responders; ordinary Agent Messages and explicit human follow-up input remain queued.
+The non-error completion of one Agent Wait when primary interactive human input redirects the waiting Agent or an eligible inbound Agent Request requires its parked exact Run. Human input first enters Pi's native steering queue, then preemption resumes the Wait so its result cannot start another model turn ahead of that input; an inbound Request instead reserves and commits its Delivery before the next model generation. Preemption reacquires child execution capacity when the caller is a child and leaves every Answer available for ordinary Delivery or a fresh later Wait. Any inbound Agent Request may qualify independently of the outstanding snapshot's responders; ordinary Agent Messages and explicit human follow-up input remain queued.
 _Avoid_: interruption, failure, Answer retrieval
 
 **Request Cancellation**:
