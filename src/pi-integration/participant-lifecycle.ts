@@ -46,12 +46,19 @@ export type ParticipantLifecycleHandlers = Readonly<{
 export function registerParticipantLifecycle(
 	pi: ExtensionAPI,
 	handlers: ParticipantLifecycleHandlers,
-	options: Readonly<{ registerInput?: boolean }> = {},
+	options: Readonly<{
+		registerInput?: boolean;
+		deferPrimaryInputQueued?: boolean;
+	}> = {},
 ): void {
 	// agent_start is the one awaited Pi boundary shared by native prompts,
 	// custom Delivery turns, queued continuations, and automatic retries.
 	pi.on("agent_start", () => handlers.executionStarted());
-	if (options.registerInput !== false) registerParticipantInputLifecycle(pi, handlers);
+	if (options.registerInput !== false) {
+		registerParticipantInputLifecycle(pi, handlers, {
+			deferPrimaryInputQueued: options.deferPrimaryInputQueued,
+		});
+	}
 	// message_end is Pi's final awaited hook before it synchronously publishes the
 	// native result. A Run fence can still turn a submitted candidate into the one
 	// interruption result here; attention remains until later transcript proof.
@@ -93,8 +100,12 @@ export function registerParticipantLifecycle(
 export function registerParticipantInputLifecycle(
 	pi: ExtensionAPI,
 	handlers: ParticipantLifecycleHandlers,
+	options: Readonly<{ deferPrimaryInputQueued?: boolean }> = {},
 ): void {
-	pi.on("input", createParticipantInputHandler(handlers));
+	pi.on(
+		"input",
+		createParticipantInputHandler(handlers, () => Promise.resolve(), options),
+	);
 }
 
 export function createParticipantInputHandler(

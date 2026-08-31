@@ -27,6 +27,7 @@ import {
 	type ParticipantLifecycleHandlers,
 } from "../pi-integration/participant-lifecycle.ts";
 import { registerParticipantNativeSessionPolicy } from "../pi-integration/participant-native-session-policy.ts";
+import { bindPrimarySteeringAdmission } from "../pi-integration/primary-steering-admission.ts";
 
 export function createAgentBoundExtension(
 	resolveView: () => OrdinaryAgentCoordinatorView,
@@ -116,11 +117,24 @@ export function bindHiddenOwnerAgentExtension(options: {
 	// Owner, the same extension becomes its hidden identity-bound Owner surface.
 	ownerExtension.hidden = true;
 	registerAgentsCommand(pi, resolveView);
-	registerParticipantLifecycle(
-		pi,
-		participantLifecycleHandlers(resolveView),
+	const lifecycleHandlers = participantLifecycleHandlers(resolveView);
+	const unbindPrimarySteeringAdmission = bindPrimarySteeringAdmission(
+		runtime.session,
+		() => lifecycleHandlers.primaryInputQueued(),
+		(error) => {
+			runtime.services.diagnostics.push({
+				type: "error",
+				message: `Owner steering admission failed: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			});
+		},
 	);
+	registerParticipantLifecycle(pi, lifecycleHandlers, {
+		deferPrimaryInputQueued: false,
+	});
 	pi.on("session_shutdown", (event) => {
+		unbindPrimarySteeringAdmission();
 		if (event.reason !== "reload") return prepareOwnerReplacement();
 	});
 }

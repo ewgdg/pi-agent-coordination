@@ -6,6 +6,7 @@ import {
 	fauxToolCall,
 	type Context,
 } from "@earendil-works/pi-ai";
+import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
@@ -13,7 +14,16 @@ import { createTestOwnerHost } from "./support/pi-host.ts";
 test("primary Owner input preempts Agent Wait before the next model turn", {
 	timeout: 10_000,
 }, async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
+	const extensionWithLaterAsyncInputHandler: ExtensionFactory = async (pi) => {
+		await piAgentCoordination(pi);
+		pi.on("session_start", () => {
+			pi.on("input", async (event) => {
+				if (event.streamingBehavior !== "steer") return;
+				await new Promise<void>((resolve) => setTimeout(resolve, 100));
+			});
+		});
+	};
+	const host = await createTestOwnerHost(t, extensionWithLaterAsyncInputHandler, {
 		persistent: true,
 		processVisibleModel: true,
 	});
@@ -123,9 +133,12 @@ test("primary Owner input preempts Agent Wait before the next model turn", {
 	const directedPrompt = host.session.prompt(userDirection, {
 		streamingBehavior: "steer",
 	});
-	await waitUntil(() => ownerAssistantTexts(host).includes(
-		"The Owner processed the explicitly queued follow-up.",
-	));
+	await waitUntil(() =>
+		ownerRanBeforeHumanInput ||
+		ownerAssistantTexts(host).includes(
+			"The Owner processed the explicitly queued follow-up.",
+		)
+	);
 	const ownerTexts = ownerAssistantTexts(host);
 	assert.equal(
 		ownerTexts.indexOf("The Owner acted on the new human direction.") <

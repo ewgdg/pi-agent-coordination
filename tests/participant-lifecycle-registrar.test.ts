@@ -198,7 +198,7 @@ test("ordinary and Moderator extensions preserve local lifecycle operation order
 	}
 });
 
-test("primary steering notifies coordination only after Pi can queue the input", async () => {
+test("primary steering defers coordination until after its input handler returns", async () => {
 	const calls: string[] = [];
 	const handlers = lifecycleHandlers({
 		async humanInputSubmitted() {
