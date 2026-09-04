@@ -313,8 +313,9 @@ export function findAuthoredAgentMessageSources(options: {
 			try {
 				input = validateAgentMessageInput(part.arguments);
 			} catch {
-				// Pi durably records model-emitted tool calls even when native schema
-				// validation rejects them before this extension executes.
+				// Pi commits model-emitted calls before native validation results.
+				// Invalid input authors no Message during that gap; only a conflicting
+				// result makes it contradictory protocol evidence.
 				const results = entries.filter(
 					(entry) =>
 						entry.type === "message" &&
@@ -322,6 +323,7 @@ export function findAuthoredAgentMessageSources(options: {
 						entry.message.toolName === "agent_message" &&
 						entry.message.toolCallId === part.id,
 				);
+				if (results.length === 0) continue;
 				if (
 					results.length === 1 &&
 					results[0]?.type === "message" &&

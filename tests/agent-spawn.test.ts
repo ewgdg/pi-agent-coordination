@@ -18,6 +18,7 @@ import {
 	WorkflowCoordinator,
 	type AgentSpawnInput,
 	type AgentSpawnReceipt,
+	type MessageBoundaryHooks,
 	type SpawnBoundaryHooks,
 } from "../src/coordination/workflow-coordinator.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
@@ -42,6 +43,66 @@ import {
 import { capturedSessionManager } from "./support/captured-session-managers.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
+
+test("Creation Request delivery progresses before an invalid Agent Message receives its native error result", { timeout: 5_000 }, async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+	});
+	const invalidCallId = "invalid-message-before-native-result";
+	const request = "Creation Request during native validation";
+	const respond = (context: Context) => {
+		const receivedRequest = context.messages.some((message) =>
+			message.role === "user" && JSON.stringify(message.content).includes(request)
+		);
+		const answered = context.messages.some((message) =>
+			message.role === "toolResult" && message.toolCallId === "answer-during-validation"
+		);
+		return receivedRequest && !answered
+			? fauxAssistantMessage(fauxToolCall("agent_message", {
+				operation: "answer", answer: "The initial Request arrived.",
+			}, { id: "answer-during-validation" }), { stopReason: "toolUse" })
+			: fauxAssistantMessage("Finished.");
+	};
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "status", agentId: host.session.sessionId,
+		}, { id: invalidCallId }), { stopReason: "toolUse" }),
+		respond, respond, respond, respond,
+	]);
+	let childId: string | undefined;
+	const unsubscribe = host.session.agent.subscribe(async (event) => {
+		if (event.type !== "tool_execution_start" || event.toolCallId !== invalidCallId) return;
+		// Pi awaits this public event after committing the call and before native
+		// validation commits its error, making the reported race deterministic.
+		assert.equal(host.session.sessionManager.getEntries().some((entry) =>
+			entry.type === "message" && entry.message.role === "toolResult" &&
+			entry.message.toolCallId === invalidCallId
+		), false);
+		const result = await executeRegisteredTool(host.session, "agent_spawn", "spawn-during-validation", { request });
+		const receipt = result.details as AgentSpawnReceipt;
+		assert.ok(receipt.spawnStatus === "created" && receipt.messageStatus === "sent");
+		childId = receipt.agentId;
+		await waitForAgentTranscriptText(host, childId, request);
+	});
+	try {
+		await host.session.prompt("Attempt an invalid Message operation.");
+	} finally {
+		unsubscribe();
+	}
+	assert.ok(childId);
+	const validationResult = host.session.sessionManager.getEntries().find((entry) =>
+		entry.type === "message" && entry.message.role === "toolResult" &&
+		entry.message.toolCallId === invalidCallId
+	);
+	assert.ok(validationResult?.type === "message" && validationResult.message.role === "toolResult");
+	assert.equal(validationResult.message.isError, true);
+	const entries = await agentTranscriptEntries(host, childId, 0);
+	assert.equal(entries?.filter((entry) =>
+		entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery" &&
+		JSON.stringify(entry.content).includes(request)
+	).length, 1);
+});
 
 test("an authenticated ordinary Agent creates a durable isolated child and admits its Creation Request", async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
@@ -1019,6 +1080,93 @@ test("confirmed post-Identity Delivery admission failure keeps the child and Req
 	await harness.shutdown();
 });
 
+test("a pre-dispatch invariant failure releases the child and its Creation Request remains retryable", { timeout: 5_000 }, async (t) => {
+	let failDispatch = true;
+	const harness = await createCoordinatorHarness(t, {}, undefined, {
+		scheduleDeliveryDispatch: (_context, dispatch) => {
+			if (failDispatch) throw new ProtocolInvariantError("Delivery admission could not inspect Request evidence");
+			dispatch();
+		},
+	});
+	const spawnCallId = "spawn-before-dispatch-failure";
+	await assert.rejects(harness.spawn(spawnCallId), /could not inspect Request evidence/);
+	const child = harness.view.children()[0];
+	assert.ok(child);
+	assert.deepEqual(child.run, { phase: "dormant", retentionReasons: [] });
+	const sourceEntry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(sourceEntry);
+	const source = { agentId: harness.host.session.sessionId, entryId: sourceEntry.id, toolCallId: spawnCallId };
+	const requestId = deriveMessageIdentity(source);
+	const path = child.primaryEvidence.transcriptPath;
+	assert.ok(path);
+	assert.equal(transcriptFromSessionFile(path).inspect().entries.some((entry) =>
+		entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery"
+	), false);
+
+	failDispatch = false;
+	harness.host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "answer", answer: "The retried Creation Request arrived.",
+		}, { id: "answer-retried-creation" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Finished."),
+	]);
+	const retryCallId = "retry-failed-creation";
+	const retry = { operation: "retry" as const, messageId: requestId };
+	harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_message", retry, { id: retryCallId }), { stopReason: "toolUse" },
+	));
+	const receipt = await harness.view.message(retryCallId, retry);
+	assert.ok("messageStatus" in receipt && receipt.messageStatus === "sent");
+	const entries = await waitForEntry(path, (entry) =>
+		entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery"
+	);
+	assert.equal(entries.filter((entry) =>
+		entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery" &&
+		JSON.stringify(entry.details) === JSON.stringify({ messages: [source] })
+	).length, 1);
+	await harness.shutdown();
+});
+
+test("retry advances an undispatched Creation Request without duplicating a late dispatch callback", { timeout: 5_000 }, async (t) => {
+	let canDispatch = false;
+	let delayedDispatch: (() => void) | undefined;
+	const harness = await createCoordinatorHarness(t, {}, undefined, {
+		scheduleDeliveryDispatch: (_context, dispatch) => {
+			if (canDispatch) dispatch();
+			else delayedDispatch = dispatch;
+		},
+	});
+	harness.host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "answer", answer: "The pending Creation Request arrived once.",
+		}, { id: "answer-pending-creation" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Finished."),
+	]);
+	const spawn = await harness.spawn("spawn-delayed-creation");
+	assert.ok(spawn.spawnStatus === "created" && spawn.messageStatus === "sent");
+	assert.ok(delayedDispatch);
+	const child = harness.view.status(spawn.agentId);
+	const path = child.primaryEvidence.transcriptPath;
+	assert.ok(path);
+	canDispatch = true;
+	const retryCallId = "retry-pending-creation";
+	const retry = { operation: "retry" as const, messageId: spawn.requestMessageId };
+	harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_message", retry, { id: retryCallId }), { stopReason: "toolUse" },
+	));
+	const receipt = await harness.view.message(retryCallId, retry);
+	assert.ok("messageStatus" in receipt && receipt.messageStatus === "sent");
+	await waitForEntry(path, (entry) =>
+		entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery"
+	);
+	delayedDispatch();
+	await harness.coordinator.forAgent(spawn.agentId).reachSafeBoundary();
+	assert.equal(transcriptFromSessionFile(path).inspect().entries.filter((entry) =>
+		entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery"
+	).length, 1);
+	await harness.shutdown();
+});
+
 test("lost Run-start confirmation stays indeterminate after confirmed Identity", async (t) => {
 	const harness = await createCoordinatorHarness(t, {
 		afterRunStart: (context) => {
@@ -1441,6 +1589,7 @@ async function createCoordinatorHarness(
 	t: TestCleanupRegistrar,
 	hooks: SpawnBoundaryHooks,
 	ownerExtension: ExtensionFactory = () => undefined,
+	messageBoundaryHooks: MessageBoundaryHooks = {},
 ) {
 	const host = await createUnboundTestOwnerHost(t, ownerExtension, {
 		persistent: true,
@@ -1452,6 +1601,7 @@ async function createCoordinatorHarness(
 	coordinator = createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: hooks,
+		messageBoundaryHooks,
 	});
 	const view = coordinator.forAgent(identity.agentId);
 

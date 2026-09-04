@@ -319,9 +319,12 @@ export class DefaultChildSpawner {
 			});
 			if (admission !== "pending") throw new Error(admission);
 		} catch (error) {
+			try {
+				await this.#messages.requestRelease(child);
+			} catch (cleanupError) {
+				throw new AggregateError([error, cleanupError], "Creation Request admission cleanup failed");
+			}
 			if (error instanceof ProtocolInvariantError) throw error;
-			child.host.removeRetentionReason("pending_delivery");
-			await this.#messages.requestRelease(child);
 			return {
 				spawnStatus: "created",
 				agentId,
