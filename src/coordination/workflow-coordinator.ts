@@ -1019,20 +1019,16 @@ export class WorkflowCoordinator {
 		let target = initialTarget;
 		while (true) {
 			const previousRecord = active.record;
+			const previousProjection = active.attachment.projection();
+			let presentationReady: Promise<void> | undefined;
 			let requestPreviousRunRelease = false;
 			let targetChanged = false;
 			await previousRecord.host.lane.run(() => {
 				targetChanged = record.host.currentProjection() !== target.projection;
 				if (targetChanged) return;
-				if (
-					previousRecord.host.currentProjection() === active.attachment.projection()
-				) {
-					previousRecord.host.removeRetentionReason("interactive_selection");
-					requestPreviousRunRelease = true;
-				}
 				active.record = record;
 				active.failed = false;
-				active.attachment.retarget({
+				presentationReady = active.attachment.retarget({
 					agentId: record.identity.agentId,
 					label: record.identity.metadata.label,
 					projection: target.projection,
@@ -1048,14 +1044,25 @@ export class WorkflowCoordinator {
 				target = await this.#acquireAgentViewTarget(record);
 				continue;
 			}
-			if (requestPreviousRunRelease) {
-				try {
-					await this.#messages.requestRelease(previousRecord);
-				} catch (error) {
-					this.#reportAgentViewError(error);
+			// The previous Runtime still renders its loading selector until the
+			// physical handoff completes. Releasing it earlier can freeze that view.
+			try {
+				await presentationReady;
+			} finally {
+				await previousRecord.host.lane.run(() => {
+					if (previousRecord.host.currentProjection() !== previousProjection) return;
+					previousRecord.host.removeRetentionReason("interactive_selection");
+					requestPreviousRunRelease = true;
+				});
+				if (requestPreviousRunRelease) {
+					try {
+						await this.#messages.requestRelease(previousRecord);
+					} catch (error) {
+						this.#reportAgentViewError(error);
+					}
 				}
+				this.#notifyAgentActivityChanged();
 			}
-			this.#notifyAgentActivityChanged();
 			return;
 		}
 	}

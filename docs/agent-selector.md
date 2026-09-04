@@ -4,7 +4,7 @@
 
 Selecting a roster row opens that durable Agent's full-window interactive view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. Pressing `o` from either tab or any Live scope returns to that exact existing Owner presentation; Owner is a global destination rather than a roster entry.
 
-Agent selection prepares the target mode before dismissing the roster. The selector retains input focus during asynchronous preparation, so typing, paste, Enter, or Escape cannot fall through to the Owner editor between selection and child attachment.
+Agent selection prepares the target mode before dismissing the roster. The focused row shows an animated loading indicator throughout preparation. When switching between children, the current selector keeps rendering until the replacement frame takes over; the previous Runtime remains retained through the handoff. The selector retains input focus during asynchronous preparation, so typing, paste, Enter, or Escape cannot fall through to the Owner editor between selection and child attachment.
 
 ## Live roster
 

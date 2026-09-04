@@ -62,9 +62,12 @@ export function startPhysicalAgentViewSurface(
 	});
 	const attachCurrentProjection = () => {
 		if (closed) return;
-		void attachment.attach(view.projection()).catch(failFromAttachment);
+		return attachment.attach(view.projection()).catch((error) => {
+			failFromAttachment(error);
+			throw error;
+		});
 	};
-	const removeViewChangeHandler = view.addChangeHandler(attachCurrentProjection);
+	const removeViewChangeHandler = view.addPresentationHandler(attachCurrentProjection);
 	const removeViewCloseHandler = view.addCloseHandler(closeFromHost);
 	const ready = attachment.attach(view.projection()).catch(failFromAttachment);
 	const cleanup = closedPromise.then(async () => {
@@ -86,7 +89,7 @@ export type DurableAgentView = Readonly<{
 	agentId: string;
 	label: string;
 	projection(): TerminalProjection;
-	addChangeHandler(handler: () => void): () => void;
+	addPresentationHandler(handler: () => void | Promise<void>): () => void;
 	addCloseHandler(handler: () => void): () => void;
 	fail(error: unknown): void;
 	close(): Promise<void>;
@@ -129,7 +132,10 @@ export async function openAgentViewSurface(
 	};
 	const attachCurrentProjection = () => {
 		if (!attachment || closedByHost) return;
-		void attachment.attach(view.projection()).catch(failFromAttachment);
+		return attachment.attach(view.projection()).catch((error) => {
+			failFromAttachment(error);
+			throw error;
+		});
 	};
 
 	try {
@@ -152,7 +158,7 @@ export async function openAgentViewSurface(
 						fail: failFromAttachment,
 						requestExit,
 					});
-				removeViewChangeHandler = view.addChangeHandler(attachCurrentProjection);
+				removeViewChangeHandler = view.addPresentationHandler(attachCurrentProjection);
 				removeViewCloseHandler = view.addCloseHandler(closeFromHost);
 				return new DetachedAgentDiagnosticSurface(
 					view,
@@ -173,7 +179,7 @@ export async function openAgentViewSurface(
 						overlayHandle.hide();
 						return;
 					}
-					attachCurrentProjection();
+					void attachCurrentProjection()?.catch(failFromAttachment);
 				},
 			},
 		);

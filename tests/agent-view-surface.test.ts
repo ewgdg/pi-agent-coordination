@@ -20,6 +20,9 @@ import {
 	type DurableAgentView,
 } from "../src/presentation/agent-view-surface.ts";
 
+import { DurableAgentViewAttachment } from "../src/coordination/durable-agent-view.ts";
+import { openAgentSelectorSurface } from "../src/presentation/agent-selector-surface.ts";
+
 const AGENT_ID = "agent-view-durable-12345678";
 
 test("selected child owns raw output, physical input, and resize until Owner restoration", async () => {
@@ -168,7 +171,7 @@ test("physical output backpressure pauses and resumes the selected child PTY", a
 	await opened;
 });
 
-test("retargeting waits for accepted physical output to drain before starting the next child", async () => {
+test("retargeting drains accepted physical output before publishing the replacement frame", async () => {
 	const first = createProjectionHarness("first");
 	const second = createProjectionHarness("second");
 	const view = createViewHarness(first.projection);
@@ -181,12 +184,15 @@ test("retargeting waits for accepted physical output to drain before starting th
 	await first.finishReinitialization();
 	first.emitOutput("accepted-first-output");
 	view.replaceProjection(second.projection);
-	await first.waitForDetachment();
-	assert.deepEqual(second.attachedStates(), []);
+	await second.waitForReinitialization();
+	second.emitOutput("second-frame");
+	assert.deepEqual(first.attachedStates(), [true]);
+	assert.deepEqual(surface.physicalWrites(), ["accepted-first-output"]);
 
 	await surface.releaseBackpressure();
 	await second.finishReinitialization();
 	assert.deepEqual(second.attachedStates(), [true]);
+	assert.deepEqual(surface.physicalWrites(), ["accepted-first-output", "second-frame"]);
 
 	await view.closeFromHost();
 	await opened;
@@ -212,42 +218,215 @@ test("a diagnostic host keeps xterm active without reinitializing child presenta
 	await opened;
 });
 
-test("retargeting rebuilds the detached child before starting the replacement attachment", async () => {
+test("child selector keeps animating until the replacement frame takes over", { timeout: 5_000 }, async () => {
 	const first = createProjectionHarness("first", undefined, false, true);
-	const second = createProjectionHarness("second");
+	const second = createProjectionHarness("second", undefined, true);
+	const view = new DurableAgentViewAttachment({
+		agentId: "first", label: "first", projection: first.projection,
+		requestClose: async () => view.settleClosed(),
+		reportFailure: (error) => assert.fail(String(error)),
+	});
+	const surface = createSurfaceHarness();
+	const mounted = startPhysicalAgentViewSurface(view, {
+		ownerTui: surface.ownerTui,
+		physicalTerminal: surface.physicalTerminal,
+		requestShutdown() {},
+	})!;
+	await first.finishReinitialization();
+	await mounted.ready;
+	let selector!: Component;
+	const frames: string[] = [];
+	const selectorUi = {
+		custom<T>(factory: (tui: TUI, theme: Theme, keys: KeybindingsManager, done: (value: T) => void) => Component) {
+			return new Promise<T>((resolve) => {
+				selector = factory({
+					terminal: { rows: 24 },
+					requestRender() {
+						const frame = selector.render(80).join("\n");
+						frames.push(frame);
+						first.emitOutput(frame);
+					},
+				} as TUI, {
+					fg: (_color: string, text: string) => text,
+					bg: (_color: string, text: string) => text,
+					bold: (text: string) => text,
+				} as Theme, {} as KeybindingsManager, resolve);
+			});
+		},
+	} as ExtensionUIContext;
+	const selection = openAgentSelectorSurface(selectorUi, {
+		live: ["owner", "first", "second"].map((agentId) => ({
+			agentId, workflowId: "owner", label: agentId,
+			directSpawnerAgentId: agentId === "owner" ? null : "owner",
+			primaryEvidence: { transcriptPath: null, inspectedThrough: { agentId, entryId: agentId } },
+			run: { phase: "live", work: "settled", attention: "none", retentionReasons: [] },
+			model: { provider: "test", modelId: "test" }, thinking: "off", queuedInputCount: 0,
+		})),
+		dormant: [], selectedAgentId: "second",
+		prepareSelection() {
+			return view.retarget({ agentId: "second", label: "second", projection: second.projection });
+		},
+	});
+	try {
+		selector.handleInput!("\r");
+		// Observe actual animation without coupling the test to its frame cadence.
+		const deadline = Date.now() + 1_000;
+		while (new Set(frames.filter((frame) => frame.includes("loading"))).size < 2) {
+			assert.ok(Date.now() < deadline, "selector did not animate while preparation was pending");
+			await new Promise<void>((resolve) => setTimeout(resolve, 5));
+		}
+		assert.match(frames.at(-1)!, /loading/);
+		assert.equal(surface.physicalWrites().at(-1), frames.at(-1),
+			"the visible spinner must advance while the replacement is preparing");
+		surface.emitInput("input-during-preparation");
+		assert.deepEqual(first.inputs(), []);
+		assert.deepEqual(second.inputs(), []);
+		surface.emitResize(100, 30);
+		assert.deepEqual(second.resizes().at(-1), { columns: 100, rows: 30 });
+		second.emitOutput("complete-second-frame");
+		await second.finishReinitialization();
+		await first.waitForDetachment();
+		assert.equal(surface.physicalWrites().at(-1), "complete-second-frame",
+			"the ready replacement must be visible while the old detached view rebuilds");
+		assert.equal(surface.ownerStarts(), 0);
+		first.emitOutput("stale-first-output");
+		assert.equal(surface.physicalWrites().at(-1), "complete-second-frame");
+	} finally {
+		await second.finishReinitialization();
+		await first.finishDetachment();
+		await selection;
+		mounted.close();
+		await mounted.closed;
+	}
+});
+
+test("closing during replacement preparation restores Owner and discards late child output", { timeout: 5_000 }, async () => {
+	const first = createProjectionHarness("first");
+	const second = createProjectionHarness("second", undefined, true);
 	const view = createViewHarness(first.projection);
 	const surface = createSurfaceHarness();
-
-	const opened = openAgentViewSurface(surface.ui, view.view, {
+	const mounted = startPhysicalAgentViewSurface(view.view, {
+		ownerTui: surface.ownerTui, physicalTerminal: surface.physicalTerminal,
 		requestShutdown() {},
-		physicalTerminal: surface.physicalTerminal,
-	});
+	})!;
 	await first.finishReinitialization();
+	await mounted.ready;
 	view.replaceProjection(second.projection);
-	await first.waitForDetachment();
-	surface.emitInput("late-first-terminal-reply");
-	assert.deepEqual(second.attachedStates(), []);
-	assert.equal(surface.ownerStarts(), 0);
-	await first.finishDetachment();
 	await second.waitForReinitialization();
-	surface.emitInput("input-during-second-reinitialization");
+	mounted.close();
+	await mounted.closed;
+	const restoredOutput = [...surface.physicalWrites()];
 	await second.finishReinitialization();
-
-	assert.deepEqual(first.attachedStates(), [true, false]);
-	assert.deepEqual(second.attachedStates(), [true]);
-	assert.equal(surface.ownerStops().length, 1);
-	assert.equal(surface.ownerStarts(), 0);
-	first.emitOutput("stale-first-output");
-	second.emitOutput("live-second-output");
-	assert.deepEqual(surface.physicalWrites(), ["live-second-output"]);
-	surface.emitInput("selected-input");
-	assert.deepEqual(first.inputs(), []);
-	assert.deepEqual(second.inputs(), ["selected-input"]);
-
-	await view.closeFromHost();
-	await opened;
-	assert.deepEqual(second.attachedStates(), [true, false]);
+	first.emitOutput("late-first-output");
+	second.emitOutput("late-second-output");
+	assert.deepEqual(surface.physicalWrites(), restoredOutput);
 	assert.equal(surface.ownerStarts(), 1);
+	assert.deepEqual(first.attachedStates(), [true, false]);
+	assert.deepEqual(second.attachedStates(), [true, false]);
+});
+
+test("superseding a pending replacement keeps the current view rendering until the final target is ready", { timeout: 5_000 }, async () => {
+	const first = createProjectionHarness("first");
+	const second = createProjectionHarness("second", undefined, true);
+	const third = createProjectionHarness("third", undefined, true);
+	const view = createViewHarness(first.projection);
+	const surface = createSurfaceHarness();
+	const mounted = startPhysicalAgentViewSurface(view.view, {
+		ownerTui: surface.ownerTui, physicalTerminal: surface.physicalTerminal,
+		requestShutdown() {},
+	})!;
+	await first.finishReinitialization();
+	await mounted.ready;
+	view.replaceProjection(second.projection);
+	await second.waitForReinitialization();
+	view.replaceProjection(third.projection);
+	await second.finishReinitialization();
+	await third.waitForReinitialization();
+	first.emitOutput("current-selector-loading");
+	second.emitOutput("cancelled-target-output");
+	assert.equal(surface.physicalWrites().at(-1), "current-selector-loading");
+	third.emitOutput("final-target-frame");
+	await third.finishReinitialization();
+	assert.equal(surface.physicalWrites().at(-1), "final-target-frame");
+	mounted.close();
+	await mounted.closed;
+	assert.deepEqual(second.attachedStates(), [true, false]);
+	assert.deepEqual(third.attachedStates(), [true, false]);
+	assert.equal(surface.ownerStarts(), 1);
+});
+
+test("a failed cancellation is observed while replacement preparation is still pending", { timeout: 5_000 }, async () => {
+	const first = createProjectionHarness("first");
+	const second = createProjectionHarness("second", undefined, true);
+	const third = createProjectionHarness("third");
+	const failure = new Error("cancelled replacement could not detach");
+	const view = new DurableAgentViewAttachment({
+		agentId: "first", label: "first", projection: first.projection,
+		requestClose: async () => view.settleClosed(),
+		reportFailure() {},
+	});
+	const surface = createSurfaceHarness();
+	const mounted = startPhysicalAgentViewSurface(view, {
+		ownerTui: surface.ownerTui, physicalTerminal: surface.physicalTerminal,
+		requestShutdown() {},
+	})!;
+	await first.finishReinitialization();
+	await mounted.ready;
+	const pending = view.retarget({
+		agentId: "second", label: "second",
+		projection: {
+			...second.projection,
+			physicalTerminal: {
+				...second.projection.physicalTerminal,
+				async endAttachment() {
+					await second.projection.physicalTerminal.endAttachment();
+					throw failure;
+				},
+			},
+		},
+	}).catch((error: unknown) => error);
+	await second.waitForReinitialization();
+	const superseding = view.retarget({
+		agentId: "third", label: "third", projection: third.projection,
+	}).catch((error: unknown) => error);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	await second.finishReinitialization();
+	assert.equal(await pending, failure);
+	assert.equal(await superseding, failure);
+	mounted.close();
+	await mounted.closed;
+	assert.equal(surface.ownerStarts(), 1);
+});
+
+test("failed replacement rejects selection and restores Owner", { timeout: 5_000 }, async () => {
+	const first = createProjectionHarness("first");
+	const failure = new Error("replacement presentation failed");
+	const second = createProjectionHarness("second", failure);
+	const failures: unknown[] = [];
+	const view = new DurableAgentViewAttachment({
+		agentId: "first", label: "first", projection: first.projection,
+		requestClose: async () => view.settleClosed(),
+		reportFailure: (error) => { failures.push(error); },
+	});
+	const surface = createSurfaceHarness();
+	const mounted = startPhysicalAgentViewSurface(view, {
+		ownerTui: surface.ownerTui, physicalTerminal: surface.physicalTerminal,
+		requestShutdown() {},
+	})!;
+	await first.finishReinitialization();
+	await mounted.ready;
+	try {
+		await assert.rejects(view.retarget({
+			agentId: "second", label: "second", projection: second.projection,
+		}), failure);
+	} finally {
+		mounted.close();
+		await mounted.closed;
+	}
+	assert.deepEqual(failures, [failure]);
+	assert.equal(surface.ownerStarts(), 1);
+	assert.deepEqual(first.attachedStates(), [true, false]);
+	assert.deepEqual(second.attachedStates(), [true, false]);
 });
 
 test("attachment setup failure restores Owner exactly once and reports the view failure", async () => {
@@ -481,7 +660,7 @@ function createViewHarness(initialProjection: TerminalProjection): {
 		agentId: AGENT_ID,
 		label: "Durable Agent",
 		projection: () => projection,
-		addChangeHandler(handler) {
+		addPresentationHandler(handler) {
 			changeHandlers.add(handler);
 			return () => changeHandlers.delete(handler);
 		},

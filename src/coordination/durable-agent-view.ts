@@ -6,7 +6,7 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 	#label: string;
 	readonly #requestClose: () => Promise<void>;
 	readonly #reportFailure: (error: unknown) => void;
-	readonly #changeHandlers = new Set<() => void>();
+	readonly #presentationHandlers = new Set<() => void | Promise<void>>();
 	readonly #closeHandlers = new Set<() => void>();
 	#projection: TerminalProjection;
 	#closed = false;
@@ -37,10 +37,11 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 		return this.#projection;
 	}
 
-	addChangeHandler(handler: () => void): () => void {
+	/** A handler settles after its presentation has handed over to the new projection. */
+	addPresentationHandler(handler: () => void | Promise<void>): () => void {
 		if (this.#closed) return () => undefined;
-		this.#changeHandlers.add(handler);
-		return () => this.#changeHandlers.delete(handler);
+		this.#presentationHandlers.add(handler);
+		return () => this.#presentationHandlers.delete(handler);
 	}
 
 	addCloseHandler(handler: () => void): () => void {
@@ -61,28 +62,23 @@ export class DurableAgentViewAttachment implements DurableAgentView {
 		this.#reportFailure(error);
 	}
 
-	retarget(options: {
+	async retarget(options: {
 		agentId: string;
 		label: string;
 		projection: TerminalProjection;
-	}): void {
+	}): Promise<void> {
 		if (this.#closed) return;
 		this.#agentId = options.agentId;
 		this.#label = options.label;
 		this.#projection = options.projection;
-		this.#notifyChanged();
+		await Promise.all([...this.#presentationHandlers].map((present) => present()));
 	}
 
 	settleClosed(): void {
 		if (this.#closed) return;
 		this.#closed = true;
-		this.#changeHandlers.clear();
+		this.#presentationHandlers.clear();
 		for (const handler of this.#closeHandlers) handler();
 		this.#closeHandlers.clear();
-	}
-
-	#notifyChanged(): void {
-		if (this.#closed) return;
-		for (const handler of this.#changeHandlers) handler();
 	}
 }
