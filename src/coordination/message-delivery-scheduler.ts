@@ -178,7 +178,12 @@ export class MessageDeliveryScheduler {
 			pending = new Map();
 			this.#pendingByAgent.set(record.identity.agentId, pending);
 		}
-		if (pending.has(delivery.messageId)) return "pending";
+		if (pending.has(delivery.messageId)) {
+			// Coalesce identity while rechecking progress. An earlier admission may
+			// have stopped before dispatch; existing reservations still prevent repeats.
+			await this.#drainInLane(record);
+			return "pending";
+		}
 		const policy = this.#workflowPolicy.current();
 		if (
 			"deliveryItem" in delivery &&
@@ -201,7 +206,22 @@ export class MessageDeliveryScheduler {
 		}
 		pending.set(delivery.messageId, delivery);
 		this.#addPendingDeliveryReason(record);
-		await this.#drainInLane(record);
+		try {
+			await this.#drainInLane(record);
+		} catch (error) {
+			// A failed pre-dispatch inspection must not leave an abandoned item that
+			// later retries merely coalesce with. Dispatched or proven work is owned
+			// by normal transcript reconciliation and must retain its reservation.
+			if (
+				!this.hasDispatchReservation(record.identity.agentId, delivery.messageId) &&
+				!delivery.inspectProof()
+			) {
+				pending.delete(delivery.messageId);
+				if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);
+				this.#removePendingDeliveryReason(record);
+			}
+			throw error;
+		}
 		return "pending";
 	}
 
@@ -301,6 +321,9 @@ export class MessageDeliveryScheduler {
 
 	requestRelease(record: AgentRecord): Promise<"released" | "retained" | "stale"> {
 		return record.host.lane.run(() => {
+			// Spawn reserves delivery retention before admission. Release that reason
+			// only when no queued or dispatched scheduling still owns it.
+			this.#removePendingDeliveryReason(record);
 			const handle = record.host.currentHandle();
 			return handle
 				? record.host.releaseIfEligibleInLane(handle)

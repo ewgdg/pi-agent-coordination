@@ -438,7 +438,7 @@ test("a preempted Agent Wait is a non-error result without Answer Delivery proof
 	}), undefined);
 });
 
-test("a schema-rejected agent_message call is not authored protocol evidence", () => {
+test("a schema-invalid Agent Message authors no protocol evidence before or after native rejection", () => {
 	const agentId = "schema-rejected-message-author";
 	const rejectedToolCallId = "invalid-cancel-arguments";
 	const sessionManager = SessionManager.inMemory(process.cwd(), { id: agentId });
@@ -453,6 +453,10 @@ test("a schema-rejected agent_message call is not authored protocol evidence", (
 			{ stopReason: "toolUse" },
 		),
 	);
+	assert.deepEqual(findAuthoredAgentMessageSources({
+		authorAgentId: agentId,
+		transcript: transcriptFromSessionManager(sessionManager).inspect(),
+	}), []);
 	sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: rejectedToolCallId,
@@ -467,6 +471,26 @@ test("a schema-rejected agent_message call is not authored protocol evidence", (
 		authorAgentId: agentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 	}), []);
+});
+
+test("a successful result cannot turn a malformed Agent Message into authored evidence", () => {
+	const sessionManager = SessionManager.inMemory(process.cwd());
+	const agentId = sessionManager.getSessionId();
+	const toolCallId = "malformed-message-with-success";
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
+	sessionManager.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_message", { operation: "status" }, { id: toolCallId }),
+		{ stopReason: "toolUse" },
+	));
+	sessionManager.appendMessage({
+		role: "toolResult", toolCallId, toolName: "agent_message",
+		content: [{ type: "text", text: "Message sent." }],
+		details: {}, isError: false, timestamp: Date.now(),
+	});
+	assert.throws(() => findAuthoredAgentMessageSources({
+		authorAgentId: agentId,
+		transcript: transcriptFromSessionManager(sessionManager).inspect(),
+	}), /committed agent_message source .* is invalid/);
 });
 
 test("an answer-required rejection does not author a retryable Message", () => {
