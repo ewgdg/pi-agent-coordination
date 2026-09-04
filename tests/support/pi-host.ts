@@ -508,9 +508,6 @@ function createTestOverlayHandle(onHide?: () => void): OverlayHandle {
 		isFocused() {
 			return focused;
 		},
-		getBounds() {
-			return undefined;
-		},
 	};
 }
 

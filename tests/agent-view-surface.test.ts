@@ -761,7 +761,6 @@ function createSurfaceHarness(options: Readonly<{
 			focused = false;
 		},
 		isFocused: () => focused,
-		getBounds: () => undefined,
 	};
 	const inputListeners = new Set<(
 		data: string,
