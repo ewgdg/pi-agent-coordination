@@ -11,7 +11,7 @@ import type {
 	EffectiveAgentRunConfiguration,
 } from "../templates/agent-configuration.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
-import type { AgentTranscript } from "../transcript/agent-transcript.ts";
+import type { AgentTranscript, TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdentity;
 
@@ -50,10 +50,12 @@ export class EvidenceUnavailableError extends Error {
 	}
 }
 
-export function statusOf(record: AgentRecord): AgentStatus {
+export function statusOf(
+	record: AgentRecord,
+	transcript: TranscriptInspection = record.transcript.inspect(),
+): AgentStatus {
 	const metadata = record.identity.metadata;
 	const run: AgentRunState = record.host.observe();
-	const transcript = record.transcript.inspect();
 	const transcriptTail = transcript.entries.at(-1);
 	if (!transcriptTail) {
 		throw new Error(
