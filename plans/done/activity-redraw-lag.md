@@ -31,4 +31,17 @@ Use the existing Pi TUI/component boundary, native registered tools/session even
 - Confirmed that existing runtime notifications cover Owner queue and thinking changes, with model changes forwarded by the activity extension. A read-only freshness audit found no newly stale displayed fields; the pre-existing process-child native queue notification gap remains outside this change.
 - Added a deterministic public Component regression. It failed on the original renderer when repaint queried live evidence, and now passes for resize/invalidation, animation, published queue/work changes, and animation settlement.
 - The dock retains its activity snapshot between notifications. Roster construction shares one transcript inspection across status, configuration, and recency instead of rereading the same history.
-- Five focused test files passed, 43 tests total, and TypeScript checking passed. The isolated saved-session PTY replay fell from 125–133 ms to 27.7 ms median input latency; all 20 instrumented redraws had zero child-transcript file reads. Native PTY transition tests and independent review are in progress.
+- Five focused test files passed, 43 tests total, and TypeScript checking passed. The isolated saved-session PTY replay fell from 125–133 ms to 27.7 ms median input latency; all 20 instrumented redraws had zero child-transcript file reads.
+- Both native fullscreen PTY cases passed: mouse scrolling with exact Owner restoration, and switching between two Agent modes. Both focused cold-recovery cases passed: dormant child rediscovery and dormant recency ordering. Native Owner status/bootstrap/disposal passed. Final total: 48 focused tests. The full integration suite was intentionally not run.
+
+## Standards review
+
+Independent review against the fixed base found no documented standards violations or material code-smell concerns. The shared-inspection parameters were assessed as local enabling refactors.
+
+## Spec review
+
+Independent review found no material correctness findings or scope creep. Existing host/runtime, attention, selection, and model notifications supply the cached display's refreshes; native transition checks cover the changed behavior.
+
+## Outcome
+
+Standards: 0 findings. Spec: 0 findings. No review fixes were required after the validated implementation commit. The activity display no longer performs child-history reads during ordinary redraws, while explicit roster observations keep current evidence and share one inspection. The reviewed implementation and PR draft are ready for publication in the dedicated branch.
