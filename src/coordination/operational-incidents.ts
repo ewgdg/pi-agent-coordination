@@ -1,4 +1,5 @@
 import { uuidv7 } from "@earendil-works/pi-ai";
+import { setImmediate } from "node:timers/promises";
 import {
 	materializeNewAgentTranscript,
 	transcriptFromSessionFile,
@@ -143,6 +144,7 @@ export class OperationalIncidentCoordinator {
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
 	readonly #integratedAgentIds = new Set<string>();
 	readonly #reconciliationLane = new SerialLane();
+	#pendingReconciliation: Promise<void> | undefined;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
@@ -915,15 +917,22 @@ export class OperationalIncidentCoordinator {
 		}
 	}
 
-	#scheduleReconciliation(): void {
-		void this.#reconciliationLane
-			.run(() => this.#reconcileWorkflow())
+	#scheduleReconciliation(): Promise<void> {
+		// Host events often arrive in bursts. Share the pending observation and let
+		// input/timers run between scans instead of draining a long microtask queue.
+		return this.#pendingReconciliation ??= this.#reconciliationLane
+			.run(async () => {
+				await setImmediate();
+				// Changes after observation starts must schedule a fresh successor pass.
+				this.#pendingReconciliation = undefined;
+				await this.#reconcileWorkflow();
+			})
 			.catch((error: unknown) => this.#reportError(error));
 	}
 
 	#scheduleReconciliationAfterHostLane(record: AgentRecord): void {
 		void record.host.lane
-			.run(() => this.#reconciliationLane.run(() => this.#reconcileWorkflow()))
+			.run(() => this.#scheduleReconciliation())
 			.catch((error: unknown) => this.#reportError(error));
 	}
 
