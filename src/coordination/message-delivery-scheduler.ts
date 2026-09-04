@@ -503,7 +503,7 @@ export class MessageDeliveryScheduler {
 			this.#hasUnprovenFrozenBatch(record)
 		) return;
 		if (!this.#isDeliveryBoundary(record)) return;
-		const steer = this.#eligibleSteerDeliveries(eligible);
+		const steer = this.#eligibleSteerDeliveries(record, eligible);
 		const selected = steer.length > 0 ? steer : eligible.slice(0, 1);
 		const delivery = selected[0];
 		if (!delivery) return;
@@ -611,7 +611,7 @@ export class MessageDeliveryScheduler {
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending) return this.#drainInLane(record);
 		const eligible = this.#eligibleDeliveries(pending);
-		const steer = this.#eligibleSteerDeliveries(eligible);
+		const steer = this.#eligibleSteerDeliveries(record, eligible);
 		const current = steer.length > 0 ? steer : eligible.slice(0, 1);
 		const stillSelected = current.length === selected.length &&
 			current.every((delivery, index) => delivery === selected[index]);
@@ -660,7 +660,7 @@ export class MessageDeliveryScheduler {
 		if (steer.length === 0) {
 			const pending = this.#pendingByAgent.get(record.identity.agentId);
 			if (!pending) return;
-			steer = this.#eligibleSteerDeliveries(this.#eligibleDeliveries(pending));
+			steer = this.#eligibleSteerDeliveries(record, this.#eligibleDeliveries(pending));
 		}
 		if (steer.length === 0) return;
 		const frozen: FrozenSteerBatch = { deliveries: steer, dispatched: false };
@@ -746,11 +746,15 @@ export class MessageDeliveryScheduler {
 	}
 
 	#eligibleSteerDeliveries(
+		record: AgentRecord,
 		eligible: readonly ScheduledDelivery[],
 	): ScheduledMessageDelivery[] {
 		const steer = eligible.filter(
 			(delivery): delivery is ScheduledMessageDelivery =>
-				delivery.deliveryMode === "steer" && "deliveryItem" in delivery,
+				delivery.deliveryMode === "steer" && "deliveryItem" in delivery &&
+				// Wait preemption queues before turn_end, but its Delivery proof may
+				// not exist yet. The reservation already owns that dispatch.
+				!this.hasDispatchReservation(record.identity.agentId, delivery.messageId),
 		);
 		const suppressedAfterBatch = new Set(
 			steer.flatMap(({ suppressesAfterCommitMessageId }) =>
