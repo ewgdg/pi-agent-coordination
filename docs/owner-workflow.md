@@ -56,6 +56,18 @@ The conformance gate then exercises transcript ordering and branches, model-visi
 
 Pi's version is diagnostic information, not an allowlist. Package builds use a pinned Pi development cohort only to make conformance tests reproducible; installed Pi packages are runtime peers supplied by the host.
 
+### Pi 0.85.0 installation
+
+The published `@earendil-works/pi-coding-agent@0.85.0` imports `@earendil-works/pi-server` from its experimental server entry but omits it from its dependencies. The development cohort explicitly includes `@earendil-works/pi-server@0.85.0` so local host loading and child-process tests can run.
+
+For a global npm installation of Pi 0.85.0, install the matching server package alongside Pi:
+
+```bash
+npm install -g @earendil-works/pi-server@0.85.0
+```
+
+Restart Pi after installation. This works around `ERR_MODULE_NOT_FOUND` for `@earendil-works/pi-server`; reinstalling the same Pi release alone does not supply the missing dependency.
+
 ## Durable and volatile state
 
 Pi transcripts are the durable authority for Agent identity, authored Messages and Requests, committed Deliveries and Answers, and recovery evidence. Agent Templates and Workflow Policy are resolved from current trusted resources; policy reload publishes complete snapshots but does not write them to transcripts.
