@@ -44,33 +44,48 @@ import { capturedSessionManager } from "./support/captured-session-managers.ts";
 
 const MAX_CONDITION_POLL_ATTEMPTS = 5_000;
 
-test("Creation Request delivery progresses before an invalid Agent Message receives its native error result", { timeout: 5_000 }, async (t) => {
+test("another Agent spawns and delivers a Creation Request before an invalid Message receives its native error result", { timeout: 5_000 }, async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
 	});
 	const invalidCallId = "invalid-message-before-native-result";
 	const request = "Creation Request during native validation";
+	const parentRequest = "Delegate a leaf to verify concurrent validation.";
+	const leafSpawnCallId = "spawn-leaf-during-validation";
 	const respond = (context: Context) => {
+		const receivedParentRequest = context.messages.some((message) =>
+			message.role === "user" && JSON.stringify(message.content).includes(parentRequest)
+		);
+		const spawnedLeaf = context.messages.some((message) =>
+			message.role === "toolResult" && message.toolCallId === leafSpawnCallId
+		);
+		if (receivedParentRequest && !spawnedLeaf) {
+			return fauxAssistantMessage(fauxToolCall("agent_spawn", { request }, {
+				id: leafSpawnCallId,
+			}), { stopReason: "toolUse" });
+		}
 		const receivedRequest = context.messages.some((message) =>
 			message.role === "user" && JSON.stringify(message.content).includes(request)
 		);
+		const answerCallId = receivedParentRequest ? "answer-parent-validation" : "answer-during-validation";
 		const answered = context.messages.some((message) =>
-			message.role === "toolResult" && message.toolCallId === "answer-during-validation"
+			message.role === "toolResult" && message.toolCallId === answerCallId
 		);
-		return receivedRequest && !answered
+		return (receivedRequest || receivedParentRequest) && !answered
 			? fauxAssistantMessage(fauxToolCall("agent_message", {
 				operation: "answer", answer: "The initial Request arrived.",
-			}, { id: "answer-during-validation" }), { stopReason: "toolUse" })
+			}, { id: answerCallId }), { stopReason: "toolUse" })
 			: fauxAssistantMessage("Finished.");
 	};
 	host.model.setResponses([
 		fauxAssistantMessage(fauxToolCall("agent_message", {
 			operation: "status", agentId: host.session.sessionId,
 		}, { id: invalidCallId }), { stopReason: "toolUse" }),
-		respond, respond, respond, respond,
+		respond, respond, respond, respond, respond, respond, respond,
 	]);
 	let childId: string | undefined;
+	let parentId: string | undefined;
 	const unsubscribe = host.session.agent.subscribe(async (event) => {
 		if (event.type !== "tool_execution_start" || event.toolCallId !== invalidCallId) return;
 		// Pi awaits this public event after committing the call and before native
@@ -79,14 +94,22 @@ test("Creation Request delivery progresses before an invalid Agent Message recei
 			entry.type === "message" && entry.message.role === "toolResult" &&
 			entry.message.toolCallId === invalidCallId
 		), false);
-		const result = await executeRegisteredTool(host.session, "agent_spawn", "spawn-during-validation", { request });
+		const result = await executeRegisteredTool(host.session, "agent_spawn", "spawn-during-validation", { request: parentRequest });
 		const receipt = result.details as AgentSpawnReceipt;
 		assert.ok(receipt.spawnStatus === "created" && receipt.messageStatus === "sent");
-		childId = receipt.agentId;
+		parentId = receipt.agentId;
+		// The fresh parent uses its own native agent_spawn tool while the Owner's
+		// malformed call still has no result, exercising cross-Agent inspection.
+		const leafReceipt = await waitForAgentToolResult(host, parentId, leafSpawnCallId) as AgentSpawnReceipt;
+		assert.ok(leafReceipt.spawnStatus === "created" && leafReceipt.messageStatus === "sent");
+		childId = leafReceipt.agentId;
 		await waitForAgentTranscriptText(host, childId, request);
+		await waitForAgentToolResult(host, childId, "answer-during-validation");
+		await waitForAgentToolResult(host, parentId, "answer-parent-validation");
 	});
 	try {
 		await host.session.prompt("Attempt an invalid Message operation.");
+		await host.session.waitForIdle();
 	} finally {
 		unsubscribe();
 	}
@@ -98,6 +121,10 @@ test("Creation Request delivery progresses before an invalid Agent Message recei
 	assert.ok(validationResult?.type === "message" && validationResult.message.role === "toolResult");
 	assert.equal(validationResult.message.isError, true);
 	const entries = await agentTranscriptEntries(host, childId, 0);
+	const identity = entries?.find((entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity");
+	assert.ok(identity?.type === "custom");
+	assert.equal((identity.data as { directSpawnerAgentId: string }).directSpawnerAgentId, parentId);
+	assert.notEqual(parentId, host.session.sessionId);
 	assert.equal(entries?.filter((entry) =>
 		entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery" &&
 		JSON.stringify(entry.content).includes(request)

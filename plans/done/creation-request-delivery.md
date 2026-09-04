@@ -32,7 +32,18 @@ Use deterministic provider fixtures and controlled lifecycle gates. Run only rel
 - Pre-dispatch failure regression reproduced a settled live child retained by pending delivery, then passed with cleanup and successful explicit retry.
 - Pending-retry regression timed out before the change, then delivered exactly once after rechecking eligibility, including a late original dispatch callback.
 - Focused protocol tests passed; successful-result contradiction coverage remains intact. Typecheck passed.
+- Independent Standards review passed. Spec review requested cross-Agent native timing coverage; the strengthened test passes and the reviewer confirmed the finding is resolved.
+- Final targeted run passed all four delivery, retry, and malformed-call polling cases. Protocol and Message Delivery tests passed 15/15.
+- Affected spawn coverage passed 26/27. The remaining test expects a native tool list without `powershell`; the identical assertion fails on untouched base with the same pinned dependencies. No unrelated tool-list change is included.
+- Message and Request coverage passed 65/66 on its broader run. The remaining test encoded the old malformed-call behavior; its corrected contract now passes the final targeted run, including contradictory-success rejection.
+- Final typecheck and package dry-run passed. The full project suite was not run, per repository policy.
 
 ## Evidence and decisions
 
 The saved-transcript replay showed RequestEvidence throwing during the interval between an invalid call and its error result. Real MessageCoordinator admission retained pending delivery after the exception, and duplicate admission returned pending with no dispatch. These observations guide regression tests; tests must not depend on the user's saved sessions.
+
+The final native regression holds an invalid Owner call before Pi validation while a distinct Agent uses its native spawn tool to create a leaf. It verifies the leaf's spawner identity and one initial delivery. The same test fails on the untouched base with the reported invariant error. It waits for native Answer receipts before teardown so fixture shutdown does not race unfinished tool execution.
+
+## Outcome
+
+The delivery fix is implemented and independently reviewed in its isolated branch, ready for PR handoff. Invalid unaccepted calls no longer block unrelated protocol inspection. Pre-dispatch failure releases abandoned scheduling while retaining the canonical child and Request; explicit retry rechecks pending work without duplicating dispatched work. Moderator detection remains in #89.

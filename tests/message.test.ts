@@ -1078,7 +1078,7 @@ test("poll rejects malformed normal author-result evidence", async (t) => {
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("poll rejects malformed committed Agent Message source evidence", async (t) => {
+test("poll tolerates an unaccepted invalid call and rejects its contradictory success result", async (t) => {
 	const harness = await createDormantChildHarness(t, {});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The valid Message reached the recipient transcript."),
@@ -1086,7 +1086,7 @@ test("poll rejects malformed committed Agent Message source evidence", async (t)
 	const sent = await authorMessage(
 		harness,
 		"valid-message-before-malformed-source",
-		"Reject malformed committed coordination sources during later inspection.",
+		"Keep inspecting valid Delivery while another call awaits validation.",
 	);
 	await waitForDelivery(harness, sent.source);
 	harness.host.session.sessionManager.appendMessage(
@@ -1115,6 +1115,17 @@ test("poll rejects malformed committed Agent Message source evidence", async (t)
 		),
 	);
 
+	const receipt = await harness.view.message(pollToolCallId, pollInput);
+	assert.ok("disposition" in receipt && receipt.disposition === "delivered");
+	harness.host.session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId: "malformed-committed-agent-message-source",
+		toolName: "agent_message",
+		content: [{ type: "text", text: "Message sent." }],
+		details: {},
+		isError: false,
+		timestamp: Date.now(),
+	});
 	await assert.rejects(
 		() => harness.view.message(pollToolCallId, pollInput),
 		/committed agent_message source .* is invalid/,
