@@ -152,17 +152,21 @@ export class RequestEvidence {
 	}
 
 	requireRequest(requestId: string): Request {
+		// A child's Identity already locates its Creation Request. Searching every
+		// history first makes each deadlock check reparse the whole workflow per child.
+		const creationRequest = this.#findCreationRequest(requestId);
+		if (creationRequest) return creationRequest;
 		for (const author of this.#agents.values()) {
+			const authorTranscript = author.transcript.inspect();
 			const authored = findAuthoredAgentMessageSource({
 				authorAgentId: author.identity.agentId,
-				transcript: author.transcript.inspect(),
+				transcript: authorTranscript,
 				messageId: requestId,
 			});
 			if (!authored) continue;
 			if (authored.input.operation !== "request") {
 				throw new Error(`wrong_message_kind: Message ${requestId} is not a Request`);
 			}
-			const authorTranscript = author.transcript.inspect();
 			const target = this.#inspectMessageTarget(
 				author,
 				authorTranscript,
@@ -191,8 +195,6 @@ export class RequestEvidence {
 			}
 			return request;
 		}
-		const creationRequest = this.#findCreationRequest(requestId);
-		if (creationRequest) return creationRequest;
 		this.#throwIfUnavailableDeliveryEvidence(
 			`Request ${requestId} depends on quarantined Agent proof`,
 			({ projection }) =>
