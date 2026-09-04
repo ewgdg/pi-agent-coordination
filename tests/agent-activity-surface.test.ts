@@ -418,3 +418,53 @@ test("activity updates volatile state and rebinds scope without retaining a stal
 	dock.dispose();
 	assert.equal(snapshots.handlerCount(), 0);
 });
+
+test("activity redraws and animation use published state until the source changes", (t) => {
+	t.mock.timers.enable({ apis: ["setInterval"] });
+	const initial: AgentActivitySnapshot = {
+		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
+		children: [agent({
+			agentId: "worker",
+			label: "Worker",
+			parent: "owner",
+			run: { phase: "live", work: "active", attention: "none", retentionReasons: [] },
+		})],
+		answerMode: false,
+		humanAttention: [],
+		operationalAttention: [],
+	};
+	const snapshots = source(initial);
+	let readingPublishedState = true;
+	let renderRequests = 0;
+	const dock = new AgentActivityDock(
+		{ requestRender: () => renderRequests += 1 } as unknown as TUI,
+		theme,
+		{
+			...snapshots.source,
+			snapshot() {
+				assert.ok(readingPublishedState, "ordinary repaint must not query live activity evidence");
+				return snapshots.source.snapshot();
+			},
+		},
+	);
+	t.after(() => dock.dispose());
+	readingPublishedState = false;
+	for (const width of [80, 120, 80]) {
+		dock.invalidate();
+		assert.match(dock.render(width).join("\n"), /Worker/);
+	}
+	t.mock.timers.tick(1_000);
+	assert.ok(renderRequests > 0, "an active child still animates between state changes");
+	assert.match(dock.render(200).join("\n"), /Worker.*active/);
+
+	readingPublishedState = true;
+	snapshots.publish({
+		...initial,
+		children: [agent({ agentId: "worker", label: "Worker", parent: "owner", queued: 2 })],
+	});
+	readingPublishedState = false;
+	assert.match(dock.render(200).join("\n"), /Worker.*idle.*2 queued/);
+	const requestsAfterSettlement = renderRequests;
+	t.mock.timers.tick(1_000);
+	assert.equal(renderRequests, requestsAfterSettlement, "settled activity stops animating");
+});

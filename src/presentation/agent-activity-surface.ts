@@ -63,8 +63,8 @@ export function installAgentActivityDock(
 export class AgentActivityDock implements Component {
 	readonly #tui: Pick<TUI, "requestRender">;
 	readonly #theme: Theme;
-	readonly #source: AgentActivitySource;
 	readonly #removeChangeHandler: () => void;
+	#snapshot: AgentActivitySnapshot;
 	#spinnerTimer: ReturnType<typeof setInterval> | undefined;
 	#disposed = false;
 
@@ -75,8 +75,11 @@ export class AgentActivityDock implements Component {
 	) {
 		this.#tui = tui;
 		this.#theme = theme;
-		this.#source = source;
+		// Snapshot construction can inspect entire child histories. Keep that work
+		// on activity changes so editor, resize, and animation redraws stay cheap.
+		this.#snapshot = source.snapshot();
 		this.#removeChangeHandler = source.addChangeHandler(() => {
+			this.#snapshot = source.snapshot();
 			this.#syncSpinner();
 			this.#tui.requestRender();
 		});
@@ -85,7 +88,7 @@ export class AgentActivityDock implements Component {
 
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
-		const snapshot = this.#source.snapshot();
+		const snapshot = this.#snapshot;
 		const ownerScope = snapshot.scope.agentId === snapshot.scope.workflowId;
 		const identityLines = ownerScope
 			? []
@@ -123,7 +126,6 @@ export class AgentActivityDock implements Component {
 				`${this.#theme.fg("accent", this.#theme.bold("ANSWER"))}${this.#theme.fg("dim", " · Enter submits")}`,
 			]
 			: [];
-		this.#syncSpinner(snapshot);
 		return [...identityLines, ...attentionLines, ...agentLines, ...answerModeLines].map(
 			(line) => truncateToWidth(line, safeWidth, ""),
 		);
@@ -202,9 +204,9 @@ export class AgentActivityDock implements Component {
 		return this.#theme.fg("toolTitle", this.#theme.bold(label));
 	}
 
-	#syncSpinner(snapshot = this.#source.snapshot()): void {
+	#syncSpinner(): void {
 		if (this.#disposed) return;
-		const animated = snapshot.children
+		const animated = this.#snapshot.children
 			.filter(hasLiveRun)
 			.slice(0, MAX_VISIBLE_AGENT_ROWS)
 			.some((child) => {

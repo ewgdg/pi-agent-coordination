@@ -35,6 +35,7 @@ import type {
 	ProjectionInputSubmission,
 } from "../runtime/agent-runtime-host.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
+import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
 	ProcessChildSessionFactory,
 } from "../runtime/process-child-session-factory.ts";
@@ -744,12 +745,12 @@ export class WorkflowCoordinator {
 		const live: AgentRosterStatus[] = [];
 		const dormant: Array<{ status: AgentRosterStatus; recency: number; order: number }> = [];
 		for (const [order, record] of authorityOrder.entries()) {
-			const status = this.#rosterStatus(record);
+			const transcript = record.transcript.inspect();
+			const status = this.#rosterStatus(record, transcript);
 			if (status.run.phase !== "dormant") {
 				live.push(status);
 				continue;
 			}
-			const transcript = record.transcript.inspect();
 			const header = transcript.header;
 			if (!header) {
 				throw new Error(
@@ -771,12 +772,16 @@ export class WorkflowCoordinator {
 		};
 	}
 
-	#rosterStatus(record: AgentRecord): AgentRosterStatus {
-		const status = statusOf(record);
+	#rosterStatus(
+		record: AgentRecord,
+		transcript: TranscriptInspection = record.transcript.inspect(),
+	): AgentRosterStatus {
+		// Share one observation for the evidence pointer, configuration, and recency.
+		// File-backed transcripts otherwise reparse the whole history for each field.
+		const status = statusOf(record, transcript);
 		const runtimeSnapshot = status.run.phase === "starting"
 			? undefined
 			: record.host.effectiveRuntimeSnapshot();
-		const transcript = record.transcript.inspect();
 		const transcriptContext = transcript.context;
 		const configured = record.effectiveConfiguration;
 		const prepared = record.launchConfiguration;
