@@ -42,6 +42,7 @@ const PROCESS_TEST_FILES = new Set([
 	"pty-terminal-projection.test.ts",
 	"run-supervision.test.ts",
 	"run-test-suite.test.ts",
+	"steer-request-preemption.test.ts",
 	"unix-control-transport.test.ts",
 	"windows-process-control-transport.test.ts",
 ]);

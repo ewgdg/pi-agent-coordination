@@ -72,7 +72,7 @@ Use Steer only when the next model turn needs exceptional direction:
 }
 ```
 
-At a safe boundary, all Steer Messages already pending for that recipient are frozen in admission order, deduplicated against transcript proof, and committed as one model-visible batch. A Message admitted after that freeze waits for the next safe boundary. Steer takes precedence over Deferred when both are pending.
+At a safe boundary, all Steer Messages already pending for that recipient are frozen in admission order, deduplicated against transcript proof and existing dispatch reservations, and committed as one model-visible batch. A Request already queued to preempt Agent Wait keeps that single dispatch while its Delivery proof is pending. A Message admitted after that freeze waits for the next safe boundary. Steer takes precedence over Deferred when both are pending.
 
 The initial receipt reports live sending only:
 
