@@ -29,8 +29,13 @@ Fix request-evidence acquisition and redundant operational reconciliation direct
 - The same captured 17-request lookup now takes 12.8 ms with 17 reads / 3.24 MB, compared with 2,302.8 ms / 1,479 reads / 617 MB. Resolved identities match.
 - The host-change regression failed because evidence scans ran before a queued native event. Pending passes now coalesce within the existing lane and yield with setImmediate before observation starts. Tests also cover fresh evidence in a successor pass, reported failure followed by successful reconciliation, and shutdown fencing.
 - Combined production incident-coordinator probe: 86 captured Agent records, 10 Owner-authored Creation Requests retained by a real Owner Runtime Host, six host changes. Baseline took 7,344.6 ms and delayed a queued native event 7,345.1 ms while reading 2.34 GB (5,220 reads). The fix completed in 85.3 ms with a 0.2 ms event delay and 28.4 MB (10 reads), with no errors. The replay models this active Request graph; it does not reconstruct the entire live process's transient state.
-- Five new regressions and typecheck pass. Existing incident validation: 26 of 27 pass; the remaining exact-tool-list assertion observes an extra powershell tool in the installed Pi host. Baseline verification and independent review pending.
+- Validation complete: 60 focused tests (including the five new regressions), 26 incident scenarios, seven Request lifecycle cases, three selector/Message lifecycle cases, and two native fullscreen PTY cases pass: 98 passing tests total. Typecheck and diff checks pass. The remaining incident test fails on its exact tool-list assertion because the installed Pi host includes powershell; that same test was run separately on unchanged 00851c9 and fails identically. The full integration suite was not run.
+- Independent Standards and Spec reviewers inspected 00851c9...3d97644 and reported no actionable findings. The original dedicated reviewer role was unavailable on this account; both completed reviews used the available default agent runtime.
 
 ## Decisions
 
 The direct Creation Request lookup and bounded scheduling remove the measured stall without a transcript cache or new shared snapshot abstraction. Every observation continues to read fresh authoritative evidence. No dependency or runtime policy setting changes are needed.
+
+## Outcome and limits
+
+The reproduced request-scan and host-event-burst stalls no longer occur in the isolated measurements. The live user's Pi process was not restarted or modified during implementation. Loading the fix requires updating that installed extension after merge and restarting or reloading Pi. The measured replay does not guarantee a latency ceiling for every possible history or reconstruct all active Run Failure/Moderator state; unrelated runtime failures and dependency discrepancies remain outside this change.
