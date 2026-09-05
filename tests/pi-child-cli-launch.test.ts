@@ -1,7 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { getPackageDir } from "@earendil-works/pi-coding-agent";
 
 import { buildPiChildCliLaunch } from "../src/process-runtime/pi-child-cli-launch.ts";
+import { resolveInstalledPiCliPath } from "../src/process-runtime/pi-child-process-runtime.ts";
+
+test("installed Pi CLI path follows the package-declared pi executable", () => {
+	const packageManifest = JSON.parse(
+		readFileSync(join(getPackageDir(), "package.json"), "utf8"),
+	) as { bin?: { pi?: unknown } };
+	const piExecutable = packageManifest.bin?.pi;
+	assert.equal(typeof piExecutable, "string");
+	assert.equal(
+		resolveInstalledPiCliPath(),
+		join(getPackageDir(), piExecutable as string),
+	);
+});
 
 test("Pi child CLI launch uses the exact session and immutable explicit resources", () => {
 	assert.deepEqual(

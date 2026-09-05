@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
 	chmod,
 	mkdir,
@@ -714,7 +715,30 @@ export class PiChildProcessLaunch {
 }
 
 export function resolveInstalledPiCliPath(): string {
-	return join(getPackageDir(), "dist", "cli.js");
+	const packageDir = getPackageDir();
+	const packageJsonPath = join(packageDir, "package.json");
+	let packageMetadata: unknown;
+	try {
+		packageMetadata = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+	} catch (error) {
+		throw new Error(
+			`invalid_pi_package_metadata: could not read package metadata at ${packageJsonPath}`,
+			{ cause: error },
+		);
+	}
+
+	const bin = isRecord(packageMetadata) ? packageMetadata.bin : undefined;
+	const piExecutable = isRecord(bin) ? bin.pi : undefined;
+	if (typeof piExecutable !== "string" || piExecutable.length === 0) {
+		throw new Error(
+			`invalid_pi_package_metadata: package.json bin.pi must be a non-empty string at ${packageJsonPath}`,
+		);
+	}
+	return join(packageDir, piExecutable);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }
 
 async function assertRuntimeSnapshot(
