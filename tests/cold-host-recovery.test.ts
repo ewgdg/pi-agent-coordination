@@ -746,6 +746,8 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 test("reopen derives ordinary Request evidence from abandoned branches across compaction", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
+	const ownerSessionFile = host.session.sessionManager.getSessionFile();
+	assert.ok(ownerSessionFile);
 	host.model.setResponses([
 		fauxAssistantMessage("The self Request is delivered but remains unanswered."),
 	]);
@@ -754,7 +756,16 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 		targetAgent: host.session.sessionId,
 		question: "Remain unresolved on an abandoned physical branch.",
 	}) as { requestMessageId: string };
-	await host.session.waitForIdle();
+	await waitForTranscriptEntry(
+		ownerSessionFile,
+		(entry) =>
+			entry.type === "message" &&
+			entry.message.role === "assistant" &&
+			entry.message.content.some((part) =>
+				part.type === "text" &&
+				part.text === "The self Request is delivered but remains unanswered."
+			),
+	);
 	const identity = host.session.sessionManager.getEntries().find(
 		(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
 	);
@@ -765,8 +776,6 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 		identity.id,
 		0,
 	);
-	const ownerSessionFile = host.session.sessionManager.getSessionFile();
-	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
 
 	const reopened = await reopenOwner(t, host, ownerSessionFile);
