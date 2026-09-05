@@ -19,7 +19,7 @@ const TEMPLATE_FIELDS = new Set([
 	"skills",
 	"extensions",
 	"systemPromptMode",
-	"inheritProjectContext",
+	"contextFiles",
 ]);
 
 export class AgentTemplateParseError extends Error {
@@ -104,9 +104,9 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 	const systemPromptMode = mapping.systemPromptMode === undefined
 		? "append"
 		: parseSystemPromptMode(mapping.systemPromptMode, sourcePath, name);
-	const inheritProjectContext = mapping.inheritProjectContext === undefined
+	const contextFiles = mapping.contextFiles === undefined
 		? true
-		: parseInheritProjectContext(mapping.inheritProjectContext, sourcePath, name);
+		: parseContextFiles(mapping.contextFiles, sourcePath, name);
 
 	return {
 		name,
@@ -116,7 +116,7 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 		...(skills === undefined ? {} : { skills }),
 		...(extensions === undefined ? {} : { extensions }),
 		systemPromptMode,
-		inheritProjectContext,
+		contextFiles,
 		systemPrompt: split.body,
 		sourcePath,
 	};
@@ -303,7 +303,7 @@ function parseSystemPromptMode(
 	return value;
 }
 
-function parseInheritProjectContext(
+function parseContextFiles(
 	value: unknown,
 	sourcePath: string,
 	templateName: string,
@@ -311,7 +311,7 @@ function parseInheritProjectContext(
 	if (typeof value !== "boolean") {
 		throw new AgentTemplateParseError(
 			sourcePath,
-			"inheritProjectContext must be a boolean",
+			"contextFiles must be a boolean",
 			templateName,
 		);
 	}

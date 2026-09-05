@@ -6,8 +6,8 @@ export const CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE =
 	"PI_AGENT_COORDINATION_SYSTEM_PROMPT_MODE";
 export const CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE =
 	"PI_AGENT_COORDINATION_SYSTEM_PROMPT_PATH";
-export const CHILD_PROCESS_INHERIT_PROJECT_CONTEXT_ENVIRONMENT_VARIABLE =
-	"PI_AGENT_COORDINATION_INHERIT_PROJECT_CONTEXT";
+export const CHILD_PROCESS_CONTEXT_FILES_ENVIRONMENT_VARIABLE =
+	"PI_AGENT_COORDINATION_CONTEXT_FILES";
 
 const PHYSICAL_HERDR_OWNERSHIP_VARIABLES = new Set([
 	"HERDR_ENV",
@@ -18,7 +18,7 @@ const CHILD_RUNTIME_OWNED_VARIABLES = new Set([
 	CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE,
 	CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE,
 	CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE,
-	CHILD_PROCESS_INHERIT_PROJECT_CONTEXT_ENVIRONMENT_VARIABLE,
+	CHILD_PROCESS_CONTEXT_FILES_ENVIRONMENT_VARIABLE,
 ]);
 
 export function buildChildProcessEnvironment(options: {
@@ -26,7 +26,7 @@ export function buildChildProcessEnvironment(options: {
 	bootstrapPath: string;
 	systemPromptMode?: "append" | "replace";
 	systemPromptPath?: string;
-	inheritProjectContext?: boolean;
+	contextFiles?: boolean;
 }): Record<string, string> {
 	if (!isAbsolute(options.bootstrapPath) || options.bootstrapPath.includes("\0")) {
 		throw new Error("invalid_child_environment: bootstrap path must be absolute");
@@ -55,9 +55,9 @@ export function buildChildProcessEnvironment(options: {
 		environment[CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE] =
 			options.systemPromptPath;
 	}
-	if (options.inheritProjectContext !== undefined) {
-		environment[CHILD_PROCESS_INHERIT_PROJECT_CONTEXT_ENVIRONMENT_VARIABLE] =
-		options.inheritProjectContext ? "1" : "0";
+	if (options.contextFiles !== undefined) {
+		environment[CHILD_PROCESS_CONTEXT_FILES_ENVIRONMENT_VARIABLE] =
+			options.contextFiles ? "1" : "0";
 	}
 	return environment;
 }

@@ -149,7 +149,7 @@ async function createLaunchOptions(
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			systemPrompt: { mode: "append", body: `Launch context for ${name}` },
-			inheritProjectContext: true,
+			contextFiles: true,
 		},
 		skillPaths: [],
 		projectTrusted: true,

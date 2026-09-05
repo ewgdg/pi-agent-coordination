@@ -112,7 +112,7 @@ async function createRuntimeOptions(name: string): Promise<StartPiChildProcessRu
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			systemPrompt: { mode: "append", body: `Windows runtime context for ${name}` },
-			inheritProjectContext: true,
+			contextFiles: true,
 		},
 		skillPaths: [],
 		projectTrusted: true,

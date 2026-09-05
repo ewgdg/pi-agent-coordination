@@ -53,7 +53,7 @@ process.env.HOME = await mkdtemp(join(tmpdir(), "pi-agent-coordination-test-home
 delete process.env.PI_AGENT_COORDINATION_BOOTSTRAP;
 delete process.env.PI_AGENT_COORDINATION_SYSTEM_PROMPT_MODE;
 delete process.env.PI_AGENT_COORDINATION_SYSTEM_PROMPT_PATH;
-delete process.env.PI_AGENT_COORDINATION_INHERIT_PROJECT_CONTEXT;
+delete process.env.PI_AGENT_COORDINATION_CONTEXT_FILES;
 
 async function loadPiBuiltInExtensionFactories(): Promise<readonly InlineExtension[]> {
 	const modulePath = join(getPackageDir(), "dist", "extensions", "index.js");

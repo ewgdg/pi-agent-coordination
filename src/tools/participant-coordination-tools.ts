@@ -301,7 +301,9 @@ const agentSpawnConfigurationParameters = Type.Object(
 		systemPromptMode: Type.Optional(
 			Type.Union([Type.Literal("append"), Type.Literal("replace")]),
 		),
-		inheritProjectContext: Type.Optional(Type.Boolean()),
+		contextFiles: Type.Optional(Type.Boolean({
+			description: "Load trusted project instruction files such as AGENTS.md and CLAUDE.md; this does not inherit the parent conversation.",
+		})),
 	},
 	{ additionalProperties: false },
 );

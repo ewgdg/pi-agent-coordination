@@ -236,7 +236,7 @@ export class PiChildProcessRuntime {
 			const environment = buildChildProcessEnvironment({
 				ownerEnvironment,
 				bootstrapPath,
-				inheritProjectContext: options.configuration.inheritProjectContext,
+				contextFiles: options.configuration.contextFiles,
 				...(systemPromptArtifactPath === undefined
 					? {}
 					: {
@@ -777,7 +777,7 @@ async function assertRuntimeSnapshot(
 				filePath: await realpath(systemPromptArtifactPath),
 				body: await readFile(systemPromptArtifactPath, "utf8"),
 			},
-		inheritProjectContext: expected.inheritProjectContext,
+		contextFiles: expected.contextFiles,
 	};
 	if (JSON.stringify(actual) !== JSON.stringify(expectedSnapshot)) {
 		throw new Error(

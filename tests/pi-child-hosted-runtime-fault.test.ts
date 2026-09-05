@@ -210,7 +210,7 @@ function createFakeRuntime(options: Readonly<{
 			sessionId: "fault-runtime",
 			sessionPath: "/sessions/fault-runtime.jsonl",
 			systemPrompt: null,
-			inheritProjectContext: true,
+			contextFiles: true,
 		},
 		channel: {
 			onClose: () => () => undefined,

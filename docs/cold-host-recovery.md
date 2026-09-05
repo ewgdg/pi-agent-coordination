@@ -20,7 +20,7 @@ Malformed, unreadable, incomplete, foreign, cyclic, duplicate, and source-confli
 
 ## Dormant Agents and `/agents`
 
-Recovered ordinary Agents and Moderators begin dormant. Observation and `/agents` do not resolve Runtime configuration, create Pi services, start a Run, invoke a model, or append transcript evidence. A later ordinary Message dynamically resolves the current ancestry, Template, explicit spawn configuration, resources, trust, native project-context inheritance, and explicit system prompt before starting work through the participant's normal role-bound Run path. Native interaction becomes available after that session is live and retained.
+Recovered ordinary Agents and Moderators begin dormant. Observation and `/agents` do not resolve Runtime configuration, create Pi services, start a Run, invoke a model, or append transcript evidence. A later ordinary Message dynamically resolves the current ancestry, Template, explicit spawn configuration, resources, trust, native project context-file loading, and explicit system prompt before starting work through the participant's normal role-bound Run path. Native interaction becomes available after that session is live and retained.
 
 The [Agent selector](agent-selector.md) presents Live rows in creation hierarchy and Dormant rows by Pi session recency. Dormant recency uses the latest user or assistant activity time, then the native session creation time. Unfiltered direct-child search remains in canonical spawn-call order regardless of presentation recency; filtered results use relevance first and that order as their deterministic tie-breaker.
 

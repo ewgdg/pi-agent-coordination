@@ -240,7 +240,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			],
 			skills: [],
 			extensions: processExtensions,
-			inheritProjectContext: true,
+			contextFiles: true,
 		},
 	);
 
@@ -718,7 +718,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 			mode: "append",
 			body: "Template context\n\nSpawn context",
 		},
-		inheritProjectContext: true,
+		contextFiles: true,
 	});
 	assert.deepEqual(
 		view.children().map(({ label, description }) => ({ label, description })),
