@@ -66,20 +66,20 @@ test("Agent Spawn rejects extension path arrays at input validation", () => {
 	);
 });
 
-test("Agent Spawn validates independent system-prompt and project-context controls", () => {
+test("Agent Spawn validates independent system-prompt and context-file controls", () => {
 	assert.deepEqual(validateAgentSpawnInput({
 		request: "Use the native project instructions with a focused prompt.",
 		config: {
 			systemPrompt: "Focus on the assigned task.",
 			systemPromptMode: "append",
-			inheritProjectContext: true,
+			contextFiles: true,
 		},
 	}), {
 		request: "Use the native project instructions with a focused prompt.",
 		config: {
 			systemPrompt: "Focus on the assigned task.",
 			systemPromptMode: "append",
-			inheritProjectContext: true,
+			contextFiles: true,
 		},
 	});
 	assert.throws(

@@ -305,7 +305,7 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 		skills: ["research"],
 		extensions: ["/extensions/research.ts"],
 		systemPrompt: { mode: "append" as const, body: "Configured context" },
-		inheritProjectContext: true,
+		contextFiles: true,
 	};
 	const receipt = {
 		spawnStatus: "created" as const,

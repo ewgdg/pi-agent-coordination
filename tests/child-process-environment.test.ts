@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
 	CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE,
-	CHILD_PROCESS_INHERIT_PROJECT_CONTEXT_ENVIRONMENT_VARIABLE,
+	CHILD_PROCESS_CONTEXT_FILES_ENVIRONMENT_VARIABLE,
 	CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE,
 	CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE,
 	buildChildProcessEnvironment,
@@ -55,14 +55,14 @@ test("child process carries and replaces explicit system-prompt launch metadata"
 		bootstrapPath: "/runtime/new-bootstrap.json",
 		systemPromptMode: "append",
 		systemPromptPath: "/runtime/new-prompt.md",
-		inheritProjectContext: false,
+		contextFiles: false,
 	});
 
 	assert.deepEqual(childEnvironment, {
 		[CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE]: "/runtime/new-bootstrap.json",
 		[CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE]: "append",
 		[CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE]: "/runtime/new-prompt.md",
-		[CHILD_PROCESS_INHERIT_PROJECT_CONTEXT_ENVIRONMENT_VARIABLE]: "0",
+		[CHILD_PROCESS_CONTEXT_FILES_ENVIRONMENT_VARIABLE]: "0",
 	});
 });
 

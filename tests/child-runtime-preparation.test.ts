@@ -86,7 +86,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			skills: ["review", "project-audit"],
 			extensions: "inherit",
 			systemPromptMode: "append",
-			inheritProjectContext: true,
+			contextFiles: true,
 			systemPrompt: "Template instructions",
 			sourcePath: join(fixture, "research-agent.md"),
 		},
@@ -123,7 +123,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 				mode: "append",
 				body: "Template instructions\n\nSpawn instructions",
 			},
-			inheritProjectContext: true,
+			contextFiles: true,
 		},
 		projectTrusted: true,
 		skillSources: [
@@ -214,7 +214,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 			useWhen: "Use for moderation.",
 			extensions: "none",
 			systemPromptMode: "replace",
-			inheritProjectContext: false,
+			contextFiles: false,
 			systemPrompt: "Moderator-only context",
 			sourcePath: join(fixture, "moderator.md"),
 		},
@@ -235,7 +235,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		skills: [],
 		extensions: [],
 		systemPrompt: { mode: "replace", body: "Moderator-only context" },
-		inheritProjectContext: false,
+		contextFiles: false,
 	});
 
 	const explicitlyConfiguredModerator = await prepareChildRuntime({
@@ -250,7 +250,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 				thinking: "high",
 			}],
 			systemPromptMode: "append",
-			inheritProjectContext: true,
+			contextFiles: true,
 			systemPrompt: "",
 			sourcePath: join(fixture, "configured-moderator.md"),
 		},

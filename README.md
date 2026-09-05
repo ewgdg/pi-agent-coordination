@@ -42,6 +42,34 @@ pi
 
 The package adopts the current session as the Workflow Owner; no separate activation command is required. Print, JSON, and RPC modes do not activate coordination.
 
+## Agent templates
+
+Create a Markdown file with YAML frontmatter in `~/.agents/agents/` (`%USERPROFILE%\.agents\agents\` on Windows) for a user-wide template, or `.agents/agents/` in a trusted project for a project-specific template. The frontmatter defines its name and optional configuration; the Markdown body supplies its optional system-prompt instructions. `contextFiles` defaults to `true` and controls Pi's discovery of `AGENTS.md` and `CLAUDE.md` instruction files.
+
+### Suggested Moderator template
+
+Moderation works without a template. To use a cheaper model for incident handling instead of inheriting the Owner's model, save this as `~/.agents/agents/moderator.md`:
+
+```markdown
+---
+name: moderator
+useWhen: Use for moderation and incident response.
+models:
+  - id: openai-codex/gpt-5.6-luna
+    thinking: high
+  - id: deepseek/deepseek-v4-flash
+    thinking: high
+systemPromptMode: append
+contextFiles: true
+---
+```
+
+Pi selects the first available model in this ordered list, using its paired thinking level. Availability requires a catalogue entry and configured provider authentication; preparation fails if none are available. Adjust the list to your Pi setup. This example adds no custom system-prompt instructions.
+
+The reserved `moderator` template is applied automatically when a Moderator runtime is prepared. It is excluded from ordinary Agents' available-template instructions and cannot be selected through `agent_spawn`.
+
+See [Agent Templates](docs/agent-spawning.md#agent-templates) for all supported fields, model-selection examples, discovery precedence, and reload behavior.
+
 ## Compatibility
 
 Pi supplies the package's Pi peer modules. Compatibility is defined jointly by a fail-fast structural gate against the running host module world and the native behavioral conformance suite. The Pi version is diagnostic only.
