@@ -246,15 +246,20 @@ function inspection(sessionId: string, entryId: string): TranscriptInspection {
 	};
 }
 
-test("unchanged local reads reuse evidence without rebuilding Pi history or context", () => {
+test("unchanged local reads reuse evidence without reprocessing prior facts or rebuilding context", () => {
 	const manager = SessionManager.inMemory("/workflow", { id: "retained" });
 	manager.appendCustomEntry("agent-coordination.identity", { agentId: "retained" });
 	const transcript = transcriptFromSessionManager(manager);
 	const first = transcript.inspect();
-	manager.getEntries = () => { throw new Error("full history read"); };
+	const getEntries = manager.getEntries.bind(manager);
+	let enumerations = 0;
+	manager.getEntries = () => { enumerations++; return getEntries(); };
+	const before = transcript.diagnostics()!;
 	manager.getBranch = () => { throw new Error("branch reconstruction"); };
 	manager.buildSessionContext = () => { throw new Error("context reconstruction"); };
 	assert.equal(transcript.inspect(), first);
+	assert.equal(enumerations, 1);
+	assert.equal(transcript.diagnostics()!.entriesConsumed, before.entriesConsumed);
 	manager.appendCustomEntry("marker", { value: 2 });
 	assert.equal(transcript.inspect().entries.length, 2);
 });
@@ -365,4 +370,29 @@ test("unchanged reads do no history work and fixed appends consume only their by
 	assert.ok(after.bytesRead - before.bytesRead <= Buffer.byteLength(line) + 128);
 	assert.equal(after.branchBuilds, 0);
 	assert.equal(after.contextBuilds, 0);
+});
+
+test("a second refresh observes an append after the first read finished but before its promise settled", async () => {
+	const manager = SessionManager.inMemory("/workflow", { id: "refresh-race" });
+	manager.appendCustomEntry("agent-coordination.identity", { agentId: "refresh-race" });
+	const transcript = transcriptFromSessionManager(manager);
+	await transcript.refresh();
+	const first = transcript.refresh();
+	manager.appendCustomEntry("marker", { afterRead: true });
+	const second = transcript.refresh();
+	const [, current] = await Promise.all([first, second]);
+	assert.equal(current.entries.length, 2);
+});
+
+test("rewriting an incomplete tail never splices old bytes into a new committed entry", async () => {
+	const root = await mkdtemp(join(tmpdir(), "transcript-tail-rewrite-"));
+	const file = join(root, "session.jsonl");
+	const header = `${JSON.stringify({ type: "session", version: 3, id: "tail", timestamp: new Date().toISOString(), cwd: root })}\n`;
+	await writeFile(file, `${header}{"type":"custom","id":"old`);
+	const transcript = transcriptFromSessionFile(file);
+	await transcript.refresh();
+	assert.equal(transcript.inspect().entries.length, 0);
+	const replacement = { type: "custom", id: "new-complete", parentId: null, timestamp: new Date().toISOString(), customType: "marker" };
+	await writeFile(file, `${header}${JSON.stringify(replacement)}\n`);
+	assert.deepEqual((await transcript.refresh()).entries, [replacement]);
 });

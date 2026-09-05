@@ -11,6 +11,34 @@ import { InProcessHostedRuntime } from "../src/runtime/in-process-hosted-runtime
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
+for (const prepared of [false, true]) test(`shutdown during ${prepared ? "prepared" : "fresh"} relationship catch-up keeps exact startup cleanup`, async () => {
+	const resource = createRunResource();
+	const host = AgentRuntimeSupervisor.createChild({ agentId: "projection-test-agent", startSession: async () => resource.startedRun });
+	if (prepared) await host.lane.run(() => host.prepareInLane());
+	const entered = deferredVoid();
+	const resume = deferredVoid();
+	host.setRunStartInitializer(async () => {
+		entered.resolve();
+		await resume.promise;
+		return { awaitingAnswerRequestIds: ["unpublished-request"], answerOwedRequestIds: [] };
+	});
+	let started = false;
+	const ended: string[] = [];
+	host.setRunStartedHandler(() => { started = true; });
+	host.addEndedHandler((_handle, cause) => ended.push(cause));
+	const starting = host.lane.run(() => host.startInLane());
+	await entered.promise;
+	assert.equal(host.hasRetentionReason("awaiting_answer", "unpublished-request"), false);
+	assert.equal(started, false);
+	const shuttingDown = host.beginShutdown();
+	resume.resolve();
+	await assert.rejects(starting, /shutdown|host_shutting_down/);
+	await shuttingDown;
+	assert.equal(started, false);
+	assert.deepEqual(ended, ["termination"]);
+	assert.equal(host.hasRetentionReason("awaiting_answer", "unpublished-request"), false);
+});
+
 test("clean release disposes the exact projection and session once", async () => {
 	const resource = createRunResource();
 	const host = AgentRuntimeSupervisor.createChild({
@@ -830,4 +858,10 @@ function createRunResource(options?: {
 			}
 		},
 	};
+}
+
+function deferredVoid() {
+ let resolve!: () => void;
+ const promise = new Promise<void>(done => { resolve = done; });
+ return { promise, resolve };
 }

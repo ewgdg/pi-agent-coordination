@@ -1,4 +1,3 @@
-import { refreshAgentTranscripts } from "./agent-record.ts";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
@@ -133,7 +132,7 @@ export class MessageCoordinator {
 
 	integrate(record: AgentRecord): void {
 		record.host.setRunStartInitializer(
-			() => this.#requestEvidence.residualRelationshipsFor(record),
+			() => this.#requestEvidence.refreshRelationshipsFor(record),
 		);
 		record.host.addSettledHandler((_handle, settlement) => {
 			if (settlement === "failed") {
@@ -141,9 +140,10 @@ export class MessageCoordinator {
 			}
 		});
 		this.#deliveryScheduler.integrate(record);
-		if (record.host.currentHandle()) {
-			record.host.initializeCurrentRunRelationships();
-		}
+	}
+
+	async refreshTranscriptFacts(): Promise<void> {
+		for (const record of this.#agents.values()) await this.#requestEvidence.refreshRelationshipsFor(record);
 	}
 
 	requestSources(requestIds: readonly string[]): readonly ToolCallPointer[] {
@@ -478,7 +478,7 @@ export class MessageCoordinator {
 	}
 
 	async reachSafeBoundary(agentId: string): Promise<void> {
-		await refreshAgentTranscripts(this.#agents.values());
+		await this.refreshTranscriptFacts();
 		if (this.#isShuttingDown()) return Promise.resolve();
 		const record = this.#requireAgent(agentId);
 		// Confirmed Run disposal already owns this Agent lane and fences its volatile
@@ -522,7 +522,7 @@ export class MessageCoordinator {
 		toolCallId: string,
 		providedInput: AgentMessageInput,
 	): Promise<AgentMessageReceipt> {
-		await refreshAgentTranscripts(this.#agents.values());
+		await this.refreshTranscriptFacts();
 		const caller = this.#requireAgent(callerAgentId);
 		const committedInput = resolveCommittedAgentMessageInput({
 			agentId: callerAgentId,
@@ -1144,7 +1144,8 @@ export class MessageCoordinator {
 	}
 
 	#reconcileAnswerDeliveries(requester: AgentRecord): void {
-		for (const request of this.#requestEvidence.findRequestsAuthoredBy(requester)) {
+		for (const requestId of requester.host.requestRelationshipIds("awaiting_answer")) {
+			const request = this.#requestEvidence.requireRequest(requestId);
 			const answer = this.#requestEvidence.findAnswer(request);
 			if (!answer) continue;
 			if (answer.targetAgentId !== requester.identity.agentId) continue;

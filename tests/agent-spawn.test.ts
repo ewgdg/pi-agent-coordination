@@ -657,7 +657,7 @@ test("a successor Runtime re-resolves its current Template and project resources
 		},
 	]);
 	let coordinator: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		packageRoot: host.cwd,
 		templateRoots: (parentCwd, projectTrusted) => {
@@ -1625,7 +1625,7 @@ async function createCoordinatorHarness(
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: hooks,
 		messageBoundaryHooks,

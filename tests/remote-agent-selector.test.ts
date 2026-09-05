@@ -66,6 +66,7 @@ function presentationView(options: {
 	focusHumanAnswer?: (agentId: string, requestId: string) => Promise<void>;
 } = {}): HumanPresentationCoordinatorView {
 	return {
+		refreshTranscriptFacts: async () => undefined,
 		status: options.status ?? (() => childStatus),
 		selectionRoster: () => ({ live: [ownerStatus, childStatus], dormant: [] }),
 		humanAttention: options.humanAttention ?? (() => []),

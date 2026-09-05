@@ -479,7 +479,7 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	await bindTestOwnerHost(host, "tui");
@@ -690,7 +690,7 @@ test("termination fences selected input between participant handling and Agent a
 		processVisibleModel: true,
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = createTestWorkflowCoordinator(host, identity, {
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	await bindTestOwnerHost(host, "tui");
@@ -1194,7 +1194,7 @@ test("closing a Dormant session_start modal cancels view initialization without 
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	await bindTestOwnerHost(host, "tui");
@@ -1306,7 +1306,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	await bindTestOwnerHost(host, "tui");

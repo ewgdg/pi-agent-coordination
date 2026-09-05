@@ -1,3 +1,4 @@
+import { initializeCoordinationProjections } from "../protocol/coordination-projections.ts";
 import {
 	SessionManager,
 	type FileEntry,
@@ -36,21 +37,22 @@ const READ_CHUNK_BYTES = 64 * 1024;
 const ENTRIES_PER_TURN = 256;
 const CURSOR_ANCHOR_BYTES = 128;
 
-/** Pi exposes no physical append iterator. Keep the checked host access here. */
-function physicalEntries(manager: SessionManager): readonly FileEntry[] {
-	const entries = (manager as unknown as { fileEntries: unknown }).fileEntries;
-	if (!Array.isArray(entries))
-		throw new Error("unsupported_pi_host: SessionManager.fileEntries is unavailable");
-	return entries;
-}
-
 class SessionManagerTranscriptReader implements TranscriptReader {
 	readonly #manager: SessionManager;
-	#physical: readonly FileEntry[] | undefined;
+
 	#cursor = 0;
 	#state: RetainedTranscript | undefined;
-	readonly #counts = { bytesRead: 0, entriesParsed: 0, entriesConsumed: 0, reconstructions: 0 };
-	snapshot() { return this.#state?.inspection; }
+	readonly #counts = {
+		bytesRead: 0,
+		entriesParsed: 0,
+		entriesConsumed: 0,
+		reconstructions: 0,
+		localEnumerations: 0,
+		localEntriesEnumerated: 0,
+	};
+	snapshot() {
+		return this.#state?.inspection;
+	}
 	diagnostics() {
 		return {
 			...this.#counts,
@@ -63,45 +65,50 @@ class SessionManagerTranscriptReader implements TranscriptReader {
 		this.#manager = manager;
 	}
 	read(): TranscriptInspection {
-		const entries = physicalEntries(this.#manager);
-		if (entries !== this.#physical || entries.length < this.#cursor) {
-			this.#physical = entries;
-			this.#cursor = 0;
-			this.#counts.reconstructions++;
-			this.#state = new RetainedTranscript(
-				this.#manager.getHeader(),
-				this.#manager.getSessionFile() ?? null,
-			);
-		}
+		const entries = this.#prepare();
 		while (this.#cursor < entries.length) this.#consume(entries);
 		this.#state!.setLeaf(this.#manager.getLeafId());
 		return this.#state!.inspection;
 	}
-	#consume(entries: readonly FileEntry[]): void {
-		const entry = entries[this.#cursor]!;
-		if (entry.type !== "session") {
-			this.#state!.append(entry);
-			this.#counts.entriesConsumed++;
+	#prepare(): readonly SessionEntry[] {
+		const entries = this.#manager.getEntries();
+		this.#counts.localEnumerations++;
+		this.#counts.localEntriesEnumerated += entries.length;
+		const header = this.#manager.getHeader();
+		const path = this.#manager.getSessionFile() ?? null;
+		const previous = this.#state?.entries;
+		// getEntries returns a fresh shallow list. Public entries are immutable;
+		// retain endpoint references to detect a reset/reload without reprocessing history.
+		if (
+			!this.#state ||
+			header !== this.#state.inspection.header ||
+			path !== this.#state.inspection.transcriptPath ||
+			entries.length < this.#cursor ||
+			(this.#cursor > 0 &&
+				(entries[0] !== previous?.[0] ||
+					entries[this.#cursor - 1] !== previous?.[this.#cursor - 1]))
+		) {
+			this.#cursor = 0;
+			this.#counts.reconstructions++;
+			this.#state = new RetainedTranscript(header, path, initializeCoordinationProjections);
 		}
+		return entries;
+	}
+
+	#consume(entries: readonly SessionEntry[]): void {
+		const entry = entries[this.#cursor]!;
+		this.#state!.append(entry);
+		this.#counts.entriesConsumed++;
 		this.#cursor++;
 	}
 	async refresh(): Promise<TranscriptInspection> {
-		const entries = physicalEntries(this.#manager);
-		if (entries !== this.#physical || entries.length < this.#cursor) {
-			this.#physical = entries;
-			this.#cursor = 0;
-			this.#counts.reconstructions++;
-			this.#state = new RetainedTranscript(
-				this.#manager.getHeader(),
-				this.#manager.getSessionFile() ?? null,
-			);
-		}
+		let entries = this.#prepare();
 		while (this.#cursor < entries.length) {
 			const end = Math.min(entries.length, this.#cursor + ENTRIES_PER_TURN);
 			while (this.#cursor < end) this.#consume(entries);
 			this.#state!.setLeaf(this.#manager.getLeafId());
 			await yieldTurn();
-			if (physicalEntries(this.#manager) !== entries) return this.refresh();
+			entries = this.#prepare();
 		}
 		this.#state!.setLeaf(this.#manager.getLeafId());
 		return this.#state!.inspection;
@@ -112,8 +119,17 @@ class SessionManagerTranscriptReader implements TranscriptReader {
 class SessionFileTranscriptReader implements TranscriptReader {
 	readonly #path: string;
 	#state: RetainedTranscript | undefined;
-	readonly #counts = { bytesRead: 0, entriesParsed: 0, entriesConsumed: 0, reconstructions: 0 };
-	snapshot() { return this.#state?.inspection; }
+	readonly #counts = {
+		bytesRead: 0,
+		entriesParsed: 0,
+		entriesConsumed: 0,
+		reconstructions: 0,
+		localEnumerations: 0,
+		localEntriesEnumerated: 0,
+	};
+	snapshot() {
+		return this.#state?.inspection;
+	}
 	diagnostics() {
 		return {
 			...this.#counts,
@@ -171,6 +187,10 @@ class SessionFileTranscriptReader implements TranscriptReader {
 			);
 			if (!anchor.equals(this.#anchor)) this.#reset();
 		}
+		// An incomplete tail is not committed evidence. A writer may replace it
+		// while growing the file, so restart that tail at the committed cursor.
+		this.#partial = Buffer.alloc(0);
+		this.#readPosition = this.#cursor;
 		this.#device = actual.dev;
 		this.#inode = actual.ino;
 		this.#size = actual.size;
@@ -180,7 +200,7 @@ class SessionFileTranscriptReader implements TranscriptReader {
 	}
 	#reset(): void {
 		this.#counts.reconstructions++;
-		this.#state = new RetainedTranscript(null, this.#path);
+		this.#state = new RetainedTranscript(null, this.#path, initializeCoordinationProjections);
 		this.#cursor = 0;
 		this.#readPosition = 0;
 		this.#partial = Buffer.alloc(0);
@@ -200,14 +220,20 @@ class SessionFileTranscriptReader implements TranscriptReader {
 			let offset = 0;
 			let newline: number;
 			while ((newline = pending.indexOf(10, offset)) !== -1) {
-				const line = new TextDecoder("utf-8", { fatal: true }).decode(pending.subarray(offset, newline));
+				const line = new TextDecoder("utf-8", { fatal: true }).decode(
+					pending.subarray(offset, newline),
+				);
 				if (line.trim()) {
 					const entry = JSON.parse(line) as FileEntry;
 					this.#counts.entriesParsed++;
 					if (entry.type === "session") {
 						if (this.#cursor !== 0)
 							throw new Error("invalid_transcript: unexpected session header");
-						this.#state = new RetainedTranscript(entry, this.#path);
+						this.#state = new RetainedTranscript(
+							entry,
+							this.#path,
+							initializeCoordinationProjections,
+						);
 					} else {
 						if (!entry.id || !("parentId" in entry))
 							throw new Error("invalid_transcript: entry has no physical identity");

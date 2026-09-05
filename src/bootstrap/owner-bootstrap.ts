@@ -106,6 +106,7 @@ export async function initializeOwnerWorkflow(options: {
 		workflowPolicy: policy,
 		recoveredWorkflow,
 	});
+	await coordinator.initialize();
 	let parkingBinding: OwnerSettlementParkingBinding | undefined;
 	let ownerReplacementPreparation: Promise<void> | undefined;
 	const prepareOwnerReplacement = () => {

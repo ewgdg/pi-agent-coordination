@@ -1197,7 +1197,7 @@ async function createRunSupervisionHarness(
 	});
 	await bindTestOwnerHost(host, "tui");
 	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = createTestWorkflowCoordinator(host, ownerIdentity, {
+	const coordinator = await createTestWorkflowCoordinator(host, ownerIdentity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: options?.workflowPolicy,
 		messageBoundaryHooks: options?.deferFirstResume

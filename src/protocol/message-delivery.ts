@@ -156,6 +156,7 @@ function readMessageDeliveries(options: {
 }): Readonly<{
 	deliveries: readonly DeliveredMessageEvidence[];
 	bySource: ReadonlyMap<string, readonly DeliveredMessageEvidence[]>;
+	byRequest: ReadonlyMap<string, readonly DeliveredMessageEvidence[]>;
 	duplicate?: DeliveredMessageEvidence;
 	inspectedThrough: EntryPointer;
 }> {
@@ -172,6 +173,7 @@ function readMessageDeliveries(options: {
 		() => ({
 			deliveries: [] as DeliveredMessageEvidence[],
 			bySource: new Map<string, DeliveredMessageEvidence[]>(),
+			byRequest: new Map<string, DeliveredMessageEvidence[]>(),
 			duplicate: undefined as DeliveredMessageEvidence | undefined,
 		}),
 		(facts, committedEntry) => {
@@ -212,6 +214,13 @@ function readMessageDeliveries(options: {
 				if (matches.length) facts.duplicate ??= delivery;
 				matches.push(delivery);
 				facts.bySource.set(key, matches);
+				if (delivery.projection.kind !== "message") {
+					const requestId = delivery.projection.requestMessageId;
+					const related = facts.byRequest.get(requestId) ?? [];
+					related.push(delivery);
+					facts.byRequest.set(requestId, related);
+					indexedState(transcript).observeMessageRequest(key, requestId);
+				}
 			}
 			facts.deliveries.push(...deliveries);
 			return facts;
@@ -421,4 +430,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isProtocolString(value: unknown): value is string {
 	return typeof value === "string" && value.length > 0 && !value.includes("\0");
+}
+
+export function deliveriesBySource(options: {
+	recipientAgentId: string;
+	transcript: TranscriptInspection;
+	source: ToolCallPointer;
+}): readonly DeliveredMessageEvidence[] {
+	const facts = readMessageDeliveries(options);
+	if (facts.duplicate) throw new ProtocolInvariantError("Message has duplicate Deliveries");
+	return facts.bySource.get(toolCallPointerKey(options.source)) ?? [];
+}
+
+export function deliveriesForRequest(options: {
+	recipientAgentId: string;
+	transcript: TranscriptInspection;
+	requestId: string;
+}): readonly DeliveredMessageEvidence[] {
+	const facts = readMessageDeliveries(options);
+	if (facts.duplicate) throw new ProtocolInvariantError("Message has duplicate Deliveries");
+	return facts.byRequest.get(options.requestId) ?? [];
 }

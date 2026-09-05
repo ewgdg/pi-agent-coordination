@@ -1,4 +1,7 @@
+import { indexedState, type RetainedTranscript } from "../transcript/retained-transcript.ts";
+import { setImmediate as yieldTurn } from "node:timers/promises";
 import {
+	withAgentTranscriptObservations,
 	EvidenceUnavailableError,
 	requireAgentRecord,
 	type AgentRecord,
@@ -10,11 +13,12 @@ import {
 import {
 	compareCommittedToolCallOrder,
 	deriveMessageIdentity,
+	resolveCommittedToolCall,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
 import {
 	inspectAnswerDelivery,
-	inspectAnswerRetrievals,
+	retrievalsForRequest,
 	inspectAgentMessageAuthorResult,
 	inspectCanonicalMessage,
 	inspectMessageDelivery,
@@ -25,15 +29,17 @@ import {
 } from "../protocol/message.ts";
 import {
 	inspectMessageDeliveries,
+	deliveriesForRequest,
 	type DeliveredMessageEvidence,
 	validateDeliveredMessageEvidence,
 } from "../protocol/message-delivery.ts";
 import {
 	answerSourceDeliveryRequestId,
+	answerResultSources,
+	cancellationSourcesForRequest,
+	cancellationSourcesAfter,
 	answerSourceResultRequestId,
 	findAuthoredAgentMessageSource,
-	findAuthoredAgentMessageSources,
-	findAuthoredRequestSources,
 	inspectCanonicalRequestResolution,
 } from "../protocol/request-resolution.ts";
 import type { AgentWaitAnswer } from "../protocol/agent-wait.ts";
@@ -43,6 +49,9 @@ import {
 	inspectCommittedAgentMessageTarget,
 	resolveCommittedAgentMessageTargetId,
 } from "./agent-message-target.ts";
+
+const REQUEST_STEPS_PER_TURN = 256;
+const REQUEST_CATCH_UP_SLICE_MS = 8;
 
 type Request = Extract<Message, { kind: "request" }>;
 type Answer = Extract<Message, { kind: "answer" }>;
@@ -77,28 +86,33 @@ export class RequestEvidence {
 			transcript: responder.transcript.inspect(),
 			source: answer.source,
 		});
-		return resultRequestId === undefined &&
+		return (
+			resultRequestId === undefined &&
 			responder.host.currentHandle() !== undefined &&
-			!responder.host.currentRunFailed();
+			!responder.host.currentRunFailed()
+		);
 	}
 
-	findAnswerBySource(
-		responder: AgentRecord,
-		toolCallId: string,
-	): Answer | undefined {
+	findAnswerBySource(responder: AgentRecord, toolCallId: string): Answer | undefined {
 		const matches = new Map<string, Answer>();
 		for (const answer of this.#admittedAnswersByRequest.values()) {
 			if (
 				answer.fromAgentId === responder.identity.agentId &&
 				answer.source.toolCallId === toolCallId
-			) matches.set(answer.messageId, answer);
-		}
-		for (const request of this.#requestsTargeting(responder)) {
-			const answer = this.findAnswer(request);
-			if (answer?.source.toolCallId === toolCallId) {
+			)
 				matches.set(answer.messageId, answer);
-			}
 		}
+		const committed = resolveCommittedToolCall({
+			agentId: responder.identity.agentId,
+			transcript: responder.transcript.inspect(),
+			toolCallId,
+			toolName: "agent_message",
+		});
+		const durable = this.#resolveAuthoredMessage(
+			responder,
+			deriveMessageIdentity(committed.source),
+		);
+		if (durable?.kind === "answer") matches.set(durable.messageId, durable);
 		if (matches.size > 1) {
 			throw new Error(
 				`invariant_violation: Agent Answer source ${toolCallId} resolved multiple Requests`,
@@ -204,74 +218,36 @@ export class RequestEvidence {
 		throw new Error(`unknown_identity: Request ${requestId}`);
 	}
 
-	findRequestsAuthoredBy(author: AgentRecord): Request[] {
-		const requests = findAuthoredRequestSources({
-			authorAgentId: author.identity.agentId,
-			transcript: author.transcript.inspect(),
-		}).flatMap(({ source, input }) => {
-			const authorTranscript = author.transcript.inspect();
-			const target = this.#inspectMessageTarget(
-				author,
-				authorTranscript,
-				source.toolCallId,
-				input.targetAgent,
-			);
-			if (target.state !== "resolved") return [];
-			const message = resolveCommittedMessage({
-				fromAgentId: author.identity.agentId,
-				workflowId: author.identity.workflowId,
-				transcript: authorTranscript,
-				toolCallId: source.toolCallId,
-				providedInput: input,
-				resolvedTargetAgentId: target.targetAgentId,
-			});
-			if (message.kind !== "request") {
-				throw new Error(
-					`invariant_violation: Request source ${source.toolCallId} resolved as another Message kind`,
-				);
-			}
-			return [message];
-		});
-		for (const child of this.#agents.values()) {
-			if (
-				!("spawnSource" in child.identity) ||
-				child.identity.directSpawnerAgentId !== author.identity.agentId
-			) {
-				continue;
-			}
-			const request = this.#findCreationRequest(
-				deriveMessageIdentity(child.identity.spawnSource),
-			);
-			if (request) requests.push(request);
-		}
-		return requests;
-	}
-
-	outstandingRequestIdsAt(
-		author: AgentRecord,
-		waitSource: ToolCallPointer,
-	): readonly string[] {
+	outstandingRequestIdsAt(author: AgentRecord, waitSource: ToolCallPointer): readonly string[] {
 		if (waitSource.agentId !== author.identity.agentId) {
 			throw new Error("wrong_participant: Agent Wait source belongs to another Agent");
 		}
 		const transcript = author.transcript.inspect();
-		return this.#canonicalRequestsAuthoredBy(author)
-			.filter((request) =>
-				compareCommittedToolCallOrder(transcript, request.source, waitSource) < 0
+		const requestIds = new Set(this.residualRelationshipsFor(author).awaitingAnswerRequestIds);
+		for (const candidate of cancellationSourcesAfter({
+			authorAgentId: author.identity.agentId,
+			transcript,
+			source: waitSource,
+		})) {
+			if (
+				candidate.input.operation === "cancel" &&
+				this.#findBoundAuthoredRequest(author, candidate.input.requestMessageId)
 			)
-			.sort((left, right) =>
-				compareCommittedToolCallOrder(transcript, left.source, right.source)
+				requestIds.add(candidate.input.requestMessageId);
+		}
+		return [...requestIds]
+			.map((requestId) => this.requireRequest(requestId))
+			.filter(
+				(request) => compareCommittedToolCallOrder(transcript, request.source, waitSource) < 0,
 			)
+			.sort((left, right) => compareCommittedToolCallOrder(transcript, left.source, right.source))
 			.flatMap((request) => {
 				const cancellation = this.findCancellation(request);
 				if (
 					cancellation &&
-					compareCommittedToolCallOrder(
-						transcript,
-						cancellation.source,
-						waitSource,
-					) < 0
-				) return [];
+					compareCommittedToolCallOrder(transcript, cancellation.source, waitSource) < 0
+				)
+					return [];
 
 				const answer = this.findAnswer(request);
 				if (!answer) return [request.messageId];
@@ -309,106 +285,292 @@ export class RequestEvidence {
 	}
 
 	residualRelationshipsFor(agent: AgentRecord): ResidualRequestRelationships {
-		this.#validateAnswerResultReferences(agent);
-		const awaitingAnswerRequestIds: string[] = [];
-		const answerOwedRequestIds: string[] = [];
-		const localDeliveries = inspectMessageDeliveries({
-			recipientAgentId: agent.identity.agentId,
-			transcript: agent.transcript.inspect(),
+		return withAgentTranscriptObservations(this.#agents.values(), () => {
+			const graph = this.#relationshipGraph(agent);
+			do {
+				this.#startRelationshipUpdate(agent, graph);
+				while (this.#advanceRelationshipUpdate(graph)) {
+					/* Finish the shared cursor. */
+				}
+				this.#startRelationshipUpdate(agent, graph);
+			} while (graph.pending);
+			return graph.result;
 		});
-		const deliveredAnswerRequestIds = new Set([
-			...localDeliveries.flatMap((delivery) => {
-				if (
-					delivery.projection.kind !== "answer" ||
-					this.#agents.has(delivery.source.agentId)
-				) return [];
-				validateDeliveredMessageEvidence(delivery);
-				return [delivery.projection.requestMessageId];
-			}),
-			...inspectAnswerRetrievals({
-				requesterAgentId: agent.identity.agentId,
-				transcript: agent.transcript.inspect(),
-			}).map(({ requestId }) => requestId),
-		]);
-		const deliveredCancellationRequestIds = new Set(
-			localDeliveries.flatMap((delivery) => {
-				if (
-					delivery.projection.kind !== "request_cancellation" ||
-					this.#agents.has(delivery.source.agentId)
-				) return [];
-				validateDeliveredMessageEvidence(delivery);
-				return [delivery.projection.requestMessageId];
+	}
+
+	async refreshRelationshipsFor(agent: AgentRecord): Promise<ResidualRequestRelationships> {
+		let result: ResidualRequestRelationships | undefined;
+		do {
+			const records = [...this.#agents.values()];
+			const inspections = new Map<AgentRecord, TranscriptInspection>();
+			for (const record of records) inspections.set(record, await record.transcript.refresh());
+			if (records.length !== this.#agents.size || records.some(record => this.#agents.get(record.identity.agentId) !== record)) continue;
+			// Pin these already-refreshed views. A synchronous read here would drain
+			// a concurrent append outside both the physical and relationship budgets.
+			withAgentTranscriptObservations(records, () => {
+				const graph = this.#relationshipGraph(agent);
+				this.#startRelationshipUpdate(agent, graph);
+				const updating = graph.pending !== undefined;
+				const started = performance.now();
+				let consumed = 0;
+				while (consumed++ < REQUEST_STEPS_PER_TURN && performance.now() - started < REQUEST_CATCH_UP_SLICE_MS) {
+					if (!this.#advanceRelationshipUpdate(graph)) {
+						this.#startRelationshipUpdate(agent, graph);
+						if (!graph.pending) {
+							if (!updating) result = graph.result;
+							break;
+						}
+					}
+				}
+			}, inspections);
+			if (!result) await yieldTurn();
+		} while (!result);
+		return result;
+	}
+
+	#relationshipGraph(agent: AgentRecord): RelationshipGraph {
+		return indexedState(agent.transcript.inspect()).memo(
+			RequestEvidence.prototype.residualRelationshipsFor,
+			agent.identity.agentId,
+			this.#agents,
+			(): RelationshipGraph => ({
+				cursors: new Map(),
+				awaiting: new Set(),
+				owed: new Set(),
+				roster: [],
+				result: { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] },
 			}),
 		);
+	}
 
-		for (const request of this.#canonicalRequestsAuthoredBy(agent)) {
-			const responder = this.#agents.get(request.targetAgentId);
-			if (responder) {
-				const resolution = this.#inspectResolution(request);
-				const answerDelivered = resolution.answer !== undefined &&
-					inspectAnswerDelivery({
-						requesterAgentId: agent.identity.agentId,
-						transcript: agent.transcript.inspect(),
-						answer: resolution.answer,
-					}).deliveryEvidence !== undefined;
-				if (!resolution.cancellation && !answerDelivered) {
-					awaitingAnswerRequestIds.push(request.messageId);
-				}
-				continue;
-			}
-			// The peer cannot be inspected, but requester-side Cancellation commits
-			// and Answer Deliveries remain exact local proof.
+	#startRelationshipUpdate(agent: AgentRecord, graph: RelationshipGraph): void {
+		const observations = [...this.#agents.values()].map((record) => ({
+			record,
+			state: indexedState(record.transcript.inspect()),
+		}));
+		if (graph.pending) {
 			if (
-				!this.#hasCanonicalAuthoredResolution(
-					agent,
-					request.messageId,
-					"cancel",
-				) &&
-				!deliveredAnswerRequestIds.has(request.messageId)
-			) {
-				awaitingAnswerRequestIds.push(request.messageId);
+				observations.length === graph.pendingSources?.size &&
+				observations.every(({ record, state }) => {
+					const cursor = graph.pendingSources!.get(record);
+					return cursor?.state === state && cursor.scope === state.scopeVersion;
+				})
+			)
+				return;
+			graph.pending = undefined;
+			graph.cursors.clear();
+		}
+		const reset =
+			observations.length !== graph.roster.length ||
+			observations.some(({ record, state }, index) => {
+				const cursor = graph.cursors.get(record);
+				return (
+					graph.roster[index] !== record ||
+					!cursor ||
+					cursor.state !== state ||
+					cursor.scope !== state.scopeVersion
+				);
+			});
+		const creationIds: string[] = [];
+		if (reset) {
+			graph.cursors.clear();
+			graph.awaiting.clear();
+			graph.owed.clear();
+			graph.roster = observations.map(({ record }) => record);
+			for (const child of graph.roster) {
+				if (
+					"spawnSource" in child.identity &&
+					child.identity.directSpawnerAgentId === agent.identity.agentId
+				)
+					creationIds.push(deriveMessageIdentity(child.identity.spawnSource));
 			}
 		}
+		const cursors = new Map<AgentRecord, RelationshipCursor>();
+		for (const { record, state } of observations) {
+			cursors.set(record, {
+				state,
+				scope: state.scopeVersion,
+				count: state.requestChanges.length,
+				physicalCount: state.entries.length,
+			});
+		}
+		if (
+			!reset &&
+			[...cursors].every(([record, cursor]) => cursor.count === graph.cursors.get(record)?.count)
+		)
+			return;
+		graph.pendingSources = cursors;
+		graph.pending = this.#updateRelationships(agent, graph, creationIds, cursors);
+	}
 
-		for (const delivery of localDeliveries) {
-			if (delivery.projection.kind !== "request") continue;
-			const requestId = deriveMessageIdentity(delivery.source);
-			const requester = this.#agents.get(delivery.source.agentId);
-			if (requester) {
-				const request = this.requireRequest(requestId);
-				if (!this.#inspectRequestDelivery(request, agent).deliveryEvidence) continue;
-				const resolution = this.#inspectResolution(request);
-				const cancellationDelivered = resolution.cancellation !== undefined &&
-					inspectMessageDelivery({
-						recipientAgentId: agent.identity.agentId,
-						transcript: agent.transcript.inspect(),
-						message: resolution.cancellation,
-					}).deliveryEvidence !== undefined;
-				if (!resolution.answer && !cancellationDelivered) {
-					answerOwedRequestIds.push(requestId);
-				}
-				continue;
-			}
-			validateDeliveredMessageEvidence(delivery);
-			// The peer cannot be inspected, but responder-side Answer commits and
-			// Cancellation Deliveries remain exact local proof.
-			if (
-				!this.#hasCanonicalAuthoredResolution(agent, requestId, "answer") &&
-				!deliveredCancellationRequestIds.has(requestId)
-			) {
-				answerOwedRequestIds.push(requestId);
+	*#updateRelationships(
+		agent: AgentRecord,
+		graph: RelationshipGraph,
+		creationIds: readonly string[],
+		cursors: Map<AgentRecord, RelationshipCursor>,
+	): Generator<void> {
+		const changed = new Set(creationIds);
+		for (const [record, cursor] of cursors) {
+			for (let index = graph.cursors.get(record)?.count ?? 0; index < cursor.count; index++) {
+				changed.add(cursor.state.requestChanges[index]!);
+				yield;
 			}
 		}
-		const uniqueAnswerOwedRequestIds = uniqueRequestIds(answerOwedRequestIds);
-		if (uniqueAnswerOwedRequestIds.length > 1) {
+		for (const requestId of changed) {
+			const contribution = this.#relationshipForRequest(agent, requestId);
+			if (contribution.awaiting) graph.awaiting.add(requestId);
+			else graph.awaiting.delete(requestId);
+			if (contribution.owed) graph.owed.add(requestId);
+			else graph.owed.delete(requestId);
+			yield;
+		}
+		if (graph.owed.size > 1)
 			throw new Error(
 				`invariant_violation: Agent ${agent.identity.agentId} has multiple active Requests`,
 			);
-		}
-		return {
-			awaitingAnswerRequestIds: uniqueRequestIds(awaitingAnswerRequestIds),
-			answerOwedRequestIds: uniqueAnswerOwedRequestIds,
+		graph.result = {
+			awaitingAnswerRequestIds: [...graph.awaiting],
+			answerOwedRequestIds: [...graph.owed],
 		};
+		for (const cursor of cursors.values()) {
+			if (
+				cursor.state.scopeVersion === cursor.scope &&
+				cursor.state.entries.length === cursor.physicalCount
+			)
+				cursor.count = cursor.state.requestChanges.length;
+		}
+		graph.cursors = cursors;
+	}
+
+	#advanceRelationshipUpdate(graph: RelationshipGraph): boolean {
+		if (!graph.pending) return false;
+		try {
+			if (!graph.pending.next().done) return true;
+		} catch (error) {
+			// No cursor is committed on failure; the next observation reconstructs.
+			graph.cursors.clear();
+			graph.pending = undefined;
+			throw error;
+		}
+		graph.pending = undefined;
+		return false;
+	}
+
+	#relationshipForRequest(
+		agent: AgentRecord,
+		requestId: string,
+	): { awaiting: boolean; owed: boolean } {
+		const transcript = agent.transcript.inspect();
+		const answerSources =
+			answerResultSources({ authorAgentId: agent.identity.agentId, transcript }).get(requestId) ??
+			[];
+		if (answerSources.length) this.#requireResponderRequest(agent, requestId);
+		const localDeliveries = deliveriesForRequest({
+			recipientAgentId: agent.identity.agentId,
+			transcript,
+			requestId,
+		});
+		let awaiting = false;
+		let owed = false;
+		const request = this.#findBoundAuthoredRequest(agent, requestId);
+		if (request?.kind === "request") {
+			const responder = this.#agents.get(request.targetAgentId);
+			const delivery = responder
+				? this.#inspectRequestDelivery(request, responder).deliveryEvidence
+				: undefined;
+			if (
+				inspectCanonicalMessage({
+					message: request,
+					authorTranscript: transcript,
+					deliveryEvidence: delivery,
+				}).state === "canonical"
+			) {
+				if (responder) {
+					const resolution = this.#inspectResolution(request);
+					const answered =
+						resolution.answer &&
+						inspectAnswerDelivery({
+							requesterAgentId: agent.identity.agentId,
+							transcript,
+							answer: resolution.answer,
+						}).deliveryEvidence;
+					awaiting = !resolution.cancellation && !answered;
+				} else {
+					const delivered = localDeliveries.some((delivery) => {
+						if (delivery.projection.kind !== "answer") return false;
+						validateDeliveredMessageEvidence(delivery);
+						return true;
+					});
+					awaiting =
+						!this.#hasCanonicalAuthoredResolution(agent, requestId, "cancel") &&
+						!delivered &&
+						retrievalsForRequest({
+							requesterAgentId: agent.identity.agentId,
+							transcript,
+							requestId,
+						}).length === 0;
+				}
+			}
+		}
+		for (const delivery of localDeliveries) {
+			if (delivery.projection.kind !== "request") continue;
+			const requester = this.#agents.get(delivery.source.agentId);
+			if (requester) {
+				const incoming = this.requireRequest(requestId);
+				if (!this.#inspectRequestDelivery(incoming, agent).deliveryEvidence) continue;
+				const resolution = this.#inspectResolution(incoming);
+				const cancelled =
+					resolution.cancellation &&
+					inspectMessageDelivery({
+						recipientAgentId: agent.identity.agentId,
+						transcript,
+						message: resolution.cancellation,
+					}).deliveryEvidence;
+				owed = !resolution.answer && !cancelled;
+			} else {
+				validateDeliveredMessageEvidence(delivery);
+				const cancelled = localDeliveries.some((candidate) => {
+					if (candidate.projection.kind !== "request_cancellation") return false;
+					validateDeliveredMessageEvidence(candidate);
+					return true;
+				});
+				owed = !this.#hasCanonicalAuthoredResolution(agent, requestId, "answer") && !cancelled;
+			}
+		}
+		return { awaiting, owed };
+	}
+
+	#findBoundAuthoredRequest(agent: AgentRecord, requestId: string): Request | undefined {
+		const transcript = agent.transcript.inspect();
+		const source = findAuthoredAgentMessageSource({
+			authorAgentId: agent.identity.agentId,
+			transcript,
+			messageId: requestId,
+		});
+		const creation = this.#findCreationRequest(requestId);
+		let request: Request | undefined =
+			creation?.fromAgentId === agent.identity.agentId ? creation : undefined;
+		if (source?.input.operation === "request") {
+			const target = this.#inspectMessageTarget(
+				agent,
+				transcript,
+				source.source.toolCallId,
+				source.input.targetAgent,
+			);
+			// Authorship alone does not bind a target or establish a Request obligation.
+			if (target.state === "resolved") {
+				const message = resolveCommittedMessage({
+					fromAgentId: agent.identity.agentId,
+					workflowId: agent.identity.workflowId,
+					transcript,
+					toolCallId: source.source.toolCallId,
+					providedInput: source.input,
+					resolvedTargetAgentId: target.targetAgentId,
+				});
+				if (message.kind === "request") request = message;
+			}
+		}
+		return request;
 	}
 
 	callerWaitAnswer(
@@ -478,68 +640,52 @@ export class RequestEvidence {
 		});
 	}
 
-	#canonicalRequestsAuthoredBy(author: AgentRecord): Request[] {
-		const canonical = new Map<string, Request>();
-		for (const request of this.findRequestsAuthoredBy(author)) {
-			const recipient = this.#agents.get(request.targetAgentId);
-			const delivery = recipient === undefined
-				? undefined
-				: this.#inspectRequestDelivery(request, recipient).deliveryEvidence;
-			if (
-				inspectCanonicalMessage({
-					message: request,
-					authorTranscript: author.transcript.inspect(),
-					deliveryEvidence: delivery,
-				}).state !== "canonical"
-			) continue;
-			if (canonical.has(request.messageId)) {
-				throw new Error(
-					`invariant_violation: Request ${request.messageId} has multiple canonical sources`,
-				);
-			}
-			canonical.set(request.messageId, request);
-		}
-		return [...canonical.values()];
-	}
-
 	#hasCanonicalAuthoredResolution(
 		author: AgentRecord,
 		requestId: string,
 		operation: "answer" | "cancel",
 	): boolean {
-		const canonical = findAuthoredAgentMessageSources({
-			authorAgentId: author.identity.agentId,
-			transcript: author.transcript.inspect(),
-		}).filter(({ source, input }) => {
+		const transcript = author.transcript.inspect();
+		const sources =
+			operation === "cancel"
+				? cancellationSourcesForRequest({
+						authorAgentId: author.identity.agentId,
+						transcript,
+						requestId,
+					})
+				: (answerResultSources({ authorAgentId: author.identity.agentId, transcript }).get(
+						requestId,
+					) ?? []);
+		const canonical = sources.filter(({ source, input }) => {
 			if (operation === "answer") {
 				if (
 					input.operation !== "answer" ||
-					(
-						answerSourceResultRequestId({
-							transcript: author.transcript.inspect(),
-							source,
-						}) ?? requestId
-					) !== requestId
-				) return false;
-				return inspectAgentMessageAuthorResult({
+					(answerSourceResultRequestId({
+						transcript: author.transcript.inspect(),
+						source,
+					}) ?? requestId) !== requestId
+				)
+					return false;
+				return (
+					inspectAgentMessageAuthorResult({
+						authorAgentId: author.identity.agentId,
+						transcript: author.transcript.inspect(),
+						source,
+						input,
+						requestId,
+					}) === "canonical"
+				);
+			}
+			if (input.operation !== "cancel" || input.requestMessageId !== requestId) return false;
+			return (
+				inspectAgentMessageAuthorResult({
 					authorAgentId: author.identity.agentId,
 					transcript: author.transcript.inspect(),
 					source,
 					input,
-					requestId,
-				}) === "canonical";
-			}
-			if (
-				input.operation !== "cancel" ||
-				input.requestMessageId !== requestId
-			) return false;
-			return inspectAgentMessageAuthorResult({
-				authorAgentId: author.identity.agentId,
-				transcript: author.transcript.inspect(),
-				source,
-				input,
-				resolvedTargetAgentId: this.requireRequest(requestId).targetAgentId,
-			}) === "canonical";
+					resolvedTargetAgentId: this.requireRequest(requestId).targetAgentId,
+				}) === "canonical"
+			);
 		});
 		if (canonical.length > 1) {
 			throw new Error(
@@ -570,22 +716,25 @@ export class RequestEvidence {
 		for (const child of this.#agents.values()) {
 			if (!("spawnSource" in child.identity)) continue;
 			if (child.identity.spawnSource.toolCallId.length === 0) continue;
-			if ((child.creationRequest?.messageId ?? deriveMessageIdentity(child.identity.spawnSource)) !== requestId) continue;
+			if (
+				(child.creationRequest?.messageId ?? deriveMessageIdentity(child.identity.spawnSource)) !==
+				requestId
+			)
+				continue;
 			if (!child.creationInput) {
-				throw new EvidenceUnavailableError(`Creation Request ${requestId} has no reconstructed spawn input`);
+				throw new EvidenceUnavailableError(
+					`Creation Request ${requestId} has no reconstructed spawn input`,
+				);
 			}
-			return child.creationRequest ??= resolveCreationRequest({
+			return (child.creationRequest ??= resolveCreationRequest({
 				childIdentity: child.identity,
 				creationInput: child.creationInput,
-			});
+			}));
 		}
 		return undefined;
 	}
 
-	#resolveAuthoredMessage(
-		author: AgentRecord,
-		messageId: string,
-	): Message | undefined {
+	#resolveAuthoredMessage(author: AgentRecord, messageId: string): Message | undefined {
 		const authored = findAuthoredAgentMessageSource({
 			authorAgentId: author.identity.agentId,
 			transcript: author.transcript.inspect(),
@@ -601,14 +750,15 @@ export class RequestEvidence {
 				authored.input.targetAgent,
 			);
 			if (target.state === "not_created") return undefined;
-			const resolvedTargetAgentId = target.state === "resolved"
-				? target.targetAgentId
-				: this.#resolveMessageTargetId(
-					author,
-					authorTranscript,
-					authored.source.toolCallId,
-					authored.input.targetAgent,
-				);
+			const resolvedTargetAgentId =
+				target.state === "resolved"
+					? target.targetAgentId
+					: this.#resolveMessageTargetId(
+							author,
+							authorTranscript,
+							authored.source.toolCallId,
+							authored.input.targetAgent,
+						);
 			return resolveCommittedMessage({
 				fromAgentId: author.identity.agentId,
 				workflowId: author.identity.workflowId,
@@ -627,9 +777,7 @@ export class RequestEvidence {
 			if (resultRequestId !== undefined) {
 				this.#requireResponderRequest(author, resultRequestId);
 			}
-			const matches = this.#requestsTargeting(author).flatMap((request) => {
-				const requester = this.#agents.get(request.fromAgentId);
-				if (!requester) return [];
+			const matches = [...this.#agents.values()].flatMap((requester) => {
 				const deliveryRequestId = answerSourceDeliveryRequestId({
 					requesterAgentId: requester.identity.agentId,
 					transcript: requester.transcript.inspect(),
@@ -644,7 +792,10 @@ export class RequestEvidence {
 						`invariant_violation: Agent Answer ${messageId} result and Delivery name different Requests`,
 					);
 				}
-				if ((resultRequestId ?? deliveryRequestId) !== request.messageId) return [];
+				const requestId = resultRequestId ?? deliveryRequestId;
+				if (requestId === undefined) return [];
+				const request = this.#requireResponderRequest(author, requestId);
+				if (request.fromAgentId !== requester.identity.agentId) return [];
 				const answer = resolveCommittedAnswer({
 					responderAgentId: author.identity.agentId,
 					transcript: author.transcript.inspect(),
@@ -661,7 +812,9 @@ export class RequestEvidence {
 					message: answer,
 					authorTranscript: author.transcript.inspect(),
 					deliveryEvidence: delivery.deliveryEvidence,
-				}).state === "canonical" ? [answer] : [];
+				}).state === "canonical"
+					? [answer]
+					: [];
 			});
 			if (matches.length > 1) {
 				throw new Error(
@@ -680,20 +833,6 @@ export class RequestEvidence {
 		});
 	}
 
-	#validateAnswerResultReferences(author: AgentRecord): void {
-		for (const { source, input } of findAuthoredAgentMessageSources({
-			authorAgentId: author.identity.agentId,
-			transcript: author.transcript.inspect(),
-		})) {
-			if (input.operation !== "answer") continue;
-			const requestId = answerSourceResultRequestId({
-				transcript: author.transcript.inspect(),
-				source,
-			});
-			if (requestId !== undefined) this.#requireResponderRequest(author, requestId);
-		}
-	}
-
 	#requireResponderRequest(responder: AgentRecord, requestId: string): Request {
 		const request = this.requireRequest(requestId);
 		if (request.targetAgentId !== responder.identity.agentId) {
@@ -702,14 +841,6 @@ export class RequestEvidence {
 			);
 		}
 		return request;
-	}
-
-	#requestsTargeting(responder: AgentRecord): Request[] {
-		return [...this.#agents.values()].flatMap((requester) =>
-			this.findRequestsAuthoredBy(requester).filter(
-				(request) => request.targetAgentId === responder.identity.agentId,
-			)
-		);
 	}
 
 	#inspectMessageTarget(
@@ -779,6 +910,18 @@ export class RequestEvidence {
 	}
 }
 
-function uniqueRequestIds(requestIds: readonly string[]): string[] {
-	return [...new Set(requestIds)];
-}
+type RelationshipCursor = {
+	state: RetainedTranscript;
+	scope: number;
+	count: number;
+	physicalCount: number;
+};
+type RelationshipGraph = {
+	cursors: Map<AgentRecord, RelationshipCursor>;
+	roster: AgentRecord[];
+	awaiting: Set<string>;
+	owed: Set<string>;
+	result: ResidualRequestRelationships;
+	pending?: Generator<void>;
+	pendingSources?: Map<AgentRecord, RelationshipCursor>;
+};

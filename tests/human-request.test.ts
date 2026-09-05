@@ -483,7 +483,7 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 	);
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		humanRequestBoundaryHooks: {
 			beforeResultCommit: ({ failExactRun }) => {
@@ -594,7 +594,7 @@ test("Human Request fails before input_required when no interactive Agent editor
 	);
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});
@@ -647,7 +647,7 @@ async function createHumanRequestChild(
 	);
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
 	});

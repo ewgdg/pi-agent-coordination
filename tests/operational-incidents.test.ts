@@ -385,7 +385,7 @@ test("an overdue root call starts a Moderator outside full child capacity", asyn
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy(
@@ -722,7 +722,7 @@ test("a live successor tells its Run Failure Moderator to resolve immediately", 
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = createTestWorkflowCoordinator(host, identity, {
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	const owner = coordinator.forAgent(identity.agentId);
@@ -1676,7 +1676,7 @@ test("an outgoing Request suppresses a Stall only while its responder can progre
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectNextCreationDelivery = true;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
@@ -1770,7 +1770,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectedCreationDeliveries = 0;
 	let coordinator!: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
@@ -1956,7 +1956,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let rejectedCreationDeliveries = 0;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission() {
@@ -2082,7 +2082,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		spawnBoundaryHooks: {
 			beforeDeliveryAdmission: () => "confirmed_failure",
@@ -2884,7 +2884,7 @@ async function createIncidentBoundaryHarness(
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	let coordinator!: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		incidentBoundaryHooks,
 	});

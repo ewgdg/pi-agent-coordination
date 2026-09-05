@@ -1,3 +1,6 @@
+import { requestHistory } from "../tests/support/request-history.ts";
+import { MessageCoordinator } from "../src/coordination/messages.ts";
+import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 /** Run with node --expose-gc benchmarks/transcript-consumption.ts. Uses /tmp copies only. */
 import { appendFile, mkdtemp, writeFile } from "node:fs/promises";
@@ -16,6 +19,8 @@ const HISTORY_SIZES = [2_000, 20_000];
 const BACKLOG_ENTRIES = 10_000;
 const UNCHANGED_READS = 100;
 const results = [];
+// Keep earlier cases alive so later forced collections do not skew their heap deltas.
+const retainedInputs: unknown[] = [];
 for (const size of HISTORY_SIZES) {
 	for (const role of ["Owner", "Agent"] as const) {
 		const root = await mkdtemp(join(tmpdir(), "pi-transcript-benchmark-"));
@@ -35,6 +40,12 @@ for (const size of HISTORY_SIZES) {
 		const transcript = local
 			? transcriptFromSessionManager(local)
 			: transcriptFromSessionFile(file);
+		retainedInputs.push({ local, transcript });
+		const localEnumeration = local
+			? await measure(async () => {
+					for (let i = 0; i < UNCHANGED_READS; i++) local.getEntries();
+				})
+			: undefined;
 		const reconstruction = await measure(async () => {
 			await transcript.refresh();
 			query(transcript);
@@ -66,6 +77,7 @@ for (const size of HISTORY_SIZES) {
 			role,
 			historyEntries: size,
 			reconstruction,
+			localEnumeration,
 			retainedHeapBytes,
 			unchangedHeapGrowthBytes,
 			unchanged,
@@ -92,9 +104,53 @@ for (const size of HISTORY_SIZES) {
 		}
 	}
 }
+const relationships = [];
+for (const settledRequests of [200, 2_000]) {
+	const history = requestHistory();
+	for (let i = 0; i < settledRequests; i++) history.answer(history.request());
+	const messages = new MessageCoordinator({
+		agents: history.agents,
+		workflowPolicy: new WorkflowPolicyStore(),
+		isShuttingDown: () => false,
+	});
+	retainedInputs.push({ history, messages });
+	global.gc?.();
+	const initialHeap = process.memoryUsage().heapUsed;
+	const reconstruction = await measure(() => messages.refreshTranscriptFacts());
+	global.gc?.();
+	const retainedHeapBytes = process.memoryUsage().heapUsed - initialHeap;
+	const before = [...history.agents.values()].map((a) => a.transcript.diagnostics()!);
+	const unchanged = await measure(async () => {
+		for (let i = 0; i < UNCHANGED_READS; i++) {
+			await messages.refreshTranscriptFacts();
+			if (messages.outstandingRequestIdsFor(history.requester.record).length)
+				throw new Error("Unexpected outstanding Request");
+		}
+	});
+	const unchangedWork = [...history.agents.values()].map((a, i) =>
+		delta(before[i]!, a.transcript.diagnostics()!),
+	);
+	history.request();
+	const appendRequest = await measure(async () => {
+		await messages.refreshTranscriptFacts();
+		if (messages.outstandingRequestIdsFor(history.requester.record).length !== 1)
+			throw new Error("Missing outstanding Request");
+	});
+	for (let i = 0; i < 2_000; i++) history.answer(history.request());
+	const backlog = await measure(() => messages.refreshTranscriptFacts());
+	relationships.push({
+		settledRequests,
+		reconstruction,
+		retainedHeapBytes,
+		unchanged,
+		unchangedWork,
+		appendRequest,
+		backlog,
+	});
+}
 console.log(
 	JSON.stringify(
-		{ unchangedReads: UNCHANGED_READS, backlogEntries: BACKLOG_ENTRIES, results },
+		{ unchangedReads: UNCHANGED_READS, backlogEntries: BACKLOG_ENTRIES, results, relationships },
 		null,
 		2,
 	),
@@ -133,11 +189,29 @@ function query(transcript: AgentTranscript) {
 }
 async function measure(work: () => Promise<void>) {
 	const start = performance.now();
-	const heartbeat = new Promise<number>((resolve) =>
-		setImmediate(() => resolve(performance.now() - start)),
-	);
-	await work();
-	return { elapsedMs: performance.now() - start, eventLoopDelayMs: await heartbeat };
+	let last = start,
+		maximumGapMs = 0,
+		heartbeatCount = 0,
+		finished = false;
+	const heartbeat = new Promise<void>((resolve) => {
+		const tick = () => {
+			const now = performance.now();
+			maximumGapMs = Math.max(maximumGapMs, now - last);
+			last = now;
+			heartbeatCount++;
+			if (finished) resolve();
+			else setImmediate(tick);
+		};
+		setImmediate(tick);
+	});
+	try {
+		await work();
+	} finally {
+		finished = true;
+	}
+	const elapsedMs = performance.now() - start;
+	await heartbeat;
+	return { elapsedMs, maximumGapMs, heartbeatCount };
 }
 function delta(before: TranscriptDiagnostics, after: TranscriptDiagnostics) {
 	return Object.fromEntries(

@@ -73,7 +73,7 @@ type EndedHandler = (handle: AgentRunHandle, cause: AgentRunEndCause) => void;
 type StateChangeHandler = () => void;
 type ProjectionInputSettledHandler = () => void;
 type RunFenceHandler = (handle: AgentRunHandle) => void;
-type RunStartInitializer = () => ResidualRequestRelationships;
+type RunStartInitializer = () => ResidualRequestRelationships | Promise<ResidualRequestRelationships>;
 type RunStartedHandler = (
 	handle: AgentRunHandle,
 ) => void | Promise<void>;
@@ -228,11 +228,14 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#runEndingHandler = handler;
 	}
 
-	initializeCurrentRunRelationships(): void {
+	async initializeCurrentRunRelationships(): Promise<void> {
 		if (!this.#runtime || this.#starting || this.#ending) {
 			throw new Error("invariant_violation: Request relationships require a bound Agent Run");
 		}
-		this.#initializeRequestRelationships();
+		const run = this.#runtime;
+		const relationships = await this.#runStartInitializer?.();
+		if (this.#runtime !== run || this.#ending || this.#runStartsClosed) return;
+		this.#initializeRequestRelationships(relationships);
 	}
 
 	currentHandle(): AgentRunHandle | undefined {
@@ -591,7 +594,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 				await this.#admitPreparedRun(existing);
 				return existing.runtime;
 			} catch (error) {
-				const cleanupErrors = [error, ...await this.#discardFailedStart("failure")];
+				const cleanupErrors = [error, ...await this.#discardFailedStart(this.#startingCancellationRequested ? "termination" : "failure")];
 				this.#clearRunScopedState();
 				if (cleanupErrors.length > 1) {
 					throw new AggregateError(cleanupErrors, "Agent Run admission cleanup failed");
@@ -620,7 +623,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			startedRun = await this.#startSession();
 			readiness = startedRun.ready ?? Promise.resolve();
 			this.#bindRuntime(startedRun);
-			if (admitRun) this.#markPreparedRunAdmitted(this.#runtime!);
+			if (admitRun) await this.#markPreparedRunAdmitted(this.#runtime!);
 			if (this.#runStartsClosed) {
 				const shutdownError = new Error(
 					"Workflow shutdown during Agent Run initialization",
@@ -694,23 +697,31 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 
 	async #admitPreparedRun(run: BoundAgentRuntime): Promise<void> {
 		if (run.admitted) return;
-		this.#markPreparedRunAdmitted(run);
+		await this.#markPreparedRunAdmitted(run);
+		if (this.#runStartsClosed) {
+			this.#startingCancellationRequested = true;
+			throw new Error("host_shutting_down: Agent Run startup is closed");
+		}
 		await this.#runStartedHandler?.(run.handle);
 	}
 
-	#markPreparedRunAdmitted(run: BoundAgentRuntime): void {
+	async #markPreparedRunAdmitted(run: BoundAgentRuntime): Promise<void> {
 		this.#cancelReleaseAfterActivitySettlement(run);
 		run.releaseDeferredUntilActivitySettles = false;
 		this.#runSequence += 1;
 		run.handle = Object.freeze({ sequence: this.#runSequence });
 		run.admitted = true;
-		this.#initializeRequestRelationships();
+		// Startup owns an exact Run before readiness. Keep that identity for terminal
+		// cleanup, while #starting fences execution/release during yielding catch-up.
+		const relationships = await this.#runStartInitializer?.();
+		if (this.#runStartsClosed) return;
+		if (this.#runtime !== run) throw new Error("invariant_violation: Agent Runtime changed during Run initialization");
+		this.#initializeRequestRelationships(relationships);
 		this.#notifyStateChanged();
 	}
 
-	#initializeRequestRelationships(): void {
+	#initializeRequestRelationships(relationships: ResidualRequestRelationships | undefined): void {
 		this.#requestRelationships.clear();
-		const relationships = this.#runStartInitializer?.();
 		if (!relationships) return;
 		for (const requestId of relationships.awaitingAnswerRequestIds) {
 			this.addRetentionReason("awaiting_answer", requestId);

@@ -12,6 +12,11 @@ export class RetainedTranscript {
 	branchBuilds = 0;
 	contextBuilds = 0;
 	readonly byId = new Map<string, SessionEntry>();
+	readonly requestChanges: string[] = [];
+	scopeVersion = 0;
+	readonly #requestsByToolCall = new Map<string, Set<string>>();
+	readonly #requestsByMessageSource = new Map<string, Set<string>>();
+	readonly #requestVersions = new Map<string, number>();
 	readonly positions = new Map<string, number>();
 	readonly scopes = new Map<string, SessionEntry[]>();
 	readonly #settings = new Map<string, TranscriptSettings>();
@@ -23,8 +28,15 @@ export class RetainedTranscript {
 	#branch: SessionEntry[] | undefined;
 	#context: SessionContext | undefined;
 	readonly inspection: TranscriptInspection;
+	readonly #initializeProjections:
+		((transcript: TranscriptInspection, agentId: string) => void) | undefined;
 
-	constructor(header: SessionHeader | null, path: string | null) {
+	constructor(
+		header: SessionHeader | null,
+		path: string | null,
+		initializeProjections?: (transcript: TranscriptInspection, agentId: string) => void,
+	) {
+		this.#initializeProjections = initializeProjections;
 		const state = this;
 		this.inspection = {
 			sessionId: header?.id ?? "",
@@ -70,7 +82,14 @@ export class RetainedTranscript {
 			if (!Number.isNaN(timestamp)) this.recency = Math.max(this.recency ?? 0, timestamp);
 		}
 		const bootstrap = bootstrapAgent(entry);
-		if (bootstrap) this.scopes.set(bootstrap, []);
+		if (bootstrap) {
+			this.scopes.set(bootstrap, []);
+			this.scopeVersion++;
+			this.requestChanges.length = 0;
+			this.#requestVersions.clear();
+			this.#requestsByToolCall.clear();
+			this.#requestsByMessageSource.clear();
+		}
 		for (const [agentId, scope] of this.scopes) {
 			if (agentId === bootstrap) {
 				for (const key of this.#buckets.keys()) {
@@ -89,6 +108,20 @@ export class RetainedTranscript {
 			}
 		}
 		this.entries.push(entry);
+		if (bootstrap === this.inspection.sessionId)
+			this.#initializeProjections?.(this.inspection, bootstrap);
+		if (entry.type === "message" && entry.message.role === "toolResult") {
+			for (const requestId of this.#requestsByToolCall.get(entry.message.toolCallId) ?? [])
+				this.touchRequest(requestId);
+			const details = entry.message.details;
+			if (
+				typeof details === "object" &&
+				details !== null &&
+				"requestMessageId" in details &&
+				typeof details.requestMessageId === "string"
+			)
+				this.touchRequest(details.requestMessageId);
+		}
 		for (const projections of this.#derived.values()) {
 			for (const projection of projections.values()) this.#advance(projection);
 		}
@@ -115,11 +148,36 @@ export class RetainedTranscript {
 		return scope;
 	}
 
+	bindRequestSource(toolCallId: string, requestId: string): void {
+		let requests = this.#requestsByToolCall.get(toolCallId);
+		if (!requests) this.#requestsByToolCall.set(toolCallId, (requests = new Set()));
+		if (requests.has(requestId)) return;
+		requests.add(requestId);
+		this.touchRequest(requestId);
+	}
+
+	observeMessageRequest(sourceKey: string, requestId: string): void {
+		let requests = this.#requestsByMessageSource.get(sourceKey);
+		if (!requests) this.#requestsByMessageSource.set(sourceKey, (requests = new Set()));
+		requests.add(requestId);
+		// Conflicting correlation must invalidate the earlier Request too.
+		for (const related of requests) this.touchRequest(related);
+	}
+
+	touchRequest(requestId: string): void {
+		this.requestChanges.push(requestId);
+		this.#requestVersions.set(requestId, (this.#requestVersions.get(requestId) ?? 0) + 1);
+	}
+
+	requestVersion(requestId: string): number {
+		return this.#requestVersions.get(requestId) ?? 0;
+	}
+
 	memo<T>(owner: unknown, key: string, version: unknown, compute: () => T): T {
 		let values = this.#memo.get(owner);
 		if (!values) this.#memo.set(owner, (values = new Map()));
 		const existing = values.get(key);
-		if (existing && existing.version === version) return existing.value as T;
+		if (existing && sameVersion(existing.version, version)) return existing.value as T;
 		const value = compute();
 		values.set(key, { version, value });
 		return value;
@@ -259,27 +317,6 @@ export function coordinationEntries(
 	return indexedState(transcript).bucket(agentId, key);
 }
 
-export function projectEntries<T>(
-	transcript: TranscriptInspection,
-	agentId: string,
-	key: string,
-	owner: unknown,
-	parse: (entry: SessionEntry) => readonly T[],
-): T[] {
-	const state = indexedState(transcript);
-	return state.project(
-		owner,
-		`${agentId}\0${key}`,
-		state.bucket(agentId, key),
-		() => [] as T[],
-		(values, entry) => {
-			const additions = parse(entry);
-			values.push(...additions);
-			return values;
-		},
-	);
-}
-
 export type TranscriptSettings = Pick<SessionContext, "model" | "thinkingLevel"> & {
 	hasRecordedThinking: boolean;
 };
@@ -296,3 +333,13 @@ type Projection = {
 	consume(value: unknown, entry: SessionEntry): unknown;
 	error?: unknown;
 };
+
+function sameVersion(left: unknown, right: unknown): boolean {
+	return (
+		left === right ||
+		(Array.isArray(left) &&
+			Array.isArray(right) &&
+			left.length === right.length &&
+			left.every((value, index) => value === right[index]))
+	);
+}

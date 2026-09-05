@@ -433,6 +433,11 @@ export class WorkflowCoordinator {
 		});
 	}
 
+	async initialize(): Promise<void> {
+		await this.#messages.refreshTranscriptFacts();
+		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
+	}
+
 	async refreshAgentTemplateSnapshot(agentId: string): Promise<AgentTemplateCatalogueSnapshot> {
 		return this.#sessionFactory.captureTemplateSnapshotFor(this.#requireAgent(agentId));
 	}
@@ -851,7 +856,10 @@ export class WorkflowCoordinator {
 			} while (this.#activityRefreshRequested);
 		})()
 			.catch((error) => this.#reportAgentRuntimeReleaseError(error))
-			.finally(() => { this.#activityRefresh = undefined; });
+			.finally(() => {
+				this.#activityRefresh = undefined;
+				if (this.#activityRefreshRequested) this.#notifyAgentActivityChanged();
+			});
 		for (const handler of this.#agentActivityChangeHandlers) handler();
 	}
 
