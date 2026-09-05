@@ -42,13 +42,38 @@ pi
 
 The package adopts the current session as the Workflow Owner; no separate activation command is required. Print, JSON, and RPC modes do not activate coordination.
 
-## Agent templates
+## Suggested agent templates
 
-Create a Markdown file with YAML frontmatter in `~/.agents/agents/` for a user-wide template, or `.agents/agents/` in a trusted project for a project-specific template.
+See [Agent Templates](docs/agent-spawning.md#agent-templates) for configuration details.
 
-### Suggested Moderator template
+### `cheap-delegate`
 
-Moderation works without a template. To use a cheaper model for incident handling instead of inheriting the Owner's model, save this as `~/.agents/agents/moderator.md`:
+A cost-efficient default for bounded implementation, routine execution, and targeted fact-finding.
+
+Save as `~/.agents/agents/cheap-delegate.md`:
+
+```markdown
+---
+name: cheap-delegate
+useWhen: >-
+  Use as a cost-efficient default delegate for tasks with clear goals and
+  verifiable outcomes, such as implementation with explicit requirements or
+  instructions and bounded scope, routine execution, or targeted fact-finding.
+  Do not use for thorough review, open-ended investigation, high-stakes security
+  or architecture work, or tasks requiring substantial ambiguity resolution.
+  If its results remain inadequate after several iterations and show no obvious
+  improvement, stop assigning that task to this template.
+models:
+  - id: openai-codex/gpt-5.6-luna
+    thinking: high
+---
+```
+
+### `moderator`
+
+Use a cheaper model for incident handling. The `moderator` template is used automatically for incident handling.
+
+Save as `~/.agents/agents/moderator.md`:
 
 ```markdown
 ---
@@ -59,14 +84,8 @@ models:
     thinking: high
   - id: deepseek/deepseek-v4-flash
     thinking: high
-systemPromptMode: append
-loadContextFiles: true
 ---
 ```
-
-Adjust the model list to your Pi setup. The `moderator` template is used automatically for incident handling.
-
-See [Agent Templates](docs/agent-spawning.md#agent-templates) for configuration details.
 
 ## Compatibility
 
