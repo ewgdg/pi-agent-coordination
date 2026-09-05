@@ -280,10 +280,16 @@ const agentSpawnConfigurationParameters = Type.Object(
 		),
 		cwd: Type.Optional(Type.String({ minLength: 1 })),
 		allowedTools: Type.Optional(
-			Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
+			Type.Array(Type.String({ minLength: 1 }), {
+				uniqueItems: true,
+				description: "Omit to inherit tools by default.",
+			}),
 		),
 		skills: Type.Optional(
-			Type.Array(Type.String({ minLength: 1 }), { uniqueItems: true }),
+			Type.Array(Type.String({ minLength: 1 }), {
+				uniqueItems: true,
+				description: "Omit to inherit skills by default.",
+			}),
 		),
 		extensions: Type.Optional(
 			Type.Union([

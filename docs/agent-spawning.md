@@ -14,7 +14,6 @@ agent_spawn({
       id: "inherit",
       thinking: "high",
     },
-    allowedTools: ["read", "grep"],
     systemPrompt: "Reproduce the failure before proposing changes.",
     systemPromptMode: "append",
     inheritProjectContext: true,
@@ -78,7 +77,6 @@ models:
     thinking: high
   - id: deepseek/deepseek-v4-flash
     thinking: medium
-allowedTools: read, grep
 skills:
   - research
 extensions: inherit
