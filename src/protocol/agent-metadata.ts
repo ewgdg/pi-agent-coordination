@@ -10,6 +10,7 @@ const MODERATOR_INCIDENT_BY_TRIGGER = {
 	obligation_stall: "obligation stall",
 	dependency_deadlock: "dependency deadlock",
 	operation_review: "operation review",
+	delivery_stall: "delivery stall",
 } as const;
 
 export type ModeratorTriggerKind = keyof typeof MODERATOR_INCIDENT_BY_TRIGGER;

@@ -7,6 +7,7 @@ import {
 } from "./agent-record.ts";
 import {
 	MessageDeliveryScheduler,
+	type MessageDeliveryAdmission,
 	type IncomingRequestWaitPreemptor,
 	type ScheduledCustomDelivery,
 	type ScheduledMessageDelivery,
@@ -69,6 +70,14 @@ export type {
 	RequestCancellationReceipt,
 } from "./message-receipts.ts";
 
+type CreationRequestScheduling = Readonly<{
+	recipient: AgentRecord;
+	requestId: string;
+	fromAgentId: string;
+	question: string;
+	source: ToolCallPointer;
+}>;
+
 export type MessageBoundaryHooks = Readonly<{
 	scheduleDeliveryDispatch?: ScheduleDeliveryDispatch;
 	beforeDeliveryAdmission?(context: Readonly<{
@@ -108,6 +117,9 @@ export class MessageCoordinator {
 		boundaryHooks?: MessageBoundaryHooks;
 		preemptAgentWait?: IncomingRequestWaitPreemptor;
 		workflowPolicy: WorkflowPolicyStore;
+		deliveryProgressClock?: import("./operation-review.ts").OperationReviewClock;
+		onDeliveryProgressChanged?(): void;
+		isWaitingForCapacity?(agentId: string): boolean;
 	}) {
 		this.#agents = options.agents;
 		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
@@ -127,8 +139,15 @@ export class MessageCoordinator {
 			afterResumeReservation: this.#boundaryHooks.afterResumeReservation,
 			preemptAgentWait: options.preemptAgentWait,
 			workflowPolicy: options.workflowPolicy,
+			deliveryProgressClock: options.deliveryProgressClock,
+			onDeliveryProgressChanged: options.onDeliveryProgressChanged,
+			isWaitingForCapacity: options.isWaitingForCapacity,
 		});
 	}
+
+	blockedDeliveries() { return this.#deliveryScheduler.blockedDeliveries(); }
+
+	shutdownDeliveryProgress(): void { this.#deliveryScheduler.shutdownProgress(); }
 
 	integrate(record: AgentRecord): void {
 		record.host.setRunStartInitializer(
@@ -370,6 +389,7 @@ export class MessageCoordinator {
 		if (message.kind === "request") {
 			sender.host.addRetentionReason("awaiting_answer", message.messageId);
 		}
+		const delivery = this.#scheduleGeneralMessage(recipient, message);
 		if (
 			this.#boundaryHooks.beforeDeliveryAdmission?.({
 				recipientAgentId: recipient.identity.agentId,
@@ -377,13 +397,13 @@ export class MessageCoordinator {
 				operation: "send",
 			}) === "confirmed_failure"
 		) {
+			this.#deliveryScheduler.recordAdmissionFailure(recipient, delivery, new Error("Confirmed Delivery admission failure"));
 			return {
 				...identity,
 				messageStatus: "not_sent",
 				reason: "target_unavailable",
 			};
 		}
-		const delivery = this.#scheduleGeneralMessage(recipient, message);
 		const admission = await this.#deliveryScheduler.admit(recipient, delivery);
 		if (admission === "pending") {
 			return this.#boundaryHooks.afterDeliveryAdmission?.({
@@ -401,15 +421,17 @@ export class MessageCoordinator {
 		};
 	}
 
-	async admitCreationRequest(options: {
-		recipient: AgentRecord;
-		requestId: string;
-		fromAgentId: string;
-		question: string;
-		source: ToolCallPointer;
-	}): Promise<"pending" | "target_unavailable" | "capacity_exhausted"> {
+	recordCreationRequestFailure(options: CreationRequestScheduling, error: unknown): void {
+		this.#deliveryScheduler.recordAdmissionFailure(options.recipient, this.#creationRequestDelivery(options), error);
+	}
+
+	async admitCreationRequest(options: CreationRequestScheduling): Promise<MessageDeliveryAdmission> {
+		return this.#deliveryScheduler.admit(options.recipient, this.#creationRequestDelivery(options));
+	}
+
+	#creationRequestDelivery(options: CreationRequestScheduling): ScheduledMessageDelivery {
 		const { recipient, requestId, fromAgentId, question, source } = options;
-		const delivery: ScheduledMessageDelivery = {
+		return {
 			messageId: requestId,
 			deliveryMode: "deferred",
 			deliveryItem: createCreationRequestDeliveryItem({
@@ -441,7 +463,6 @@ export class MessageCoordinator {
 				}
 			},
 		};
-		return this.#deliveryScheduler.admit(recipient, delivery);
 	}
 
 	admitCustomDelivery(

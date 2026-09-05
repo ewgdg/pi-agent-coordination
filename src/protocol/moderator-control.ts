@@ -24,7 +24,8 @@ export type ModeratorResolutionBlocker =
 	| "obligation_stall"
 	| "run_failure"
 	| "dependency_deadlock"
-	| "operation_review";
+	| "operation_review"
+	| "delivery_stall";
 
 export type ModeratorControlReceipt =
 	| Readonly<{

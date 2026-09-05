@@ -100,7 +100,7 @@ The volatile resolution performed immediately before one new Agent Runtime start
 The working directory obtained during Runtime Preparation by resolving the canonical per-spawn `cwd` against the current parent Runtime working directory. It anchors that Agent's project-scoped Template discovery for descendants and Pi's ordinary Project Context and cwd-scoped resource discovery for the prepared Runtime.
 
 **Workflow Policy**:
-The Owner-scoped configuration snapshot governing new host admissions, limits, and operation review. Its execution limit counts concurrent child Agent Runs only; the canonical Workflow Owner and Moderators enter immediately without consuming child capacity. Owner resource reload may replace the Policy prospectively without making it transcript state or changing already-admitted work.
+The Owner-scoped configuration snapshot governing new host admissions, limits, operation review, and delivery progress. Its execution limit counts concurrent child Agent Runs only; the canonical Workflow Owner and Moderators enter immediately without consuming child capacity. Owner resource reload may replace the Policy prospectively without making it transcript state or changing already-admitted work.
 _Avoid_: Workflow state, Workflow configuration lifecycle
 
 **Agent Request**:
@@ -186,11 +186,20 @@ One runtime-authored, model-visible Deferred Delivery sent when a simple Obligat
 **Obligation Stall**:
 A settled Agent Run retained by an Answer Obligation it must discharge, with no active or admitted work, external progress source, or Interruption Hold. An unresolved outgoing Request to a dormant Agent is not an external progress source. The first simple occurrence schedules an Obligation Reminder; a later occurrence with durable reminder proof starts Moderator handling.
 
+**Delivery Progress Deadline**:
+The captured Workflow Policy interval during which eligible delivery machinery must advance toward transcript Delivery proof. Eligibility starts an interval; reservation and dispatch reset it. Legitimate dependency waits suspend it, and regained eligibility starts fresh. Proof or suppression clears it. Polls and heartbeats are not progress, and neither ordinary model generation nor Agent Wait duration is timed.
+
+**Delivery Stall**:
+A live delivery blockage qualifying through an unresolved upstream Answer Obligation and its outstanding Request path. Known scheduling loss requests investigation immediately; silent eligible scheduling or commitment stalls qualify at the Delivery Progress Deadline. The undelivered leaf need not have an obligation and the path need not be cyclic. Human attention, selection and Holds exclude paths. Run termination leaves undelivered work observable while its upstream obligation remains; it is not cancellation or an exclusion. Handling is bounded per continuous blocked Message and grants no retry, cancellation, outcome, or authority.
+
+**Moderation Unavailable**:
+Passive Owner attention when moderation cannot inspect evidence or create its Moderator, including when its observation pass does not complete within the delivery-progress policy interval. It points to retained Owner diagnostic evidence and deduplicates the continuous fault. A creation exception pauses staging for that continuous condition; it does not consume an uncommitted attempt or permit heartbeat retries. Inspection success, completion of a still-running preparation, or original-condition clearance dismisses the applicable attention. It is not an Operational Incident trigger, durable failure state, or authorization to recover effects.
+
 **Operational Incident**:
 A predefined suspicious live coordination condition blocking at least one unresolved Answer Obligation and starting Moderator handling. It is a transient occurrence rather than a durable aggregate or lifecycle; unnecessary review is preferable to silently stranded obligated work.
 
 **Handling Key**:
-A derived host-local key that suppresses repeated Moderator creation while one continuous Operational Incident is being handled or shown as exhausted Owner attention. It is transient correlation rather than Incident identity, is released when the condition clears, and is not persisted or reconstructed after host loss.
+A derived host-local key that suppresses repeated Moderator creation while one continuous Operational Incident is being handled, has faulted Moderator preparation, or is shown as exhausted Owner attention. It is transient correlation rather than Incident identity, is released when the condition clears, and is not persisted or reconstructed after host loss.
 
 **Operation Review Deadline**:
 The runtime-owned limit on how long one root Pi tool call belonging to an Agent with an unresolved Answer Obligation may remain unresolved before operational review is required. The watcher does not inspect the tool's internal awaits or separately review background coordination work after its root call returns. A blocking call is reviewed from execution admission; an asynchronous call is reviewed only across a continuous unattended wait, beginning when its Run reaches an Idle boundary and ending if Agent work resumes before expiry. Terminal tool-result commit or explicit Moderator renewal ends the current interval, while tool progress, heartbeat, logs, or other machinery activity does not. It does not govern model generation, and expiry establishes no operational outcome.

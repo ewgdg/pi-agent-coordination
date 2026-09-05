@@ -1,3 +1,4 @@
+import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
@@ -186,6 +187,7 @@ function readMessageDeliveries(options: {
 					entry.customType === CONVERSATION_FORK_CUSTOM_TYPE ||
 					entry.customType === MODERATOR_ROUTINE_START_CUSTOM_TYPE ||
 					entry.customType === OBLIGATION_REMINDER_CUSTOM_TYPE ||
+					entry.customType === OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE ||
 					entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE
 				)
 					continue;

@@ -87,7 +87,14 @@ type OperationReviewConditionSnapshot = ConditionSnapshotBase & Readonly<{
 	review: OperationReviewSnapshot;
 }>;
 
+type DeliveryStallSnapshot = ConditionSnapshotBase & Readonly<{
+	kind: "delivery_stall";
+	delivery: Readonly<{ messageId: string; recipientAgentId: string }>;
+	reason: import("./delivery-progress.ts").DeliveryBlockageReason;
+}>;
+
 type OperationalConditionSnapshot =
+	| DeliveryStallSnapshot
 	| ObligationStallSnapshot
 	| RunFailureSnapshot
 	| DependencyDeadlockSnapshot
@@ -99,11 +106,14 @@ type OperationalIncidentHandling = {
 	committedAttemptCount: number;
 	diagnostics: EntryPointer[];
 	exhausted: boolean;
+	creationFailed: boolean;
+	trigger?: ModeratorTrigger;
 	previousAttempt?: EntryPointer;
 };
 
 export type OperationalIncidentAttention = Readonly<{
-	trigger: ModeratorTrigger;
+	trigger: ModeratorTrigger | Readonly<{ kind: "moderation_unavailable" }>;
+	summary?: string;
 	affectedAgents: readonly Readonly<{
 		agentId: string;
 		label: string;
@@ -122,6 +132,7 @@ const unavailablePresentation: OperationalIncidentPresentation = {
 };
 
 export type OperationalIncidentBoundaryHooks = Readonly<{
+	beforeEvidenceInspection?(): void | Promise<void>;
 	beforeModeratorBootstrapCommit?(): void | "confirmed_failure";
 	beforeModeratorRunStart?(): void | "confirmed_failure";
 }>;
@@ -137,8 +148,13 @@ export class OperationalIncidentCoordinator {
 	readonly #boundaryHooks: OperationalIncidentBoundaryHooks;
 	readonly #presentation: OperationalIncidentPresentation;
 	readonly #workflowPolicy: WorkflowPolicyStore;
+	readonly #deliveryProgressClock: OperationReviewClock;
+	#activeCreation: OperationalIncidentHandling | undefined;
+	#cancelInspectionDeadline: (() => void) | undefined;
 	readonly #operationReviews: OperationReviewWatcher;
 	readonly #onAttentionChanged: () => void;
+	readonly #faultAttention = new Map<string, OperationalIncidentAttention>();
+	readonly #retainDiagnostic: (error: unknown) => EntryPointer;
 	readonly #handlingByKey = new Map<string, OperationalIncidentHandling>();
 	readonly #attemptByModeratorAgentId = new Map<string, OperationalConditionSnapshot>();
 	readonly #runFailureByKey = new Map<string, RunFailureSnapshot>();
@@ -155,9 +171,11 @@ export class OperationalIncidentCoordinator {
 		integrateAgent(record: AgentRecord): void;
 		isShuttingDown(): boolean;
 		reportError(error: unknown): void;
+		retainDiagnostic(error: unknown): EntryPointer;
 		boundaryHooks?: OperationalIncidentBoundaryHooks;
 		presentation?: OperationalIncidentPresentation;
 		operationReviewClock?: OperationReviewClock;
+		deliveryProgressClock?: OperationReviewClock;
 		onAttentionChanged?(): void;
 	}) {
 		this.#agents = options.agents;
@@ -165,14 +183,20 @@ export class OperationalIncidentCoordinator {
 		this.#sessionFactory = options.sessionFactory;
 		this.#messages = options.messages;
 		this.#workflowPolicy = options.workflowPolicy;
+		this.#deliveryProgressClock = options.deliveryProgressClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
 		this.#integrateAgent = options.integrateAgent;
 		this.#isShuttingDown = options.isShuttingDown;
 		this.#reportError = options.reportError;
+		this.#retainDiagnostic = options.retainDiagnostic;
 		this.#boundaryHooks = options.boundaryHooks ?? {};
 		this.#presentation = options.presentation ?? unavailablePresentation;
 		this.#onAttentionChanged = options.onAttentionChanged ?? (() => undefined);
+		const reviewClock = options.operationReviewClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
 		this.#operationReviews = new OperationReviewWatcher({
-			clock: options.operationReviewClock ?? SYSTEM_OPERATION_REVIEW_CLOCK,
+			clock: {
+				schedule: (delayMs, callback) => reviewClock.schedule(delayMs,
+					() => this.#containEvidenceInspection(callback)),
+			},
 			isUnresolved: (toolCall) => this.#isToolCallUnresolved(toolCall),
 			hasAnswerObligation: (agentId) => {
 				const record = this.#agents.get(agentId);
@@ -190,11 +214,11 @@ export class OperationalIncidentCoordinator {
 		if (this.#integratedAgentIds.has(record.identity.agentId)) return;
 		this.#integratedAgentIds.add(record.identity.agentId);
 		record.host.addSettledHandler((_handle, settlement) => {
-			this.#operationReviews.setAgentAttendance(record.identity.agentId, "idle");
+			this.#containEvidenceInspection(() => this.#operationReviews.setAgentAttendance(record.identity.agentId, "idle"));
 			if (settlement !== "settled") return;
 			this.#scheduleReconciliationAfterHostLane(record);
 		});
-		record.host.addEndedHandler((handle, cause) => {
+		record.host.addEndedHandler((handle, cause) => this.#containEvidenceInspection(() => {
 			this.#operationReviews.endRun(record.identity.agentId);
 			if (this.#isModerator(record)) {
 				if (cause === "failure" && !this.#isShuttingDown()) {
@@ -206,7 +230,7 @@ export class OperationalIncidentCoordinator {
 							);
 							if (handling) await this.#handleModeratorFailure(handling, record);
 						})
-						.catch((error: unknown) => this.#reportError(error));
+						.catch((error: unknown) => this.#presentFault("moderation:evidence", error));
 				}
 				return;
 			}
@@ -233,15 +257,19 @@ export class OperationalIncidentCoordinator {
 				}
 			}
 			this.#scheduleReconciliation();
-		});
+		}));
 		record.host.addStateChangeHandler(() => {
-			this.#operationReviews.reconcileAgent(record.identity.agentId);
+			this.#containEvidenceInspection(() => this.#operationReviews.reconcileAgent(record.identity.agentId));
 			this.#scheduleReconciliation();
 		});
 	}
 
+	deliveryProgressChanged(): void {
+		void this.#scheduleReconciliation();
+	}
+
 	beginExecution(agentId: string): void {
-		this.#operationReviews.setAgentAttendance(agentId, "attended");
+		this.#containEvidenceInspection(() => this.#operationReviews.setAgentAttendance(agentId, "attended"));
 	}
 
 	admitToolExecution(agentId: string, toolCallId: string, toolName: string): void {
@@ -281,7 +309,16 @@ export class OperationalIncidentCoordinator {
 	}
 
 	reconcileCommittedToolResults(agentId: string): void {
-		this.#operationReviews.reconcileAgent(agentId);
+		this.#containEvidenceInspection(() => this.#operationReviews.reconcileAgent(agentId));
+		this.#scheduleReconciliation();
+	}
+
+	#containEvidenceInspection(inspect: () => void): void {
+		try {
+			inspect();
+		} catch (error) {
+			this.#presentFault("moderation:evidence", error);
+		}
 	}
 
 	executeModeratorControl(
@@ -344,6 +381,7 @@ export class OperationalIncidentCoordinator {
 			| "run_failure"
 			| "dependency_deadlock"
 			| "operation_review"
+			| "delivery_stall"
 		> = [];
 		if (moderator.host.requestRelationshipIds("answer_owed").length > 0) {
 			predicates.push("incoming_requests");
@@ -375,11 +413,10 @@ export class OperationalIncidentCoordinator {
 
 	attentionItems(callerAgentId: string): readonly OperationalIncidentAttention[] {
 		if (callerAgentId !== this.#ownerIdentity.agentId) return [];
-		return [...this.#handlingByKey.values()].flatMap((handling) =>
-			handling.exhausted
-				? [this.#attentionFor(handling)]
-				: []
+		const exhausted = [...this.#handlingByKey.values()].flatMap((handling) =>
+			handling.exhausted ? [this.#attentionFor(handling)] : []
 		);
+		return [...this.#faultAttention.values(), ...exhausted];
 	}
 
 	reachSafeBoundary(): Promise<void> {
@@ -387,20 +424,75 @@ export class OperationalIncidentCoordinator {
 	}
 
 	shutdown(): void {
+		this.#cancelInspectionDeadline?.();
 		this.#operationReviews.shutdown();
+		this.#messages.shutdownDeliveryProgress();
 		let attentionDismissed = false;
 		for (const [key, handling] of this.#handlingByKey) {
 			if (!handling.exhausted) continue;
 			this.#presentation.dismiss(key);
 			attentionDismissed = true;
 		}
+		for (const key of this.#faultAttention.keys()) this.#dismissFault(key);
 		this.#handlingByKey.clear();
 		this.#attemptByModeratorAgentId.clear();
 		this.#runFailureByKey.clear();
 		if (attentionDismissed) this.#onAttentionChanged();
 	}
 
-	async #reconcileWorkflow(): Promise<void> {
+	#reconcileWorkflow(): Promise<void> {
+		return this.#withModerationDeadline(async () => {
+			await this.#inspectWorkflow();
+			this.#dismissFault("moderation:evidence");
+		});
+	}
+
+	async #withModerationDeadline(work: () => Promise<void>): Promise<void> {
+		// Initial bootstrap and its immediate replacements share the enclosing
+		// inspection deadline; a later terminal failure starts its own pass.
+		if (this.#cancelInspectionDeadline) return work();
+		// This watches the observation pass itself, not the affected Agent's model
+		// or parked Wait. A hung inspector/bootstrap must not hide Owner attention.
+		const intervalMs = this.#workflowPolicy.current().deliveryProgressIntervalMs;
+		this.#cancelInspectionDeadline = this.#deliveryProgressClock.schedule(intervalMs, () => {
+			const handling = this.#activeCreation;
+			this.#presentFault(handling ? `moderation:creation:${handling.snapshot.key}` : "moderation:evidence",
+				new Error(`Moderation ${handling ? "creation" : "evidence inspection"} made no completion within ${intervalMs}ms`), handling);
+		});
+		try {
+			await work();
+		} catch (error) {
+			this.#presentFault("moderation:evidence", error);
+		} finally {
+			this.#cancelInspectionDeadline?.();
+			this.#cancelInspectionDeadline = undefined;
+			this.#activeCreation = undefined;
+		}
+	}
+
+	#presentFault(key: string, error: unknown, handling?: OperationalIncidentHandling): void {
+		if (this.#isShuttingDown() || this.#faultAttention.has(key)) return;
+		const agentIds = handling?.snapshot.affectedAgentIds ?? [this.#ownerIdentity.agentId];
+		const attention: OperationalIncidentAttention = {
+			trigger: handling?.trigger ?? { kind: "moderation_unavailable" },
+			summary: handling ? "Moderator creation blocked; inspect diagnostic evidence." : "Moderation evidence inspection blocked; inspect diagnostic evidence.",
+			affectedAgents: agentIds.map((agentId) => ({ agentId, label: this.#requireAgent(agentId).identity.metadata.label })),
+			diagnostics: [this.#retainDiagnostic(error)],
+		};
+		this.#faultAttention.set(key, attention);
+		this.#presentation.present(key, attention);
+		this.#onAttentionChanged();
+	}
+
+	#dismissFault(key: string): void {
+		if (!this.#faultAttention.delete(key)) return;
+		this.#presentation.dismiss(key);
+		this.#onAttentionChanged();
+	}
+
+	async #inspectWorkflow(): Promise<void> {
+		if (this.#isShuttingDown()) return;
+		await this.#boundaryHooks.beforeEvidenceInspection?.();
 		await this.#messages.refreshTranscriptFacts();
 		if (this.#isShuttingDown()) return;
 		const snapshots: OperationalConditionSnapshot[] = [];
@@ -412,27 +504,32 @@ export class OperationalIncidentCoordinator {
 			}
 			snapshots.push(snapshot);
 		}
+		const deliveryStalls = this.#observeDeliveryStalls();
+		snapshots.push(...deliveryStalls);
 		snapshots.push(...this.#observeOperationReviews());
 		const dependencyDeadlocks = this.#observeDependencyDeadlocks();
 		snapshots.push(...dependencyDeadlocks);
-		const deadlockedAgentIds = new Set(
-			dependencyDeadlocks.flatMap(({ affectedAgentIds }) => affectedAgentIds),
+		const dependencyHandledAgentIds = new Set(
+			[...dependencyDeadlocks, ...deliveryStalls].flatMap(({ affectedAgentIds }) => affectedAgentIds),
 		);
 		for (const record of [...this.#agents.values()]) {
 			if (
 				this.#isModerator(record) ||
-				deadlockedAgentIds.has(record.identity.agentId)
+				dependencyHandledAgentIds.has(record.identity.agentId)
 			) continue;
 			const snapshot = this.#observeObligationStall(record);
 			if (snapshot) snapshots.push(snapshot);
 		}
 		const currentKeys = new Set(snapshots.map(({ key }) => key));
+		for (const key of this.#faultAttention.keys()) {
+			if (key.startsWith("moderation:creation:") && !currentKeys.has(key.slice("moderation:creation:".length))) this.#dismissFault(key);
+		}
 		for (const key of this.#handlingByKey.keys()) {
 			if (!currentKeys.has(key)) this.#releaseHandling(key);
 		}
 		for (const snapshot of snapshots) {
 			const existing = this.#handlingByKey.get(snapshot.key);
-			if (existing?.moderatorAgentId !== undefined || existing?.exhausted) continue;
+			if (existing?.moderatorAgentId !== undefined || existing?.exhausted || existing?.creationFailed) continue;
 			if (
 				!existing &&
 				snapshot.kind === "obligation_stall" &&
@@ -443,20 +540,32 @@ export class OperationalIncidentCoordinator {
 				committedAttemptCount: 0,
 				diagnostics: [],
 				exhausted: false,
+				creationFailed: false,
 			};
 			this.#handlingByKey.set(snapshot.key, handling);
-			try {
-				await this.#createModerator(handling);
-			} catch (error) {
-				if (
-					handling.moderatorAgentId === undefined &&
-					handling.committedAttemptCount === 0
-				) {
-					this.#handlingByKey.delete(snapshot.key);
-				}
-				throw error;
-			}
+			await this.#attemptModeratorCreation(handling);
 		}
+	}
+
+	#attemptModeratorCreation(handling: OperationalIncidentHandling): Promise<void> {
+		return this.#withModerationDeadline(async () => {
+			const previousCreation = this.#activeCreation;
+			this.#activeCreation = handling;
+			try {
+				handling.trigger = this.#triggerFor(handling.snapshot);
+				await this.#createModerator(handling);
+				// Initial creation can synchronously lead to replacement creation.
+				// Do not clear that replacement's fault when the outer call returns.
+				if (!handling.creationFailed) this.#dismissFault(`moderation:creation:${handling.snapshot.key}`);
+			} catch (error) {
+				// Uncommitted preparation consumes no committed attempt, but must
+				// not repeat staging effects on unrelated activity or heartbeats.
+				handling.creationFailed = true;
+				this.#presentFault(`moderation:creation:${handling.snapshot.key}`, error, handling);
+			} finally {
+				this.#activeCreation = previousCreation;
+			}
+		});
 	}
 
 	#scheduleObligationReminder(
@@ -614,7 +723,7 @@ export class OperationalIncidentCoordinator {
 		handling.diagnostics.push(handling.previousAttempt);
 		handling.moderatorAgentId = undefined;
 		if (handling.committedAttemptCount < MAX_AUTOMATIC_MODERATOR_ATTEMPTS) {
-			await this.#createModerator(handling);
+			await this.#attemptModeratorCreation(handling);
 		} else {
 			handling.exhausted = true;
 			this.#presentation.present(
@@ -627,7 +736,7 @@ export class OperationalIncidentCoordinator {
 
 	#attentionFor(handling: OperationalIncidentHandling): OperationalIncidentAttention {
 		return {
-			trigger: this.#triggerFor(handling.snapshot),
+			trigger: handling.trigger ?? this.#triggerFor(handling.snapshot),
 			affectedAgents: handling.snapshot.affectedAgentIds.map((agentId) => ({
 				agentId,
 				label: this.#requireAgent(agentId).identity.metadata.label,
@@ -650,6 +759,10 @@ export class OperationalIncidentCoordinator {
 				snapshot.requestIds.slice(0, MAX_MODERATOR_REQUEST_SOURCES),
 			),
 		};
+		if (snapshot.kind === "delivery_stall") {
+			return { kind: snapshot.kind, agentIds: snapshot.affectedAgentIds, requests: requestSet,
+				delivery: snapshot.delivery, reason: snapshot.reason };
+		}
 		if (snapshot.kind === "run_failure") {
 			return {
 				kind: "run_failure",
@@ -707,6 +820,7 @@ export class OperationalIncidentCoordinator {
 	}
 
 	#conditionRemains(snapshot: OperationalConditionSnapshot): boolean {
+		if (snapshot.kind === "delivery_stall") return this.#observeDeliveryStalls().some(({ key }) => key === snapshot.key);
 		if (snapshot.kind === "operation_review") {
 			return this.#operationReviews.expiredReviews().some(
 				(review) => toolCallPointerKey(review.toolCall) === snapshot.key,
@@ -727,6 +841,64 @@ export class OperationalIncidentCoordinator {
 			);
 		}
 		return this.#observeDependencyDeadlocks().some(({ key }) => key === snapshot.key);
+	}
+
+
+	#observeDeliveryStalls(): readonly DeliveryStallSnapshot[] {
+		const blocked = this.#messages.blockedDeliveries();
+		const snapshots: DeliveryStallSnapshot[] = [];
+		for (const delivery of blocked) {
+			const affected = new Set<string>();
+			const requests = new Set<string>();
+			for (const root of this.#agents.values()) {
+				if (this.#isModerator(root) || this.#deliveryPathExcluded(root)) continue;
+				const run = root.host.observe();
+				// A running model is a progress source, not a timed obligation.
+				if (run.phase !== "live" || (run.work === "active" && run.attention !== "agent_wait")) continue;
+				const obligations = this.#messages.answerObligationRequestIds(root);
+				if (obligations.length === 0) continue;
+				const visit = (record: AgentRecord, path: string[], edges: string[]): void => {
+					const agentId = record.identity.agentId;
+					if (path.includes(agentId) || this.#deliveryPathExcluded(record)) return;
+					const currentRun = record.host.observe();
+					if (agentId !== delivery.recipientAgentId && (
+						currentRun.phase === "starting" ||
+						(currentRun.phase === "live" && currentRun.work === "active" && currentRun.attention === "none")
+					)) return;
+					const nextPath = [...path, agentId];
+					if (agentId === delivery.recipientAgentId) {
+						for (const id of nextPath) affected.add(id);
+						for (const id of [...obligations, ...edges]) requests.add(id);
+					}
+					for (const edge of this.#messages.requestRelationships(
+						this.#messages.outstandingRequestIdsFor(record),
+					)) {
+						const target = this.#agents.get(edge.targetAgentId);
+						if (target && !this.#isModerator(target)) visit(target, nextPath, [...edges, edge.requestId]);
+					}
+				};
+				visit(root, [], []);
+			}
+			if (requests.size === 0) continue;
+			const affectedAgentIds = [...affected].sort((a, b) => a.localeCompare(b));
+			snapshots.push({
+				kind: "delivery_stall",
+				key: JSON.stringify(["delivery_stall", delivery.messageId]),
+				affectedAgentIds,
+				requestIds: [...requests].sort(),
+				inspectedThrough: affectedAgentIds.map((id) => statusOf(this.#requireAgent(id)).primaryEvidence.inspectedThrough),
+				delivery: { messageId: delivery.messageId, recipientAgentId: delivery.recipientAgentId },
+				reason: delivery.reason,
+			});
+		}
+		return snapshots;
+	}
+
+	#deliveryPathExcluded(record: AgentRecord): boolean {
+		const run = record.host.observe();
+		return (run.phase !== "dormant" && run.attention === "input_required") ||
+			record.host.hasRetentionReason("interactive_selection") ||
+			record.host.hasRetentionReason("interruption_hold");
 	}
 
 	#observeOperationReviews(): readonly OperationReviewConditionSnapshot[] {

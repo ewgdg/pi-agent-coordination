@@ -1,6 +1,6 @@
 # Operational Incident moderation
 
-The host starts an isolated Moderator when live coordination evidence matches an Operation Review, Obligation Stall, Run Failure, or Dependency Deadlock. Operational Incidents are transient observations of blocked obligated work, not durable Agent or Workflow lifecycle states.
+The host starts an isolated Moderator when live coordination evidence matches an Operation Review, Obligation Stall, Run Failure, Dependency Deadlock, or Delivery Stall. Operational Incidents are transient observations of blocked obligated work, not durable Agent or Workflow lifecycle states.
 
 ## Detection
 
@@ -24,6 +24,30 @@ Deadlock detection is observational. It does not cancel a Request, interrupt or 
 
 Clean Run release, deliberate termination, orderly shutdown, optional work, ordinary model duration, Human waiting, and intentional Holds do not create Run Failure or Dependency Deadlock handling. Operation Review never times model generation or internal coordination machinery, including a parked `agent_wait`; the existing Request graph remains eligible for Dependency Deadlock observation. Primary interactive human input or an eligible inbound Agent Request preempts the parked Wait through normal coordination, so human redirection and reverse-Request flows do not depend on Dependency Deadlock moderation.
 
+## Delivery Stall
+
+A Delivery Stall is observed when an unresolved Answer Obligation depends on a Message whose delivery machinery has lost its continuation or exhausted its progress interval. The dependency is traced through outstanding Requests from an obligated ordinary Agent, including a parent parked in `agent_wait`. The undelivered recipient need not owe an Answer yet, and the path need not form a cycle. Pending retention alone is not evidence of progress.
+
+Delivery progress uses the admission-time `deliveryProgressIntervalMs` from [Workflow Policy](workflow-policy.md):
+
+| Transition or observation | Deadline effect |
+| --- | --- |
+| First observation of eligible pending scheduling | Start the captured interval |
+| Frozen scheduling reservation, then dispatch to Pi | Reset at each meaningful transition |
+| Transcript Delivery proof or Request suppression | Clear observation and handling |
+| Execution-capacity wait, active recipient work before dispatch, or admission behind an existing Answer Obligation | Suspend; follow outstanding Request dependencies rather than timing the wait |
+| Human attention, interactive selection, or intentional Hold on the recipient | Suspend; regain eligibility with a fresh interval |
+| Poll, heartbeat, repeated state observation, or policy reload | No extension |
+| Scheduling/dispatch exception with no continuing delivery path, including startup/admission exits before dispatch | Immediately request investigation once a qualifying obligation path exists |
+
+A dispatch Promise can cover the entire Pi model turn. It is not Delivery proof, and waiting for its completion must not time model generation: transcript commitment ends delivery observation independently of that Promise.
+
+Human waiting, selection, and Holds anywhere along a qualifying path exclude that path. Active or starting intermediate Agents remain legitimate progress sources. An obligated parent doing ordinary model work does not qualify just because a child delivery is pending. Run termination does not cancel Requests or exempt stranded delivery work: an unproven Delivery losing its recipient Run remains observable as a known scheduling failure while an upstream obligation still qualifies. This does not restart the recipient or turn deliberate termination into Run Failure handling.
+
+One continuous blocked Message produces one handling instance containing affected Agent identities, bounded canonical Request source pointers along the dependency, the exact Message and recipient identities, and either the observed scheduling diagnostic or the expired stage and interval. Other triggers retain their contracts; affected Delivery Stall paths do not also receive simple Obligation Stall reminders. The condition ends when proof, suppression, meaningful progress, a legitimate wait/exclusion, or final qualifying obligation clearance removes the blockage. Later recurrence is independently handled.
+
+Detection does **not** establish a delivery outcome, retry a Message, recreate scheduling, cancel Requests, duplicate Delivery proof, or authorize new Moderator operations. Existing explicit Message Retry semantics remain unchanged.
+
 ## Continuous conditions
 
 Each trigger has a deterministic transient Handling Key:
@@ -32,6 +56,7 @@ Each trigger has a deterministic transient Handling Key:
 - Run Failure uses the affected Agent and exact Run sequence.
 - Dependency Deadlock uses sorted component Agent and Request identities.
 - Operation Review uses the exact root tool-call pointer.
+- Delivery Stall uses the blocked Message identity, aggregating current qualifying upstream paths.
 
 The key suppresses duplicates only while that exact continuous predicate remains true. Relevant Run, Request, Delivery, input, selection, attention, and Hold transitions revalidate all current conditions. Clearing a predicate releases its key and the current Moderator's `moderator_handling` retention without aborting the Moderator or settling its ordinary Requests.
 
@@ -55,6 +80,14 @@ An Operation Review trigger contains only `kind`, the exact `toolCall` pointer, 
 One continuous condition permits at most two committed automatic attempts: the initial Moderator and one fresh replacement. A post-commit startup failure or terminal Moderator Run failure consumes its attempt. The replacement continues the original condition and points to the first attempt's terminal evidence; Moderator failure never becomes a nested Operational Incident.
 
 After the second committed attempt fails, automatic creation stops. Passive Operational Attention appears once in the Owner-scoped activity dock and as an `ATTENTION` row in `/agents`. It presents the original trigger—including its exact Run sequence when applicable and bounded Request source pointers—the affected Agent identities, and the two terminal diagnostic pointers. Selecting attention for exactly one affected Agent opens that Agent's view without changing the incident; multi-Agent attention remains informational and Enter keeps `/agents` open. Only the Workflow Owner can observe this attention. It disappears immediately when the original predicate clears.
+
+## Unavailable moderation and Owner attention
+
+The moderation reconciliation boundary contains evidence-inspection and Moderator-creation failures. It retains one non-model-visible `agent-coordination.operational-diagnostic` entry in the Owner transcript with the error message and full stack, and presents one concise passive Owner attention item with its diagnostic pointer. Creation failure preserves the original trigger and affected Agents; inspection failure reports `moderation_unavailable` without inventing a Request graph. The latter is an attention signal, not a Moderator trigger or durable failure state.
+
+A watchdog uses the current delivery-progress policy interval to surface the same attention if the inspection/bootstrap pass is still blocked. Both initial Moderator creation and replacement preparation after a terminal Moderator failure run within this timed containment; immediate replacements share their enclosing pass. It does not abort the Promise, unlock a lane, retry scheduling, or infer whether effects committed. Repeated activity does not duplicate attention or diagnostic entries for the continuous fault. A creation exception retains faulted handling and stops further staging for that continuous condition, including failure before the first Moderator Input commits. Heartbeats, safe-boundary checks and unrelated activity do not retry preparation. Condition clearance releases the faulted handling; a later recurrence starts fresh. A preparation that only exceeded its deadline may still finish, without cancellation or another attempt. A successful inspection clears inspection attention; successful creation or original-condition clearance clears creation attention. Failure before Moderator Input commits consumes no committed attempt, but is not permission for repeated staging; committed handling keeps the existing two-attempt bound.
+
+This is the scoped containment required for delivery-blockage detection. It does not decide the broader participant lifecycle containment, fencing, or cleanup policy discussed in issue #75. Core evidence scanners continue throwing; no malformed-call race or scheduler-recovery behavior is changed. Passive attention belongs to the Owner surface, including when a child Runtime supplies the selected view; it is not a generic Pi extension-error chat row.
 
 ## Diagnosis, escalation, and Resolution
 

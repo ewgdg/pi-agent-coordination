@@ -16,6 +16,7 @@ test("strict Workflow Policy parsing fills defaults and freezes one complete sna
 	assert.deepEqual(defaults, {
 		maxConcurrentAgentRuns: 8,
 		maxPendingDeliveriesPerAgent: 256,
+		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 600_000,
 	});
 	assert.equal(Object.isFrozen(defaults), true);
@@ -23,11 +24,13 @@ test("strict Workflow Policy parsing fills defaults and freezes one complete sna
 	const configured = parseWorkflowPolicy(JSON.stringify({
 		maxConcurrentAgentRuns: 3,
 		maxPendingDeliveriesPerAgent: 17,
+		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
 	}));
 	assert.deepEqual(configured, {
 		maxConcurrentAgentRuns: 3,
 		maxPendingDeliveriesPerAgent: 17,
+		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
 	});
 	assert.equal(Object.isFrozen(configured), true);
@@ -48,6 +51,10 @@ test("strict Workflow Policy parsing rejects the complete invalid document", () 
 		["zero concurrency", '{"maxConcurrentAgentRuns": 0}'],
 		["fractional concurrency", '{"maxConcurrentAgentRuns": 1.5}'],
 		["unsafe delivery limit", `{"maxPendingDeliveriesPerAgent": ${Number.MAX_SAFE_INTEGER + 1}}`],
+		["null delivery interval", '{"deliveryProgressIntervalMs": null}'],
+		["short delivery interval", '{"deliveryProgressIntervalMs": 999}'],
+		["long delivery interval", '{"deliveryProgressIntervalMs": 2147483648}'],
+		["fractional delivery interval", '{"deliveryProgressIntervalMs": 1000.5}'],
 		["short review interval", '{"operationReviewIntervalMs": 999}'],
 		["long review interval", '{"operationReviewIntervalMs": 2147483648}'],
 	] as const;
@@ -83,6 +90,7 @@ test("Workflow Policy loads only the exact optional user file", async (t) => {
 	assert.deepEqual(loaded.snapshot, {
 		maxConcurrentAgentRuns: 2,
 		maxPendingDeliveriesPerAgent: 256,
+		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_200,
 	});
 });
@@ -100,6 +108,7 @@ test("Workflow Policy reload publication replaces or preserves one whole snapsho
 	assert.deepEqual(store.current(), {
 		maxConcurrentAgentRuns: 8,
 		maxPendingDeliveriesPerAgent: 4,
+		deliveryProgressIntervalMs: 60_000,
 		operationReviewIntervalMs: 1_000,
 	});
 });

@@ -424,7 +424,7 @@ const ModeratorControlReceiptSchema = Type.Union([
 		predicates: Type.Array(Type.Union([
 			Type.Literal("incoming_requests"), Type.Literal("outgoing_requests"),
 			Type.Literal("obligation_stall"), Type.Literal("run_failure"),
-			Type.Literal("dependency_deadlock"), Type.Literal("operation_review"),
+			Type.Literal("dependency_deadlock"), Type.Literal("operation_review"), Type.Literal("delivery_stall"),
 		])),
 	}),
 ]);
@@ -520,6 +520,19 @@ const ModeratorRequestSetSchema = closed({
 });
 const ModeratorTriggerSchema = Type.Union([
 	closed({
+		kind: Type.Literal("delivery_stall"),
+		agentIds: Type.Array(NonEmptyStringSchema, { minItems: 1, uniqueItems: true }),
+		requests: ModeratorRequestSetSchema,
+		delivery: closed({ messageId: NonEmptyStringSchema, recipientAgentId: NonEmptyStringSchema }),
+		reason: Type.Union([
+			closed({ kind: Type.Literal("scheduling_failure"), diagnostic: Type.String() }),
+			closed({ kind: Type.Literal("progress_deadline"),
+				stage: Type.Union([Type.Literal("eligible"), Type.Literal("reserved"), Type.Literal("dispatched")]),
+				intervalMs: Type.Integer({ minimum: 1 }),
+			}),
+		]),
+	}),
+	closed({
 		kind: Type.Literal("obligation_stall"),
 		agentId: NonEmptyStringSchema,
 		obligations: ModeratorRequestSetSchema,
@@ -552,7 +565,8 @@ const OperationalIncidentAgentSchema = closed({
 	label: NonEmptyStringSchema,
 });
 const OperationalIncidentAttentionSchema = closed({
-	trigger: ModeratorTriggerSchema,
+	trigger: Type.Union([ModeratorTriggerSchema, closed({ kind: Type.Literal("moderation_unavailable") })]),
+	summary: Type.Optional(Type.String()),
 	affectedAgents: Type.Array(OperationalIncidentAgentSchema, {
 		minItems: 1,
 		uniqueItems: true,

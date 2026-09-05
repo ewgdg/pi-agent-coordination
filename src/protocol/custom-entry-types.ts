@@ -9,3 +9,6 @@ export const OBLIGATION_REMINDER_CUSTOM_TYPE =
 	"agent-coordination.obligation-reminder";
 export const RUN_FAILURE_RECOVERY_CUSTOM_TYPE =
 	"agent-coordination.run-failure-recovery";
+
+export const OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE =
+	"agent-coordination.operational-diagnostic";

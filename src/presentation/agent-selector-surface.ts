@@ -398,6 +398,7 @@ class AgentSelectorSurface implements Component {
 						: undefined,
 					detailLines: [
 						"",
+						...(attention.summary ? [attention.summary] : []),
 						`Affected ${attention.affectedAgents.map(({ label }) => label).join(", ")}`,
 						requests.sources.length === 0
 							? `Requests ${requests.total}`

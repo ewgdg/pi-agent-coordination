@@ -48,7 +48,19 @@ export type ModeratorRequestSet = Readonly<{
 	sources: readonly ToolCallPointer[];
 }>;
 
+export type DeliveryProgressStage = "eligible" | "reserved" | "dispatched";
+export type DeliveryBlockageReason =
+	| Readonly<{ kind: "scheduling_failure"; diagnostic: string }>
+	| Readonly<{ kind: "progress_deadline"; stage: DeliveryProgressStage; intervalMs: number }>;
+
 export type ModeratorTrigger =
+	| Readonly<{
+		kind: "delivery_stall";
+		agentIds: readonly string[];
+		requests: ModeratorRequestSet;
+		delivery: Readonly<{ messageId: string; recipientAgentId: string }>;
+		reason: DeliveryBlockageReason;
+	}>
 	| Readonly<{
 		kind: "obligation_stall";
 		agentId: string;
@@ -291,8 +303,10 @@ function validateModeratorInput(value: unknown): ModeratorInput {
 			runSequence: triggerValue.runSequence as number,
 			obligations: validateRequestSet(triggerValue.obligations),
 		};
-	} else if (triggerValue.kind === "dependency_deadlock") {
-		requireExactKeys(triggerValue, ["kind", "agentIds", "requests"]);
+	} else if (triggerValue.kind === "dependency_deadlock" || triggerValue.kind === "delivery_stall") {
+		requireExactKeys(triggerValue, triggerValue.kind === "delivery_stall"
+			? ["kind", "agentIds", "requests", "delivery", "reason"]
+			: ["kind", "agentIds", "requests"]);
 		if (
 			!Array.isArray(triggerValue.agentIds) ||
 			triggerValue.agentIds.length === 0 ||
@@ -309,11 +323,33 @@ function validateModeratorInput(value: unknown): ModeratorInput {
 		) {
 			throw new ProtocolInvariantError("Moderator Input affected Agents are not normalized");
 		}
-		trigger = {
-			kind: "dependency_deadlock",
-			agentIds: affectedAgentIds,
-			requests: validateRequestSet(triggerValue.requests),
-		};
+		const requests = validateRequestSet(triggerValue.requests);
+		if (triggerValue.kind === "delivery_stall") {
+			const delivery = requireExactRecord(triggerValue.delivery, ["messageId", "recipientAgentId"]);
+			if (!isIdentifier(delivery.messageId) || !isIdentifier(delivery.recipientAgentId) ||
+				!affectedAgentIds.includes(delivery.recipientAgentId)) {
+				throw new ProtocolInvariantError("Moderator Input blocked Delivery is invalid");
+			}
+			const reason = requireRecord(triggerValue.reason);
+			let blockage: Extract<ModeratorTrigger, { kind: "delivery_stall" }>["reason"];
+			if (reason.kind === "scheduling_failure") {
+				requireExactKeys(reason, ["kind", "diagnostic"]);
+				if (typeof reason.diagnostic !== "string") throw new ProtocolInvariantError("Moderator Input diagnostic is invalid");
+				blockage = { kind: reason.kind, diagnostic: reason.diagnostic };
+			} else {
+				requireExactKeys(reason, ["kind", "stage", "intervalMs"]);
+				if (reason.kind !== "progress_deadline" ||
+					!["eligible", "reserved", "dispatched"].includes(reason.stage as string) ||
+					!Number.isSafeInteger(reason.intervalMs) || (reason.intervalMs as number) <= 0) {
+					throw new ProtocolInvariantError("Moderator Input Delivery interval is invalid");
+				}
+				blockage = { kind: reason.kind, stage: reason.stage as "eligible" | "reserved" | "dispatched", intervalMs: reason.intervalMs as number };
+			}
+			trigger = { kind: "delivery_stall", agentIds: affectedAgentIds, requests,
+				delivery: { messageId: delivery.messageId, recipientAgentId: delivery.recipientAgentId }, reason: blockage };
+		} else {
+			trigger = { kind: "dependency_deadlock", agentIds: affectedAgentIds, requests };
+		}
 	} else if (triggerValue.kind === "operation_review") {
 		requireExactKeys(triggerValue, ["kind", "toolCall", "reviewIntervalMs"]);
 		const toolCall = validateToolCallPointer(triggerValue.toolCall);

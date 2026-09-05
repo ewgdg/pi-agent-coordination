@@ -2209,7 +2209,7 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 });
 
 
-test("a pre-commit Moderator bootstrap failure consumes no attempt", async (t) => {
+test("a pre-commit Moderator bootstrap failure pauses staging until condition clearance and consumes no committed attempt", async (t) => {
 	let bootstrapAttempts = 0;
 	const harness = await createIncidentBoundaryHarness(t, {
 		beforeModeratorBootstrapCommit: () => {
@@ -2219,6 +2219,7 @@ test("a pre-commit Moderator bootstrap failure consumes no attempt", async (t) =
 	});
 	harness.host.model.setResponses([
 		fauxAssistantMessage("I settled without answering the Creation Request."),
+		fauxAssistantMessage("I remained settled after the obligation reminder."),
 	]);
 	const affected = await spawnFromView(
 		harness.host.session,
@@ -2237,18 +2238,19 @@ test("a pre-commit Moderator bootstrap failure consumes no attempt", async (t) =
 	);
 	assert.equal((await findModerators(harness.host)).length, 0);
 
-	harness.host.model.setResponses(Array.from({ length: 8 }, () => (context: Context) =>
-		context.tools?.some(({ name }) => name === "moderator_control")
-			? fauxAssistantMessage("I am the first committed handling attempt.")
-			: fauxAssistantMessage("The unrelated Agent settled.")
-	));
-	await spawnFromView(
-		harness.host.session,
-		harness.owner,
-		"spawn-unrelated-after-pre-commit-failure",
-		"Create an unrelated state transition without touching the original Stall.",
-	);
+	for (let n = 0; n < 4; n++) await harness.owner.reachSafeBoundary();
+	assert.equal(bootstrapAttempts, 1, "heartbeats do not retry a faulted staging attempt");
+	assert.equal(harness.owner.operationalAttention().length, 1);
+	const selected = await harness.owner.openAgentView(affected.agentId);
+	assert.ok(selected);
+	await harness.owner.reachSafeBoundary();
+	assert.equal(harness.owner.operationalAttention().length, 0, JSON.stringify(harness.owner.operationalAttention()));
+	harness.host.model.setResponses([
+		fauxAssistantMessage("I am the first committed handling attempt for the recurring condition."),
+	]);
+	await selected.close();
 	const moderator = await waitForModeratorForAgent(harness.host, affected.agentId);
+	assert.equal(bootstrapAttempts, 2);
 	const input = SessionManager.open(moderator.path).getEntries()[0];
 	assert.ok(input?.type === "custom_message" && typeof input.content === "string");
 	assert.equal(
@@ -2872,9 +2874,11 @@ async function controlFromView(
 async function createIncidentBoundaryHarness(
 	t: TestCleanupRegistrar,
 	incidentBoundaryHooks: {
+		beforeEvidenceInspection?(): void | Promise<void>;
 		beforeModeratorBootstrapCommit?(): void | "confirmed_failure";
 		beforeModeratorRunStart?(): void | "confirmed_failure";
 	} = {},
+	options: Partial<ConstructorParameters<typeof WorkflowCoordinator>[2]> = {},
 ) {
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
@@ -2887,6 +2891,7 @@ async function createIncidentBoundaryHarness(
 	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		incidentBoundaryHooks,
+		...options,
 	});
 	return { host, coordinator, owner: coordinator.forAgent(identity.agentId) };
 }
@@ -3123,3 +3128,555 @@ async function waitForConditionPoll(): Promise<void> {
 		setTimeout(resolve, CONDITION_POLL_INTERVAL_MS)
 	);
 }
+
+test("blocked Delivery failure moderates an upstream obligated parent immediately", async (t) => {
+	const clock = new ControllableOperationReviewClock();
+	let requests = 0;
+	let blockedRequestId = "";
+	const { host, coordinator, owner } = await createIncidentBoundaryHarness(t, {}, {
+		deliveryProgressClock: clock,
+		messageBoundaryHooks: {
+			scheduleDeliveryDispatch(context, dispatch) {
+				if (context.kind === "request" && ++requests > 1) {
+					blockedRequestId = context.messageId;
+					throw new Error("controlled pre-dispatch failure");
+				}
+				dispatch();
+			},
+		},
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			request: "Do the leaf work.", label: "Blocked Leaf",
+		}, { id: "spawn-blocked-leaf" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "wait-blocked-leaf" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Investigate the blocked delivery, without retrying."),
+	]);
+	const parent = await spawnFromView(host.session, owner, "spawn-obligated-parent", "Delegate then join.");
+	const moderator = await waitForModeratorKind(host, "delivery_stall");
+	const inputEntry = SessionManager.open(moderator.path).getEntries().find(
+		(entry) => entry.type === "custom_message" && entry.customType === "agent-coordination.moderator-input",
+	);
+	assert.ok(inputEntry?.type === "custom_message");
+	const input = JSON.parse(inputEntry.content as string);
+	assert.equal(input.trigger.delivery.messageId, blockedRequestId);
+	assert.equal(input.trigger.reason.kind, "scheduling_failure");
+	assert.ok(input.trigger.agentIds.includes(parent.agentId));
+	assert.ok(input.trigger.requests.sources.some((source: { toolCallId: string }) => source.toolCallId === "spawn-obligated-parent"));
+	assert.ok(input.trigger.requests.sources.some((source: { toolCallId: string }) => source.toolCallId === "spawn-blocked-leaf"));
+	await coordinator.forAgent(parent.agentId).reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 1);
+	assert.equal(requests, 2, "moderation never retries scheduling");
+});
+
+test("blocked Delivery deadline catches a silent leaf while its obligated parent parks in agent_wait", async (t) => {
+	const clock = new ControllableOperationReviewClock();
+	let requests = 0;
+	const { host, coordinator, owner } = await createIncidentBoundaryHarness(t, {}, {
+		deliveryProgressClock: clock,
+		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"deliveryProgressIntervalMs":1000}')),
+		messageBoundaryHooks: {
+			scheduleDeliveryDispatch(context, dispatch) {
+				if (context.kind === "request" && ++requests > 1) return;
+				dispatch();
+			},
+		},
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Leaf work." }, { id: "silent-leaf" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "silent-leaf-wait" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Investigate the silent delivery."),
+	]);
+	const parent = await spawnFromView(host.session, owner, "silent-parent", "Delegate then join.");
+	await waitForCondition(() => {
+		const run = owner.status(parent.agentId).run;
+		return run.phase === "live" && run.attention === "agent_wait";
+	});
+	await owner.reachSafeBoundary();
+	clock.advanceBy(999);
+	await assertNoModeratorKindAtSafeBoundary(owner, host, "delivery_stall");
+	// Transcript polls and lifecycle safe-boundary heartbeats are not progress.
+	for (let n = 0; n < 3; n++) await owner.reachSafeBoundary();
+	clock.advanceBy(1);
+	const moderator = await waitForModeratorKind(host, "delivery_stall");
+	const entry = SessionManager.open(moderator.path).getEntries()[0];
+	assert.ok(entry?.type === "custom_message");
+	assert.deepEqual(JSON.parse(entry.content as string).trigger.reason, {
+		kind: "progress_deadline", stage: "eligible", intervalMs: 1000,
+	});
+	clock.advanceBy(10_000);
+	await coordinator.forAgent(parent.agentId).reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 1);
+	assert.equal(requests, 2);
+});
+
+test("blocked Delivery Moderator creation failure produces deduplicated Owner attention with diagnostics", async (t) => {
+	let requests = 0;
+	let bootstrapAttempts = 0;
+	const { host, owner } = await createIncidentBoundaryHarness(t, {
+		beforeModeratorBootstrapCommit: () => { bootstrapAttempts++; return "confirmed_failure"; },
+	}, {
+		messageBoundaryHooks: {
+			scheduleDeliveryDispatch(context, dispatch) {
+				if (context.kind === "request" && ++requests > 1) throw new Error("controlled blocked delivery");
+				dispatch();
+			},
+		},
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Leaf work." }, { id: "unavailable-leaf" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Await the leaf."),
+	]);
+	await spawnFromView(host.session, owner, "unavailable-parent", "Delegate.");
+	await waitForCondition(() => owner.operationalAttention().length > 0);
+	const attention = owner.operationalAttention();
+	assert.equal(attention.length, 1);
+	assert.equal(attention[0]?.trigger.kind, "delivery_stall");
+	assert.ok(attention[0]?.diagnostics.length);
+	for (let n = 0; n < 3; n++) await owner.reachSafeBoundary();
+	assert.deepEqual(owner.operationalAttention(), attention);
+	assert.equal(bootstrapAttempts, 1, "deduplication also prevents repeated staging effects");
+	assert.equal((await findModerators(host)).length, 0);
+});
+
+test("moderation evidence failure surfaces once to Owner and clears after successful inspection", async (t) => {
+	let unavailable = false;
+	const { host, owner } = await createIncidentBoundaryHarness(t, {
+		beforeEvidenceInspection() { if (unavailable) throw new Error("controlled evidence read failure"); },
+	});
+	unavailable = true;
+	for (let n = 0; n < 3; n++) await owner.reachSafeBoundary();
+	const attention = owner.operationalAttention();
+	assert.equal(attention.length, 1);
+	assert.equal(attention[0]?.trigger.kind, "moderation_unavailable");
+	const diagnosticId = attention[0]?.diagnostics[0]?.entryId;
+	const diagnostic = host.session.sessionManager.getEntry(diagnosticId!);
+	assert.ok(diagnostic?.type === "custom");
+	assert.match(JSON.stringify(diagnostic.data), /controlled evidence read failure/);
+	assert.match(JSON.stringify(diagnostic.data), /stack/);
+	assert.equal(host.services.diagnostics.filter(({message}) => message.includes("controlled evidence read failure")).length, 1);
+	unavailable = false;
+	await owner.reachSafeBoundary();
+	assert.deepEqual(owner.operationalAttention(), []);
+});
+
+test("blocked Delivery meaningful reservation resets its deadline and transcript proof clears handling without duplicate Delivery", async (t) => {
+	const clock = new ControllableOperationReviewClock();
+	const policy = new WorkflowPolicyStore(parseWorkflowPolicy('{"deliveryProgressIntervalMs":1000}'));
+	let requests = 0;
+	let dispatchRequest: (() => void) | undefined;
+	let releaseSteer: (() => Promise<void>) | undefined;
+	let releaseOwner!: () => void;
+	const ownerGate = new Promise<void>((resolve) => { releaseOwner = resolve; });
+	t.after(() => releaseOwner());
+	const { host, coordinator, owner } = await createIncidentBoundaryHarness(t, {}, {
+		deliveryProgressClock: clock,
+		workflowPolicy: policy,
+		messageBoundaryHooks: {
+			scheduleDeliveryDispatch(context, dispatch) {
+				if (context.kind === "request" && ++requests > 1) { dispatchRequest = dispatch; return; }
+				dispatch();
+			},
+			afterSteerFreeze(context) { releaseSteer = context.release; return "defer"; },
+		},
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "request", targetAgent: "Owner", question: "Decide this dependency.", deliveryMode: "steer",
+		}, { id: "steer-progress-request" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "steer-progress-wait" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Inspect the held reservation."),
+		async () => { await ownerGate; return fauxAssistantMessage("Owner work remains ordinary model duration."); },
+	]);
+	const parent = await spawnFromView(host.session, owner, "steer-progress-parent", "Ask Owner then join.");
+	await waitForCondition(() => !!dispatchRequest);
+	const parentView = coordinator.forAgent(parent.agentId);
+	await parentView.reachSafeBoundary();
+	clock.advanceBy(999);
+	assert.equal((await findModerators(host)).length, 0);
+	policy.publish(parseWorkflowPolicy('{"deliveryProgressIntervalMs":5000}'));
+	dispatchRequest!();
+	await waitForCondition(() => !!releaseSteer);
+	await parentView.reachSafeBoundary();
+	clock.advanceBy(999);
+	await parentView.reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 0);
+	clock.advanceBy(1);
+	const moderator = await waitForModeratorKind(host, "delivery_stall");
+	const first = SessionManager.open(moderator.path).getEntries()[0];
+	assert.ok(first?.type === "custom_message");
+	assert.equal(JSON.parse(first.content as string).trigger.reason.stage, "reserved");
+	await releaseSteer!();
+	await waitForCondition(() => host.session.sessionManager.getEntries().some(
+		(entry) => entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery" &&
+			JSON.stringify(entry.details).includes("steer-progress-request"),
+	));
+	await parentView.reachSafeBoundary();
+	await waitForCondition(() => !owner.status(moderator.id).run.retentionReasons.some(({reason}) => reason === "moderator_handling"));
+	clock.advanceBy(10_000);
+	await parentView.reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 1, "committed Delivery ends timing even while model work continues");
+	assert.equal(host.session.sessionManager.getEntries().filter(
+		(entry) => entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery" &&
+			JSON.stringify(entry.details).includes("steer-progress-request"),
+	).length, 1);
+});
+
+async function createSilentLeafHarness(t: TestCleanupRegistrar, intervalMs = 1000, parkParent = true) {
+	const clock = new ControllableOperationReviewClock();
+	let requests = 0;
+	let leafAgentId = "";
+	const harness = await createIncidentBoundaryHarness(t, {}, {
+		deliveryProgressClock: clock,
+		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy(JSON.stringify({ deliveryProgressIntervalMs: intervalMs }))),
+		messageBoundaryHooks: {
+			scheduleDeliveryDispatch(context, dispatch) {
+				if (context.kind === "request" && ++requests > 1) { leafAgentId = context.recipientAgentId; return; }
+				dispatch();
+			},
+		},
+	});
+	harness.host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Leaf work." }, { id: "excluded-leaf" }), { stopReason: "toolUse" }),
+		parkParent
+			? fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "excluded-leaf-wait" }), { stopReason: "toolUse" })
+			: fauxAssistantMessage("The leaf owns this work."),
+		...Array.from({length: 4}, () => fauxAssistantMessage("Investigate this continuous blockage.")),
+	]);
+	const parent = await spawnFromView(harness.host.session, harness.owner, "excluded-parent", "Delegate then join.");
+	await waitForCondition(() => {
+		const run = harness.owner.status(parent.agentId).run;
+		return leafAgentId !== "" && run.phase === "live" && (parkParent ? run.attention === "agent_wait" : run.work === "settled");
+	});
+	await harness.owner.reachSafeBoundary();
+	return { ...harness, clock, parent, leafAgentId };
+}
+
+test("blocked Delivery selection suspends the interval and recurrence after selection gets independent handling", async (t) => {
+	const { host, owner, clock, leafAgentId } = await createSilentLeafHarness(t);
+	clock.advanceBy(999);
+	const selected = await owner.openAgentView(leafAgentId);
+	assert.ok(selected);
+	await owner.reachSafeBoundary();
+	clock.advanceBy(10_000);
+	await assertNoModeratorKindAtSafeBoundary(owner, host, "delivery_stall");
+	await selected.close();
+	await owner.reachSafeBoundary();
+	clock.advanceBy(999);
+	await assertNoModeratorKindAtSafeBoundary(owner, host, "delivery_stall");
+	clock.advanceBy(1);
+	const first = await waitForModeratorKind(host, "delivery_stall");
+	const selectedAgain = await owner.openAgentView(leafAgentId);
+	assert.ok(selectedAgain);
+	await owner.reachSafeBoundary();
+	assert.equal(owner.status(first.id).run.retentionReasons.some(({reason}) => reason === "moderator_handling"), false);
+	await selectedAgain.close();
+	await owner.reachSafeBoundary();
+	clock.advanceBy(1000);
+	await waitForCondition(async () => (await findModerators(host)).length === 2);
+});
+
+test("blocked Delivery intentional leaf Hold excludes moderation", async (t) => {
+	const { host, owner, clock, parent, leafAgentId } = await createSilentLeafHarness(t);
+	await controlFromView(host.session, owner, "hold-blocked-leaf", { operation: "interrupt", agentId: leafAgentId });
+	await owner.reachSafeBoundary();
+	clock.advanceBy(10_000);
+	await assertNoModeratorKindAtSafeBoundary(owner, host, "delivery_stall");
+	await cancelRequestFromView(host.session, owner, "cancel-blocked-parent", parent.requestMessageId);
+	await owner.reachSafeBoundary();
+	clock.advanceBy(10_000);
+	await assertNoModeratorKindAtSafeBoundary(owner, host, "delivery_stall");
+});
+
+test("blocked Delivery final upstream obligation clearance releases handling without cancelling the leaf Request", async (t) => {
+	const { host, owner, clock, parent, leafAgentId } = await createSilentLeafHarness(t, 1000, false);
+	clock.advanceBy(1000);
+	const moderator = await waitForModeratorKind(host, "delivery_stall");
+	await cancelRequestFromView(host.session, owner, "clear-blocked-obligation", parent.requestMessageId);
+	await waitForCondition(() => !owner.status(parent.agentId).run.retentionReasons.some(({reason}) => reason === "answer_owed"));
+	await owner.reachSafeBoundary();
+	assert.equal(owner.status(moderator.id).run.retentionReasons.some(({reason}) => reason === "moderator_handling"), false);
+	assert.ok(owner.status(parent.agentId).run.retentionReasons.some(({reason}) => reason === "awaiting_answer"));
+	assert.ok(owner.status(leafAgentId).run.retentionReasons.some(({reason}) => reason === "pending_delivery"));
+	clock.advanceBy(10_000);
+	await owner.reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 1);
+});
+
+test("blocked Delivery follows existing obligations and does not time active recipient or capacity waiting", async (t) => {
+	const clock = new ControllableOperationReviewClock();
+	let releaseOwner!: () => void;
+	const ownerGate = new Promise<void>((resolve) => { releaseOwner = resolve; });
+	t.after(() => releaseOwner());
+	let ownerStarted = false;
+	const { host, owner } = await createIncidentBoundaryHarness(t, {}, {
+		deliveryProgressClock: clock,
+		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"maxConcurrentAgentRuns":1,"deliveryProgressIntervalMs":1000}')),
+	});
+	const route = async (context: Context) => {
+		const messages = JSON.stringify(context.messages);
+		if (!context.tools?.some(({name}) => name === "agent_spawn")) {
+			ownerStarted = true;
+			await ownerGate;
+			return fauxAssistantMessage("Owner's ordinary model work completed.");
+		}
+		const tag = messages.includes("First worker") ? "first" : "second";
+		if (!messages.includes(`"id":"request-${tag}-owner"`)) {
+			return fauxAssistantMessage(fauxToolCall("agent_message", {
+				operation: "request", targetAgent: "Owner", question: `Decide for ${tag} worker.`,
+			}, {id: `request-${tag}-owner`}), {stopReason: "toolUse"});
+		}
+		return fauxAssistantMessage(fauxToolCall("agent_wait", {}, {id: `wait-${tag}-owner`}), {stopReason: "toolUse"});
+	};
+	host.model.setResponses(Array.from({length: 12}, () => route));
+	const first = await spawnFromView(host.session, owner, "legitimate-first", "First worker requests Owner.");
+	await waitForCondition(() => ownerStarted);
+	const second = await spawnFromView(host.session, owner, "legitimate-second", "Second worker requests Owner.");
+	await waitForCondition(() => {
+		const run = owner.status(second.agentId).run;
+		return run.phase === "live" && run.attention === "agent_wait";
+	});
+	clock.advanceBy(100_000);
+	await owner.reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 0);
+	assert.ok(owner.status(first.agentId).run.retentionReasons.some(({reason}) => reason === "awaiting_answer"));
+	assert.ok(owner.status(second.agentId).run.retentionReasons.some(({reason}) => reason === "awaiting_answer"));
+});
+
+test("blocked Delivery upstream Human waiting excludes moderation without timing the parked Human Request", async (t) => {
+	const clock = new ControllableOperationReviewClock();
+	let requests = 0;
+	const { host, owner } = await createIncidentBoundaryHarness(t, {}, {
+		deliveryProgressClock: clock,
+		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"deliveryProgressIntervalMs":1000}')),
+		messageBoundaryHooks: {
+			scheduleDeliveryDispatch(context, dispatch) {
+				if (context.kind === "request" && ++requests > 1) return;
+				dispatch();
+			},
+		},
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", {request: "Blocked leaf."}, {id: "human-leaf"}), {stopReason: "toolUse"}),
+		fauxAssistantMessage(fauxToolCall("ask_user_question", {question: "Choose whether to continue."}, {id: "human-blocked-parent"}), {stopReason: "toolUse"}),
+	]);
+	await spawnFromView(host.session, owner, "human-wait-parent", "Delegate, then ask the Human.");
+	await waitForCondition(() => owner.humanAttention().length === 1);
+	await owner.reachSafeBoundary();
+	clock.advanceBy(100_000);
+	await assertNoModeratorKindAtSafeBoundary(owner, host, "delivery_stall");
+});
+
+test("blocked Delivery execution capacity wait leaves an obligated parked parent unmoderated", async (t) => {
+	const clock = new ControllableOperationReviewClock();
+	let releaseParent!: () => void;
+	let releaseCapacity!: () => void;
+	const parentGate = new Promise<void>((resolve) => { releaseParent = resolve; });
+	const capacityGate = new Promise<void>((resolve) => { releaseCapacity = resolve; });
+	t.after(() => { releaseParent(); releaseCapacity(); });
+	let parentStarted = false;
+	let capacityStarted = false;
+	let leafStarted = false;
+	const { host, owner } = await createIncidentBoundaryHarness(t, {}, {
+		deliveryProgressClock: clock,
+		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"maxConcurrentAgentRuns":1,"deliveryProgressIntervalMs":1000}')),
+	});
+	const route = async (context: Context) => {
+		const messages = JSON.stringify(context.messages);
+		if (messages.includes("unrelated-capacity-work")) {
+			capacityStarted = true;
+			await capacityGate;
+			return fauxAssistantMessage("Capacity work finished.");
+		}
+		if (messages.includes("capacity-parent-work")) {
+			if (!messages.includes('"id":"capacity-leaf-spawn"')) {
+				parentStarted = true;
+				await parentGate;
+				return fauxAssistantMessage(fauxToolCall("agent_spawn", {request: "capacity-leaf-work"}, {id: "capacity-leaf-spawn"}), {stopReason: "toolUse"});
+			}
+			return fauxAssistantMessage(fauxToolCall("agent_wait", {}, {id: "capacity-parent-wait"}), {stopReason: "toolUse"});
+		}
+		leafStarted = true;
+		return fauxAssistantMessage("Leaf work began.");
+	};
+	host.model.setResponses(Array.from({length: 12}, () => route));
+	const parent = await spawnFromView(host.session, owner, "capacity-parent", "capacity-parent-work");
+	await waitForCondition(() => parentStarted);
+	await spawnFromView(host.session, owner, "capacity-holder", "unrelated-capacity-work");
+	releaseParent();
+	await waitForCondition(() => {
+		const run = owner.status(parent.agentId).run;
+		return capacityStarted && run.phase === "live" && run.attention === "agent_wait";
+	});
+	await owner.reachSafeBoundary();
+	clock.advanceBy(100_000);
+	await owner.reachSafeBoundary();
+	assert.equal(leafStarted, false, "leaf is still legitimately waiting behind the active capacity holder");
+	assert.equal((await findModerators(host)).length, 0);
+});
+
+test("moderation inspection deadline reports Owner attention while the inspection Promise remains blocked", async (t) => {
+	const clock = new ControllableOperationReviewClock();
+	let releaseInspection!: () => void;
+	const gate = new Promise<void>((resolve) => { releaseInspection = resolve; });
+	t.after(() => releaseInspection());
+	let block = false;
+	let started = false;
+	const { owner } = await createIncidentBoundaryHarness(t, {
+		beforeEvidenceInspection() {
+			if (!block) return;
+			started = true;
+			return gate;
+		},
+	}, {
+		deliveryProgressClock: clock,
+		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"deliveryProgressIntervalMs":1000}')),
+	});
+	block = true;
+	const boundary = owner.reachSafeBoundary();
+	await waitForCondition(() => started);
+	clock.advanceBy(999);
+	assert.equal(owner.operationalAttention().length, 0);
+	clock.advanceBy(1);
+	assert.equal(owner.operationalAttention()[0]?.trigger.kind, "moderation_unavailable");
+	clock.advanceBy(10_000);
+	assert.equal(owner.operationalAttention().length, 1);
+	block = false;
+	releaseInspection();
+	await boundary;
+	assert.equal(owner.operationalAttention().length, 0);
+});
+
+test("blocked Delivery detects a Creation Request stranded before scheduler admission without changing its canonical identity", async (t) => {
+	const clock = new ControllableOperationReviewClock();
+	let starts = 0;
+	const { host, owner } = await createIncidentBoundaryHarness(t, {}, {
+		deliveryProgressClock: clock,
+		spawnBoundaryHooks: { beforeRunStart: () => ++starts > 1 ? "confirmed_failure" : undefined },
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", {request: "Never admitted leaf."}, {id: "pre-admission-leaf"}), {stopReason: "toolUse"}),
+		fauxAssistantMessage("The leaf remains responsible for the admitted work."),
+		fauxAssistantMessage("Investigate startup without retrying."),
+	]);
+	const parent = await spawnFromView(host.session, owner, "pre-admission-parent", "Delegate.");
+	const moderator = await waitForModeratorKind(host, "delivery_stall");
+	const entry = SessionManager.open(moderator.path).getEntries()[0];
+	assert.ok(entry?.type === "custom_message");
+	const trigger = JSON.parse(entry.content as string).trigger;
+	assert.equal(trigger.reason.kind, "scheduling_failure");
+	const leafSource = trigger.requests.sources.find((source: {toolCallId: string}) => source.toolCallId === "pre-admission-leaf");
+	assert.ok(leafSource);
+	assert.equal(trigger.delivery.messageId, deriveMessageIdentity(leafSource));
+	assert.equal(owner.status(trigger.delivery.recipientAgentId).run.phase, "dormant");
+	assert.ok(trigger.agentIds.includes(parent.agentId));
+	assert.equal(starts, 2);
+});
+
+test("blocked Delivery remains observable after leaf termination without cancellation or automatic restart", async (t) => {
+	const { host, owner, clock, parent, leafAgentId } = await createSilentLeafHarness(t);
+	await controlFromView(host.session, owner, "terminate-stranded-leaf", {
+		operation: "terminate", agentId: leafAgentId,
+	});
+	const moderator = await waitForModeratorKind(host, "delivery_stall");
+	const input = SessionManager.open(moderator.path).getEntries()[0];
+	assert.ok(input?.type === "custom_message");
+	const trigger = JSON.parse(input.content as string).trigger;
+	assert.equal(trigger.delivery.recipientAgentId, leafAgentId);
+	assert.equal(trigger.reason.kind, "scheduling_failure");
+	assert.equal(owner.status(leafAgentId).run.phase, "dormant");
+	const parentRun = owner.status(parent.agentId).run;
+	assert.ok(parentRun.phase === "live" && parentRun.attention === "agent_wait");
+	assert.ok(parentRun.retentionReasons.some(({reason}) => reason === "awaiting_answer"));
+	assert.ok(parentRun.retentionReasons.some(({reason}) => reason === "answer_owed"));
+	clock.advanceBy(10_000);
+	await owner.reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 1);
+	assert.equal(owner.status(leafAgentId).run.phase, "dormant");
+});
+
+test("a blocked replacement Moderator preparation receives deadline attention before its Promise completes", async (t) => {
+	const { ProcessChildSessionFactory } = await import("../src/runtime/process-child-session-factory.ts");
+	const original = ProcessChildSessionFactory.prototype.prepareModeratorRun;
+	let preparations = 0;
+	let blocked = false;
+	let releasePreparation!: () => void;
+	const gate = new Promise<void>((resolve) => { releasePreparation = resolve; });
+	t.after(() => releasePreparation());
+	t.mock.method(ProcessChildSessionFactory.prototype, "prepareModeratorRun", async function(
+		this: InstanceType<typeof ProcessChildSessionFactory>,
+		options: Parameters<typeof original>[0],
+	) {
+		if (++preparations === 2) {
+			blocked = true;
+			await gate;
+		}
+		return original.call(this, options);
+	});
+	const clock = new ControllableOperationReviewClock();
+	const { host, owner } = await createIncidentBoundaryHarness(t, {}, {
+		deliveryProgressClock: clock,
+		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"deliveryProgressIntervalMs":1000}')),
+	});
+	let moderatorTurns = 0;
+	const route = (context: Context) => {
+		if (!context.tools?.some(({name}) => name === "moderator_control")) {
+			return fauxAssistantMessage("Settled without the owed Answer.");
+		}
+		if (++moderatorTurns === 1) {
+			return fauxAssistantMessage("The first Moderator fails terminally.", {
+				stopReason: "error",
+				errorMessage: "400 invalid_request_error: controlled terminal Moderator failure",
+			});
+		}
+		return fauxAssistantMessage("Replacement investigation continues.");
+	};
+	host.model.setResponses(Array.from({length: 8}, () => route));
+	await spawnFromView(host.session, owner, "replacement-watchdog-parent", "Settle without Answer.");
+	await waitForCondition(() => blocked);
+	clock.advanceBy(999);
+	assert.equal(owner.operationalAttention().length, 0);
+	clock.advanceBy(1);
+	const attention = owner.operationalAttention();
+	assert.equal(attention.length, 1);
+	assert.equal(attention[0]?.trigger.kind, "obligation_stall");
+	assert.match(attention[0]?.summary ?? "", /creation blocked/);
+	const pointer = attention[0]?.diagnostics[0];
+	assert.ok(pointer);
+	assert.ok(host.session.sessionManager.getEntry(pointer.entryId));
+	clock.advanceBy(10_000);
+	assert.deepEqual(owner.operationalAttention(), attention);
+	assert.equal(preparations, 2);
+	releasePreparation();
+	await owner.reachSafeBoundary();
+	await waitForCondition(async () => (await findModerators(host)).length === 2);
+	assert.equal(owner.operationalAttention().length, 0);
+	assert.equal(preparations, 2);
+});
+
+test("a failed replacement bootstrap retains Owner attention and does not restage on heartbeats", async (t) => {
+	let bootstrapAttempts = 0;
+	let runStarts = 0;
+	const { host, owner } = await createIncidentBoundaryHarness(t, {
+		beforeModeratorBootstrapCommit() {
+			return ++bootstrapAttempts === 2 ? "confirmed_failure" : undefined;
+		},
+		beforeModeratorRunStart() {
+			runStarts++;
+			return "confirmed_failure";
+		},
+	});
+	host.model.setResponses([
+		fauxAssistantMessage("Settled without the owed Answer."),
+		fauxAssistantMessage("Still settled after the reminder."),
+	]);
+	await spawnFromView(host.session, owner, "replacement-bootstrap-fault-parent", "Settle without Answer.");
+	await waitForCondition(() => owner.operationalAttention().length > 0);
+	const attention = owner.operationalAttention();
+	assert.equal(attention[0]?.trigger.kind, "obligation_stall");
+	for (let n = 0; n < 4; n++) await owner.reachSafeBoundary();
+	assert.deepEqual(owner.operationalAttention(), attention);
+	assert.equal(bootstrapAttempts, 2);
+	assert.equal(runStarts, 1, "uncommitted replacement preparation is not a committed handling attempt");
+	assert.equal((await findModerators(host)).length, 1);
+});

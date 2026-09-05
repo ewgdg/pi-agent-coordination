@@ -7,21 +7,24 @@ export type WorkflowPolicySnapshot = Readonly<{
 	maxConcurrentAgentRuns: number;
 	maxPendingDeliveriesPerAgent: number;
 	operationReviewIntervalMs: number;
+	deliveryProgressIntervalMs: number;
 }>;
 
 export const DEFAULT_WORKFLOW_POLICY: WorkflowPolicySnapshot = Object.freeze({
 	maxConcurrentAgentRuns: 8,
 	maxPendingDeliveriesPerAgent: 256,
 	operationReviewIntervalMs: 600_000,
+	deliveryProgressIntervalMs: 60_000,
 });
 
 const POLICY_FIELDS = new Set<keyof WorkflowPolicySnapshot>([
 	"maxConcurrentAgentRuns",
 	"maxPendingDeliveriesPerAgent",
 	"operationReviewIntervalMs",
+	"deliveryProgressIntervalMs",
 ]);
-const MINIMUM_REVIEW_INTERVAL_MS = 1_000;
-const MAXIMUM_REVIEW_INTERVAL_MS = 2_147_483_647;
+const MINIMUM_INTERVAL_MS = 1_000;
+const MAXIMUM_INTERVAL_MS = 2_147_483_647;
 const POLICY_DIRECTORY = "config";
 const POLICY_FILENAME = "pi-agent-coordination.json";
 
@@ -83,7 +86,10 @@ export function parseWorkflowPolicy(source: string): WorkflowPolicySnapshot {
 			"maxPendingDeliveriesPerAgent",
 			policyValueOrDefault(parsed, "maxPendingDeliveriesPerAgent"),
 		),
-		operationReviewIntervalMs: parseReviewInterval(
+		deliveryProgressIntervalMs: parseBoundedInterval(
+			policyValueOrDefault(parsed, "deliveryProgressIntervalMs"), "deliveryProgressIntervalMs",
+		),
+		operationReviewIntervalMs: parseBoundedInterval(
 			policyValueOrDefault(parsed, "operationReviewIntervalMs"),
 		),
 	});
@@ -132,14 +138,14 @@ function parsePositiveSafeInteger(field: string, value: unknown): number {
 	return value as number;
 }
 
-function parseReviewInterval(value: unknown): number {
+function parseBoundedInterval(value: unknown, field = "operationReviewIntervalMs"): number {
 	if (
 		!Number.isInteger(value) ||
-		(value as number) < MINIMUM_REVIEW_INTERVAL_MS ||
-		(value as number) > MAXIMUM_REVIEW_INTERVAL_MS
+		(value as number) < MINIMUM_INTERVAL_MS ||
+		(value as number) > MAXIMUM_INTERVAL_MS
 	) {
 		throw new Error(
-			`Workflow Policy operationReviewIntervalMs must be an integer from ${MINIMUM_REVIEW_INTERVAL_MS} through ${MAXIMUM_REVIEW_INTERVAL_MS}`,
+			`Workflow Policy ${field} must be an integer from ${MINIMUM_INTERVAL_MS} through ${MAXIMUM_INTERVAL_MS}`,
 		);
 	}
 	return value as number;
@@ -151,7 +157,8 @@ function assertCompleteWorkflowPolicy(snapshot: WorkflowPolicySnapshot): void {
 		"maxPendingDeliveriesPerAgent",
 		snapshot.maxPendingDeliveriesPerAgent,
 	);
-	parseReviewInterval(snapshot.operationReviewIntervalMs);
+	parseBoundedInterval(snapshot.operationReviewIntervalMs);
+	parseBoundedInterval(snapshot.deliveryProgressIntervalMs, "deliveryProgressIntervalMs");
 	if (!Object.isFrozen(snapshot)) {
 		throw new Error("Workflow Policy snapshots must be immutable");
 	}

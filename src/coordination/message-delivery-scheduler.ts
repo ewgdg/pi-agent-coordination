@@ -15,8 +15,12 @@ import type {
 	AgentRunSettlement,
 	AgentRuntimeDelivery,
 	InterruptionHoldHandle,
+	TranscriptCommitConfirmation,
 } from "../runtime/agent-runtime-host.ts";
 import type { WorkflowPolicyStore } from "../policy/workflow-policy.ts";
+
+import { DeliveryProgress, type DeliveryBlockageReason, type DeliveryProgressStage } from "./delivery-progress.ts";
+import { SYSTEM_OPERATION_REVIEW_CLOCK, type OperationReviewClock } from "./operation-review.ts";
 
 type ScheduledDeliveryBase = Readonly<{
 	messageId: string;
@@ -88,6 +92,20 @@ export type IncomingRequestWaitPreemptor = (
 	reserveDelivery: () => boolean,
 ) => Promise<void>;
 
+type TrackedDeliveryProgress = {
+	record: AgentRecord;
+	delivery: ScheduledDelivery;
+	watcher: DeliveryProgress;
+	dispatched: boolean;
+	failed: boolean;
+};
+
+type BlockedDelivery = Readonly<{
+	messageId: string;
+	recipientAgentId: string;
+	reason: DeliveryBlockageReason;
+}>;
+
 type ActiveDeferredDelivery = {
 	delivery: ScheduledDelivery;
 	completion: Promise<void>;
@@ -111,6 +129,10 @@ type ActiveResume = ReservedResume & {
 };
 
 export class MessageDeliveryScheduler {
+	readonly #progress = new Map<string, TrackedDeliveryProgress>();
+	readonly #progressClock: OperationReviewClock;
+	readonly #progressChanged: () => void;
+	readonly #isWaitingForCapacity: (agentId: string) => boolean;
 	readonly #pendingByAgent = new Map<string, Map<string, ScheduledDelivery>>();
 	readonly #activeDeferredByAgent = new Map<string, ActiveDeferredDelivery>();
 	readonly #activeWaitPreemptionByAgent = new Map<string, ActiveWaitPreemption>();
@@ -134,7 +156,13 @@ export class MessageDeliveryScheduler {
 		afterResumeReservation?: ResumeReservationHandler;
 		preemptAgentWait?: IncomingRequestWaitPreemptor;
 		workflowPolicy: WorkflowPolicyStore;
+		deliveryProgressClock?: OperationReviewClock;
+		onDeliveryProgressChanged?(): void;
+		isWaitingForCapacity?(agentId: string): boolean;
 	}) {
+		this.#progressClock = options.deliveryProgressClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
+		this.#progressChanged = options.onDeliveryProgressChanged ?? (() => undefined);
+		this.#isWaitingForCapacity = options.isWaitingForCapacity ?? (() => false);
 		this.#scheduleReleaseEvaluationHook = options.scheduleReleaseEvaluation;
 		this.#scheduleDeliveryDispatchHook = options.scheduleDeliveryDispatch;
 		this.#afterSteerFreeze = options.afterSteerFreeze;
@@ -143,8 +171,96 @@ export class MessageDeliveryScheduler {
 		this.#workflowPolicy = options.workflowPolicy;
 	}
 
+	blockedDeliveries(): readonly BlockedDelivery[] {
+		const blocked: BlockedDelivery[] = [];
+		for (const [messageId, item] of this.#progress) {
+			const { record, delivery, watcher } = item;
+			if (delivery.inspectProof() || delivery.isSuppressed?.()) {
+				watcher.dispose();
+				this.#progress.delete(messageId);
+				continue;
+			}
+			const reason = watcher.observe(this.#deliveryWaitIsLegitimate(item));
+			if (reason) blocked.push({ messageId, recipientAgentId: record.identity.agentId, reason });
+		}
+		return blocked;
+	}
+
+	#deliveryWaitIsLegitimate(item: TrackedDeliveryProgress): boolean {
+		const { record, delivery } = item;
+		const run = record.host.observe();
+		if (
+			record.host.hasRetentionReason("interactive_selection") ||
+			record.host.blocksOrdinaryDelivery() ||
+			(run.phase !== "dormant" && run.attention === "input_required") ||
+			this.#isWaitingForCapacity(record.identity.agentId)
+		) return true;
+		// Dispatched work belongs to delivery machinery until proof commits; its
+		// prompt Promise must not turn subsequent model duration into a deadline.
+		if (item.dispatched) return false;
+		if (delivery.isIncomingRequest && delivery.isIncomingRequestActive?.()) return true;
+		const atDeliveryBoundary = this.#isDeliveryBoundary(record);
+		if (run.phase === "live" && run.work === "active" &&
+			run.attention === "none" && !atDeliveryBoundary) return true;
+		if (item.failed) return false;
+		const pending = this.#pendingByAgent.get(record.identity.agentId);
+		if (!pending || !this.#eligibleDeliveries(pending).includes(delivery)) return true;
+		const canPreemptWait = run.phase === "live" && run.attention === "agent_wait" &&
+			delivery.isIncomingRequest;
+		return !atDeliveryBoundary && !canPreemptWait;
+	}
+
+	recordAdmissionFailure(record: AgentRecord, delivery: ScheduledMessageDelivery, error: unknown): void {
+		this.#trackProgress(record, delivery);
+		this.#failDeliveryProgress(delivery, error);
+	}
+
+	shutdownProgress(): void {
+		for (const { watcher } of this.#progress.values()) watcher.dispose();
+		this.#progress.clear();
+	}
+
+	#trackProgress(record: AgentRecord, delivery: ScheduledDelivery): void {
+		if (this.#progress.has(delivery.messageId)) return;
+		this.#progress.set(delivery.messageId, {
+			record, delivery, dispatched: false, failed: false,
+			watcher: new DeliveryProgress(this.#progressClock,
+				this.#workflowPolicy.current().deliveryProgressIntervalMs, this.#progressChanged),
+		});
+		this.#progressChanged();
+	}
+
+	#advanceProgress(delivery: ScheduledDelivery, stage: DeliveryProgressStage): void {
+		const item = this.#progress.get(delivery.messageId);
+		if (!item) return;
+		item.failed = false;
+		if (stage === "dispatched") item.dispatched = true;
+		item.watcher.advance(stage);
+	}
+
+	#failDeliveryProgress(delivery: ScheduledDelivery, error: unknown): void {
+		const item = this.#progress.get(delivery.messageId);
+		if (!item) return;
+		item.failed = true;
+		item.watcher.fail(error);
+	}
+
 	integrate(record: AgentRecord): void {
 		this.#ensureSettlementHandler(record);
+		record.host.addEndedHandler((_handle, cause) => {
+			for (const [messageId, item] of this.#progress) {
+				if (item.record !== record) continue;
+				// Run termination does not cancel Requests: without proof, the
+				// upstream obligation still depends on this stranded Delivery.
+				if (cause === "failure" || cause === "termination") {
+					this.#failDeliveryProgress(item.delivery, new Error("Recipient Run ended before Delivery proof"));
+				} else if (cause === "shutdown") {
+					item.watcher.dispose();
+					this.#progress.delete(messageId);
+				}
+			}
+			this.#progressChanged();
+		});
 	}
 
 	admit(
@@ -190,12 +306,15 @@ export class MessageDeliveryScheduler {
 			this.#countPendingIdentities(pending) >=
 			policy.maxPendingDeliveriesPerAgent
 		) {
+			this.recordAdmissionFailure(record, delivery, new Error("Pending Delivery admission capacity exhausted without a queued continuation"));
 			return "capacity_exhausted";
 		}
+		this.#trackProgress(record, delivery);
 		if (!record.host.currentHandle()) {
 			try {
 				await record.host.startInLane(["pending_delivery"]);
 			} catch (error) {
+				this.#failDeliveryProgress(delivery, error);
 				if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);
 				if (
 					error instanceof ProtocolInvariantError ||
@@ -209,6 +328,7 @@ export class MessageDeliveryScheduler {
 		try {
 			await this.#drainInLane(record);
 		} catch (error) {
+			this.#failDeliveryProgress(delivery, error);
 			// A failed pre-dispatch inspection must not leave an abandoned item that
 			// later retries merely coalesce with. Dispatched or proven work is owned
 			// by normal transcript reconciliation and must retain its reservation.
@@ -455,7 +575,20 @@ export class MessageDeliveryScheduler {
 		evaluate();
 	}
 
-	async #drainInLane(
+	async #drainInLane(record: AgentRecord, bypassDeliveryDispatchHook = false): Promise<void> {
+		try {
+			await this.#advanceDeliveryInLane(record, bypassDeliveryDispatchHook);
+		} catch (error) {
+			// Only scheduling still owned by this drain lost its continuation.
+			// A different dispatched Message keeps its existing Pi continuation.
+			for (const delivery of this.#pendingByAgent.get(record.identity.agentId)?.values() ?? []) {
+				if (!this.hasDispatchReservation(record.identity.agentId, delivery.messageId)) this.#failDeliveryProgress(delivery, error);
+			}
+			throw error;
+		}
+	}
+
+	async #advanceDeliveryInLane(
 		record: AgentRecord,
 		bypassDeliveryDispatchHook = false,
 	): Promise<void> {
@@ -528,7 +661,7 @@ export class MessageDeliveryScheduler {
 		}
 		// A settled Run may become active before Pi processes admission. followUp
 		// preserves Deferred ordering, while triggerTurn starts a standalone Idle turn.
-		const { completion } = record.host.deliverInLane(
+		const { completion } = this.#dispatchInLane(record, [delivery],
 			"customMessage" in delivery
 				? {
 					kind: "custom",
@@ -543,6 +676,27 @@ export class MessageDeliveryScheduler {
 			completion,
 			deliveryCommitted: false,
 		});
+	}
+
+	#dispatchInLane(
+		record: AgentRecord,
+		deliveries: readonly ScheduledDelivery[],
+		input: AgentRuntimeDelivery,
+		confirmation?: TranscriptCommitConfirmation,
+	) {
+		try {
+			const dispatched = record.host.deliverInLane(input, confirmation);
+			for (const delivery of deliveries) this.#advanceProgress(delivery, "dispatched");
+			// The Pi prompt Promise can outlive Delivery proof by an entire model
+			// turn. Observe rejection, but let transcript proof end delivery timing.
+			void dispatched.completion.catch((error: unknown) => {
+				for (const delivery of deliveries) this.#failDeliveryProgress(delivery, error);
+			});
+			return dispatched;
+		} catch (error) {
+			for (const delivery of deliveries) this.#failDeliveryProgress(delivery, error);
+			throw error;
+		}
 	}
 
 	#completeProvenPromptOwnedDeliveriesInLane(record: AgentRecord): boolean {
@@ -585,7 +739,7 @@ export class MessageDeliveryScheduler {
 			!this.#eligibleDeliveries(pending).includes(delivery) ||
 			this.#activeWaitPreemptionByAgent.has(record.identity.agentId)
 		) return false;
-		const { completion } = record.host.deliverInLane(
+		const { completion } = this.#dispatchInLane(record, [delivery],
 			"customMessage" in delivery
 				? {
 					kind: "custom",
@@ -621,7 +775,7 @@ export class MessageDeliveryScheduler {
 	async #startResumeInLane(record: AgentRecord, reserved: ReservedResume): Promise<void> {
 		if (!record.host.beginIsolatedResumptionInLane(reserved.hold)) return;
 		try {
-			const delivery = record.host.deliverInLane(
+			const delivery = this.#dispatchInLane(record, [reserved.delivery],
 				createRuntimeMessageDelivery([reserved.delivery]),
 				{ inspectCommit: () => reserved.delivery.inspectProof() !== undefined },
 			);
@@ -665,6 +819,7 @@ export class MessageDeliveryScheduler {
 		if (steer.length === 0) return;
 		const frozen: FrozenSteerBatch = { deliveries: steer, dispatched: false };
 		this.#frozenSteerByAgent.set(record.identity.agentId, frozen);
+		for (const delivery of steer) this.#advanceProgress(delivery, "reserved");
 		const release = () => record.host.lane.run(() =>
 			this.#dispatchFrozenSteerInLane(record, frozen)
 		);
@@ -696,7 +851,7 @@ export class MessageDeliveryScheduler {
 		);
 		if (unprovenSteer.length === 0) return;
 		frozen.dispatched = true;
-		record.host.deliverInLane(
+		this.#dispatchInLane(record, unprovenSteer,
 			createRuntimeMessageDelivery(unprovenSteer, "steer"),
 		);
 	}

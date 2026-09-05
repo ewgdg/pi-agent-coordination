@@ -12,11 +12,12 @@ The file is a strict UTF-8 JSON object. Its complete optional surface is:
 {
   "maxConcurrentAgentRuns": 8,
   "maxPendingDeliveriesPerAgent": 256,
-  "operationReviewIntervalMs": 600000
+  "operationReviewIntervalMs": 600000,
+  "deliveryProgressIntervalMs": 60000
 }
 ```
 
-An omitted file or field uses the shown default. Unknown fields, duplicate keys, comments, trailing commas, wrong types, and invalid integers reject the complete file. Execution and delivery limits must be positive safe integers. `operationReviewIntervalMs` must be an integer from `1000` through `2147483647` milliseconds.
+An omitted file or field uses the shown default. Unknown fields, duplicate keys, comments, trailing commas, wrong types, and invalid integers reject the complete file. Execution and delivery limits must be positive safe integers. `operationReviewIntervalMs` and `deliveryProgressIntervalMs` must each be an integer from `1000` through `2147483647` milliseconds.
 
 Invalid initial policy prevents coordination from creating the Workflow runtime. Owner resource reload reads the file again: a valid file atomically publishes one frozen complete snapshot, while an invalid file reports a diagnostic and preserves the previous snapshot. Reloading child resources does not reload Workflow Policy. Policy is volatile Owner-scoped configuration; it is not written to any Agent transcript.
 
@@ -39,3 +40,11 @@ Each new distinct delivery admission uses the policy snapshot current at that ad
 `operationReviewIntervalMs` limits one applicable review interval for each unresolved root Pi tool call owned by an answer-obligated Agent. Each call captures the complete policy snapshot current at execution admission, so reload affects only later calls.
 
 A blocking call starts its interval at execution admission. An asynchronous call starts an interval only when its Agent reaches an unattended Idle boundary. A Moderator may renew an exact current call for a positive interval no greater than the value captured by that call. Longer observation therefore requires another deliberate renewal; policy reload never stretches an admitted call's bound.
+
+## Delivery progress interval
+
+`deliveryProgressIntervalMs` bounds a continuous interval during which Delivery machinery is responsible for advancing an eligible Message toward transcript commitment. The default is one minute; ordinary model generation and parked Agent Wait are not part of this interval.
+
+Each observed scheduling admission captures its interval. An eligible delivery starts timing at its first live eligibility observation; reservation and dispatch restart the captured interval. Transcript proof or suppression ends observation. Execution-capacity waiting, an active recipient, Request admission behind an existing Answer Obligation, Human attention, selection, and Holds suspend applicable delivery timing. Regained eligibility starts a fresh captured interval. Polls, heartbeats, logs, and policy reload do not extend it. A known lost scheduling continuation qualifies immediately instead of waiting for expiry.
+
+The same current policy value bounds one moderation inspection/bootstrap pass, including replacement creation after terminal Moderator failure, before reporting passive Owner attention if that pass does not complete. This watchdog does not abort the pass or retry any effects. See [Operational Incident moderation](operational-incident-moderation.md) for dependency qualification and exclusions.

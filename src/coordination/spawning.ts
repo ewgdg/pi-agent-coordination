@@ -256,7 +256,12 @@ export class DefaultChildSpawner {
 		parent.children.push(agentId);
 		this.#integrateAgent(child);
 		this.#addRetentionReason(parent, "awaiting_answer", requestId);
+		const creationDelivery = {
+			recipient: child, requestId, fromAgentId: callerAgentId, question: input.request, source,
+		};
 		if (materializationUncertain || identityConfirmation === "confirmation_lost") {
+			this.#messages.recordCreationRequestFailure(creationDelivery,
+				new Error("Creation Request scheduling stopped after uncertain Identity confirmation"));
 			return {
 				spawnStatus: "unknown",
 				candidateAgentId: agentId,
@@ -276,6 +281,7 @@ export class DefaultChildSpawner {
 				return child.host.startInLane(["pending_delivery"]);
 			});
 		} catch (error) {
+			this.#messages.recordCreationRequestFailure(creationDelivery, error);
 			if (error instanceof ProtocolInvariantError) throw error;
 			return {
 				spawnStatus: "created",
@@ -297,6 +303,8 @@ export class DefaultChildSpawner {
 				identity,
 			}) === "confirmation_lost"
 		) {
+			this.#messages.recordCreationRequestFailure(creationDelivery,
+				new Error("Creation Request scheduling stopped after uncertain Run confirmation"));
 			return {
 				spawnStatus: "unknown",
 				candidateAgentId: agentId,
@@ -310,15 +318,10 @@ export class DefaultChildSpawner {
 			if (this.#boundaryHooks.beforeDeliveryAdmission?.() === "confirmed_failure") {
 				throw new Error("Confirmed Delivery admission failure");
 			}
-			const admission = await this.#messages.admitCreationRequest({
-				recipient: child,
-				requestId,
-				fromAgentId: callerAgentId,
-				question: input.request,
-				source,
-			});
+			const admission = await this.#messages.admitCreationRequest(creationDelivery);
 			if (admission !== "pending") throw new Error(admission);
 		} catch (error) {
+			this.#messages.recordCreationRequestFailure(creationDelivery, error);
 			try {
 				await this.#messages.requestRelease(child);
 			} catch (cleanupError) {

@@ -1,3 +1,4 @@
+import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { refreshAgentTranscripts } from "./agent-record.ts";
 import { indexedState } from "../transcript/retained-transcript.ts";
 import type {
@@ -237,6 +238,7 @@ export class WorkflowCoordinator {
 	#activeAgentView: ActiveDurableAgentView | undefined;
 	readonly #workflowPolicy: WorkflowPolicyStore;
 	readonly #executionScheduler: WorkflowExecutionScheduler;
+	readonly #waitingForExecution = new Set<string>();
 	readonly #executionPermits = new Map<
 		string,
 		Readonly<{ handle: AgentRunHandle; permit: WorkflowExecutionPermit }>
@@ -264,6 +266,7 @@ export class WorkflowCoordinator {
 			operationalIncidentPresentation?: OperationalIncidentPresentation;
 			postMortemAgentPresenter?: PostMortemAgentPresenter;
 			operationReviewClock?: OperationReviewClock;
+			deliveryProgressClock?: OperationReviewClock;
 			workflowPolicy?: WorkflowPolicyStore;
 			recoveredWorkflow?: ColdWorkflowRecovery;
 			humanRequestBoundaryHooks?: HumanRequestBoundaryHooks;
@@ -359,6 +362,9 @@ export class WorkflowCoordinator {
 			quarantinedWorkflowAgentIds: this.#quarantinedWorkflowAgentIds,
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
+			deliveryProgressClock: options.deliveryProgressClock,
+			onDeliveryProgressChanged: () => this.#operationalIncidents?.deliveryProgressChanged(),
+			isWaitingForCapacity: (agentId) => this.#waitingForExecution.has(agentId),
 			preemptAgentWait: (record, reserveDelivery) =>
 				this.#agentWaits.preemptForInboundRequest(record, reserveDelivery),
 			workflowPolicy: this.#workflowPolicy,
@@ -416,9 +422,22 @@ export class WorkflowCoordinator {
 					message: error instanceof Error ? error.message : String(error),
 				});
 			},
+			retainDiagnostic: (error) => {
+				const entryId = runtime.session.sessionManager.appendCustomEntry(
+					OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE,
+					{ message: error instanceof Error ? error.message : String(error),
+						stack: error instanceof Error ? error.stack : undefined },
+				);
+				this.#ownerDiagnostics.push({
+					type: "error",
+					message: error instanceof Error ? error.message : String(error),
+				});
+				return { agentId: identity.agentId, entryId };
+			},
 			boundaryHooks: options.incidentBoundaryHooks,
 			presentation: options.operationalIncidentPresentation,
 			operationReviewClock: options.operationReviewClock,
+			deliveryProgressClock: options.deliveryProgressClock,
 			onAttentionChanged: () => this.#notifyAgentActivityChanged(),
 		});
 		for (const record of this.#agents.values()) this.#integrateAgent(record);
@@ -1286,12 +1305,17 @@ export class WorkflowCoordinator {
 		const handle = record.host.currentHandle();
 		if (!handle) return;
 		const role = this.#executionRole(agentId);
+		this.#waitingForExecution.add(agentId);
+		this.#operationalIncidents.deliveryProgressChanged();
 		const permit = await this.#executionScheduler.admit(
 			role,
 			role === "child"
 				? record.host.exactRunCancellationSignal(handle)
 				: undefined,
-		);
+		).finally(() => {
+			this.#waitingForExecution.delete(agentId);
+			this.#operationalIncidents.deliveryProgressChanged();
+		});
 		if (!permit) return;
 		if (this.#shuttingDown) {
 			permit.release();
