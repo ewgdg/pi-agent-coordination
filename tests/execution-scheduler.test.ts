@@ -195,7 +195,7 @@ test("the coordinator derives Owner and child roles from canonical Workflow iden
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);
 	let coordinator: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
 	});
@@ -265,7 +265,7 @@ test("a child Agent Wait releases and reacquires child execution capacity", { ti
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = createTestWorkflowCoordinator(host, identity, {
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: new WorkflowPolicyStore(
 			parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
@@ -337,7 +337,7 @@ test("an exact Run ending releases capacity without a participant execution-end 
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = createTestWorkflowCoordinator(host, identity, {
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	const owner = coordinator.forAgent(identity.agentId);
@@ -394,7 +394,7 @@ test("an input-required child Run releases capacity until work can resume", asyn
 		parseWorkflowPolicy('{"maxConcurrentAgentRuns": 1}'),
 	);
 	let coordinator: WorkflowCoordinator;
-	coordinator = createTestWorkflowCoordinator(host, identity, {
+	coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 		workflowPolicy: policy,
 	});

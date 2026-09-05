@@ -266,7 +266,7 @@ test("a rejected ambiguous Request is not retained as canonical Request evidence
 		[second.identity.agentId, second],
 	]));
 
-	assert.deepEqual(evidence.findRequestsAuthoredBy(author), []);
+	assert.deepEqual(evidence.residualRelationshipsFor(author), { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
 });
 
 test("an unresolved ambiguous Request stays out of relationship reconciliation", () => {
@@ -290,7 +290,7 @@ test("an unresolved ambiguous Request stays out of relationship reconciliation",
 		[second.identity.agentId, second],
 	]));
 
-	assert.deepEqual(evidence.findRequestsAuthoredBy(author), []);
+	assert.deepEqual(evidence.residualRelationshipsFor(author), { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
 });
 
 test("an error result plus Request Delivery remains contradictory evidence", () => {

@@ -1,15 +1,17 @@
-import { indexedState, coordinationEntries, projectEntries } from "../transcript/retained-transcript.ts";
+import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
 	deriveMessageIdentity,
+	compareCommittedToolCallOrder,
 	ProtocolInvariantError,
 	sameToolCallPointer,
 	type ToolCallPointer,
 } from "./identities.ts";
 import {
 	inspectAnswerDelivery,
-	inspectAnswerRetrievals,
+	retrievalsBySource,
+	retrievalsForRequest,
 	inspectCanonicalMessage,
 	inspectMessageDelivery,
 	resolveCommittedAnswer,
@@ -21,6 +23,8 @@ import {
 } from "./message.ts";
 import {
 	inspectMessageDeliveries,
+	deliveriesBySource,
+	deliveriesForRequest,
 	type DeliveredMessageEvidence,
 	validateDeliveredMessageEvidence,
 } from "./message-delivery.ts";
@@ -71,94 +75,115 @@ export function inspectCanonicalRequestResolution(options: {
 	responderTranscript: TranscriptInspection;
 }): CanonicalRequestResolution {
 	const { request, requesterTranscript, responderTranscript } = options;
-	const answers = findAuthoredAgentMessageSources({
-		authorAgentId: request.targetAgentId,
-		transcript: responderTranscript,
-	}).flatMap(({ source, input }) => {
-		if (input.operation !== "answer") return [];
-		const resultRequestId = answerSourceResultRequestId({
-			transcript: responderTranscript,
-			source,
-		});
-		const deliveryRequestId = answerSourceDeliveryRequestId({
-			requesterAgentId: request.fromAgentId,
-			transcript: requesterTranscript,
-			source,
-		});
-		if (
-			resultRequestId !== undefined &&
-			deliveryRequestId !== undefined &&
-			resultRequestId !== deliveryRequestId
-		) {
-			throw new ProtocolInvariantError(
-				`Agent Answer ${deriveMessageIdentity(source)} result and Delivery name different Requests`,
-			);
-		}
-		const correlatedRequestId = resultRequestId ?? deliveryRequestId;
-		if (correlatedRequestId !== request.messageId) return [];
-		const answer = resolveCommittedAnswer({
-			responderAgentId: request.targetAgentId,
-			transcript: responderTranscript,
-			toolCallId: source.toolCallId,
-			providedInput: input,
-			request,
-		});
-		const delivery = inspectAnswerDelivery({
-			requesterAgentId: request.fromAgentId,
-			transcript: requesterTranscript,
-			answer,
-		});
-		return inspectCanonicalMessage({
-			message: answer,
-			authorTranscript: responderTranscript,
-			deliveryEvidence: delivery.deliveryEvidence,
-		}).state === "canonical" ? [answer] : [];
-	});
-	const cancellations = findAuthoredAgentMessageSources({
-		authorAgentId: request.fromAgentId,
-		transcript: requesterTranscript,
-	})
-		.filter((source): source is AuthoredAgentMessageSource & {
-			input: Extract<AgentMessageInput, { operation: "cancel" }>;
-		} =>
-			source.input.operation === "cancel" &&
-			source.input.requestMessageId === request.messageId
-		)
-		.map(({ source, input }) => resolveCommittedCancellation({
-			requesterAgentId: request.fromAgentId,
-			transcript: requesterTranscript,
-			toolCallId: source.toolCallId,
-			providedInput: input,
-			request,
-		}))
-		.filter((cancellation) => {
-			const delivery = inspectMessageDelivery({
-				recipientAgentId: request.targetAgentId,
-				transcript: responderTranscript,
-				message: cancellation,
+	const candidates = answerSourcesForRequest(options);
+	const requesterState = indexedState(requesterTranscript);
+	const responderState = indexedState(responderTranscript);
+	return requesterState.memo(
+		inspectCanonicalRequestResolution,
+		request.messageId,
+		[
+			requesterState.requestVersion(request.messageId),
+			responderState,
+			responderState.scopeVersion,
+			responderState.requestVersion(request.messageId),
+		],
+		() => {
+			const answers = candidates.flatMap(({ source, input }) => {
+				if (input.operation !== "answer") return [];
+				const resultRequestId = answerSourceResultRequestId({
+					transcript: responderTranscript,
+					source,
+				});
+				const deliveryRequestId = answerSourceDeliveryRequestId({
+					requesterAgentId: request.fromAgentId,
+					transcript: requesterTranscript,
+					source,
+				});
+				if (
+					resultRequestId !== undefined &&
+					deliveryRequestId !== undefined &&
+					resultRequestId !== deliveryRequestId
+				) {
+					throw new ProtocolInvariantError(
+						`Agent Answer ${deriveMessageIdentity(source)} result and Delivery name different Requests`,
+					);
+				}
+				const correlatedRequestId = resultRequestId ?? deliveryRequestId;
+				if (correlatedRequestId !== request.messageId) return [];
+				const answer = resolveCommittedAnswer({
+					responderAgentId: request.targetAgentId,
+					transcript: responderTranscript,
+					toolCallId: source.toolCallId,
+					providedInput: input,
+					request,
+				});
+				const delivery = inspectAnswerDelivery({
+					requesterAgentId: request.fromAgentId,
+					transcript: requesterTranscript,
+					answer,
+				});
+				return inspectCanonicalMessage({
+					message: answer,
+					authorTranscript: responderTranscript,
+					deliveryEvidence: delivery.deliveryEvidence,
+				}).state === "canonical"
+					? [answer]
+					: [];
 			});
-			return inspectCanonicalMessage({
-				message: cancellation,
-				authorTranscript: requesterTranscript,
-				deliveryEvidence: delivery.deliveryEvidence,
-			}).state === "canonical";
-		});
-	if (answers.length > 1) {
-		throw new ProtocolInvariantError(
-			`Request ${request.messageId} has multiple canonical Answers`,
-		);
-	}
-	if (cancellations.length > 1) {
-		throw new ProtocolInvariantError(
-			`Request ${request.messageId} has multiple canonical Cancellations`,
-		);
-	}
-	return {
-		...(answers[0] === undefined ? {} : { answer: answers[0] }),
-		...(cancellations[0] === undefined
-			? {}
-			: { cancellation: cancellations[0] }),
-	};
+			const cancellations = (
+				authoredFacts({
+					authorAgentId: request.fromAgentId,
+					transcript: requesterTranscript,
+				}).cancellations.get(request.messageId) ?? []
+			)
+				.filter(
+					(
+						source,
+					): source is AuthoredAgentMessageSource & {
+						input: Extract<AgentMessageInput, { operation: "cancel" }>;
+					} =>
+						source.input.operation === "cancel" &&
+						source.input.requestMessageId === request.messageId,
+				)
+				.map(({ source, input }) =>
+					resolveCommittedCancellation({
+						requesterAgentId: request.fromAgentId,
+						transcript: requesterTranscript,
+						toolCallId: source.toolCallId,
+						providedInput: input,
+						request,
+					}),
+				)
+				.filter((cancellation) => {
+					const delivery = inspectMessageDelivery({
+						recipientAgentId: request.targetAgentId,
+						transcript: responderTranscript,
+						message: cancellation,
+					});
+					return (
+						inspectCanonicalMessage({
+							message: cancellation,
+							authorTranscript: requesterTranscript,
+							deliveryEvidence: delivery.deliveryEvidence,
+						}).state === "canonical"
+					);
+				});
+			if (answers.length > 1) {
+				throw new ProtocolInvariantError(
+					`Request ${request.messageId} has multiple canonical Answers`,
+				);
+			}
+			if (cancellations.length > 1) {
+				throw new ProtocolInvariantError(
+					`Request ${request.messageId} has multiple canonical Cancellations`,
+				);
+			}
+			return {
+				...(answers[0] === undefined ? {} : { answer: answers[0] }),
+				...(cancellations[0] === undefined ? {} : { cancellation: cancellations[0] }),
+			};
+		},
+	);
 }
 
 export function answerCallTargetAgentId(options: {
@@ -257,10 +282,11 @@ export function answerSourceDeliveryRequestId(options: {
 	transcript: TranscriptInspection;
 	source: ToolCallPointer;
 }): string | undefined {
-	const direct = inspectMessageDeliveries({
+	const direct = deliveriesBySource({
 		recipientAgentId: options.requesterAgentId,
 		transcript: options.transcript,
-	}).filter(({ source }) => sameToolCallPointer(source, options.source));
+		source: options.source,
+	});
 	const requestIds: string[] = [];
 	for (const delivery of direct) {
 		validateDeliveredMessageEvidence(delivery);
@@ -271,9 +297,10 @@ export function answerSourceDeliveryRequestId(options: {
 		}
 		requestIds.push(delivery.projection.requestMessageId);
 	}
-	for (const retrieval of inspectAnswerRetrievals({
+	for (const retrieval of retrievalsBySource({
 		requesterAgentId: options.requesterAgentId,
 		transcript: options.transcript,
+		source: options.source,
 	})) {
 		if (sameToolCallPointer(retrieval.answerSource, options.source)) {
 			requestIds.push(retrieval.requestId);
@@ -305,6 +332,9 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 			requests: [] as AuthoredRequestSource[],
 			invalidCalls: [] as string[],
 			byMessage: new Map<string, AuthoredAgentMessageSource[]>(),
+			byCall: new Map<string, AuthoredAgentMessageSource[]>(),
+			cancellations: new Map<string, AuthoredAgentMessageSource[]>(),
+			cancellationOrder: [] as AuthoredAgentMessageSource[],
 		}),
 		(facts, entry) => {
 			if (entry.type !== "message" || entry.message.role !== "assistant") return facts;
@@ -327,6 +357,18 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 				matches.push(source);
 				facts.byMessage.set(messageId, matches);
 				facts.sources.push(source);
+				const calls = facts.byCall.get(part.id) ?? [];
+				calls.push(source);
+				facts.byCall.set(part.id, calls);
+				if (input.operation === "request")
+					indexedState(transcript).bindRequestSource(part.id, messageId);
+				if (input.operation === "cancel") {
+					const cancellations = facts.cancellations.get(input.requestMessageId) ?? [];
+					cancellations.push(source);
+					facts.cancellations.set(input.requestMessageId, cancellations);
+					facts.cancellationOrder.push(source);
+					indexedState(transcript).bindRequestSource(part.id, input.requestMessageId);
+				}
 				if (input.operation === "request") facts.requests.push({ source: source.source, input });
 			}
 			return facts;
@@ -352,4 +394,107 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 		throw new ProtocolInvariantError(`committed agent_message source ${toolCallId} is invalid`);
 	}
 	return facts;
+}
+
+/** Correlation is indexed when each Answer result arrives. */
+export function answerResultSources(options: {
+	authorAgentId: string;
+	transcript: TranscriptInspection;
+}) {
+	const { authorAgentId, transcript } = options;
+	const authored = authoredFacts(options);
+	return indexedState(transcript).project(
+		answerResultSources,
+		authorAgentId,
+		coordinationEntries(transcript, authorAgentId, "role:toolResult"),
+		() => new Map<string, AuthoredAgentMessageSource[]>(),
+		(byRequest, entry) => {
+			if (
+				entry.type !== "message" ||
+				entry.message.role !== "toolResult" ||
+				entry.message.toolName !== "agent_message"
+			)
+				return byRequest;
+			for (const candidate of authored.byCall.get(entry.message.toolCallId) ?? []) {
+				if (candidate.input.operation !== "answer") continue;
+				const requestId = answerSourceResultRequestId({ transcript, source: candidate.source });
+				if (requestId === undefined) continue;
+				const sources = byRequest.get(requestId) ?? [];
+				sources.push(candidate);
+				byRequest.set(requestId, sources);
+				indexedState(transcript).bindRequestSource(candidate.source.toolCallId, requestId);
+			}
+			return byRequest;
+		},
+	);
+}
+
+function answerSourcesForRequest(options: {
+	request: Request;
+	requesterTranscript: TranscriptInspection;
+	responderTranscript: TranscriptInspection;
+}): AuthoredAgentMessageSource[] {
+	const { request, requesterTranscript, responderTranscript } = options;
+	const candidates = new Map<string, AuthoredAgentMessageSource>();
+	for (const source of answerResultSources({
+		authorAgentId: request.targetAgentId,
+		transcript: responderTranscript,
+	}).get(request.messageId) ?? [])
+		candidates.set(source.source.toolCallId, source);
+	const deliveredSources = [
+		...deliveriesForRequest({
+			recipientAgentId: request.fromAgentId,
+			transcript: requesterTranscript,
+			requestId: request.messageId,
+		})
+			.filter((delivery) => delivery.projection.kind === "answer")
+			.map((delivery) => delivery.source),
+		...retrievalsForRequest({
+			requesterAgentId: request.fromAgentId,
+			transcript: requesterTranscript,
+			requestId: request.messageId,
+		}).map((retrieval) => retrieval.answerSource),
+	];
+	for (const pointer of deliveredSources) {
+		if (pointer.agentId !== request.targetAgentId) continue;
+		const source = findAuthoredAgentMessageSource({
+			authorAgentId: request.targetAgentId,
+			transcript: responderTranscript,
+			messageId: deriveMessageIdentity(pointer),
+		});
+		if (source) candidates.set(source.source.toolCallId, source);
+	}
+	for (const candidate of candidates.values())
+		indexedState(responderTranscript).bindRequestSource(
+			candidate.source.toolCallId,
+			request.messageId,
+		);
+	return [...candidates.values()];
+}
+
+export function cancellationSourcesForRequest(options: {
+	authorAgentId: string;
+	transcript: TranscriptInspection;
+	requestId: string;
+}): readonly AuthoredAgentMessageSource[] {
+	return authoredFacts(options).cancellations.get(options.requestId) ?? [];
+}
+export function cancellationSourcesAfter(options: {
+	authorAgentId: string;
+	transcript: TranscriptInspection;
+	source: ToolCallPointer;
+}): readonly AuthoredAgentMessageSource[] {
+	const ordered = authoredFacts(options).cancellationOrder;
+	let low = 0,
+		high = ordered.length;
+	while (low < high) {
+		const middle = Math.floor((low + high) / 2);
+		if (
+			compareCommittedToolCallOrder(options.transcript, ordered[middle]!.source, options.source) <=
+			0
+		)
+			low = middle + 1;
+		else high = middle;
+	}
+	return ordered.slice(low);
 }

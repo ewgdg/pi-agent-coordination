@@ -267,7 +267,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		),
 		fauxAssistantMessage("Real process child completed after proxied observation."),
 	]);
-	const coordinator = createTestWorkflowCoordinator(host, identity, {
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	try {
@@ -371,7 +371,7 @@ test("post-Identity process startup failure leaves exact durable evidence and a 
 	});
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const coordinator = createTestWorkflowCoordinator(host, identity, {
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	try {
@@ -475,7 +475,7 @@ test("Moderator attempts use process Runtimes and one committed failure creates 
 			errorMessage: "deterministic ordinary process failure",
 		});
 	}));
-	const coordinator = createTestWorkflowCoordinator(host, identity, {
+	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-agent-coordination>",
 	});
 	let replacementPid: number | undefined;

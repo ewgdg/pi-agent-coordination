@@ -1,14 +1,8 @@
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
-import {
-	resolveCommittedToolCall,
-	sameToolCallPointer,
-} from "../protocol/identities.ts";
-import { inspectMessageDeliveries } from "../protocol/message-delivery.ts";
-import {
-	EvidenceUnavailableError,
-	type AgentRecord,
-} from "./agent-record.ts";
+import { resolveCommittedToolCall } from "../protocol/identities.ts";
+import { deliveriesBySource } from "../protocol/message-delivery.ts";
+import { EvidenceUnavailableError, type AgentRecord } from "./agent-record.ts";
 
 export type AgentMessageTargetCandidate = Readonly<{
 	agentId: string;
@@ -16,9 +10,7 @@ export type AgentMessageTargetCandidate = Readonly<{
 }>;
 
 /** Resolve the public target selector without ever choosing an arbitrary match. */
-export function resolveAgentMessageTarget<
-	Candidate extends AgentMessageTargetCandidate,
->(
+export function resolveAgentMessageTarget<Candidate extends AgentMessageTargetCandidate>(
 	identityCandidates: Iterable<Candidate>,
 	labelCandidates: Iterable<Candidate>,
 	targetAgent: string,
@@ -125,11 +117,23 @@ export function inspectCommittedAgentMessageTarget(
 		toolCallId,
 		toolName: "agent_message",
 	});
-	const deliveredTargets = [...agents.values()].filter((record) =>
-		inspectMessageDeliveries({
-			recipientAgentId: record.identity.agentId,
-			transcript: record.transcript.inspect(),
-		}).some((delivery) => sameToolCallPointer(delivery.source, source))
+	const observations = [...agents.values()].map((record) => {
+		const transcript = record.transcript.inspect();
+		return {
+			record,
+			state: indexedState(transcript),
+			count: deliveriesBySource({
+				recipientAgentId: record.identity.agentId,
+				transcript,
+				source,
+			}).length,
+		};
+	});
+	const deliveredTargets = indexedState(authorTranscript).memo(
+		inspectCommittedAgentMessageTarget,
+		toolCallId,
+		observations.flatMap(({ record, state, count }) => [record, state, state.scopeVersion, count]),
+		() => observations.filter(({ count }) => count > 0).map(({ record }) => record),
 	);
 	if (deliveredTargets.length > 1) {
 		throw new Error(

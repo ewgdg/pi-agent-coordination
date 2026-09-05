@@ -1,16 +1,14 @@
-import { coordinationEntries, projectEntries, indexedState } from "../transcript/retained-transcript.ts";
+import { coordinationEntries, indexedState } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import type { ContextPreparation } from "../policy/working-zone-preparation.ts";
 
-import {
-	inspectCommittedAgentWaitResult,
-	type AgentWaitAnswer,
-} from "./agent-wait.ts";
+import { inspectCommittedAgentWaitResult, type AgentWaitAnswer } from "./agent-wait.ts";
 import {
 	deriveMessageIdentity,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
 	sameToolCallPointer,
+	toolCallPointerKey,
 	type ToolCallPointer,
 } from "./identities.ts";
 import {
@@ -391,20 +389,15 @@ function inspectMessageAuthorResult(options: {
 	return deliveryEvidence ? "canonical" : "indeterminate";
 }
 
-function isNonAuthoringMessageResult(
-	value: unknown,
-	message: MessageResultIdentity,
-): boolean {
+function isNonAuthoringMessageResult(value: unknown, message: MessageResultIdentity): boolean {
 	if (message.kind === "message" && isRecord(value)) {
-		return sameStringList(Object.keys(value).sort(), [
-			"disposition",
-			"reason",
-			"requestMessageId",
-		]) &&
+		return (
+			sameStringList(Object.keys(value).sort(), ["disposition", "reason", "requestMessageId"]) &&
 			value.disposition === "rejected" &&
 			value.reason === "answer_required" &&
 			typeof value.requestMessageId === "string" &&
-			value.requestMessageId.length > 0;
+			value.requestMessageId.length > 0
+		);
 	}
 	if (
 		(message.kind !== "answer" && message.kind !== "request_cancellation") ||
@@ -416,34 +409,36 @@ function isNonAuthoringMessageResult(
 	const keys = Object.keys(value).sort();
 	if (message.kind === "request_cancellation") {
 		if (value.disposition === "already_answered") {
-			return sameStringList(keys, ["answerMessageId", "disposition"]) &&
+			return (
+				sameStringList(keys, ["answerMessageId", "disposition"]) &&
 				typeof value.answerMessageId === "string" &&
-				value.answerMessageId.length > 0;
+				value.answerMessageId.length > 0
+			);
 		}
 		if (value.disposition === "already_cancelled") {
-			return sameStringList(keys, ["cancellationMessageId", "disposition"]) &&
+			return (
+				sameStringList(keys, ["cancellationMessageId", "disposition"]) &&
 				typeof value.cancellationMessageId === "string" &&
-				value.cancellationMessageId.length > 0;
+				value.cancellationMessageId.length > 0
+			);
 		}
 		return false;
 	}
 	if (value.disposition === "already_answered") {
-		return sameStringList(
-			keys,
-			["answerId", "disposition", "messageId", "requestMessageId"],
-		) &&
+		return (
+			sameStringList(keys, ["answerId", "disposition", "messageId", "requestMessageId"]) &&
 			typeof value.answerId === "string" &&
 			value.answerId.length > 0 &&
-			value.messageId === value.answerId;
+			value.messageId === value.answerId
+		);
 	}
 	if (value.disposition === "already_cancelled") {
-		return sameStringList(
-			keys,
-			["cancellationId", "disposition", "messageId", "requestMessageId"],
-		) &&
+		return (
+			sameStringList(keys, ["cancellationId", "disposition", "messageId", "requestMessageId"]) &&
 			typeof value.cancellationId === "string" &&
 			value.cancellationId.length > 0 &&
-			value.messageId === value.cancellationId;
+			value.messageId === value.cancellationId
+		);
 	}
 	return false;
 }
@@ -552,9 +547,10 @@ export function inspectAnswerDelivery(options: {
 		transcript,
 		message: answer,
 	});
-	const retrievalEntries = inspectAnswerRetrievals({
+	const retrievalEntries = retrievalsBySource({
 		requesterAgentId,
 		transcript,
+		source: answer.source,
 	}).filter((retrieval) => {
 		if (!sameToolCallPointer(retrieval.answerSource, answer.source)) return false;
 		if (
@@ -570,18 +566,14 @@ export function inspectAnswerDelivery(options: {
 		return true;
 	});
 	const matches = [
-		...(customDelivery.deliveryEvidence
-			? [customDelivery.deliveryEvidence.entryId]
-			: []),
+		...(customDelivery.deliveryEvidence ? [customDelivery.deliveryEvidence.entryId] : []),
 		...retrievalEntries.map(({ deliveryEvidence }) => deliveryEvidence.entryId),
 	];
 	if (matches.length > 1) {
 		throw new ProtocolInvariantError(`Answer ${answer.messageId} has duplicate Deliveries`);
 	}
 	return {
-		...(matches[0]
-			? { deliveryEvidence: { agentId: requesterAgentId, entryId: matches[0] } }
-			: {}),
+		...(matches[0] ? { deliveryEvidence: { agentId: requesterAgentId, entryId: matches[0] } } : {}),
 		inspectedThrough: customDelivery.inspectedThrough,
 	};
 }
@@ -590,13 +582,38 @@ export function inspectAnswerRetrievals(options: {
 	requesterAgentId: string;
 	transcript: TranscriptInspection;
 }): readonly AnswerRetrievalEvidence[] {
+	return answerRetrievalFacts(options).retrievals;
+}
+export function retrievalsForRequest(options: {
+	requesterAgentId: string;
+	transcript: TranscriptInspection;
+	requestId: string;
+}): readonly AnswerRetrievalEvidence[] {
+	return answerRetrievalFacts(options).byRequest.get(options.requestId) ?? [];
+}
+export function retrievalsBySource(options: {
+	requesterAgentId: string;
+	transcript: TranscriptInspection;
+	source: ToolCallPointer;
+}): readonly AnswerRetrievalEvidence[] {
+	return answerRetrievalFacts(options).bySource.get(toolCallPointerKey(options.source)) ?? [];
+}
+
+function answerRetrievalFacts(options: {
+	requesterAgentId: string;
+	transcript: TranscriptInspection;
+}) {
 	const { requesterAgentId, transcript } = options;
-	return projectEntries(
-		transcript,
+	return indexedState(transcript).project(
+		answerRetrievalFacts,
 		requesterAgentId,
-		"role:toolResult",
-		inspectAnswerRetrievals,
-		(committedEntry) => {
+		coordinationEntries(transcript, requesterAgentId, "role:toolResult"),
+		() => ({
+			retrievals: [] as AnswerRetrievalEvidence[],
+			byRequest: new Map<string, AnswerRetrievalEvidence[]>(),
+			bySource: new Map<string, AnswerRetrievalEvidence[]>(),
+		}),
+		(facts, committedEntry) => {
 			const retrievals: AnswerRetrievalEvidence[] = [];
 			for (const entry of [committedEntry]) {
 				if (
@@ -648,7 +665,18 @@ export function inspectAnswerRetrievals(options: {
 					});
 				}
 			}
-			return retrievals;
+			for (const retrieval of retrievals) {
+				const forRequest = facts.byRequest.get(retrieval.requestId) ?? [];
+				forRequest.push(retrieval);
+				facts.byRequest.set(retrieval.requestId, forRequest);
+				const key = toolCallPointerKey(retrieval.answerSource);
+				const forSource = facts.bySource.get(key) ?? [];
+				forSource.push(retrieval);
+				facts.bySource.set(key, forSource);
+				indexedState(transcript).observeMessageRequest(key, retrieval.requestId);
+			}
+			facts.retrievals.push(...retrievals);
+			return facts;
 		},
 	);
 }
@@ -737,13 +765,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isToolCallPointer(value: unknown): value is ToolCallPointer {
-	return isRecord(value) &&
+	return (
+		isRecord(value) &&
 		typeof value.agentId === "string" &&
 		value.agentId.length > 0 &&
 		typeof value.entryId === "string" &&
 		value.entryId.length > 0 &&
 		typeof value.toolCallId === "string" &&
-		value.toolCallId.length > 0;
+		value.toolCallId.length > 0
+	);
 }
 
 function sameStringList(left: readonly string[], right: readonly string[]): boolean {

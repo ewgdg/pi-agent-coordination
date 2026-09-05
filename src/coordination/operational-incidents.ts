@@ -1,4 +1,3 @@
-import { refreshAgentTranscripts } from "./agent-record.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { setImmediate } from "node:timers/promises";
@@ -402,7 +401,7 @@ export class OperationalIncidentCoordinator {
 	}
 
 	async #reconcileWorkflow(): Promise<void> {
-		await refreshAgentTranscripts(this.#agents.values());
+		await this.#messages.refreshTranscriptFacts();
 		if (this.#isShuttingDown()) return;
 		const snapshots: OperationalConditionSnapshot[] = [];
 		for (const [key, snapshot] of this.#runFailureByKey) {

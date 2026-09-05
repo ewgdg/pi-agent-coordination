@@ -100,3 +100,13 @@ export function requireAgentRecord(
 export async function refreshAgentTranscripts(records: Iterable<AgentRecord>): Promise<void> {
 	for (const record of records) await record.transcript.refresh();
 }
+
+/** No await may cross this observation: the next event-loop turn must read again. */
+export function withAgentTranscriptObservations<T>(records: Iterable<AgentRecord>, work: () => T, inspections?: ReadonlyMap<AgentRecord, TranscriptInspection>): T {
+	const iterator = records[Symbol.iterator]();
+	const observeNext = (): T => {
+		const next = iterator.next();
+		return next.done ? work() : next.value.transcript.withObservation(observeNext, inspections?.get(next.value));
+	};
+	return observeNext();
+}

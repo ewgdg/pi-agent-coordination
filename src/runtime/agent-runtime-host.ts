@@ -140,7 +140,7 @@ export interface AgentRuntimeHost {
 	addStateChangeHandler(handler: () => void): () => void;
 	setProjectionInputSettledHandler(handler: () => void): void;
 	setRunFenceHandler(handler: (handle: AgentRunHandle) => void): void;
-	setRunStartInitializer(initializer: () => ResidualRequestRelationships): void;
+	setRunStartInitializer(initializer: () => ResidualRequestRelationships | Promise<ResidualRequestRelationships>): void;
 	setRunStartedHandler(
 		handler: (handle: AgentRunHandle) => void | Promise<void>,
 	): void;
@@ -150,7 +150,7 @@ export interface AgentRuntimeHost {
 			cause: Exclude<AgentRunEndCause, "clean">,
 		) => void | Promise<void>,
 	): void;
-	initializeCurrentRunRelationships(): void;
+	initializeCurrentRunRelationships(): Promise<void>;
 	latestStartedRunSequence(): number;
 	currentRunFailed(): boolean;
 	isCurrent(handle: AgentRunHandle): boolean;

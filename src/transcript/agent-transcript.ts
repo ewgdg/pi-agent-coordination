@@ -23,6 +23,8 @@ export interface TranscriptReader {
 }
 
 export type TranscriptDiagnostics = Readonly<{
+	localEnumerations: number;
+	localEntriesEnumerated: number;
 	bytesRead: number;
 	entriesParsed: number;
 	entriesConsumed: number;
@@ -40,19 +42,25 @@ export type TranscriptDiagnostics = Readonly<{
  */
 export class AgentTranscript {
 	readonly #reader: TranscriptReader;
-	#refresh: Promise<TranscriptInspection> | undefined;
+	#observation: TranscriptInspection | undefined;
 
 	constructor(reader: TranscriptReader) {
 		this.#reader = reader;
 	}
 
 	inspect(): TranscriptInspection {
-		return this.#reader.read();
+		return this.#observation ?? this.#reader.read();
+	}
+
+	/** Share one physical observation within a synchronous consumer operation. */
+	withObservation<T>(work: () => T, inspection: TranscriptInspection = this.inspect()): T {
+		const previous = this.#observation;
+		this.#observation = inspection;
+		try { return work(); } finally { this.#observation = previous; }
 	}
 
 	refresh(): Promise<TranscriptInspection> {
-		return this.#refresh ??= (this.#reader.refresh?.() ?? Promise.resolve(this.inspect()))
-			.finally(() => { this.#refresh = undefined; });
+		return this.#reader.refresh?.() ?? Promise.resolve(this.inspect());
 	}
 
 	diagnostics(): TranscriptDiagnostics | undefined {
