@@ -624,7 +624,7 @@ export const RuntimeSnapshotSchema = closed({
 	loadContextFiles: Type.Boolean(),
 });
 
-/** Bridge-proven version-six method payload/result map. */
+/** Bridge-proven version-seven method payload/result map. */
 export const agentControlMethods = {
 	"runtime.snapshot": { request: EmptySchema, response: RuntimeSnapshotSchema },
 	"runtime.executionBegin": {
@@ -749,7 +749,7 @@ export const agentControlMethods = {
 	},
 } as const satisfies AgentControlProtocol["methods"];
 
-/** Bridge-proven version-six event payload map. */
+/** Bridge-proven version-seven event payload map. */
 export const agentControlEvents = {
 	"runtime.ready": {
 		payload: closed({ sessionId: NonEmptyStringSchema, mode: Type.Literal("tui"), hasUI: Type.Literal(true) }),

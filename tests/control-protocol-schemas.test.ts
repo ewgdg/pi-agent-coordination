@@ -17,7 +17,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 6, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 7, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control Endpoint and child bootstrap descriptors are closed and versioned", () => {
 	const endpoint = { transport: "unix", address: "/tmp/control.sock" } as const;
@@ -26,7 +26,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 6,
+		protocolVersion: 7,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
@@ -42,7 +42,12 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		validateChildProcessBootstrap({ ...bootstrap, endpoint: namedPipeEndpoint }),
 		{ ...bootstrap, endpoint: namedPipeEndpoint },
 	);
-	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, protocolVersion: 2 }), false);
+	for (const protocolVersion of [identity.protocolVersion - 1, identity.protocolVersion + 1]) {
+		assert.throws(() => validateChildProcessBootstrap({ ...bootstrap, protocolVersion }), /control_bootstrap_invalid/);
+		assert.equal(Check(ControlFrameSchema, {
+			...identity, protocolVersion, type: "hello", connectionToken: "token", expectedSessionId: "session",
+		}), false);
+	}
 	assert.equal(Check(ChildProcessBootstrapSchema, { ...bootstrap, unixPath: endpoint.address }), false);
 	assert.equal(Check(ControlEndpointSchema, { ...endpoint, extra: true }), false);
 	assert.equal(Check(ControlEndpointSchema, { ...namedPipeEndpoint, extra: true }), false);
@@ -82,7 +87,7 @@ test("Control frame schema is a closed hello/request/response/event/cancel union
 	}), false);
 });
 
-test("every version-six method and event has TypeBox payload/result schemas", () => {
+test("every version-seven method and event has TypeBox payload/result schemas", () => {
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
 		"runtime.executionBegin",
