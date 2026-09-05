@@ -39,7 +39,7 @@ const protocol = {
 		},
 	},
 } as const satisfies AgentControlProtocol;
-const identity = { protocolVersion: 6 as const, workflowId: "unix-workflow", agentId: "unix-agent" };
+const identity = { protocolVersion: 7 as const, workflowId: "unix-workflow", agentId: "unix-agent" };
 
 unixOnly("Unix listener allocates a short private endpoint and removes it on close", async () => {
 	const root = await mkdtemp(join(tmpdir(), "pi-control-test-"));
@@ -131,6 +131,37 @@ unixOnly("admission broker routes out-of-order children by one-time validated He
 	await Promise.all([firstChild.close(), secondChild.close(), duplicate.close()]);
 	await broker.close();
 	await rmdir(root);
+});
+
+unixOnly("admission rejects incompatible protocol versions before configuring a channel", { timeout: 5_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pi-control-version-"));
+	const listener = await createPlatformControlListener({ workflowId: identity.workflowId, runtimeDirectory: root });
+	const broker = new AgentControlAdmissionBroker({ listener, protocol, workflowId: identity.workflowId });
+	t.after(async () => {
+		await broker.close();
+		await rmdir(root);
+	});
+	for (const protocolVersion of [identity.protocolVersion - 1, identity.protocolVersion + 1]) {
+		let configured = false;
+		const abort = new AbortController();
+		const connectionToken = `version-${protocolVersion}`;
+		const admitted = broker.admit({
+			agentId: identity.agentId,
+			connectionToken,
+			expectedSessionId: "session",
+		}, () => { configured = true; }, abort.signal).then(() => true, () => false);
+		const child = await connectControlTransport(listener.endpoint);
+		t.after(() => child.close());
+		const closed = new Promise<void>((resolve) => child.onClose(() => resolve()));
+		await child.write(new TextEncoder().encode(`${JSON.stringify({
+			...identity, protocolVersion, type: "hello", connectionToken, expectedSessionId: "session",
+		})}\n`));
+		await closed;
+		assert.equal(configured, false);
+		// Invalid frames are closed before a pending admission can claim their token.
+		abort.abort();
+		assert.equal(await admitted, false);
+	}
 });
 
 unixOnly("admission broker binds handlers before releasing a coalesced post-Hello request", async () => {
