@@ -1,7 +1,8 @@
+import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
-import { currentCoordinationScope, ProtocolInvariantError } from "./identities.ts";
+import { ProtocolInvariantError } from "./identities.ts";
 import { RUN_FAILURE_RECOVERY_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import type { EntryPointer } from "./moderator-input.ts";
 
@@ -56,10 +57,7 @@ export function inspectRunFailureRecovery(options: {
 	recovery: RunFailureRecovery;
 }): EntryPointer | undefined {
 	const matches: string[] = [];
-	for (const entry of currentCoordinationScope(
-		options.transcript,
-		options.moderatorAgentId,
-	)) {
+	for (const entry of coordinationEntries(options.transcript, options.moderatorAgentId, `custom:${RUN_FAILURE_RECOVERY_CUSTOM_TYPE}`)) {
 		if (
 			entry.type !== "custom_message" ||
 			entry.customType !== RUN_FAILURE_RECOVERY_CUSTOM_TYPE

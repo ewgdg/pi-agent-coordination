@@ -1,3 +1,4 @@
+import { refreshAgentTranscripts } from "./agent-record.ts";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
@@ -477,6 +478,7 @@ export class MessageCoordinator {
 	}
 
 	async reachSafeBoundary(agentId: string): Promise<void> {
+		await refreshAgentTranscripts(this.#agents.values());
 		if (this.#isShuttingDown()) return Promise.resolve();
 		const record = this.#requireAgent(agentId);
 		// Confirmed Run disposal already owns this Agent lane and fences its volatile
@@ -515,11 +517,12 @@ export class MessageCoordinator {
 		);
 	}
 
-	execute(
+	async execute(
 		callerAgentId: string,
 		toolCallId: string,
 		providedInput: AgentMessageInput,
 	): Promise<AgentMessageReceipt> {
+		await refreshAgentTranscripts(this.#agents.values());
 		const caller = this.#requireAgent(callerAgentId);
 		const committedInput = resolveCommittedAgentMessageInput({
 			agentId: callerAgentId,

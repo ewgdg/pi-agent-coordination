@@ -1,9 +1,9 @@
+import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
 	compareCommittedToolCallOrder,
-	currentCoordinationScope,
 	deriveMessageIdentity,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
@@ -73,7 +73,7 @@ export function inspectCommittedAgentWaitResult(options: {
 	transcript: TranscriptInspection;
 	toolCallId: string;
 }): AgentWaitResultInspection {
-	const matches = currentCoordinationScope(options.transcript, options.agentId).filter(
+	const matches = coordinationEntries(options.transcript, options.agentId, `result:${options.toolCallId}`).filter(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -225,7 +225,7 @@ function findCallerRequestSource(options: {
 	requestMessageId: string;
 }): ToolCallPointer {
 	const matches: ToolCallPointer[] = [];
-	for (const entry of currentCoordinationScope(options.transcript, options.agentId)) {
+	for (const entry of coordinationEntries(options.transcript, options.agentId, "request-source")) {
 		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
 		for (const part of entry.message.content) {
 			if (

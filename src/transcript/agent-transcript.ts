@@ -17,17 +17,30 @@ export type TranscriptInspection = Readonly<{
 /** Storage adapter that obtains a new transcript view at the time of each read. */
 export interface TranscriptReader {
 	read(): TranscriptInspection;
+	refresh?(): Promise<TranscriptInspection>;
+	diagnostics?(): TranscriptDiagnostics;
+	snapshot?(): TranscriptInspection | undefined;
 }
+
+export type TranscriptDiagnostics = Readonly<{
+	bytesRead: number;
+	entriesParsed: number;
+	entriesConsumed: number;
+	reconstructions: number;
+	retainedEntries: number;
+	branchBuilds: number;
+	contextBuilds: number;
+}>;
 
 /**
  * Agent-owned transcript evidence boundary.
  *
- * This object deliberately keeps no snapshot cache. A file-backed reader can
- * reopen the authoritative transcript on every inspection while a Runtime in
- * another process is appending to it.
+ * Readers own disposable projections. Notifications never establish commitment;
+ * each read checks the authority's physical cursor for missed appends.
  */
 export class AgentTranscript {
 	readonly #reader: TranscriptReader;
+	#refresh: Promise<TranscriptInspection> | undefined;
 
 	constructor(reader: TranscriptReader) {
 		this.#reader = reader;
@@ -35,5 +48,19 @@ export class AgentTranscript {
 
 	inspect(): TranscriptInspection {
 		return this.#reader.read();
+	}
+
+	refresh(): Promise<TranscriptInspection> {
+		return this.#refresh ??= (this.#reader.refresh?.() ?? Promise.resolve(this.inspect()))
+			.finally(() => { this.#refresh = undefined; });
+	}
+
+	diagnostics(): TranscriptDiagnostics | undefined {
+		return this.#reader.diagnostics?.();
+	}
+
+	/** Rendering can reuse the last coherent observation while catch-up yields. */
+	snapshot(): TranscriptInspection | undefined {
+		return this.#reader.snapshot?.();
 	}
 }

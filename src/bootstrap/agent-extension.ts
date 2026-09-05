@@ -180,17 +180,20 @@ export function participantLifecycleHandlers(
 			return resolveView().agentActivity().answerMode ? "answer" : "agent";
 		},
 		async toolResultCommitting(input) {
+			await resolveView().refreshTranscriptFacts();
 			return resolveView().guardToolResult(input.message);
 		},
 		// A previous sequential tool result is committed before Pi admits the next
 		// sibling. Reconcile here so input-required attention cannot cross that barrier.
 		async toolExecutionStarted(input) {
+			await resolveView().refreshTranscriptFacts();
 			resolveView().reconcileHumanToolResults();
 			resolveView().reconcileCommittedToolResults();
 			await resolveView().ensureExecution();
 			resolveView().beginToolExecution(input.toolCallId, input.toolName);
 		},
 		async safeBoundaryReached() {
+			await resolveView().refreshTranscriptFacts();
 			resolveView().reconcileHumanToolResults();
 			resolveView().reconcileCommittedToolResults();
 			await resolveView().ensureExecution();
@@ -199,6 +202,7 @@ export function participantLifecycleHandlers(
 		// Aborted and failed turns may not reach turn_end. agent_end follows all native
 		// message commits, so it safely reconciles their final Human result as well.
 		async executionEnded() {
+			await resolveView().refreshTranscriptFacts();
 			resolveView().reconcileCommittedToolResults();
 			resolveView().endExecution();
 			resolveView().reconcileHumanToolResults();

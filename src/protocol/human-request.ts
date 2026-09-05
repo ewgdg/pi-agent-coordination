@@ -1,9 +1,9 @@
+import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
-	currentCoordinationScope,
 	deriveHumanRequestIdentity,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
@@ -98,10 +98,7 @@ export function inspectCommittedHumanRequestResult(options: {
 	request: HumanRequest;
 	transcript: TranscriptInspection;
 }): HumanRequestResultInspection {
-	const matches = currentCoordinationScope(
-		options.transcript,
-		options.request.requesterAgentId,
-	).filter(
+	const matches = coordinationEntries(options.transcript, options.request.requesterAgentId, `result:${options.request.source.toolCallId}`).filter(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&

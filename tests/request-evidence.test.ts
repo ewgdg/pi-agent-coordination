@@ -10,7 +10,7 @@ import { transcriptFromSessionManager } from "../src/pi-integration/session-mana
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { AgentTranscript } from "../src/transcript/agent-transcript.ts";
 
-test("Creation Request lookup reads its Spawner evidence without scanning unrelated histories", () => {
+test("Creation Request lookup trusts loaded identity and creation input without Spawner reads", () => {
 	const ownerSession = SessionManager.inMemory(process.cwd(), { id: "owner" });
 	const owner = record("owner", ownerSession);
 	const toolCallId = "spawn-worker";
@@ -27,6 +27,8 @@ test("Creation Request lookup reads its Spawner evidence without scanning unrela
 		spawnSource: source,
 		metadata: { label: "Worker" },
 	};
+	child.creationInput = { request: "Review the result." };
+	owner.transcript = new AgentTranscript({ read() { throw new Error("Spawner history must not be revalidated"); } });
 	const unrelated = record("unrelated");
 	unrelated.transcript = new AgentTranscript({
 		read() {

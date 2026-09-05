@@ -39,7 +39,7 @@ export type OwnerParticipantRequestHandlers<Role extends RemoteParticipantRole> 
 }>;
 
 export type OwnerParticipantPresentationHandlers = Readonly<{
-	snapshot(): RemoteAgentSelectorSnapshot;
+	snapshot(): Promise<RemoteAgentSelectorSnapshot>;
 	select(
 		action: RemoteAgentSelectorAction,
 		signal: AbortSignal,
@@ -289,7 +289,7 @@ export async function dispatchParticipantRequestToOwner(
 			);
 			break;
 		case "presentation.agents.snapshot":
-			response = handlers.presentation.snapshot();
+			response = await handlers.presentation.snapshot();
 			break;
 		case "presentation.agents.select":
 			response = await handlers.presentation.select(request.payload, request.signal);

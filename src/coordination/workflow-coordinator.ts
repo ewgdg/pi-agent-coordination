@@ -1,3 +1,5 @@
+import { refreshAgentTranscripts } from "./agent-record.ts";
+import { indexedState } from "../transcript/retained-transcript.ts";
 import type {
 	AgentSessionRuntime,
 	MessageEndEvent,
@@ -142,6 +144,7 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	agentActivity(): AgentActivitySnapshot;
 	addAgentActivityChangeHandler(handler: () => void): () => void;
 	refreshAgentActivity(): void;
+	refreshTranscriptFacts(): Promise<void>;
 	resumeFromHuman(
 		text: string,
 		images: readonly ImageContent[] | undefined,
@@ -477,6 +480,7 @@ export class WorkflowCoordinator {
 				return () => this.#agentActivityChangeHandlers.delete(handler);
 			},
 			refreshAgentActivity: () => this.#notifyAgentActivityChanged(),
+			refreshTranscriptFacts: () => refreshAgentTranscripts(this.#agents.values()),
 			children: (targetAgentId?: string) => this.#childrenFor(agentId, targetAgentId),
 			search: (input) => this.#searchFor(agentId, input),
 			message: (toolCallId, input) => this.#messages.execute(agentId, toolCallId, input),
@@ -745,7 +749,7 @@ export class WorkflowCoordinator {
 		const live: AgentRosterStatus[] = [];
 		const dormant: Array<{ status: AgentRosterStatus; recency: number; order: number }> = [];
 		for (const [order, record] of authorityOrder.entries()) {
-			const transcript = record.transcript.inspect();
+			const transcript = record.transcript.snapshot() ?? record.transcript.inspect();
 			const status = this.#rosterStatus(record, transcript);
 			if (status.run.phase !== "dormant") {
 				live.push(status);
@@ -759,7 +763,7 @@ export class WorkflowCoordinator {
 			}
 			dormant.push({
 				status,
-				recency: piSessionRecency(header, transcript.entries),
+				recency: (indexedState(transcript).recency ?? piSessionRecency(header, [])),
 				order,
 			});
 		}
@@ -774,7 +778,7 @@ export class WorkflowCoordinator {
 
 	#rosterStatus(
 		record: AgentRecord,
-		transcript: TranscriptInspection = record.transcript.inspect(),
+		transcript: TranscriptInspection = record.transcript.snapshot() ?? record.transcript.inspect(),
 	): AgentRosterStatus {
 		// Share one observation for the evidence pointer, configuration, and recency.
 		// File-backed transcripts otherwise reparse the whole history for each field.
@@ -782,7 +786,7 @@ export class WorkflowCoordinator {
 		const runtimeSnapshot = status.run.phase === "starting"
 			? undefined
 			: record.host.effectiveRuntimeSnapshot();
-		const transcriptContext = transcript.context;
+		const transcriptContext = indexedState(transcript).settings();
 		const configured = record.effectiveConfiguration;
 		const prepared = record.launchConfiguration;
 		const ownerSnapshot = this.#agents.get(this.#ownerIdentity.agentId)
@@ -792,9 +796,7 @@ export class WorkflowCoordinator {
 		if (!model) {
 			throw new Error(`invariant_violation: Agent ${status.agentId} has no resolvable model`);
 		}
-		const hasRecordedThinking = transcript.activeBranch.some(
-			(entry) => entry.type === "thinking_level_change",
-		);
+		const hasRecordedThinking = transcriptContext.hasRecordedThinking;
 		const thinking = runtimeSnapshot?.thinking ??
 			(hasRecordedThinking ? transcriptContext.thinkingLevel : undefined) ??
 			configured?.thinking ?? prepared?.thinking ?? ownerSnapshot?.thinking;
@@ -837,7 +839,19 @@ export class WorkflowCoordinator {
 		};
 	}
 
+	#activityRefresh: Promise<void> | undefined;
+	#activityRefreshRequested = false;
 	#notifyAgentActivityChanged(): void {
+		this.#activityRefreshRequested = true;
+		this.#activityRefresh ??= (async () => {
+			do {
+				this.#activityRefreshRequested = false;
+				await refreshAgentTranscripts(this.#agents.values());
+				for (const handler of this.#agentActivityChangeHandlers) handler();
+			} while (this.#activityRefreshRequested);
+		})()
+			.catch((error) => this.#reportAgentRuntimeReleaseError(error))
+			.finally(() => { this.#activityRefresh = undefined; });
 		for (const handler of this.#agentActivityChangeHandlers) handler();
 	}
 

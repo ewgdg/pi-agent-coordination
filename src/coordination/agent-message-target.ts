@@ -1,6 +1,6 @@
+import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
-	currentCoordinationScope,
 	resolveCommittedToolCall,
 	sameToolCallPointer,
 } from "../protocol/identities.ts";
@@ -227,38 +227,45 @@ function inspectPersistedTargetResult(options: {
 	transcript: TranscriptInspection;
 	toolCallId: string;
 }): CommittedAgentMessageTargetInspection {
-	const results = currentCoordinationScope(
+	const entries = coordinationEntries(
 		options.transcript,
 		options.authorAgentId,
-	).filter(
-		(entry) =>
-			entry.type === "message" &&
-			entry.message.role === "toolResult" &&
-			entry.message.toolName === "agent_message" &&
-			entry.message.toolCallId === options.toolCallId,
+		`result:${options.toolCallId}`,
 	);
-	if (results.length > 1) {
-		throw new Error(
-			`invariant_violation: Agent Message ${options.toolCallId} has multiple author results`,
-		);
-	}
-	const result = results[0];
-	if (
-		!result ||
-		result.type !== "message" ||
-		result.message.role !== "toolResult"
-	) return { state: "indeterminate" };
-	if (result.message.isError) return { state: "not_created" };
-	if (
-		typeof result.message.details !== "object" ||
-		result.message.details === null ||
-		!("targetAgentId" in result.message.details)
-	) return { state: "indeterminate" };
-	const targetAgentId = result.message.details.targetAgentId;
-	if (typeof targetAgentId !== "string" || targetAgentId.length === 0) {
-		throw new Error(
-			"invariant_violation: Agent Message author result has an invalid targetAgentId",
-		);
-	}
-	return { state: "resolved", targetAgentId };
+	return indexedState(options.transcript).memo(
+		inspectPersistedTargetResult,
+		`${options.authorAgentId}\0${options.toolCallId}`,
+		entries.length,
+		(): CommittedAgentMessageTargetInspection => {
+			const results = entries.filter(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "toolResult" &&
+					entry.message.toolName === "agent_message" &&
+					entry.message.toolCallId === options.toolCallId,
+			);
+			if (results.length > 1) {
+				throw new Error(
+					`invariant_violation: Agent Message ${options.toolCallId} has multiple author results`,
+				);
+			}
+			const result = results[0];
+			if (!result || result.type !== "message" || result.message.role !== "toolResult")
+				return { state: "indeterminate" };
+			if (result.message.isError) return { state: "not_created" };
+			if (
+				typeof result.message.details !== "object" ||
+				result.message.details === null ||
+				!("targetAgentId" in result.message.details)
+			)
+				return { state: "indeterminate" };
+			const targetAgentId = result.message.details.targetAgentId;
+			if (typeof targetAgentId !== "string" || targetAgentId.length === 0) {
+				throw new Error(
+					"invariant_violation: Agent Message author result has an invalid targetAgentId",
+				);
+			}
+			return { state: "resolved", targetAgentId };
+		},
+	);
 }

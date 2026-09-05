@@ -514,7 +514,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 	};
 	return {
 		presentation: {
-			snapshot: () => ({
+			snapshot: async () => ({
 				live: [status], dormant: [], selectedAgentId: agentId,
 				humanAttention: [], operationalAttention: [],
 			}),

@@ -1,9 +1,9 @@
+import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { OBLIGATION_REMINDER_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import {
-	currentCoordinationScope,
 	ProtocolInvariantError,
 } from "./identities.ts";
 import type { EntryPointer } from "./moderator-input.ts";
@@ -49,10 +49,7 @@ export function inspectObligationReminder(options: {
 }): EntryPointer | undefined {
 	const expected = reminderFor(options);
 	const matches: string[] = [];
-	for (const entry of currentCoordinationScope(
-		options.transcript,
-		options.recipientAgentId,
-	)) {
+	for (const entry of coordinationEntries(options.transcript, options.recipientAgentId, `custom:${OBLIGATION_REMINDER_CUSTOM_TYPE}`)) {
 		if (
 			entry.type !== "custom_message" ||
 			entry.customType !== OBLIGATION_REMINDER_CUSTOM_TYPE

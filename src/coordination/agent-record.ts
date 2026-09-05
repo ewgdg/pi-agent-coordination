@@ -18,6 +18,8 @@ export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdenti
 export type AgentRecord = {
 	identity: AgentIdentity;
 	creationInput?: AgentSpawnInput;
+	/** Derived once from the trusted loaded Identity and creationInput. */
+	creationRequest?: Extract<import("../protocol/message.ts").Message, { kind: "request" }>;
 	/** Preserves pre-admission model selection while Pi resolves any default thinking level. */
 	launchConfiguration?: AgentRunLaunchConfiguration;
 	effectiveConfiguration?: EffectiveAgentRunConfiguration;
@@ -92,4 +94,9 @@ export function requireAgentRecord(
 		throw new EvidenceUnavailableError(`Agent ${agentId} could not be verified`);
 	}
 	throw new Error(`unknown_identity: ${agentId}`);
+}
+
+/** Catch up before an asynchronous coordination observation, yielding between Agents. */
+export async function refreshAgentTranscripts(records: Iterable<AgentRecord>): Promise<void> {
+	for (const record of records) await record.transcript.refresh();
 }
