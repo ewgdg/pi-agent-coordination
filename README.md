@@ -44,7 +44,7 @@ The package adopts the current session as the Workflow Owner; no separate activa
 
 ## Agent templates
 
-Create a Markdown file with YAML frontmatter in `~/.agents/agents/` (`%USERPROFILE%\.agents\agents\` on Windows) for a user-wide template, or `.agents/agents/` in a trusted project for a project-specific template. The frontmatter defines its name and optional configuration; the Markdown body supplies its optional system-prompt instructions. `contextFiles` defaults to `true` and controls Pi's discovery of `AGENTS.md` and `CLAUDE.md` instruction files.
+Create a Markdown file with YAML frontmatter in `~/.agents/agents/` (`%USERPROFILE%\.agents\agents\` on Windows) for a user-wide template, or `.agents/agents/` in a trusted project for a project-specific template. The frontmatter defines its name and optional configuration; the Markdown body supplies its optional system-prompt instructions. `loadContextFiles` defaults to `true` and controls Pi's discovery of `AGENTS.md` and `CLAUDE.md` instruction files.
 
 ### Suggested Moderator template
 
@@ -60,7 +60,7 @@ models:
   - id: deepseek/deepseek-v4-flash
     thinking: high
 systemPromptMode: append
-contextFiles: true
+loadContextFiles: true
 ---
 ```
 

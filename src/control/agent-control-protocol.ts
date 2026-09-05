@@ -231,7 +231,7 @@ const EffectiveConfigurationSchema = closed({
 		mode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
 		body: Type.String(),
 	})),
-	contextFiles: Type.Boolean(),
+	loadContextFiles: Type.Boolean(),
 });
 const AgentSpawnReceiptSchema = Type.Union([
 	closed({
@@ -621,7 +621,7 @@ export const RuntimeSnapshotSchema = closed({
 			body: Type.String(),
 		}),
 	]),
-	contextFiles: Type.Boolean(),
+	loadContextFiles: Type.Boolean(),
 });
 
 /** Bridge-proven version-six method payload/result map. */

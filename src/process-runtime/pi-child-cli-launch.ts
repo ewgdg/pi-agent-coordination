@@ -114,7 +114,7 @@ export function buildPiChildCliLaunch(options: {
 		inputExtensionPath,
 		"--no-skills",
 		...skillPaths.flatMap((path) => ["--skill", path]),
-		...(configuration.contextFiles ? [] : ["--no-context-files"]),
+		...(configuration.loadContextFiles ? [] : ["--no-context-files"]),
 		...(systemPromptArtifactPath === undefined
 			? []
 			: [

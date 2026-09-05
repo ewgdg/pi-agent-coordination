@@ -72,14 +72,14 @@ test("Agent Spawn validates independent system-prompt and context-file controls"
 		config: {
 			systemPrompt: "Focus on the assigned task.",
 			systemPromptMode: "append",
-			contextFiles: true,
+			loadContextFiles: true,
 		},
 	}), {
 		request: "Use the native project instructions with a focused prompt.",
 		config: {
 			systemPrompt: "Focus on the assigned task.",
 			systemPromptMode: "append",
-			contextFiles: true,
+			loadContextFiles: true,
 		},
 	});
 	assert.throws(

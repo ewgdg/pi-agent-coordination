@@ -65,7 +65,7 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 			allowedTools: launchAllowedTools,
 			skills: [],
 			extensions: [CHILD_EXTENSION],
-			contextFiles: true,
+			loadContextFiles: true,
 		},
 		skillPaths: [],
 		projectTrusted: true,
@@ -356,7 +356,7 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 			sessionId: "retry-runtime",
 			sessionPath: "/sessions/retry-runtime.jsonl",
 			systemPrompt: null,
-			contextFiles: true,
+			loadContextFiles: true,
 		},
 		channel: {
 			onClose: () => () => undefined,
@@ -599,7 +599,7 @@ async function createFailureHarness(name: "channel_loss" | "process_kill") {
 			skills: [],
 			extensions: [CHILD_EXTENSION],
 			systemPrompt: { mode: "append", body: `Hosted failure context for ${name}` },
-			contextFiles: true,
+			loadContextFiles: true,
 		},
 		skillPaths: [],
 		projectTrusted: true,
@@ -654,7 +654,7 @@ function fakeRuntimeSnapshot(options: Readonly<{
 		sessionId: "dynamic-runtime",
 		sessionPath: "/sessions/dynamic-runtime.jsonl",
 		systemPrompt: null,
-		contextFiles: true,
+		loadContextFiles: true,
 	};
 }
 

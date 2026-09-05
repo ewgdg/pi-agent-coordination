@@ -19,7 +19,7 @@ const TEMPLATE_FIELDS = new Set([
 	"skills",
 	"extensions",
 	"systemPromptMode",
-	"contextFiles",
+	"loadContextFiles",
 ]);
 
 export class AgentTemplateParseError extends Error {
@@ -104,9 +104,9 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 	const systemPromptMode = mapping.systemPromptMode === undefined
 		? "append"
 		: parseSystemPromptMode(mapping.systemPromptMode, sourcePath, name);
-	const contextFiles = mapping.contextFiles === undefined
+	const loadContextFiles = mapping.loadContextFiles === undefined
 		? true
-		: parseContextFiles(mapping.contextFiles, sourcePath, name);
+		: parseLoadContextFiles(mapping.loadContextFiles, sourcePath, name);
 
 	return {
 		name,
@@ -116,7 +116,7 @@ export function parseAgentTemplate(source: string, sourcePath: string): AgentTem
 		...(skills === undefined ? {} : { skills }),
 		...(extensions === undefined ? {} : { extensions }),
 		systemPromptMode,
-		contextFiles,
+		loadContextFiles,
 		systemPrompt: split.body,
 		sourcePath,
 	};
@@ -303,7 +303,7 @@ function parseSystemPromptMode(
 	return value;
 }
 
-function parseContextFiles(
+function parseLoadContextFiles(
 	value: unknown,
 	sourcePath: string,
 	templateName: string,
@@ -311,7 +311,7 @@ function parseContextFiles(
 	if (typeof value !== "boolean") {
 		throw new AgentTemplateParseError(
 			sourcePath,
-			"contextFiles must be a boolean",
+			"loadContextFiles must be a boolean",
 			templateName,
 		);
 	}
