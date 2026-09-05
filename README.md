@@ -44,7 +44,7 @@ The package adopts the current session as the Workflow Owner; no separate activa
 
 ## Agent templates
 
-Create a Markdown file with YAML frontmatter in `~/.agents/agents/` for a user-wide template, or `.agents/agents/` in a trusted project for a project-specific template. The frontmatter defines its name and optional configuration; the Markdown body supplies its optional system-prompt instructions. `loadContextFiles` defaults to `true` and controls Pi's discovery of `AGENTS.md` and `CLAUDE.md` instruction files.
+Create a Markdown file with YAML frontmatter in `~/.agents/agents/` for a user-wide template, or `.agents/agents/` in a trusted project for a project-specific template.
 
 ### Suggested Moderator template
 
@@ -64,11 +64,9 @@ loadContextFiles: true
 ---
 ```
 
-Pi selects the first available model in this ordered list, using its paired thinking level. Availability requires a catalogue entry and configured provider authentication; preparation fails if none are available. Adjust the list to your Pi setup. This example adds no custom system-prompt instructions.
+Adjust the model list to your Pi setup. The `moderator` template is used automatically for incident handling.
 
-The reserved `moderator` template is applied automatically when a Moderator runtime is prepared. It is excluded from ordinary Agents' available-template instructions and cannot be selected through `agent_spawn`.
-
-See [Agent Templates](docs/agent-spawning.md#agent-templates) for all supported fields, model-selection examples, discovery precedence, and reload behavior.
+See [Agent Templates](docs/agent-spawning.md#agent-templates) for configuration details.
 
 ## Compatibility
 
