@@ -31,7 +31,7 @@ test("parses the complete strict Agent Template surface", () => {
 			"  - research",
 			"extensions: none",
 			"systemPromptMode: replace",
-			"contextFiles: false",
+			"loadContextFiles: false",
 			"---",
 			"Use primary sources.",
 		].join("\n"),
@@ -49,7 +49,7 @@ test("parses the complete strict Agent Template surface", () => {
 		skills: ["research"],
 		extensions: "none",
 		systemPromptMode: "replace",
-		contextFiles: false,
+		loadContextFiles: false,
 		systemPrompt: "Use primary sources.",
 		sourcePath: "/templates/research-agent.md",
 	});
@@ -81,10 +81,10 @@ test("rejects the removed aggregate Project Context field and invalid context-fi
 	);
 	assert.throws(
 		() => parseAgentTemplate(
-			"---\nname: research-agent\ncontextFiles: yes\n---\n",
+			"---\nname: research-agent\nloadContextFiles: yes\n---\n",
 			"/templates/research-agent.md",
 		),
-		/contextFiles must be a boolean/,
+		/loadContextFiles must be a boolean/,
 	);
 });
 
@@ -107,7 +107,7 @@ test("allows absent useWhen guidance but rejects a blank value", () => {
 		{
 			name: "research-agent",
 			systemPromptMode: "append",
-			contextFiles: true,
+			loadContextFiles: true,
 			systemPrompt: "",
 			sourcePath: "/templates/research-agent.md",
 		},
@@ -233,7 +233,7 @@ test("discovers whole templates by strict precedence while safely following syml
 			thinking: "high",
 		}],
 		systemPromptMode: "append",
-		contextFiles: true,
+		loadContextFiles: true,
 		systemPrompt: "Project context",
 		sourcePath: join(projectRoot, "research.md"),
 	});
@@ -270,7 +270,7 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 			],
 			allowedTools: ["read"],
 			systemPromptMode: "replace",
-			contextFiles: false,
+			loadContextFiles: false,
 			systemPrompt: "Template context",
 			sourcePath: "/templates/research.md",
 		},
@@ -296,7 +296,7 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 			mode: "replace",
 			body: "Template context\n\nSpawn context",
 		},
-		contextFiles: false,
+		loadContextFiles: false,
 	});
 });
 
@@ -318,7 +318,7 @@ test("fails when no configured Template model is available", () => {
 					{ model: { provider: "missing-b", modelId: "model" }, thinking: "high" },
 				],
 				systemPromptMode: "append",
-				contextFiles: true,
+				loadContextFiles: true,
 				systemPrompt: "",
 				sourcePath: "/templates/fallback-agent.md",
 			},
@@ -345,7 +345,7 @@ test("available paired spawn model override bypasses unavailable Template candid
 			thinking: "high" as const,
 		}],
 		systemPromptMode: "append" as const,
-		contextFiles: true,
+		loadContextFiles: true,
 		systemPrompt: "",
 		sourcePath: "/templates/fallback-agent.md",
 	};
@@ -368,7 +368,7 @@ test("available paired spawn model override bypasses unavailable Template candid
 		...inherited,
 		model: { provider: "explicit", modelId: "model" },
 		systemPrompt: { mode: "append", body: "" },
-		contextFiles: true,
+		loadContextFiles: true,
 	});
 	assert.deepEqual(resolveAgentRunConfiguration({
 		...base,
@@ -377,7 +377,7 @@ test("available paired spawn model override bypasses unavailable Template candid
 		...inherited,
 		thinking: "max",
 		systemPrompt: { mode: "append", body: "" },
-		contextFiles: true,
+		loadContextFiles: true,
 	});
 });
 
@@ -391,7 +391,7 @@ test("creates a public Template catalogue without system-prompt bodies or source
 				thinking: "high",
 			}],
 			systemPromptMode: "replace",
-			contextFiles: false,
+			loadContextFiles: false,
 			systemPrompt: "Private child instructions.",
 			sourcePath: "/private/research-agent.md",
 		},
@@ -399,21 +399,21 @@ test("creates a public Template catalogue without system-prompt bodies or source
 			name: "moderator",
 			useWhen: "Reserved for moderation.",
 			systemPromptMode: "append",
-			contextFiles: true,
+			loadContextFiles: true,
 			systemPrompt: "Private moderator instructions.",
 			sourcePath: "/private/moderator.md",
 		},
 		{
 			name: "plain-agent",
 			systemPromptMode: "append",
-			contextFiles: true,
+			loadContextFiles: true,
 			systemPrompt: "Private plain instructions.",
 			sourcePath: "/private/plain-agent.md",
 		},
 	]), [{
 		name: "plain-agent",
 		systemPromptMode: "append",
-		contextFiles: true,
+		loadContextFiles: true,
 	}, {
 		name: "research-agent",
 		useWhen: "Use for research.",
@@ -422,7 +422,7 @@ test("creates a public Template catalogue without system-prompt bodies or source
 			thinking: "high",
 		}],
 		systemPromptMode: "replace",
-		contextFiles: false,
+		loadContextFiles: false,
 	}]);
 });
 
@@ -435,7 +435,7 @@ test("catalogue hides unavailable candidates and Templates without one available
 				{ model: { provider: "available", modelId: "model" }, thinking: "high" },
 			],
 			systemPromptMode: "append",
-			contextFiles: true,
+			loadContextFiles: true,
 			systemPrompt: "",
 			sourcePath: "/templates/partly-available.md",
 		},
@@ -445,7 +445,7 @@ test("catalogue hides unavailable candidates and Templates without one available
 				{ model: { provider: "missing", modelId: "other" }, thinking: "max" },
 			],
 			systemPromptMode: "append",
-			contextFiles: true,
+			loadContextFiles: true,
 			systemPrompt: "",
 			sourcePath: "/templates/unavailable.md",
 		},
@@ -458,7 +458,7 @@ test("catalogue hides unavailable candidates and Templates without one available
 			thinking: "high",
 		}],
 		systemPromptMode: "append",
-		contextFiles: true,
+		loadContextFiles: true,
 	}]);
 });
 

@@ -16,7 +16,7 @@ agent_spawn({
     },
     systemPrompt: "Reproduce the failure before proposing changes.",
     systemPromptMode: "append",
-    contextFiles: true,
+    loadContextFiles: true,
   },
 })
 ```
@@ -81,18 +81,18 @@ skills:
   - research
 extensions: inherit
 systemPromptMode: append
-contextFiles: true
+loadContextFiles: true
 ---
 Use primary sources and record exact reproduction evidence.
 ```
 
-`name` is required lowercase kebab-case. Optional `useWhen` is nonblank text that tells a spawning Agent when to select the Template. Optional `models` is a nonempty ordered sequence of `id` and `thinking` pairs. The first model in Pi's current availability snapshot supplies both values, and preparation fails when none are available. Availability requires both a catalogue entry and configured provider authentication. Without `models`, an ordinary Agent inherits the parent model and thinking pair. A Moderator instead inherits the Owner model and lets Pi apply its shared default thinking level; a `moderator` Template with `models` explicitly selects both values. `systemPromptMode` defaults to `append`, and `contextFiles` defaults to `true`. The remaining frontmatter fields are `allowedTools`, `skills`, and `extensions`; `systemPromptMode` controls the explicit system-prompt channel; `contextFiles` controls native loading of trusted project instruction files such as `AGENTS.md` and `CLAUDE.md`. The Markdown body is the explicit child system prompt. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
+`name` is required lowercase kebab-case. Optional `useWhen` is nonblank text that tells a spawning Agent when to select the Template. Optional `models` is a nonempty ordered sequence of `id` and `thinking` pairs. The first model in Pi's current availability snapshot supplies both values, and preparation fails when none are available. Availability requires both a catalogue entry and configured provider authentication. Without `models`, an ordinary Agent inherits the parent model and thinking pair. A Moderator instead inherits the Owner model and lets Pi apply its shared default thinking level; a `moderator` Template with `models` explicitly selects both values. `systemPromptMode` defaults to `append`, and `loadContextFiles` defaults to `true`. The remaining frontmatter fields are `allowedTools`, `skills`, and `extensions`; `systemPromptMode` controls the explicit system-prompt channel; `loadContextFiles` controls native loading of trusted project instruction files such as `AGENTS.md` and `CLAUDE.md`. The Markdown body is the explicit child system prompt. Templates cannot define display metadata, working directory, the Creation Request, identity, authority, or lifecycle behavior. The reserved name `moderator` cannot be selected by ordinary `agent_spawn`.
 
 Every spawning Runtime captures an Agent Template Catalogue Snapshot during admission or fresh Runtime Preparation. Resource reload replaces that Runtime's Snapshot. The Snapshot contains the currently valid Template catalogue. The active `agent_spawn` tool exposes it through prompt guidance; Pi owns ordinary system-prompt assembly, and coordination performs no per-Run Template discovery or system-prompt mutation. Runs in a retained Runtime reuse the same Snapshot between reloads.
 
 Under the `Available Agent Templates Snapshot` heading, each prompt entry exposes its name, `useWhen` guidance, configured frontmatter values, and flat `model` and `thinking` fields for the first currently available pair. The configured fallback candidate list is not exposed. A Template whose configured candidates are all unavailable is omitted. This lets the Agent select a Template or deliberately override values through `agent_spawn.config` for a context-isolated Spawn. A Conversation Fork uses neither. Invalid and ambiguous Templates, Template source paths, discovery diagnostics, and Markdown system-prompt bodies are not exposed. The Snapshot is guidance only: every actual Spawn re-resolves the selected Template from current resources before preparing the child Runtime. Runtime Preparation also validates an explicitly overridden model against the current availability snapshot before committing the child Identity.
 
-For every new Runtime, Template discovery is anchored to the current parent Runtime cwd. The per-spawn `config.cwd` resolves against that cwd and determines the prepared Runtime cwd. Pi applies its current project-trust decision there, and the child natively discovers permitted project instruction files such as `AGENTS.md` and `CLAUDE.md` when `contextFiles` is true. The explicit system prompt is passed independently with `--append-system-prompt` or `--system-prompt`; `contextFiles: false` passes `--no-context-files`. An untrusted project cannot contribute selected resources. Changes to ancestor Templates, resources, trust, or cwd can therefore affect a later descendant Runtime; they never mutate an already retained Runtime.
+For every new Runtime, Template discovery is anchored to the current parent Runtime cwd. The per-spawn `config.cwd` resolves against that cwd and determines the prepared Runtime cwd. Pi applies its current project-trust decision there, and the child natively discovers permitted project instruction files such as `AGENTS.md` and `CLAUDE.md` when `loadContextFiles` is true. The explicit system prompt is passed independently with `--append-system-prompt` or `--system-prompt`; `loadContextFiles: false` passes `--no-context-files`. An untrusted project cannot contribute selected resources. Changes to ancestor Templates, resources, trust, or cwd can therefore affect a later descendant Runtime; they never mutate an already retained Runtime.
 
 ## Commitment and delivery
 

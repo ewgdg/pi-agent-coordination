@@ -21,7 +21,7 @@ export type AgentSpawnConfigurationInput = Readonly<{
 	extensions?: "inherit" | "none";
 	systemPrompt?: string;
 	systemPromptMode?: SystemPromptMode;
-	contextFiles?: boolean;
+	loadContextFiles?: boolean;
 }>;
 
 export type EffectiveAgentRunConfiguration = Readonly<{
@@ -35,7 +35,7 @@ export type EffectiveAgentRunConfiguration = Readonly<{
 		mode: SystemPromptMode;
 		body: string;
 	}>;
-	contextFiles: boolean;
+	loadContextFiles: boolean;
 }>;
 
 /** Launch input may delegate thinking selection to Pi while all other values stay explicit. */
@@ -64,8 +64,8 @@ export function resolveAgentRunConfiguration(options: {
 		inherited.extensions,
 	);
 	const systemPrompt = resolveSystemPrompt(template, overrides);
-	const contextFiles = overrides?.contextFiles
-		?? template?.contextFiles
+	const loadContextFiles = overrides?.loadContextFiles
+		?? template?.loadContextFiles
 		?? true;
 	const explicitlySelectedModel = overrides?.model && overrides.model.id !== "inherit"
 		? parseModelId(overrides.model.id)
@@ -96,7 +96,7 @@ export function resolveAgentRunConfiguration(options: {
 		skills: [...configuredSkills],
 		extensions: [...configuredExtensions],
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
-		contextFiles,
+		loadContextFiles,
 	};
 }
 

@@ -269,12 +269,12 @@ test("Template catalogue shows available Template configuration without Runtime 
 			skills: ["research"],
 			extensions: "none",
 			systemPromptMode: "replace",
-			contextFiles: false,
+			loadContextFiles: false,
 		},
 		{
 			name: "plain-agent",
 			systemPromptMode: "append",
-			contextFiles: true,
+			loadContextFiles: true,
 		},
 		],
 	});
@@ -304,7 +304,7 @@ test("Agent Spawn prompt guideline exposes the prepared Runtime Template catalog
 				thinking: "high" as const,
 			}],
 			systemPromptMode: "append" as const,
-			contextFiles: true,
+			loadContextFiles: true,
 		}],
 	};
 	const host = await createTestOwnerHost(t, (pi) => {
@@ -585,7 +585,7 @@ test("ordinary participant snapshot requests refresh the retained Runtime snapsh
 		templates: [{
 			name: "reloaded-template",
 			systemPromptMode: "append" as const,
-			contextFiles: true,
+			loadContextFiles: true,
 		}],
 	};
 	let refreshCount = 0;

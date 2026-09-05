@@ -18,7 +18,7 @@ export type AgentTemplate = Readonly<{
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
 	systemPromptMode: SystemPromptMode;
-	contextFiles: boolean;
+	loadContextFiles: boolean;
 	systemPrompt: string;
 	sourcePath: string;
 }>;
@@ -32,7 +32,7 @@ export type AgentTemplateCatalogueEntry = Readonly<{
 	skills?: readonly string[];
 	extensions?: "inherit" | "none";
 	systemPromptMode: SystemPromptMode;
-	contextFiles: boolean;
+	loadContextFiles: boolean;
 }>;
 
 export type AgentTemplateCatalogueSnapshot = Readonly<{
@@ -97,7 +97,7 @@ export function createAgentTemplateCatalogue(
 				...(template.skills === undefined ? {} : { skills: template.skills }),
 				...(template.extensions === undefined ? {} : { extensions: template.extensions }),
 				systemPromptMode: template.systemPromptMode,
-				contextFiles: template.contextFiles,
+				loadContextFiles: template.loadContextFiles,
 			}];
 		});
 }

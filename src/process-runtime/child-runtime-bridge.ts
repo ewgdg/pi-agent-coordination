@@ -45,7 +45,7 @@ import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
 import { answerCallTargetAgentId } from "../protocol/request-resolution.ts";
 import {
 	CHILD_PROCESS_BOOTSTRAP_ENVIRONMENT_VARIABLE,
-	CHILD_PROCESS_CONTEXT_FILES_ENVIRONMENT_VARIABLE,
+	CHILD_PROCESS_LOAD_CONTEXT_FILES_ENVIRONMENT_VARIABLE,
 	CHILD_PROCESS_SYSTEM_PROMPT_MODE_ENVIRONMENT_VARIABLE,
 	CHILD_PROCESS_SYSTEM_PROMPT_PATH_ENVIRONMENT_VARIABLE,
 } from "./child-process-environment.ts";
@@ -840,11 +840,11 @@ async function runtimeSnapshot(
 	if (explicitSystemPromptMode !== undefined && explicitSystemPromptBody === undefined) {
 		throw new Error("child_runtime_system_prompt_mismatch: prompt body is unavailable");
 	}
-	const contextFilesValue = process.env[
-		CHILD_PROCESS_CONTEXT_FILES_ENVIRONMENT_VARIABLE
+	const loadContextFilesValue = process.env[
+		CHILD_PROCESS_LOAD_CONTEXT_FILES_ENVIRONMENT_VARIABLE
 	];
-	if (contextFilesValue !== "0" && contextFilesValue !== "1") {
-		throw new Error("child_runtime_context_files_mismatch: context-files marker is invalid");
+	if (loadContextFilesValue !== "0" && loadContextFilesValue !== "1") {
+		throw new Error("child_runtime_load_context_files_mismatch: load-context-files marker is invalid");
 	}
 	const sessionPath = context.sessionManager.getSessionFile();
 	if (!sessionPath) throw new Error("child_runtime_session_path_unavailable");
@@ -886,7 +886,7 @@ async function runtimeSnapshot(
 				),
 				body: explicitSystemPromptBody!,
 			},
-		contextFiles: contextFilesValue === "1",
+		loadContextFiles: loadContextFilesValue === "1",
 	};
 }
 

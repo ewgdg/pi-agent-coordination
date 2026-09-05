@@ -724,7 +724,7 @@ test("interactive /resume retains the compact historical agent_spawn renderer", 
 			skills: [],
 			extensions: [],
 			systemPrompt: { mode: "append" as const, body: expandedMarker },
-			contextFiles: true,
+			loadContextFiles: true,
 		},
 	};
 	target.appendSessionInfo("Resumed Spawn Widget Session");

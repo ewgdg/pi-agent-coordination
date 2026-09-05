@@ -246,7 +246,7 @@ test("every version-six method and event has TypeBox payload/result schemas", ()
 		sessionId: "session",
 		sessionPath: "/sessions/session.jsonl",
 		systemPrompt: null,
-		contextFiles: true,
+		loadContextFiles: true,
 	} as const;
 	assert.equal(Check(RuntimeSnapshotSchema, validRuntimeSnapshot), true);
 	assert.equal(Check(agentControlEvents["runtime.snapshot.changed"].payload, validRuntimeSnapshot), true);
@@ -341,7 +341,7 @@ test("every version-six method and event has TypeBox payload/result schemas", ()
 			allowedTools: ["read"],
 			skills: [],
 			extensions: [],
-			contextFiles: true,
+			loadContextFiles: true,
 		},
 	}), true);
 	assert.equal(Check(agentControlMethods["coordination.spawn"].response, {

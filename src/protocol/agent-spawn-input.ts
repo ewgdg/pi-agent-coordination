@@ -77,7 +77,7 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 		...(value.extensions === undefined ? [] : ["extensions"]),
 		...(value.systemPrompt === undefined ? [] : ["systemPrompt"]),
 		...(value.systemPromptMode === undefined ? [] : ["systemPromptMode"]),
-		...(value.contextFiles === undefined ? [] : ["contextFiles"]),
+		...(value.loadContextFiles === undefined ? [] : ["loadContextFiles"]),
 	]);
 	const model = value.model === undefined ? undefined : validateModel(value.model);
 	const cwd = value.cwd === undefined ? undefined : requireNonEmptyString(value.cwd, "cwd");
@@ -107,9 +107,9 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 			"invalid_input: Agent Spawn config.systemPromptMode requires systemPrompt",
 		);
 	}
-	const contextFiles = value.contextFiles;
-	if (contextFiles !== undefined && typeof contextFiles !== "boolean") {
-		throw new Error("invalid_input: Agent Spawn config.contextFiles must be a boolean");
+	const loadContextFiles = value.loadContextFiles;
+	if (loadContextFiles !== undefined && typeof loadContextFiles !== "boolean") {
+		throw new Error("invalid_input: Agent Spawn config.loadContextFiles must be a boolean");
 	}
 	return {
 		...(model === undefined ? {} : { model }),
@@ -119,7 +119,7 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 		...(extensions === undefined ? {} : { extensions }),
 		...(systemPrompt === undefined ? {} : { systemPrompt }),
 		...(systemPromptMode === undefined ? {} : { systemPromptMode }),
-		...(contextFiles === undefined ? {} : { contextFiles }),
+		...(loadContextFiles === undefined ? {} : { loadContextFiles }),
 	};
 }
 

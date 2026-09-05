@@ -47,7 +47,7 @@ export const AgentTemplateCatalogueEntrySchema = Type.Object({
 	skills: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	extensions: Type.Optional(Type.Union([Type.Literal("inherit"), Type.Literal("none")])),
 	systemPromptMode: Type.Union([Type.Literal("append"), Type.Literal("replace")]),
-	contextFiles: Type.Boolean(),
+	loadContextFiles: Type.Boolean(),
 }, { additionalProperties: false });
 
 export const AgentTemplateCatalogueSnapshotSchema = Type.Object({
