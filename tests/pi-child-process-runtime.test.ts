@@ -1644,14 +1644,14 @@ function ordinaryOwnerHandlers(options: Readonly<{
 	message?: (toolCallId: string, input: unknown) => void;
 	observeReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["observe"]>>;
 	messageReceipt?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["coordination"]["message"]>>;
-	selectorSnapshot?: ReturnType<OwnerParticipantRequestHandlers<"ordinary">["presentation"]["snapshot"]>;
+	selectorSnapshot?: Awaited<ReturnType<OwnerParticipantRequestHandlers<"ordinary">["presentation"]["snapshot"]>>;
 	presentationSnapshotError?: Error;
 	humanInputSubmitted?: (text: string) => boolean | Promise<boolean>;
 	select?: (action: Parameters<OwnerParticipantRequestHandlers<"ordinary">["presentation"]["select"]>[0]) => void;
 }> = {}): OwnerParticipantRequestHandlers<"ordinary"> {
 	return {
 		presentation: {
-			snapshot: () => {
+			snapshot: async () => {
 				if (options.presentationSnapshotError) throw options.presentationSnapshotError;
 				return options.selectorSnapshot ?? ({
 					live: [], dormant: [], selectedAgentId: "process-child",
@@ -1716,9 +1716,9 @@ function ordinaryOwnerHandlers(options: Readonly<{
 	};
 }
 
-function processSelectorSnapshot(childAgentId: string): ReturnType<
+function processSelectorSnapshot(childAgentId: string): Awaited<ReturnType<
 	OwnerParticipantRequestHandlers<"ordinary">["presentation"]["snapshot"]
-> {
+>> {
 	const status = (
 		agentId: string,
 		label: string,

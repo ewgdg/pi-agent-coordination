@@ -1,3 +1,4 @@
+import { refreshAgentTranscripts } from "./agent-record.ts";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
@@ -94,6 +95,7 @@ export class AgentWaitCoordinator {
 		signal: AbortSignal | undefined,
 		onProgress?: (progress: AgentWaitProgress) => void,
 	): Promise<AgentWaitResult> {
+		await refreshAgentTranscripts(this.#agents.values());
 		if (!signal) {
 			throw new Error("invariant_violation: Agent Wait has no active Run signal");
 		}

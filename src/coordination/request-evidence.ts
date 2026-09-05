@@ -570,18 +570,13 @@ export class RequestEvidence {
 		for (const child of this.#agents.values()) {
 			if (!("spawnSource" in child.identity)) continue;
 			if (child.identity.spawnSource.toolCallId.length === 0) continue;
-			const spawner = this.#agents.get(child.identity.directSpawnerAgentId);
-			if (!spawner) {
-				throw new Error(
-					`invariant_violation: Creation Request ${requestId} has no Direct Spawner`,
-				);
+			if ((child.creationRequest?.messageId ?? deriveMessageIdentity(child.identity.spawnSource)) !== requestId) continue;
+			if (!child.creationInput) {
+				throw new EvidenceUnavailableError(`Creation Request ${requestId} has no reconstructed spawn input`);
 			}
-			if (deriveMessageIdentity(child.identity.spawnSource) !== requestId) continue;
-			return resolveCreationRequest({
-				requestId,
-				workflowId: child.identity.workflowId,
-				spawnerTranscript: spawner.transcript.inspect(),
+			return child.creationRequest ??= resolveCreationRequest({
 				childIdentity: child.identity,
+				creationInput: child.creationInput,
 			});
 		}
 		return undefined;

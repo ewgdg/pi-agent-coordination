@@ -37,7 +37,7 @@ test("AgentTranscript asks its reader for a fresh inspection every time", () => 
 	assert.equal(reads, 2);
 });
 
-test("local SessionManager transcript inspections are snapshots, not a shared cache", () => {
+test("local SessionManager consumers share retained transcript evidence", () => {
 	const sessionManager = SessionManager.inMemory("/workflow", { id: "agent-1" });
 	sessionManager.appendCustomEntry("agent-coordination.identity", { agentId: "agent-1" });
 	const transcript = transcriptFromSessionManager(sessionManager);
@@ -49,13 +49,13 @@ test("local SessionManager transcript inspections are snapshots, not a shared ca
 	assert.equal(before.sessionId, "agent-1");
 	assert.equal(before.transcriptPath, null);
 	assert.equal(before.header?.cwd, "/workflow");
-	assert.equal(before.entries.length, 1);
-	assert.equal(before.activeBranch.length, 1);
+	assert.equal(before.entries.length, 2);
+	assert.equal(before.activeBranch.length, 2);
 	assert.equal(after.entries.length, 2);
 	assert.equal(after.activeBranch.length, 2);
-	assert.notEqual(before, after);
-	assert.notEqual(before.entries, after.entries);
-	assert.notEqual(before.activeBranch, after.activeBranch);
+	assert.equal(before, after);
+	assert.equal(before.entries, after.entries);
+	assert.equal(before.activeBranch, after.activeBranch);
 });
 
 test("new Agent transcript materialization persists only its creation Identity", async () => {
@@ -245,3 +245,124 @@ function inspection(sessionId: string, entryId: string): TranscriptInspection {
 		context: { messages: [], thinkingLevel: "off", model: null },
 	};
 }
+
+test("unchanged local reads reuse evidence without rebuilding Pi history or context", () => {
+	const manager = SessionManager.inMemory("/workflow", { id: "retained" });
+	manager.appendCustomEntry("agent-coordination.identity", { agentId: "retained" });
+	const transcript = transcriptFromSessionManager(manager);
+	const first = transcript.inspect();
+	manager.getEntries = () => { throw new Error("full history read"); };
+	manager.getBranch = () => { throw new Error("branch reconstruction"); };
+	manager.buildSessionContext = () => { throw new Error("context reconstruction"); };
+	assert.equal(transcript.inspect(), first);
+	manager.appendCustomEntry("marker", { value: 2 });
+	assert.equal(transcript.inspect().entries.length, 2);
+});
+
+test("file consumption publishes only newline-committed UTF-8 entries", async () => {
+	const root = await mkdtemp(join(tmpdir(), "transcript-partial-"));
+	const file = join(root, "session.jsonl");
+	const header = { type: "session", version: 3, id: "partial", timestamp: new Date().toISOString(), cwd: root };
+	await writeFile(file, `${JSON.stringify(header)}\n`);
+	const transcript = transcriptFromSessionFile(file);
+	const line = Buffer.from(`${JSON.stringify({ type: "custom", id: "one", parentId: null, timestamp: new Date().toISOString(), customType: "marker", data: "你好" })}\n`);
+	const split = line.indexOf(Buffer.from("你")) + 1;
+	await appendFile(file, line.subarray(0, split));
+	assert.equal(transcript.inspect().entries.length, 0);
+	await appendFile(file, line.subarray(split, -1));
+	assert.equal(transcript.inspect().entries.length, 0);
+	await appendFile(file, line.subarray(-1));
+	assert.equal(transcript.inspect().entries.length, 1);
+	assert.deepEqual(transcript.inspect().entries, transcriptFromSessionFile(file).inspect().entries);
+});
+
+test("concurrent consumers share catch-up and a current read sees every committed entry", async () => {
+	const root = await mkdtemp(join(tmpdir(), "transcript-consumers-"));
+	const file = join(root, "session.jsonl");
+	const header = { type: "session", version: 3, id: "shared", timestamp: new Date().toISOString(), cwd: root };
+	const entries = Array.from({ length: 1200 }, (_, i) => ({ type: "custom", id: `entry-${i}`, parentId: i ? `entry-${i - 1}` : null, timestamp: header.timestamp, customType: "marker" }));
+	await writeFile(file, `${[header, ...entries].map(entry => JSON.stringify(entry)).join("\n")}\n`);
+	const transcript = transcriptFromSessionFile(file);
+	const first = transcript.refresh();
+	const second = transcript.refresh();
+	assert.equal(transcript.inspect().entries.length, entries.length);
+	await Promise.all([first, second]);
+	assert.deepEqual(transcript.inspect().entries, entries);
+});
+
+test("local physical appends survive moving back to a previously inspected branch", () => {
+	const manager = SessionManager.inMemory("/workflow", { id: "branches" });
+	const root = manager.appendCustomEntry("agent-coordination.identity", { agentId: "branches" });
+	const transcript = transcriptFromSessionManager(manager);
+	transcript.inspect();
+	manager.appendCustomEntry("hidden-branch", {});
+	manager.branch(root);
+	assert.equal(transcript.inspect().entries.length, 2);
+	assert.equal(transcript.inspect().activeBranch.length, 1);
+});
+
+test("file replacement and truncate-regrowth reconstruct disposable state", async () => {
+	const root = await mkdtemp(join(tmpdir(), "transcript-replace-"));
+	const file = join(root, "session.jsonl");
+	const manager = SessionManager.inMemory(root, { id: "replace" });
+	manager.appendCustomEntry("agent-coordination.identity", { agentId: "replace" });
+	const body = () => `${[manager.getHeader(), ...manager.getEntries()].map(entry => JSON.stringify(entry)).join("\n")}\n`;
+	await writeFile(file, body());
+	const transcript = transcriptFromSessionFile(file);
+	assert.equal(transcript.inspect().entries.length, 1);
+	manager.newSession({ id: "replacement" });
+	manager.appendCustomEntry("agent-coordination.identity", { agentId: "replacement" });
+	manager.appendCustomEntry("large-marker", { text: "larger".repeat(100) });
+	await writeFile(file, body());
+	assert.equal(transcript.inspect().sessionId, "replacement");
+	assert.equal(transcript.inspect().entries.length, 2);
+	await writeFile(file, "");
+	assert.equal(transcript.inspect().entries.length, 0);
+});
+
+test("async catch-up yields and includes appends made while consuming a backlog", async () => {
+	const root = await mkdtemp(join(tmpdir(), "transcript-backlog-"));
+	const file = join(root, "session.jsonl");
+	const manager = SessionManager.inMemory(root, { id: "backlog" });
+	manager.appendCustomEntry("agent-coordination.identity", { agentId: "backlog" });
+	for (let i = 0; i < 2000; i++) manager.appendCustomEntry("marker", { i });
+	await writeFile(file, `${[manager.getHeader(), ...manager.getEntries()].map(entry => JSON.stringify(entry)).join("\n")}\n`);
+	const transcript = transcriptFromSessionFile(file);
+	let nativeEventRan = false;
+	const event = new Promise<void>((resolve) => setImmediate(async () => {
+		nativeEventRan = true;
+		const id = manager.appendCustomEntry("concurrent-append", {});
+		await appendFile(file, `${JSON.stringify(manager.getEntry(id))}\n`);
+		resolve();
+	}));
+	await transcript.refresh();
+	await event;
+	await transcript.refresh();
+	assert.equal(nativeEventRan, true);
+	assert.deepEqual(transcript.inspect().entries, manager.getEntries());
+});
+
+test("unchanged reads do no history work and fixed appends consume only their bytes", async () => {
+	const root = await mkdtemp(join(tmpdir(), "transcript-work-"));
+	const file = join(root, "session.jsonl");
+	const manager = SessionManager.inMemory(root, { id: "work" });
+	manager.appendCustomEntry("agent-coordination.identity", { agentId: "work" });
+	for (let i = 0; i < 1000; i++) manager.appendCustomEntry("marker", { i });
+	await writeFile(file, `${[manager.getHeader(), ...manager.getEntries()].map(entry => JSON.stringify(entry)).join("\n")}\n`);
+	const transcript = transcriptFromSessionFile(file);
+	await transcript.refresh();
+	const before = transcript.diagnostics()!;
+	for (let i = 0; i < 20; i++) transcript.inspect();
+	assert.deepEqual(transcript.diagnostics(), before);
+	const id = manager.appendCustomEntry("marker", { appended: true });
+	const line = `${JSON.stringify(manager.getEntry(id))}\n`;
+	await appendFile(file, line);
+	await transcript.refresh();
+	const after = transcript.diagnostics()!;
+	assert.equal(after.entriesConsumed - before.entriesConsumed, 1);
+	assert.equal(after.entriesParsed - before.entriesParsed, 1);
+	assert.equal(after.reconstructions, before.reconstructions);
+	assert.ok(after.bytesRead - before.bytesRead <= Buffer.byteLength(line) + 128);
+	assert.equal(after.branchBuilds, 0);
+	assert.equal(after.contextBuilds, 0);
+});

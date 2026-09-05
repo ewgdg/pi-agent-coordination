@@ -1,10 +1,11 @@
+import type { AgentTranscript } from "../transcript/agent-transcript.ts";
 import {
 	CURRENT_SESSION_VERSION,
 	SessionManager,
 	type SessionEntry,
 	type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
-import { readFile, readdir } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -62,6 +63,7 @@ export type ColdWorkflowRecovery = Readonly<{
 
 type CandidateBase = {
 	path: string;
+	transcript: AgentTranscript;
 	invalid: boolean;
 };
 
@@ -164,7 +166,7 @@ export async function discoverColdWorkflow(options: {
 					candidate.identity.directSpawnerAgentId,
 				);
 				return parentCandidate
-					? transcriptFromSessionFile(parentCandidate.path)
+					? parentCandidate.transcript
 					: undefined;
 			})();
 		if (!parentTranscript) {
@@ -173,7 +175,7 @@ export async function discoverColdWorkflow(options: {
 			continue;
 		}
 		try {
-			const parentInspection = parentTranscript.inspect();
+			const parentInspection = await parentTranscript.refresh();
 			const committed = resolveCommittedSpawnSource({
 				agentId: candidate.identity.directSpawnerAgentId,
 				transcript: parentInspection,
@@ -183,7 +185,7 @@ export async function discoverColdWorkflow(options: {
 				throw new Error("spawn pointer entry does not match");
 			}
 			const input = validateAgentSpawnInput(committed.input);
-			const childInspection = transcriptFromSessionFile(candidate.path).inspect();
+			const childInspection = await candidate.transcript.refresh();
 			validateColdChildConversationMode({
 				entries: childInspection.entries,
 				identity: candidate.identity,
@@ -327,41 +329,15 @@ export async function discoverColdWorkflow(options: {
 }
 
 async function readCandidate(path: string): Promise<Candidate> {
-	let bytes: Buffer;
+	const transcript = transcriptFromSessionFile(path);
+	let inspection;
 	try {
-		bytes = await readFile(path);
-	} catch {
-		throw new CandidateError("candidate transcript is unreadable");
+		inspection = await transcript.refresh();
+	} catch (error) {
+		throw new CandidateError(error instanceof Error ? error.message : "candidate transcript is unreadable", transcript.snapshot()?.header?.id);
 	}
-	if (bytes.length === 0 || bytes.at(-1) !== 0x0a) {
-		throw new CandidateError("candidate transcript has an incomplete final append");
-	}
-	let text: string;
-	try {
-		text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-	} catch {
-		throw new CandidateError("candidate transcript is not valid UTF-8");
-	}
-	const lines = text.slice(0, -1).split("\n");
-	if (lines.length < 2 || lines.some((line) => line.length === 0)) {
-		throw new CandidateError("candidate transcript is empty or malformed");
-	}
-	let headerValue: unknown;
-	try {
-		headerValue = JSON.parse(lines[0]!);
-	} catch {
-		throw new CandidateError("candidate transcript contains malformed JSON");
-	}
-	const header = validateHeader(headerValue);
-	let entryValues: unknown[];
-	try {
-		entryValues = lines.slice(1).map((line) => JSON.parse(line));
-	} catch {
-		throw new CandidateError(
-			"candidate transcript contains malformed JSON",
-			header.id,
-		);
-	}
+	const header = validateHeader(inspection.header);
+	const entryValues = inspection.entries;
 	try {
 		validateNativeEntries(entryValues);
 	} catch (error) {
@@ -370,7 +346,7 @@ async function readCandidate(path: string): Promise<Candidate> {
 			header.id,
 		);
 	}
-	const entries = entryValues as SessionEntry[];
+	const entries = entryValues;
 	let candidateIdentity: Readonly<{
 		role: "ordinary";
 		identity: ChildAgentIdentity;
@@ -406,20 +382,9 @@ async function readCandidate(path: string): Promise<Candidate> {
 			header.id,
 		);
 	}
-	let sessionManager: SessionManager;
-	try {
-		sessionManager = SessionManager.open(path);
-	} catch {
-		throw new CandidateError("candidate transcript cannot be opened", header.id);
-	}
-	if (
-		!isDeepStrictEqual(sessionManager.getHeader(), header) ||
-		!isDeepStrictEqual(sessionManager.getEntries(), entries)
-	) {
-		throw new CandidateError("candidate transcript changed during admission", header.id);
-	}
 	return {
 		path,
+		transcript,
 		...candidateIdentity,
 		invalid: false,
 	};

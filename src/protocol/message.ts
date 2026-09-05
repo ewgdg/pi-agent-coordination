@@ -1,3 +1,4 @@
+import { coordinationEntries, projectEntries, indexedState } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import type { ContextPreparation } from "../policy/working-zone-preparation.ts";
 
@@ -7,7 +8,6 @@ import {
 } from "./agent-wait.ts";
 import {
 	deriveMessageIdentity,
-	currentCoordinationScope,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
 	sameToolCallPointer,
@@ -111,14 +111,8 @@ export function resolveCommittedMessage(options: {
 	providedInput: MessageSendInput | RequestSendInput;
 	resolvedTargetAgentId: string;
 }): Message {
-	const {
-		fromAgentId,
-		workflowId,
-		transcript,
-		toolCallId,
-		providedInput,
-		resolvedTargetAgentId,
-	} = options;
+	const { fromAgentId, workflowId, transcript, toolCallId, providedInput, resolvedTargetAgentId } =
+		options;
 	const { source, input } = resolveCommittedToolCall({
 		agentId: fromAgentId,
 		transcript,
@@ -132,30 +126,37 @@ export function resolveCommittedMessage(options: {
 	if (!sameAgentMessageInput(committedInput, providedInput)) {
 		throw new Error("invariant_violation: executed Agent Message input differs from its source");
 	}
-	const common = {
-		messageId: deriveMessageIdentity(source),
-		workflowId,
-		fromAgentId,
-		targetAgentId: resolvedTargetAgentId,
-		deliveryMode: committedInput.deliveryMode ?? "deferred",
+	return indexedState(transcript).memo(
+		resolveCommittedMessage,
+		`${workflowId}\0${resolvedTargetAgentId}\0${toolCallId}`,
 		source,
-	};
-	return committedInput.operation === "send"
-		? {
-			...common,
-			kind: "message",
-			origin: "agent_message",
-			content: committedInput.content,
-		}
-		: {
-			...common,
-			kind: "request",
-			origin: "agent_message",
-			question: committedInput.question,
-			...(committedInput.contextPreparation === undefined
-				? {}
-				: { contextPreparation: committedInput.contextPreparation }),
-		};
+		(): Message => {
+			const common = {
+				messageId: deriveMessageIdentity(source),
+				workflowId,
+				fromAgentId,
+				targetAgentId: resolvedTargetAgentId,
+				deliveryMode: committedInput.deliveryMode ?? "deferred",
+				source,
+			};
+			return committedInput.operation === "send"
+				? {
+						...common,
+						kind: "message",
+						origin: "agent_message",
+						content: committedInput.content,
+					}
+				: {
+						...common,
+						kind: "request",
+						origin: "agent_message",
+						question: committedInput.question,
+						...(committedInput.contextPreparation === undefined
+							? {}
+							: { contextPreparation: committedInput.contextPreparation }),
+					};
+		},
+	);
 }
 
 export function resolveCommittedAnswer(options: {
@@ -354,7 +355,7 @@ function inspectMessageAuthorResult(options: {
 	deliveryEvidence?: EntryPointer;
 }): MessageAuthorResultState {
 	const { authorAgentId, transcript, toolCallId, identity, deliveryEvidence } = options;
-	const results = currentCoordinationScope(transcript, authorAgentId).filter(
+	const results = coordinationEntries(transcript, authorAgentId, `result:${toolCallId}`).filter(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -590,56 +591,66 @@ export function inspectAnswerRetrievals(options: {
 	transcript: TranscriptInspection;
 }): readonly AnswerRetrievalEvidence[] {
 	const { requesterAgentId, transcript } = options;
-	const retrievals: AnswerRetrievalEvidence[] = [];
-	for (const entry of currentCoordinationScope(transcript, requesterAgentId)) {
-		if (
-			entry.type !== "message" ||
-			entry.message.role !== "toolResult" ||
-			entry.message.isError ||
-			!isRecord(entry.message.details)
-		) continue;
-		const candidates = entry.message.toolName === "agent_message" &&
-			entry.message.details.disposition === "answer_delivered"
-			? [entry.message.details]
-			: entry.message.toolName === "agent_wait"
-				? completedAgentWaitAnswers({
-					requesterAgentId,
-					transcript,
-					toolCallId: entry.message.toolCallId,
-				})
-				: [];
-		for (const details of candidates) {
-			const expectedKeys = [
-				"answer",
-				"answerId",
-				"answerSource",
-				"disposition",
-				"fromAgentId",
-				"requestMessageId",
-			];
-			if (
-				!sameStringList(Object.keys(details).sort(), expectedKeys) ||
-				!isToolCallPointer(details.answerSource) ||
-				typeof details.answerId !== "string" ||
-				typeof details.requestMessageId !== "string" ||
-				typeof details.fromAgentId !== "string" ||
-				typeof details.answer !== "string" ||
-				details.answerId !== deriveMessageIdentity(details.answerSource) ||
-				details.fromAgentId !== details.answerSource.agentId
-			) {
-				throw new ProtocolInvariantError("Answer Retrieval evidence is invalid");
+	return projectEntries(
+		transcript,
+		requesterAgentId,
+		"role:toolResult",
+		inspectAnswerRetrievals,
+		(committedEntry) => {
+			const retrievals: AnswerRetrievalEvidence[] = [];
+			for (const entry of [committedEntry]) {
+				if (
+					entry.type !== "message" ||
+					entry.message.role !== "toolResult" ||
+					entry.message.isError ||
+					!isRecord(entry.message.details)
+				)
+					continue;
+				const candidates =
+					entry.message.toolName === "agent_message" &&
+					entry.message.details.disposition === "answer_delivered"
+						? [entry.message.details]
+						: entry.message.toolName === "agent_wait"
+							? completedAgentWaitAnswers({
+									requesterAgentId,
+									transcript,
+									toolCallId: entry.message.toolCallId,
+								})
+							: [];
+				for (const details of candidates) {
+					const expectedKeys = [
+						"answer",
+						"answerId",
+						"answerSource",
+						"disposition",
+						"fromAgentId",
+						"requestMessageId",
+					];
+					if (
+						!sameStringList(Object.keys(details).sort(), expectedKeys) ||
+						!isToolCallPointer(details.answerSource) ||
+						typeof details.answerId !== "string" ||
+						typeof details.requestMessageId !== "string" ||
+						typeof details.fromAgentId !== "string" ||
+						typeof details.answer !== "string" ||
+						details.answerId !== deriveMessageIdentity(details.answerSource) ||
+						details.fromAgentId !== details.answerSource.agentId
+					) {
+						throw new ProtocolInvariantError("Answer Retrieval evidence is invalid");
+					}
+					retrievals.push({
+						answerId: details.answerId,
+						requestId: details.requestMessageId,
+						fromAgentId: details.fromAgentId,
+						answer: details.answer,
+						answerSource: details.answerSource,
+						deliveryEvidence: { agentId: requesterAgentId, entryId: entry.id },
+					});
+				}
 			}
-			retrievals.push({
-				answerId: details.answerId,
-				requestId: details.requestMessageId,
-				fromAgentId: details.fromAgentId,
-				answer: details.answer,
-				answerSource: details.answerSource,
-				deliveryEvidence: { agentId: requesterAgentId, entryId: entry.id },
-			});
-		}
-	}
-	return retrievals;
+			return retrievals;
+		},
+	);
 }
 
 function completedAgentWaitAnswers(options: {

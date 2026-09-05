@@ -1,7 +1,7 @@
+import { indexedState, coordinationEntries, projectEntries } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
-	currentCoordinationScope,
 	deriveMessageIdentity,
 	ProtocolInvariantError,
 	sameToolCallPointer,
@@ -49,9 +49,7 @@ export function findAuthoredAgentMessageSource(options: {
 	transcript: TranscriptInspection;
 	messageId: string;
 }): AuthoredAgentMessageSource | undefined {
-	const matches = findAuthoredAgentMessageSources(options).filter(
-		({ source }) => deriveMessageIdentity(source) === options.messageId,
-	);
+	const matches = authoredFacts(options).byMessage.get(options.messageId) ?? [];
 	if (matches.length > 1) {
 		throw new ProtocolInvariantError(
 			`Message ${options.messageId} has multiple author sources`,
@@ -64,9 +62,7 @@ export function findAuthoredRequestSources(options: {
 	authorAgentId: string;
 	transcript: TranscriptInspection;
 }): readonly AuthoredRequestSource[] {
-	return findAuthoredAgentMessageSources(options).filter(
-		(source): source is AuthoredRequestSource => source.input.operation === "request",
-	);
+	return authoredFacts(options).requests;
 }
 
 export function inspectCanonicalRequestResolution(options: {
@@ -178,9 +174,7 @@ export function answerCallTargetAgentId(options: {
 	const source = answerSources.find((candidate) =>
 		candidate.source.toolCallId === toolCallId
 	)?.source;
-	const entryIndexes = new Map(
-		transcript.entries.map((entry, index) => [entry.id, index]),
-	);
+	const entryIndexes = indexedState(transcript).positions;
 	const sourceIndex = source === undefined
 		? Number.POSITIVE_INFINITY
 		: entryIndexes.get(source.entryId);
@@ -223,10 +217,7 @@ export function answerSourceResultRequestId(options: {
 	transcript: TranscriptInspection;
 	source: ToolCallPointer;
 }): string | undefined {
-	const results = currentCoordinationScope(
-		options.transcript,
-		options.source.agentId,
-	).filter(
+	const results = coordinationEntries(options.transcript, options.source.agentId, `result:${options.source.toolCallId}`).filter(
 		(entry) =>
 			entry.type === "message" &&
 			entry.message.role === "toolResult" &&
@@ -300,50 +291,65 @@ export function findAuthoredAgentMessageSources(options: {
 	authorAgentId: string;
 	transcript: TranscriptInspection;
 }): AuthoredAgentMessageSource[] {
-	const sources: AuthoredAgentMessageSource[] = [];
-	const entries = currentCoordinationScope(
-		options.transcript,
-		options.authorAgentId,
-	);
-	for (const entry of entries) {
-		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-		for (const part of entry.message.content) {
-			if (part.type !== "toolCall" || part.name !== "agent_message") continue;
-			let input: AgentMessageInput;
-			try {
-				input = validateAgentMessageInput(part.arguments);
-			} catch {
-				// Pi commits model-emitted calls before native validation results.
-				// Invalid input authors no Message during that gap; only a conflicting
-				// result makes it contradictory protocol evidence.
-				const results = entries.filter(
-					(entry) =>
-						entry.type === "message" &&
-						entry.message.role === "toolResult" &&
-						entry.message.toolName === "agent_message" &&
-						entry.message.toolCallId === part.id,
-				);
-				if (results.length === 0) continue;
-				if (
-					results.length === 1 &&
-					results[0]?.type === "message" &&
-					results[0].message.role === "toolResult" &&
-					results[0].message.isError
-				) continue;
-				throw new ProtocolInvariantError(
-					`committed agent_message source ${part.id} is invalid`,
-				);
+	return authoredFacts(options).sources;
+}
+
+function authoredFacts(options: { authorAgentId: string; transcript: TranscriptInspection }) {
+	const { transcript, authorAgentId } = options;
+	const facts = indexedState(transcript).project(
+		authoredFacts,
+		authorAgentId,
+		coordinationEntries(transcript, authorAgentId, "tool:agent_message"),
+		() => ({
+			sources: [] as AuthoredAgentMessageSource[],
+			requests: [] as AuthoredRequestSource[],
+			invalidCalls: [] as string[],
+			byMessage: new Map<string, AuthoredAgentMessageSource[]>(),
+		}),
+		(facts, entry) => {
+			if (entry.type !== "message" || entry.message.role !== "assistant") return facts;
+			for (const part of entry.message.content) {
+				if (part.type !== "toolCall" || part.name !== "agent_message") continue;
+				let input: AgentMessageInput;
+				try {
+					input = validateAgentMessageInput(part.arguments);
+				} catch {
+					facts.invalidCalls.push(part.id);
+					continue;
+				}
+				if (input.operation === "poll" || input.operation === "retry") continue;
+				const source = {
+					source: { agentId: authorAgentId, entryId: entry.id, toolCallId: part.id },
+					input,
+				};
+				const messageId = deriveMessageIdentity(source.source);
+				const matches = facts.byMessage.get(messageId) ?? [];
+				matches.push(source);
+				facts.byMessage.set(messageId, matches);
+				facts.sources.push(source);
+				if (input.operation === "request") facts.requests.push({ source: source.source, input });
 			}
-			if (input.operation === "poll" || input.operation === "retry") continue;
-			sources.push({
-				source: {
-					agentId: options.authorAgentId,
-					entryId: entry.id,
-					toolCallId: part.id,
-				},
-				input,
-			});
-		}
+			return facts;
+		},
+	);
+	// Invalid calls remain candidates until their native validation result commits.
+	// A cached absence cannot hide a later contradictory successful result.
+	for (const toolCallId of facts.invalidCalls) {
+		const results = coordinationEntries(transcript, authorAgentId, `result:${toolCallId}`).filter(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "toolResult" &&
+				entry.message.toolName === "agent_message",
+		);
+		if (results.length === 0) continue;
+		if (
+			results.length === 1 &&
+			results[0]?.type === "message" &&
+			results[0].message.role === "toolResult" &&
+			results[0].message.isError
+		)
+			continue;
+		throw new ProtocolInvariantError(`committed agent_message source ${toolCallId} is invalid`);
 	}
-	return sources;
+	return facts;
 }

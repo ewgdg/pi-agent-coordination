@@ -1,3 +1,5 @@
+import { refreshAgentTranscripts } from "./agent-record.ts";
+import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { setImmediate } from "node:timers/promises";
 import {
@@ -38,7 +40,6 @@ import {
 	validateModeratorControlInput,
 } from "../protocol/moderator-control.ts";
 import {
-	currentCoordinationScope,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
 	toolCallPointerKey,
@@ -401,6 +402,7 @@ export class OperationalIncidentCoordinator {
 	}
 
 	async #reconcileWorkflow(): Promise<void> {
+		await refreshAgentTranscripts(this.#agents.values());
 		if (this.#isShuttingDown()) return;
 		const snapshots: OperationalConditionSnapshot[] = [];
 		for (const [key, snapshot] of this.#runFailureByKey) {
@@ -836,10 +838,8 @@ export class OperationalIncidentCoordinator {
 	#isToolCallUnresolved(toolCall: ToolCallPointer): boolean {
 		const record = this.#agents.get(toolCall.agentId);
 		if (!record) return false;
-		const entries = currentCoordinationScope(
-			record.transcript.inspect(),
-			toolCall.agentId,
-		);
+		const transcript = record.transcript.inspect();
+		const entries = coordinationEntries(transcript, toolCall.agentId, `call:${toolCall.toolCallId}`);
 		const sourceExists = entries.some(
 			(entry) =>
 				entry.id === toolCall.entryId &&
@@ -850,7 +850,7 @@ export class OperationalIncidentCoordinator {
 				),
 		);
 		if (!sourceExists) return false;
-		return !entries.some(
+		return !coordinationEntries(transcript, toolCall.agentId, `result:${toolCall.toolCallId}`).some(
 			(entry) =>
 				entry.type === "message" &&
 				entry.message.role === "toolResult" &&
@@ -860,10 +860,7 @@ export class OperationalIncidentCoordinator {
 
 	#assertWorkflowToolCallPointer(toolCall: ToolCallPointer): void {
 		const record = this.#requireAgent(toolCall.agentId);
-		const source = currentCoordinationScope(
-			record.transcript.inspect(),
-			toolCall.agentId,
-		).find((entry) => entry.id === toolCall.entryId);
+		const source = coordinationEntries(record.transcript.inspect(), toolCall.agentId, `call:${toolCall.toolCallId}`).find((entry) => entry.id === toolCall.entryId);
 		if (
 			source?.type !== "message" ||
 			source.message.role !== "assistant" ||

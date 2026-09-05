@@ -61,6 +61,7 @@ export function registerAgentsCommand(
 		handler: async (args, ctx) => {
 			const commandMode = parseAgentsCommandArgument(args);
 			const view = resolveView();
+			await view.refreshTranscriptFacts();
 			const status = view.status();
 			if (commandMode === "owner") {
 				const selection = createAgentSelectionSession(view, status.agentId);
@@ -218,6 +219,7 @@ export function participantCoordinatorHandlers(
 		) => resolveView().wait(toolCallId, input, signal, onProgress),
 		async observe(input: AgentObserveInput) {
 			const view = resolveView();
+			await view.refreshTranscriptFacts();
 			return input.operation === "status"
 				? view.status(input.agentId)
 				: view.search(input);

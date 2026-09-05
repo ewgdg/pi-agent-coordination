@@ -1,3 +1,4 @@
+import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
@@ -8,10 +9,10 @@ import {
 	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
 import {
-	currentCoordinationScope,
 	deriveMessageIdentity,
 	ProtocolInvariantError,
 	sameToolCallPointer,
+	toolCallPointerKey,
 	type ToolCallPointer,
 } from "./identities.ts";
 
@@ -103,13 +104,12 @@ export function inspectStandaloneMessageDelivery(options: {
 		expectedProjection,
 		subject,
 	} = options;
-	const { deliveries, inspectedThrough } = readMessageDeliveries({
+	const { bySource, inspectedThrough } = readMessageDeliveries({
 		recipientAgentId,
 		transcript,
 	});
 	const matches: string[] = [];
-	for (const delivery of deliveries) {
-		if (!sameToolCallPointer(delivery.source, expectedSource)) continue;
+	for (const delivery of bySource.get(toolCallPointerKey(expectedSource)) ?? []) {
 		if (!isDeepStrictEqual(delivery.projection, expectedProjection)) {
 			throw new ProtocolInvariantError(`${subject} Delivery differs from its source`);
 		}
@@ -130,16 +130,9 @@ export function inspectMessageDeliveries(options: {
 	recipientAgentId: string;
 	transcript: TranscriptInspection;
 }): readonly DeliveredMessageEvidence[] {
-	const { deliveries } = readMessageDeliveries(options);
-	for (let index = 0; index < deliveries.length; index += 1) {
-		if (
-			deliveries.slice(index + 1).some((candidate) =>
-				sameToolCallPointer(deliveries[index]!.source, candidate.source))
-		) {
-			throw new ProtocolInvariantError(
-				`Message ${projectionIdentity(deliveries[index]!.projection)} has duplicate Deliveries`,
-			);
-		}
+	const { deliveries, duplicate } = readMessageDeliveries(options);
+	if (duplicate) {
+		throw new ProtocolInvariantError(`Message ${projectionIdentity(duplicate.projection)} has duplicate Deliveries`);
 	}
 	return deliveries;
 }
@@ -162,6 +155,8 @@ function readMessageDeliveries(options: {
 	transcript: TranscriptInspection;
 }): Readonly<{
 	deliveries: readonly DeliveredMessageEvidence[];
+	bySource: ReadonlyMap<string, readonly DeliveredMessageEvidence[]>;
+	duplicate?: DeliveredMessageEvidence;
 	inspectedThrough: EntryPointer;
 }> {
 	const { recipientAgentId, transcript } = options;
@@ -170,41 +165,60 @@ function readMessageDeliveries(options: {
 	if (!tail) {
 		throw new ProtocolInvariantError(`Agent ${recipientAgentId} has no transcript entries`);
 	}
-	const deliveries: DeliveredMessageEvidence[] = [];
-	for (const entry of currentCoordinationScope(transcript, recipientAgentId)) {
-		if (entry.type !== "custom" && entry.type !== "custom_message") continue;
-		if (!entry.customType.startsWith("agent-coordination.")) continue;
-		// Host-authored reminder, routine, and recovery entries are not Agent Messages.
-		if (
-			entry.customType === CONVERSATION_FORK_CUSTOM_TYPE ||
-			entry.customType === MODERATOR_ROUTINE_START_CUSTOM_TYPE ||
-			entry.customType === OBLIGATION_REMINDER_CUSTOM_TYPE ||
-			entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE
-		) continue;
-		if (
-			entry.type !== "custom_message" ||
-			entry.customType !== MESSAGE_DELIVERY_CUSTOM_TYPE
-		) {
-			throw new ProtocolInvariantError(
-				`unexpected current-scope coordination entry ${entry.customType}`,
-			);
-		}
-		if (!entry.display) {
-			throw new ProtocolInvariantError("Message Delivery must be model-visible");
-		}
-		const { sources, projections } = parseMessageDelivery(entry.details, entry.content);
-		for (let index = 0; index < sources.length; index += 1) {
-			const source = sources[index]!;
-			const projection = projections[index]!;
-			deliveries.push({
-				source,
-				projection,
-				deliveryEvidence: { agentId: recipientAgentId, entryId: entry.id },
-			});
-		}
-	}
+	const facts = indexedState(transcript).project(
+		readMessageDeliveries,
+		recipientAgentId,
+		coordinationEntries(transcript, recipientAgentId, "coordination"),
+		() => ({
+			deliveries: [] as DeliveredMessageEvidence[],
+			bySource: new Map<string, DeliveredMessageEvidence[]>(),
+			duplicate: undefined as DeliveredMessageEvidence | undefined,
+		}),
+		(facts, committedEntry) => {
+			const deliveries: DeliveredMessageEvidence[] = [];
+			for (const entry of [committedEntry]) {
+				if (entry.type !== "custom" && entry.type !== "custom_message") continue;
+				if (!entry.customType.startsWith("agent-coordination.")) continue;
+				// Host-authored reminder, routine, and recovery entries are not Agent Messages.
+				if (
+					entry.customType === CONVERSATION_FORK_CUSTOM_TYPE ||
+					entry.customType === MODERATOR_ROUTINE_START_CUSTOM_TYPE ||
+					entry.customType === OBLIGATION_REMINDER_CUSTOM_TYPE ||
+					entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE
+				)
+					continue;
+				if (entry.type !== "custom_message" || entry.customType !== MESSAGE_DELIVERY_CUSTOM_TYPE) {
+					throw new ProtocolInvariantError(
+						`unexpected current-scope coordination entry ${entry.customType}`,
+					);
+				}
+				if (!entry.display) {
+					throw new ProtocolInvariantError("Message Delivery must be model-visible");
+				}
+				const { sources, projections } = parseMessageDelivery(entry.details, entry.content);
+				for (let index = 0; index < sources.length; index += 1) {
+					const source = sources[index]!;
+					const projection = projections[index]!;
+					deliveries.push({
+						source,
+						projection,
+						deliveryEvidence: { agentId: recipientAgentId, entryId: entry.id },
+					});
+				}
+			}
+			for (const delivery of deliveries) {
+				const key = toolCallPointerKey(delivery.source);
+				const matches = facts.bySource.get(key) ?? [];
+				if (matches.length) facts.duplicate ??= delivery;
+				matches.push(delivery);
+				facts.bySource.set(key, matches);
+			}
+			facts.deliveries.push(...deliveries);
+			return facts;
+		},
+	);
 	return {
-		deliveries,
+		...facts,
 		inspectedThrough: { agentId: recipientAgentId, entryId: tail.id },
 	};
 }

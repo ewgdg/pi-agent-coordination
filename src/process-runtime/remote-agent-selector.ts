@@ -127,7 +127,11 @@ export function createOwnerAgentPresentationHandlers(
 	postMortemPresenter?: PostMortemAgentPresenter,
 ): OwnerParticipantPresentationHandlers {
 	return {
-		snapshot: () => createAgentSelectorSnapshot(resolveView(), selectedAgentId),
+		snapshot: async () => {
+			const view = resolveView();
+			await view.refreshTranscriptFacts();
+			return createAgentSelectorSnapshot(view, selectedAgentId);
+		},
 		addChangeHandler(handler) {
 			return resolveView().addAgentActivityChangeHandler(() =>
 				handler(createAgentSelectorSnapshot(resolveView(), selectedAgentId))

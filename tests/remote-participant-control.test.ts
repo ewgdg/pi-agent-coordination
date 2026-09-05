@@ -226,7 +226,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 	const calls: unknown[] = [];
 	const handlers: OwnerParticipantRequestHandlers<"moderator"> = {
 		presentation: {
-			snapshot() {
+			async snapshot() {
 				return {
 					live: [], dormant: [], selectedAgentId: "remote-agent",
 					humanAttention: [], operationalAttention: [],
