@@ -1,0 +1,939 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Agent selector Owner focus — logic prototype</title>
+	<style>
+		:root {
+			color-scheme: dark;
+			--page: #11151c;
+			--panel: #191f29;
+			--panel-strong: #202837;
+			--line: #354052;
+			--text: #e9eef6;
+			--muted: #9ca9bb;
+			--accent: #74d3c5;
+			--accent-soft: #173d3b;
+			--attention: #f4c56b;
+			--danger: #f18b8b;
+			font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			margin: 0;
+			background: var(--page);
+			color: var(--text);
+		}
+
+		main {
+			width: min(1180px, calc(100% - 32px));
+			margin: 0 auto;
+			padding: 42px 0 64px;
+		}
+
+		h1, h2, h3, p { margin-top: 0; }
+		h1 { margin-bottom: 10px; font-size: clamp(1.8rem, 4vw, 2.7rem); letter-spacing: -0.035em; }
+		h2 { margin-bottom: 16px; font-size: 1.08rem; }
+		h3 { margin-bottom: 7px; font-size: 0.96rem; }
+		p { color: var(--muted); line-height: 1.55; }
+
+		.badge {
+			display: inline-block;
+			margin-bottom: 14px;
+			padding: 5px 9px;
+			border: 1px solid var(--attention);
+			border-radius: 999px;
+			color: var(--attention);
+			font-size: 0.72rem;
+			font-weight: 750;
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+		}
+
+		.question {
+			margin: 22px 0 14px;
+			padding: 18px 20px;
+			border-left: 3px solid var(--accent);
+			background: var(--panel);
+			font-size: 1.05rem;
+			line-height: 1.55;
+		}
+
+		.scope-note {
+			margin-bottom: 28px;
+			font-size: 0.9rem;
+		}
+
+		.layout {
+			display: grid;
+			grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+			gap: 18px;
+			align-items: start;
+		}
+
+		.panel {
+			border: 1px solid var(--line);
+			border-radius: 12px;
+			background: var(--panel);
+			overflow: hidden;
+		}
+
+		.panel-heading {
+			padding: 14px 17px;
+			border-bottom: 1px solid var(--line);
+			background: var(--panel-strong);
+		}
+
+		.panel-heading h2 { margin: 0; }
+		.panel-body { padding: 17px; }
+
+		.terminal-stage {
+			min-height: 390px;
+			padding: 24px 14px;
+			border-radius: 8px;
+			outline: none;
+			background: #090c11;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+		}
+
+		.terminal-stage:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+
+		.selector-frame {
+			max-width: 100%;
+			padding: 1ch;
+			border: 1px solid #68778d;
+			background: #0e131a;
+			font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+			color: #d9e0eb;
+		}
+
+		.terminal-tabs { margin-bottom: 1em; }
+		.terminal-tab { display: inline-block; padding: 0 0.6ch; color: #9aa8bb; }
+		.terminal-tab.active { background: #304158; color: white; }
+
+		.section-label {
+			margin: 0.55em 0 0.2em;
+			font-weight: 700;
+			color: #b8c8dd;
+		}
+
+		.attention-line,
+		.agent-line {
+			display: grid;
+			grid-template-columns: 2ch minmax(0, 1fr) auto;
+			gap: 0.35ch;
+			min-width: 0;
+		}
+
+		.focus-prefix { color: var(--accent); }
+		.attention-line.focused { color: var(--attention); }
+		.agent-line.focused .agent-main { color: var(--accent); }
+		.agent-main { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.status { color: #96a4b5; }
+
+		.owner-path {
+			display: flex;
+			min-width: 0;
+			align-items: center;
+			margin: 0.65em 0 0.35em;
+			padding: 0.3em 0;
+			border-top: 1px solid #273241;
+			border-bottom: 1px solid #273241;
+		}
+
+		.owner-button,
+		.owner-chevron,
+		.child-control {
+			flex: 0 0 auto;
+			color: #b9c6d8;
+		}
+
+		.owner-button.focused {
+			background: var(--accent-soft);
+			color: var(--accent);
+			font-weight: 750;
+		}
+
+		.owner-chevron { color: var(--accent); }
+		.path-text { min-width: 0; margin-left: 1ch; overflow: hidden; white-space: nowrap; color: #a7b4c6; }
+		.child-control { color: #8ec9c1; white-space: nowrap; }
+
+		.detail-line {
+			padding-left: 2ch;
+			overflow: hidden;
+			color: #6f7d90;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.scroll-info { margin-top: 0.25em; text-align: right; color: #738197; }
+		.terminal-help { margin-top: 0.85em; overflow: hidden; color: #738197; white-space: nowrap; }
+		.empty { padding-left: 2ch; color: #738197; }
+
+		.closed-view {
+			width: min(100%, 62ch);
+			padding: 30px;
+			border: 1px dashed #526074;
+			text-align: center;
+			font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+			color: #aeb9c8;
+		}
+
+		.closed-view strong { color: var(--accent); }
+
+		.controls {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+		}
+
+		button, select {
+			border: 1px solid #4a586d;
+			border-radius: 7px;
+			background: #222b39;
+			color: var(--text);
+			font: inherit;
+		}
+
+		button {
+			padding: 8px 11px;
+			cursor: pointer;
+		}
+
+		button:hover { border-color: var(--accent); }
+		button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+		button.primary { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+		button:disabled { cursor: default; opacity: 0.42; }
+
+		.dimension-controls {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: 10px;
+			margin-top: 15px;
+		}
+
+		label { color: var(--muted); font-size: 0.82rem; }
+		label select { display: block; width: 100%; margin-top: 6px; padding: 7px; }
+
+		.state-grid {
+			display: grid;
+			grid-template-columns: max-content minmax(0, 1fr);
+			gap: 8px 12px;
+			margin: 0;
+			font-size: 0.88rem;
+		}
+
+		.state-grid dt { color: var(--muted); }
+		.state-grid dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+		.state-grid code { color: #c9d7e8; }
+		.transition { margin-top: 16px; padding: 12px; border-left: 2px solid var(--accent); background: #141a23; }
+		.transition strong { display: block; margin-bottom: 4px; color: var(--accent); font-size: 0.78rem; text-transform: uppercase; }
+		.transition span { color: #c5cfdd; font-size: 0.88rem; line-height: 1.45; }
+
+		.walkthroughs { margin-top: 18px; }
+		.walkthrough-tabs { display: flex; gap: 7px; padding: 12px 12px 0; overflow-x: auto; }
+		.walkthrough-tabs button { flex: 0 0 auto; }
+		.walkthrough-tabs button[aria-selected="true"] { border-color: var(--accent); color: var(--accent); }
+		.walkthrough-content { padding: 18px; }
+		.walkthrough-description { max-width: 74ch; }
+		.walkthrough-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+		.guide-status { color: var(--muted); font-size: 0.84rem; }
+		.guide-dirty { color: var(--attention); }
+
+		.steps { display: grid; gap: 9px; }
+		.step {
+			display: grid;
+			grid-template-columns: minmax(210px, 0.65fr) minmax(0, 1.35fr);
+			gap: 12px;
+			align-items: center;
+			padding: 10px;
+			border: 1px solid #303b4c;
+			border-radius: 8px;
+			background: #151b24;
+		}
+
+		.step.done { opacity: 0.58; }
+		.step.current { border-color: #58716f; }
+		.step p { margin: 0; font-size: 0.86rem; }
+
+		footer { margin-top: 18px; color: #77869a; font-size: 0.82rem; }
+
+		@media (max-width: 820px) {
+			.layout { grid-template-columns: 1fr; }
+			.terminal-stage { min-height: 340px; }
+			.step { grid-template-columns: 1fr; }
+		}
+	</style>
+</head>
+<body>
+	<main>
+		<span class="badge">Throwaway logic prototype</span>
+		<h1>Owner focus in <code>/agents</code></h1>
+		<div class="question">
+			<strong>Question:</strong> Does treating Owner as a pinned, focusable Home action—inside one keyboard order but outside the scrolling Agent roster—remain predictable when Attention, nested scopes, and scrolling interact?
+		</div>
+		<p class="scope-note">
+			<strong>Modelled assumption:</strong> focus order is the linear, non-circular sequence Attention → Owner → scoped Agents. Up/Down stop at its boundaries. Attention and Owner/path remain visible while only Agent rows scroll. Pointer behavior, current-participant styling, and production TUI mechanics are deliberately absent.
+		</p>
+
+		<div class="layout">
+			<section class="panel">
+				<div class="panel-heading"><h2>Drive the selector</h2></div>
+				<div class="panel-body">
+					<div id="terminal" class="terminal-stage" tabindex="0" aria-label="Interactive agent selector prototype"></div>
+
+					<h3 style="margin-top: 18px">Free play</h3>
+					<div class="controls" id="action-controls">
+						<button data-action="up">↑ / k</button>
+						<button data-action="down">↓ / j</button>
+						<button data-action="left">← / h parent</button>
+						<button data-action="right">→ / l action</button>
+						<button data-action="enter" class="primary">Enter</button>
+						<button data-action="tab">Tab view</button>
+						<button data-action="owner">o Owner</button>
+						<button data-action="escape">Esc</button>
+						<button data-action="open">Open /agents</button>
+					</div>
+					<div class="dimension-controls">
+						<label>Terminal columns
+							<select id="columns">
+								<option value="34">34 — narrow</option>
+								<option value="48">48</option>
+								<option value="64" selected>64</option>
+								<option value="78">78 — wide</option>
+							</select>
+						</label>
+						<label>Visible Agent rows
+							<select id="roster-rows">
+								<option value="3">3</option>
+								<option value="4" selected>4</option>
+								<option value="6">6</option>
+							</select>
+						</label>
+					</div>
+				</div>
+			</section>
+
+			<aside class="panel">
+				<div class="panel-heading"><h2>Full relevant state</h2></div>
+				<div class="panel-body" id="state-panel"></div>
+			</aside>
+		</div>
+
+		<section class="panel walkthroughs">
+			<div class="panel-heading"><h2>Guided walkthroughs</h2></div>
+			<div class="walkthrough-tabs" id="walkthrough-tabs" role="tablist"></div>
+			<div class="walkthrough-content" id="walkthrough-content"></div>
+		</section>
+
+		<footer>
+			This file is a disposable decision aid for issue #86. It is not a production implementation and stores nothing.
+		</footer>
+	</main>
+
+	<script>
+		// Pure model: no DOM access. This is the only part intended to inform production logic.
+		const AgentSelectorModel = (() => {
+			const OWNER_ID = "owner";
+			const AGENTS = [
+				{ id: "architecture", label: "Architecture", parentId: OWNER_ID, phase: "live", status: "active", description: "Owns system boundaries" },
+				{ id: "api", label: "API Design", parentId: "architecture", phase: "live", status: "idle", description: "Shapes public interfaces" },
+				{ id: "routing", label: "Request Routing", parentId: "api", phase: "live", status: "waiting", description: "Checks delivery paths" },
+				{ id: "cli", label: "CLI", parentId: "architecture", phase: "live", status: "idle", description: "Builds command surfaces" },
+				{ id: "research", label: "Research", parentId: OWNER_ID, phase: "live", status: "waiting", description: "Collects primary evidence" },
+				{ id: "source-scout", label: "Source Scout", parentId: "research", phase: "live", status: "active", description: "Finds relevant sources" },
+				{ id: "synthesis", label: "Synthesis", parentId: "research", phase: "live", status: "idle", description: "Combines findings" },
+				{ id: "builder", label: "Builder", parentId: OWNER_ID, phase: "live", status: "active", description: "Implements accepted work" },
+				{ id: "reviewer", label: "Reviewer", parentId: "builder", phase: "live", status: "idle", description: "Reviews the implementation" },
+				{ id: "validator", label: "Validation", parentId: "reviewer", phase: "live", status: "active", description: "Runs behavioral checks" },
+				{ id: "evidence", label: "Evidence Recorder", parentId: "validator", phase: "live", status: "idle", description: "Captures the verdict" },
+				{ id: "operations", label: "Operations", parentId: OWNER_ID, phase: "live", status: "idle", description: "Supervises execution" },
+				{ id: "documentation", label: "Documentation", parentId: OWNER_ID, phase: "live", status: "idle", description: "Maintains user guidance" },
+				{ id: "quality", label: "Quality", parentId: OWNER_ID, phase: "live", status: "active", description: "Checks regressions" },
+				{ id: "release", label: "Release", parentId: OWNER_ID, phase: "live", status: "waiting", description: "Prepares delivery" },
+				{ id: "observability", label: "Observability", parentId: OWNER_ID, phase: "live", status: "idle", description: "Inspects runtime behavior" },
+				{ id: "archivist", label: "Archivist", parentId: OWNER_ID, phase: "dormant", status: "dormant", description: "Preserved prior research" },
+				{ id: "migration", label: "Migration Audit", parentId: OWNER_ID, phase: "dormant", status: "dormant", description: "Reviewed old evidence" },
+				{ id: "performance", label: "Performance Probe", parentId: OWNER_ID, phase: "dormant", status: "dormant", description: "Captured benchmark results" },
+				{ id: "retired-reviewer", label: "Retired Reviewer", parentId: "builder", phase: "dormant", status: "dormant", description: "Completed an earlier review" },
+			];
+
+			const ATTENTION = [
+				{ id: "decision-boundary", label: "DECIDE 1 · Architecture", agentId: "architecture", detail: "Choose the implementation boundary" },
+				{ id: "failed-run", label: "ATTENTION 2 · Release", agentId: "release", detail: "Run failed after retries" },
+			];
+
+			const agent = (id) => AGENTS.find((candidate) => candidate.id === id);
+			const attention = (id) => ATTENTION.find((candidate) => candidate.id === id);
+			const childrenOf = (id) => AGENTS.filter((candidate) => candidate.phase === "live" && candidate.parentId === id);
+			const dormantAgents = () => AGENTS.filter((candidate) => candidate.phase === "dormant");
+			const focusKey = (focus) => focus ? `${focus.kind}:${focus.id ?? ""}` : "none";
+			const sameFocus = (left, right) => focusKey(left) === focusKey(right);
+
+			function scopedAgents(state) {
+				return state.activeTab === "dormant" ? dormantAgents() : childrenOf(state.scopeAgentId);
+			}
+
+			function focusOrder(state) {
+				const attentionFocus = state.activeTab === "live"
+					? state.visibleAttentionIds.map((id) => ({ kind: "attention", id }))
+					: [];
+				return [
+					...attentionFocus,
+					{ kind: "owner", id: OWNER_ID },
+					...scopedAgents(state).map(({ id }) => ({ kind: "agent", id })),
+				];
+			}
+
+			function initialFocus(state) {
+				if (state.activeTab === "live" && state.visibleAttentionIds.length > 0) {
+					return { kind: "attention", id: state.visibleAttentionIds[0] };
+				}
+				const visibleMounted = scopedAgents(state).some(({ id }) => id === state.mountedAgentId);
+				if (state.mountedAgentId !== OWNER_ID && visibleMounted) {
+					return { kind: "agent", id: state.mountedAgentId };
+				}
+				const firstAgent = scopedAgents(state)[0];
+				return firstAgent ? { kind: "agent", id: firstAgent.id } : { kind: "owner", id: OWNER_ID };
+			}
+
+			function liveScopeForMounted(mountedAgentId) {
+				const mounted = agent(mountedAgentId);
+				if (!mounted || mounted.phase !== "live") return OWNER_ID;
+				return mounted.parentId && mounted.parentId !== OWNER_ID ? mounted.parentId : OWNER_ID;
+			}
+
+			function createState(options = {}) {
+				const mountedAgentId = options.mountedAgentId ?? OWNER_ID;
+				const mounted = agent(mountedAgentId);
+				const activeTab = options.activeTab ?? (mounted?.phase === "dormant" ? "dormant" : "live");
+				const ownerPresentationToken = options.ownerPresentationToken ?? (
+					mountedAgentId === OWNER_ID
+						? options.mountedPresentationToken ?? "owner-presentation-A"
+						: "owner-presentation-A"
+				);
+				const base = {
+					selectorOpen: options.selectorOpen ?? true,
+					activeTab,
+					mountedAgentId,
+					ownerPresentationToken,
+					mountedPresentationToken: options.mountedPresentationToken ?? (mountedAgentId === OWNER_ID ? ownerPresentationToken : `${mountedAgentId}-presentation-A`),
+					scopeAgentId: options.scopeAgentId ?? liveScopeForMounted(mountedAgentId),
+					focus: null,
+					rememberedFocus: { live: null, dormant: null },
+					visibleAttentionIds: [...(options.visibleAttentionIds ?? [])],
+					rosterOffset: 0,
+					rosterRows: options.rosterRows ?? 4,
+					terminalColumns: options.terminalColumns ?? 64,
+					lastTransition: options.lastTransition ?? "Opened /agents.",
+				};
+				const focus = options.focus ?? initialFocus(base);
+				return ensureRosterFocusVisible({
+					...base,
+					focus,
+					rememberedFocus: { ...base.rememberedFocus, [activeTab]: focus },
+				});
+			}
+
+			function ensureRosterFocusVisible(state) {
+				const roster = scopedAgents(state);
+				const maximumOffset = Math.max(0, roster.length - state.rosterRows);
+				let rosterOffset = Math.min(state.rosterOffset, maximumOffset);
+				if (state.focus?.kind === "agent") {
+					const index = roster.findIndex(({ id }) => id === state.focus.id);
+					if (index >= 0 && index < rosterOffset) rosterOffset = index;
+					if (index >= rosterOffset + state.rosterRows) rosterOffset = index - state.rosterRows + 1;
+				}
+				return { ...state, rosterOffset };
+			}
+
+			function withFocus(state, focus, message) {
+				return ensureRosterFocusVisible({
+					...state,
+					focus,
+					rememberedFocus: { ...state.rememberedFocus, [state.activeTab]: focus },
+					lastTransition: message,
+				});
+			}
+
+			function focusIsAvailable(state, focus) {
+				return focusOrder(state).some((candidate) => sameFocus(candidate, focus));
+			}
+
+			function topLevelAncestor(id) {
+				let current = agent(id);
+				while (current && current.parentId && current.parentId !== OWNER_ID) current = agent(current.parentId);
+				return current?.parentId === OWNER_ID ? current : undefined;
+			}
+
+			function pathAgents(scopeAgentId) {
+				const path = [];
+				let current = agent(scopeAgentId);
+				while (current) {
+					path.unshift(current);
+					if (!current.parentId || current.parentId === OWNER_ID) break;
+					current = agent(current.parentId);
+				}
+				return scopeAgentId === OWNER_ID ? [] : path;
+			}
+
+			function selectParticipant(state, participantId, reason) {
+				const unchanged = state.mountedAgentId === participantId;
+				const token = unchanged
+					? state.mountedPresentationToken
+					: participantId === OWNER_ID
+						? state.ownerPresentationToken
+						: `${participantId}-prepared-presentation`;
+				return {
+					...state,
+					selectorOpen: false,
+					mountedAgentId: participantId,
+					mountedPresentationToken: token,
+					lastTransition: unchanged
+						? `${reason} Closed the selector without replacing the mounted presentation.`
+						: `${reason} Mounted ${labelForId(participantId)} and closed the selector.`,
+				};
+			}
+
+			function reduce(state, action) {
+				if (action.type === "SET_COLUMNS") {
+					return { ...state, terminalColumns: action.columns, lastTransition: `Terminal width changed to ${action.columns} columns.` };
+				}
+				if (action.type === "SET_ROSTER_ROWS") {
+					return ensureRosterFocusVisible({ ...state, rosterRows: action.rows, lastTransition: `Agent viewport changed to ${action.rows} rows.` });
+				}
+				if (action.type === "OPEN") {
+					if (state.selectorOpen) return { ...state, lastTransition: "/agents is already open." };
+					const mounted = agent(state.mountedAgentId);
+					const activeTab = mounted?.phase === "dormant" ? "dormant" : "live";
+					const opened = {
+						...state,
+						selectorOpen: true,
+						activeTab,
+						scopeAgentId: activeTab === "live" ? liveScopeForMounted(state.mountedAgentId) : state.scopeAgentId,
+						rosterOffset: 0,
+						lastTransition: "Opened /agents from the mounted participant.",
+					};
+					const focus = initialFocus(opened);
+					return withFocus(opened, focus, opened.lastTransition);
+				}
+				if (!state.selectorOpen) return { ...state, lastTransition: "Ignored: /agents is closed. Open it before sending selector input." };
+
+				switch (action.type) {
+					case "MOVE": {
+						const order = focusOrder(state);
+						if (order.length === 0) return { ...state, lastTransition: "Nothing can receive focus." };
+						const currentIndex = Math.max(0, order.findIndex((focus) => sameFocus(focus, state.focus)));
+						const nextIndex = Math.max(0, Math.min(order.length - 1, currentIndex + action.delta));
+						const direction = action.delta < 0 ? "up" : "down";
+						if (nextIndex === currentIndex) {
+							return withFocus(state, order[currentIndex], `Stayed on ${describeFocus(order[currentIndex])}; already at the ${action.delta < 0 ? "first" : "last"} selectable entry.`);
+						}
+						return withFocus(state, order[nextIndex], `Moved ${direction} to ${describeFocus(order[nextIndex])}.`);
+					}
+					case "SWITCH_TAB": {
+						const activeTab = state.activeTab === "live" ? "dormant" : "live";
+						const switched = { ...state, activeTab, rosterOffset: 0 };
+						const remembered = state.rememberedFocus[activeTab];
+						const focus = remembered && focusIsAvailable(switched, remembered) ? remembered : initialFocus(switched);
+						return withFocus(switched, focus, `Switched to ${activeTab === "live" ? "Live" : "Dormant"} and restored its focus.`);
+					}
+					case "ENTER": {
+						if (state.focus?.kind === "owner") return selectParticipant(state, OWNER_ID, "Activated Owner.");
+						if (state.focus?.kind === "agent") return selectParticipant(state, state.focus.id, "Opened the focused Agent body.");
+						if (state.focus?.kind === "attention") {
+							const item = attention(state.focus.id);
+							return item ? selectParticipant(state, item.agentId, "Opened the focused Attention item.") : state;
+						}
+						return { ...state, lastTransition: "Enter had no target." };
+					}
+					case "OWNER_HOME":
+						return selectParticipant(state, OWNER_ID, "Used the existing Owner shortcut.");
+					case "CLOSE":
+						return { ...state, selectorOpen: false, lastTransition: "Closed the selector; the mounted presentation stayed unchanged." };
+					case "RIGHT": {
+						if (state.activeTab !== "live") return { ...state, lastTransition: "Right has no hierarchy action in Dormant." };
+						if (state.focus?.kind === "owner") {
+							const previousScope = state.scopeAgentId;
+							const contextualRoot = previousScope === OWNER_ID ? undefined : topLevelAncestor(previousScope);
+							const target = contextualRoot ?? childrenOf(OWNER_ID)[0];
+							const rootState = { ...state, scopeAgentId: OWNER_ID, rosterOffset: 0 };
+							return withFocus(
+								rootState,
+								target ? { kind: "agent", id: target.id } : { kind: "owner", id: OWNER_ID },
+								contextualRoot
+									? `Browsed the Owner root and preserved context on ${contextualRoot.label}.`
+									: target ? `Browsed the Owner root and focused ${target.label}.` : "The Owner root has no Agents.",
+							);
+						}
+						if (state.focus?.kind === "agent") {
+							const children = childrenOf(state.focus.id);
+							if (children.length === 0) return { ...state, lastTransition: `${labelForId(state.focus.id)} has no live children; Right did nothing.` };
+							const scoped = { ...state, scopeAgentId: state.focus.id, rosterOffset: 0 };
+							return withFocus(scoped, { kind: "agent", id: children[0].id }, `Activated ${labelForId(state.focus.id)}'s trailing child control and focused its first child.`);
+						}
+						return { ...state, lastTransition: "Attention has no hierarchy action; Right did nothing." };
+					}
+					case "LEFT": {
+						if (state.activeTab !== "live") return { ...state, lastTransition: "Left has no hierarchy action in Dormant." };
+						if (state.scopeAgentId === OWNER_ID) return { ...state, lastTransition: "Already at the Owner root; Left did nothing." };
+						const previousScope = agent(state.scopeAgentId);
+						const parentScopeId = previousScope?.parentId && previousScope.parentId !== OWNER_ID ? previousScope.parentId : OWNER_ID;
+						const parentState = { ...state, scopeAgentId: parentScopeId, rosterOffset: 0 };
+						return withFocus(parentState, { kind: "agent", id: state.scopeAgentId }, `Moved to the parent scope and refocused ${labelForId(state.scopeAgentId)} along the previous path.`);
+					}
+					default:
+						return { ...state, lastTransition: `Unknown action: ${action.type}` };
+				}
+			}
+
+			function pathPresentation(state) {
+				const path = pathAgents(state.scopeAgentId);
+				if (state.activeTab !== "live" || path.length === 0) return { full: [], visible: [], collapsed: false, text: "" };
+				const full = path.map(({ label }) => label);
+				const ownerControlsWidth = 10;
+				const contentPadding = 4;
+				const available = Math.max(8, state.terminalColumns - ownerControlsWidth - contentPadding - 1);
+				const visible = [...full];
+				let collapsed = false;
+				const width = () => (collapsed ? 4 : 0) + visible.join(" / ").length;
+				while (visible.length > 1 && width() > available) {
+					visible.shift();
+					collapsed = true;
+				}
+				if (width() > available) {
+					const prefixWidth = collapsed ? 4 : 0;
+					const labelBudget = Math.max(3, available - prefixWidth);
+					visible[0] = `${visible[0].slice(0, Math.max(1, labelBudget - 1))}…`;
+				}
+				return { full, visible, collapsed, text: `${collapsed ? "… / " : ""}${visible.join(" / ")}` };
+			}
+
+			function derive(state) {
+				const roster = scopedAgents(state);
+				const visibleRoster = roster.slice(state.rosterOffset, state.rosterOffset + state.rosterRows);
+				return {
+					focusOrder: focusOrder(state),
+					roster,
+					visibleRoster,
+					path: pathPresentation(state),
+				};
+			}
+
+			function labelForId(id) {
+				return id === OWNER_ID ? "Owner" : agent(id)?.label ?? attention(id)?.label ?? id;
+			}
+
+			function describeFocus(focus) {
+				if (!focus) return "none";
+				if (focus.kind === "owner") return "Owner";
+				if (focus.kind === "attention") return attention(focus.id)?.label ?? focus.id;
+				return labelForId(focus.id);
+			}
+
+			return Object.freeze({
+				OWNER_ID,
+				createState,
+				reduce,
+				derive,
+				agent,
+				attention,
+				childrenOf,
+				labelForId,
+				describeFocus,
+				focusKey,
+			});
+		})();
+
+		// Throwaway demo shell.
+		const walkthroughs = [
+			{
+				id: "owner-opening",
+				title: "Open from Owner",
+				description: "With no Attention, opening from Owner should skip the already-mounted Owner and focus the first Agent. Owner remains one Up away, and Enter on it closes without replacing the Owner presentation.",
+				setup: () => AgentSelectorModel.createState({ mountedAgentId: "owner", terminalColumns: 64, rosterRows: 4 }),
+				steps: [
+					{ label: "Press ↑ / k", action: { type: "MOVE", delta: -1 }, watch: "Owner receives button-style focus without gaining a roster arrow." },
+					{ label: "Press Enter", action: { type: "ENTER" }, watch: "The selector closes and owner-presentation-A remains the mounted presentation." },
+				],
+			},
+			{
+				id: "attention-scroll",
+				title: "Attention + scroll",
+				description: "Attention keeps initial focus. Moving downward crosses the pinned Owner boundary before entering a three-row Agent viewport. The Owner/path must remain visible as that viewport scrolls.",
+				setup: () => AgentSelectorModel.createState({ mountedAgentId: "owner", visibleAttentionIds: ["decision-boundary", "failed-run"], terminalColumns: 48, rosterRows: 3 }),
+				steps: [
+					{ label: "Press ↓ / j", action: { type: "MOVE", delta: 1 }, watch: "Focus moves to the second Attention item." },
+					{ label: "Press ↓ / j", action: { type: "MOVE", delta: 1 }, watch: "Focus crosses to Owner while Attention remains above it." },
+					{ label: "Press ↓ / j", action: { type: "MOVE", delta: 1 }, watch: "Focus enters the roster at Architecture." },
+					{ label: "Press ↓ / j", action: { type: "MOVE", delta: 1 }, watch: "Research receives focus without scrolling yet." },
+					{ label: "Press ↓ / j", action: { type: "MOVE", delta: 1 }, watch: "Builder is the last visible Agent row." },
+					{ label: "Press ↓ / j", action: { type: "MOVE", delta: 1 }, watch: "The Agent viewport scrolls to Operations; Attention and Owner remain pinned." },
+				],
+			},
+			{
+				id: "nested-owner",
+				title: "Nested Owner action",
+				description: "Start deep in Builder / Reviewer / Validation. Owner's Right action returns to the root without opening Owner and preserves Builder as the top-level context. Re-enter and leave scopes to check path focus restoration.",
+				setup: () => AgentSelectorModel.createState({ mountedAgentId: "evidence", scopeAgentId: "validator", terminalColumns: 34, rosterRows: 3 }),
+				steps: [
+					{ label: "Press ↑ / k", action: { type: "MOVE", delta: -1 }, watch: "Focus moves from Evidence Recorder to pinned Owner; the deep path remains visible and truncated." },
+					{ label: "Press → / l", action: { type: "RIGHT" }, watch: "The root opens with Builder focused, preserving the previous top-level path." },
+					{ label: "Press → / l", action: { type: "RIGHT" }, watch: "Builder's trailing child control opens its scope and focuses Reviewer." },
+					{ label: "Press → / l", action: { type: "RIGHT" }, watch: "Reviewer's child control opens its scope and focuses Validation." },
+					{ label: "Press ← / h", action: { type: "LEFT" }, watch: "The parent Builder scope returns with Reviewer refocused along the old path." },
+					{ label: "Press ← / h", action: { type: "LEFT" }, watch: "The root returns with Builder refocused." },
+				],
+			},
+			{
+				id: "dormant-owner",
+				title: "Dormant Owner",
+				description: "Dormant keeps the mounted dormant Agent as initial focus. Selecting it must close without replacement. After reopening, Owner is pinned but has no child chevron, and Right must not browse hierarchy from this tab.",
+				setup: () => AgentSelectorModel.createState({ mountedAgentId: "archivist", activeTab: "dormant", terminalColumns: 48, rosterRows: 4 }),
+				steps: [
+					{ label: "Press Enter", action: { type: "ENTER" }, watch: "The selector closes without replacing archivist-presentation-A." },
+					{ label: "Open /agents", action: { type: "OPEN" }, watch: "Dormant reopens with the still-mounted Archivist focused." },
+					{ label: "Press ↑ / k", action: { type: "MOVE", delta: -1 }, watch: "Owner receives focus above the Dormant roster." },
+					{ label: "Press → / l", action: { type: "RIGHT" }, watch: "Nothing browses: Dormant Owner has no child action." },
+					{ label: "Press Enter", action: { type: "ENTER" }, watch: "The persistent Owner presentation is restored and the selector closes." },
+				],
+			},
+			{
+				id: "linear-boundaries",
+				title: "Linear boundaries",
+				description: "The complete selector is one linear focus order rather than a circular list. At either end, another keypress stays put instead of jumping across the visual layout.",
+				setup: () => AgentSelectorModel.createState({ mountedAgentId: "cli", scopeAgentId: "architecture", terminalColumns: 48, rosterRows: 3 }),
+				steps: [
+					{ label: "Press ↓ / j", action: { type: "MOVE", delta: 1 }, watch: "CLI is the final Agent in this scope, so focus stays on CLI." },
+					{ label: "Press ↑ / k", action: { type: "MOVE", delta: -1 }, watch: "Focus moves back to API Design." },
+					{ label: "Press ↑ / k", action: { type: "MOVE", delta: -1 }, watch: "Focus moves upward to pinned Owner." },
+					{ label: "Press ↑ / k", action: { type: "MOVE", delta: -1 }, watch: "Owner is the first selectable entry without Attention, so focus stays on Owner." },
+				],
+			},
+		];
+
+		const actionMap = {
+			up: { type: "MOVE", delta: -1 },
+			down: { type: "MOVE", delta: 1 },
+			left: { type: "LEFT" },
+			right: { type: "RIGHT" },
+			enter: { type: "ENTER" },
+			tab: { type: "SWITCH_TAB" },
+			owner: { type: "OWNER_HOME" },
+			escape: { type: "CLOSE" },
+			open: { type: "OPEN" },
+		};
+
+		let activeWalkthroughId = walkthroughs[0].id;
+		let guideStep = 0;
+		let guideStarted = true;
+		let guideDirty = false;
+		let state = walkthroughs[0].setup();
+
+		const terminal = document.querySelector("#terminal");
+		const statePanel = document.querySelector("#state-panel");
+		const tabs = document.querySelector("#walkthrough-tabs");
+		const walkthroughContent = document.querySelector("#walkthrough-content");
+		const columns = document.querySelector("#columns");
+		const rosterRows = document.querySelector("#roster-rows");
+
+		function escapeHtml(value) {
+			return String(value)
+				.replaceAll("&", "&amp;")
+				.replaceAll("<", "&lt;")
+				.replaceAll(">", "&gt;")
+				.replaceAll('"', "&quot;");
+		}
+
+		function dispatch(action, source = "free") {
+			state = AgentSelectorModel.reduce(state, action);
+			if (source === "guide") {
+				guideStep += 1;
+			} else {
+				guideDirty = true;
+			}
+			render();
+		}
+
+		function startWalkthrough() {
+			const walkthrough = walkthroughs.find(({ id }) => id === activeWalkthroughId);
+			state = walkthrough.setup();
+			guideStep = 0;
+			guideStarted = true;
+			guideDirty = false;
+			render();
+		}
+
+		function renderTerminal() {
+			if (!state.selectorOpen) {
+				terminal.innerHTML = `<div class="closed-view">Selector closed<br><strong>${escapeHtml(AgentSelectorModel.labelForId(state.mountedAgentId))}</strong> is mounted<br><small>${escapeHtml(state.mountedPresentationToken)}</small></div>`;
+				return;
+			}
+
+			const derived = AgentSelectorModel.derive(state);
+			const frameWidth = Math.max(24, state.terminalColumns);
+			const attentionLines = state.activeTab === "live"
+				? state.visibleAttentionIds.map((id) => {
+					const item = AgentSelectorModel.attention(id);
+					const focused = state.focus?.kind === "attention" && state.focus.id === id;
+					return `<div class="attention-line ${focused ? "focused" : ""}"><span class="focus-prefix">${focused ? "→" : " "}</span><span class="agent-main">${escapeHtml(item.label)}</span><span></span></div>`;
+				}).join("")
+				: "";
+			const attentionBlock = attentionLines
+				? `<div class="section-label">Attention Inbox</div>${attentionLines}`
+				: "";
+			const ownerFocused = state.focus?.kind === "owner";
+			const liveChevron = state.activeTab === "live" ? `<span class="owner-chevron">[›]</span>` : "";
+			const path = derived.path.text ? `<span class="path-text">${escapeHtml(derived.path.text)}</span>` : "";
+			const ownerPath = `<div class="owner-path"><span class="owner-button ${ownerFocused ? "focused" : ""}">[Owner]</span>${liveChevron}${path}</div>`;
+
+			const roster = derived.visibleRoster.map((item) => {
+				const focused = state.focus?.kind === "agent" && state.focus.id === item.id;
+				const childCount = AgentSelectorModel.childrenOf(item.id).length;
+				const childLabel = childCount === 0 || state.activeTab === "dormant"
+					? ""
+					: `<span class="child-control">[${childCount} ${childCount === 1 ? "child" : "children"} ›]</span>`;
+				const details = focused
+					? [
+						item.description,
+						item.id,
+						`${item.phase} · ${item.status}`,
+						"test-provider/test-model · thinking off · 0 queued",
+					].map((line) => `<div class="detail-line">${escapeHtml(line)}</div>`).join("")
+					: "";
+				return `<div class="agent-line ${focused ? "focused" : ""}"><span class="focus-prefix">${focused ? "→" : " "}</span><span class="agent-main">${escapeHtml(item.label)} <span class="status">· ${escapeHtml(item.status)}</span></span>${childLabel}</div>${details}`;
+			}).join("");
+			const empty = derived.visibleRoster.length === 0 ? `<div class="empty">No ${state.activeTab === "live" ? "live" : "dormant"} Agents</div>` : "";
+			const scroll = derived.roster.length > state.rosterRows
+				? `<div class="scroll-info">(${state.rosterOffset + 1}–${Math.min(state.rosterOffset + state.rosterRows, derived.roster.length)} / ${derived.roster.length})</div>`
+				: "";
+			const help = state.activeTab === "live"
+				? "Tab views · ↑/k ↓/j · →/l action · ←/h parent · Enter · Esc"
+				: "Tab views · ↑/k ↓/j · Enter · Esc";
+
+			terminal.innerHTML = `
+				<div class="selector-frame" style="width: min(100%, ${frameWidth + 4}ch)">
+					<div class="terminal-tabs"><span class="terminal-tab ${state.activeTab === "live" ? "active" : ""}">Live</span> <span class="terminal-tab ${state.activeTab === "dormant" ? "active" : ""}">Dormant</span></div>
+					${attentionBlock}
+					${ownerPath}
+					${roster}${empty}${scroll}
+					<div class="terminal-help">${help}</div>
+				</div>`;
+		}
+
+		function renderState() {
+			const derived = AgentSelectorModel.derive(state);
+			const order = derived.focusOrder.map(AgentSelectorModel.describeFocus).join(" → ");
+			const windowText = derived.roster.length === 0
+				? "empty"
+				: `${state.rosterOffset + 1}–${Math.min(state.rosterOffset + state.rosterRows, derived.roster.length)} of ${derived.roster.length}`;
+			const pathText = derived.path.full.length ? `Owner / ${derived.path.full.join(" / ")}` : "Owner root";
+			statePanel.innerHTML = `
+				<dl class="state-grid">
+					<dt>Selector</dt><dd>${state.selectorOpen ? "open" : "closed"}</dd>
+					<dt>Mounted</dt><dd>${escapeHtml(AgentSelectorModel.labelForId(state.mountedAgentId))}</dd>
+					<dt>Presentation</dt><dd><code>${escapeHtml(state.mountedPresentationToken)}</code></dd>
+					<dt>Owner Home</dt><dd><code>${escapeHtml(state.ownerPresentationToken)}</code></dd>
+					<dt>View</dt><dd>${state.activeTab === "live" ? "Live" : "Dormant"}</dd>
+					<dt>Scope</dt><dd>${escapeHtml(pathText)}</dd>
+					<dt>Focus</dt><dd>${state.selectorOpen ? escapeHtml(AgentSelectorModel.describeFocus(state.focus)) : "—"}</dd>
+					<dt>Focus order</dt><dd>${escapeHtml(order)}</dd>
+					<dt>Roster window</dt><dd>${windowText}</dd>
+					<dt>Path display</dt><dd><code>[Owner]${state.activeTab === "live" ? "[›]" : ""}${derived.path.text ? ` ${escapeHtml(derived.path.text)}` : ""}</code></dd>
+					<dt>Remembered Live</dt><dd>${escapeHtml(AgentSelectorModel.describeFocus(state.rememberedFocus.live))}</dd>
+					<dt>Remembered Dormant</dt><dd>${escapeHtml(AgentSelectorModel.describeFocus(state.rememberedFocus.dormant))}</dd>
+				</dl>
+				<div class="transition"><strong>What just happened</strong><span>${escapeHtml(state.lastTransition)}</span></div>`;
+		}
+
+		function renderWalkthroughs() {
+			tabs.innerHTML = walkthroughs.map((walkthrough) => `
+				<button role="tab" aria-selected="${walkthrough.id === activeWalkthroughId}" data-walkthrough="${walkthrough.id}">${escapeHtml(walkthrough.title)}</button>
+			`).join("");
+			const walkthrough = walkthroughs.find(({ id }) => id === activeWalkthroughId);
+			const complete = guideStep >= walkthrough.steps.length;
+			const status = guideDirty
+				? `<span class="guide-status guide-dirty">Free play changed the state. Start over for a deterministic walkthrough.</span>`
+				: complete
+					? `<span class="guide-status">Walkthrough complete. Decide whether the interaction felt predictable.</span>`
+					: `<span class="guide-status">${guideStarted ? `Step ${guideStep + 1} of ${walkthrough.steps.length}` : "Not started"}</span>`;
+			walkthroughContent.innerHTML = `
+				<h3>${escapeHtml(walkthrough.title)}</h3>
+				<p class="walkthrough-description">${escapeHtml(walkthrough.description)}</p>
+				<div class="walkthrough-toolbar"><button class="primary" id="start-walkthrough">Start over</button>${status}</div>
+				<div class="steps">
+					${walkthrough.steps.map((step, index) => {
+						const isCurrent = !guideDirty && index === guideStep;
+						const done = !guideDirty && index < guideStep;
+						return `<div class="step ${isCurrent ? "current" : ""} ${done ? "done" : ""}"><button data-guide-step="${index}" ${isCurrent ? "" : "disabled"}>${index + 1}. ${escapeHtml(step.label)}</button><p>${escapeHtml(step.watch)}</p></div>`;
+					}).join("")}
+				</div>`;
+		}
+
+		function render() {
+			renderTerminal();
+			renderState();
+			renderWalkthroughs();
+			columns.value = String(state.terminalColumns);
+			rosterRows.value = String(state.rosterRows);
+		}
+
+		document.querySelector("#action-controls").addEventListener("click", (event) => {
+			const actionName = event.target.closest("button")?.dataset.action;
+			if (actionName) dispatch(actionMap[actionName]);
+		});
+
+		columns.addEventListener("change", () => dispatch({ type: "SET_COLUMNS", columns: Number(columns.value) }));
+		rosterRows.addEventListener("change", () => dispatch({ type: "SET_ROSTER_ROWS", rows: Number(rosterRows.value) }));
+
+		tabs.addEventListener("click", (event) => {
+			const id = event.target.closest("button")?.dataset.walkthrough;
+			if (!id) return;
+			activeWalkthroughId = id;
+			guideStarted = false;
+			guideStep = 0;
+			guideDirty = false;
+			renderWalkthroughs();
+		});
+
+		walkthroughContent.addEventListener("click", (event) => {
+			if (event.target.closest("#start-walkthrough")) {
+				startWalkthrough();
+				return;
+			}
+			const step = event.target.closest("button")?.dataset.guideStep;
+			if (step === undefined || Number(step) !== guideStep || guideDirty) return;
+			const walkthrough = walkthroughs.find(({ id }) => id === activeWalkthroughId);
+			dispatch(walkthrough.steps[guideStep].action, "guide");
+		});
+
+		terminal.addEventListener("keydown", (event) => {
+			const keyActions = {
+				ArrowUp: actionMap.up,
+				k: actionMap.up,
+				ArrowDown: actionMap.down,
+				j: actionMap.down,
+				ArrowLeft: actionMap.left,
+				h: actionMap.left,
+				ArrowRight: actionMap.right,
+				l: actionMap.right,
+				Enter: actionMap.enter,
+				Tab: actionMap.tab,
+				Escape: actionMap.escape,
+				o: actionMap.owner,
+			};
+			const action = keyActions[event.key];
+			if (!action) return;
+			event.preventDefault();
+			dispatch(action);
+		});
+
+		render();
+	</script>
+</body>
+</html>
