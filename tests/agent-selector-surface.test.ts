@@ -628,9 +628,15 @@ test("Live breadcrumbs pin Owner and keep the newest three Agent scopes", async 
 	const narrow = harness.component.render(30).join("\n");
 	assert.match(narrow, /\[Owner\]\[›\] … \/ Delta/);
 	assert.doesNotMatch(narrow, /Beta/);
-	const veryNarrow = harness.component.render(24);
-	assert.match(veryNarrow.join("\n"), /Delta/);
-	assert.ok(veryNarrow.every((line) => visibleWidth(line) <= 24));
+	for (const width of [24, 20]) {
+		const veryNarrow = harness.component.render(width);
+		assert.match(veryNarrow.join("\n"), /Delta/);
+		assert.ok(veryNarrow.every((line) => visibleWidth(line) <= width));
+	}
+	const truncatedCurrentScope = harness.component.render(19);
+	assert.match(truncatedCurrentScope.join("\n"), /\[Owner\]\[›\] Del/);
+	assert.doesNotMatch(truncatedCurrentScope.join("\n"), /… \/ /);
+	assert.ok(truncatedCurrentScope.every((line) => visibleWidth(line) <= 19));
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });

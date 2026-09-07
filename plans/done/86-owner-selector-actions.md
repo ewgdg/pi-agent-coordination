@@ -32,3 +32,8 @@ The native SelectList wraps and includes all focus stops in its scroll position.
 
 ## Outcomes and retrospective
 Implemented all keyboard-only #86 requirements with no pointer or mounted-marker work. Already-mounted select_agent actions skip presentation acquisition; Human Request decisions still use the normal preparation/focus path. No full suite was run. Parent owns independent review and publishing.
+
+## Review follow-up
+- Added a failing regression at widths 20 and 19 for informational omission consuming current-scope space.
+- Drop the older-path marker before truncating the current label. Width 20 preserves `[Owner][›] Delta`; width 19 has only 15 content cells after frame/padding, so it preserves `[Owner][›] Del…` instead of the older-path marker.
+- Revalidated targeted selector/remote-selector tests (42/42), typecheck, and diff whitespace checks.

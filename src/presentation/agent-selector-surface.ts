@@ -623,7 +623,9 @@ class AgentSelectorSurface implements Component {
 			visibleLabels.shift();
 		}
 		if (visibleWidth(title()) <= width) return title();
-		const prefix = labels.length > 1 ? "[›] … / " : "[›] ";
+		// Older-path omission is informational; spend the remaining width on the
+		// current scope before truncating its label.
+		const prefix = "[›] ";
 		return `${prefix}${truncateToWidth(
 			visibleLabels.at(-1) ?? "",
 			Math.max(1, width - visibleWidth(prefix)),
