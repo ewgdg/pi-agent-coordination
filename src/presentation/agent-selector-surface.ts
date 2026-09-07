@@ -86,7 +86,8 @@ export type AgentSelectorOptions = Readonly<{
 
 type AgentSelectorItem = SelectItem & Readonly<{
 	status?: AgentRosterStatus;
-	kind: "decide" | "attention" | "agent";
+	kind: "decide" | "attention" | "owner" | "agent";
+	childControl?: string;
 	action?: AgentSelectorAction;
 	detailLines?: readonly string[];
 }>;
@@ -151,7 +152,9 @@ class AgentSelectorSurface implements Component {
 			? owner.agentId
 			: selectedLive?.directSpawnerAgentId ?? owner.agentId;
 		this.#selectedValueByTab = {
-			live: this.#attentionItems()[0]?.value ?? selectedLive?.agentId ?? owner.agentId,
+			live: this.#attentionItems()[0]?.value ?? (
+				selectedLive?.agentId !== owner.agentId ? selectedLive?.agentId : undefined
+			),
 			dormant: selectedDormant?.agentId ?? options.dormant[0]?.agentId,
 		};
 		this.#list = this.#createList();
@@ -201,6 +204,11 @@ class AgentSelectorSurface implements Component {
 			: matchesKey(data, "k")
 				? SELECT_LIST_UP_INPUT
 				: data;
+		// SelectList wraps by default; Owner is a boundary, never a wrap destination.
+		if (
+			(matchesKey(listInput, Key.up) && this.#selectedIndex === 0) ||
+			(matchesKey(listInput, Key.down) && this.#selectedIndex === this.#items.length - 1)
+		) return;
 		this.#list.handleInput(listInput);
 		this.#tui.requestRender();
 	}
@@ -223,12 +231,7 @@ class AgentSelectorSurface implements Component {
 		const contentLines = [
 			this.#renderTabs(),
 			"",
-			...(this.#activeTab === "live"
-				? this.#renderSectionedLiveList(contentWidth)
-				: [
-					this.#theme.fg("toolTitle", this.#theme.bold("Dormant Agents")),
-					...this.#renderDormantList(contentWidth),
-				]),
+			...this.#renderPinnedList(contentWidth),
 			"",
 			this.#theme.fg(
 				"dim",
@@ -256,7 +259,7 @@ class AgentSelectorSurface implements Component {
 	#createList(): SelectList {
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
-			: this.#options.dormant.map((status) => this.#agentItem(status));
+			: [this.#ownerItem(), ...this.#options.dormant.map((status) => this.#agentItem(status))];
 		this.#visibleRows = Math.max(
 			1,
 			Math.min(
@@ -272,9 +275,9 @@ class AgentSelectorSurface implements Component {
 			this.#selectListTheme(),
 		);
 		const preferredValue = this.#selectedValueByTab[this.#activeTab];
-		this.#selectedIndex = Math.max(
-			0,
-			this.#items.findIndex(({ value }) => value === preferredValue),
+		const preferredIndex = this.#items.findIndex(({ value }) => value === preferredValue);
+		this.#selectedIndex = preferredIndex >= 0 ? preferredIndex : Math.max(
+			0, this.#items.findIndex(({ kind }) => kind !== "owner"),
 		);
 		// Rebuilds must remember the resolved fallback, not an absent preferred item.
 		this.#selectedValueByTab[this.#activeTab] = this.#items[this.#selectedIndex]?.value;
@@ -366,6 +369,7 @@ class AgentSelectorSurface implements Component {
 		const owner = this.#ownerStatus();
 		return [
 			...this.#attentionItems(),
+			this.#ownerItem(),
 			...this.#options.live
 				.filter((status) =>
 					status.agentId !== owner.agentId &&
@@ -440,7 +444,7 @@ class AgentSelectorSurface implements Component {
 		).length;
 		const children = childCount === 0
 			? undefined
-			: `${childCount} ${childCount === 1 ? "child" : "children"} ›`;
+			: `[${childCount} ${childCount === 1 ? "child" : "children"} ›]`;
 		const moderator = status.agentId !== status.workflowId &&
 			status.directSpawnerAgentId === null;
 		return {
@@ -449,10 +453,10 @@ class AgentSelectorSurface implements Component {
 			description: [
 				formatRun(status, this.#theme),
 				moderator ? status.description : undefined,
-				children,
 			].filter(Boolean).join(" · "),
 			status,
 			kind: "agent",
+			childControl: this.#activeTab === "live" ? children : undefined,
 		};
 	}
 
@@ -464,90 +468,71 @@ class AgentSelectorSurface implements Component {
 		return owner;
 	}
 
-	#renderSectionedLiveList(width: number): string[] {
-		const hasAgent = this.#items.some(({ kind }) => kind === "agent");
-		if (!hasAgent && this.#items.length === 0) {
-			return [
-				this.#theme.fg("toolTitle", this.#theme.bold(this.#scopeTitle(width))),
-				this.#theme.fg("dim", "  No live Agents"),
-			];
-		}
-		const visibleList = this.#renderVisibleList(
-			width,
-			(item, previous) => {
-				const sectionKind = liveSectionKind(item);
-				if (sectionKind === (previous ? liveSectionKind(previous) : undefined)) {
-					return undefined;
-				}
-				return this.#theme.fg(
-					"toolTitle",
-					this.#theme.bold(
-						sectionKind === "attention"
-							? "Attention Inbox"
-							: this.#scopeTitle(width),
-					),
-				);
-			},
-			hasAgent ? MAX_LIVE_SECTION_HEADER_ROWS : 1,
-		);
-		return hasAgent
-			? visibleList
-			: [
-				...visibleList,
-				this.#theme.fg("toolTitle", this.#theme.bold(this.#scopeTitle(width))),
-				this.#theme.fg("dim", "  No live Agents"),
-			];
+	#ownerItem(): AgentSelectorItem {
+		return {
+			value: this.#ownerStatus().agentId,
+			label: "Owner",
+			kind: "owner",
+			action: { kind: "select_agent", agentId: this.#ownerStatus().agentId },
+		};
 	}
 
-	#renderDormantList(width: number): string[] {
-		return this.#renderVisibleList(width);
-	}
-
-	#renderVisibleList(
-		width: number,
-		sectionHeading?: (
-			item: AgentSelectorItem,
-			previous: AgentSelectorItem | undefined,
-		) => string | undefined,
-		reservedSectionRows = 0,
-	): string[] {
+	#renderPinnedList(width: number): string[] {
+		const startIndex = Math.max(0, Math.min(
+			this.#selectedIndex - Math.floor(this.#visibleRows / 2),
+			this.#items.length - this.#visibleRows,
+		));
+		const visibleItems = this.#items.slice(startIndex, startIndex + this.#visibleRows);
 		const listLines = this.#list.render(width);
-		if (this.#items.length === 0) return listLines;
-		const startIndex = Math.max(
-			0,
-			Math.min(
-				this.#selectedIndex - Math.floor(this.#visibleRows / 2),
-				this.#items.length - this.#visibleRows,
-			),
-		);
-		const endIndex = Math.min(startIndex + this.#visibleRows, this.#items.length);
-		const itemLineCount = endIndex - startIndex;
-		const rendered: string[] = [];
-		let renderedSectionRows = 0;
-		for (let offset = 0; offset < itemLineCount; offset += 1) {
-			const item = this.#items[startIndex + offset];
-			if (!item) continue;
-			const previous = offset === 0
-				? undefined
-				: this.#items[startIndex + offset - 1];
-			const heading = sectionHeading?.(item, previous);
-			if (heading !== undefined) {
-				rendered.push(heading);
-				renderedSectionRows += 1;
+		const hasAgents = this.#items.some(({ kind }) => kind === "agent");
+		const visibleAttention = visibleItems.some(({ kind }) => kind === "decide" || kind === "attention");
+		const visibleBodyRows = visibleItems.filter(({ kind }) => kind !== "owner").length;
+		// On very short terminals, trim detail only as needed to keep the pinned
+		// Owner boundary alongside the focused summary and the existing frame.
+		const detailRows = Math.max(0, Math.min(FOCUSED_DETAIL_ROWS,
+			this.#maximumOverlayRows() - FRAME_ROWS - TAB_ROWS - 1 -
+			(visibleAttention ? 1 : 0) - visibleBodyRows - (!hasAgents ? 1 : 0) -
+			(listLines.length > visibleItems.length ? SCROLL_INDICATOR_ROWS : 0),
+		));
+		const attention: string[] = [];
+		const agents: string[] = [];
+		for (const [offset, item] of visibleItems.entries()) {
+			if (item.kind === "owner") continue;
+			const lines = item.kind === "agent" ? agents : attention;
+			let line = listLines[offset] ?? "";
+			if (item.childControl) {
+				// Reserve the hierarchy action before truncating the participant body.
+				const bodyWidth = Math.max(0, width - visibleWidth(item.childControl) - 1);
+				line = truncateToWidth(line, bodyWidth, "");
+				line += " ".repeat(Math.max(1, width - visibleWidth(line) - visibleWidth(item.childControl)));
+				line += this.#theme.fg("dim", item.childControl);
 			}
-			const selected = startIndex + offset === this.#selectedIndex;
-			const itemLine = listLines[offset] ?? "";
-			rendered.push(itemLine);
-			if (selected) rendered.push(...this.#focusedDetailLines(item, width));
+			lines.push(line);
+			if (startIndex + offset === this.#selectedIndex) {
+				lines.push(...this.#focusedDetailLines(item, width).slice(0, detailRows));
+			}
 		}
-		return [
-			...rendered,
-			...Array.from(
-				{ length: Math.max(0, reservedSectionRows - renderedSectionRows) },
-				() => "",
-			),
-			...listLines.slice(itemLineCount),
+		const ownerFocused = this.#items[this.#selectedIndex]?.kind === "owner";
+		const owner = ownerFocused
+			? this.#theme.bg("selectedBg", this.#theme.fg("text", "[Owner]"))
+			: this.#theme.fg("toolTitle", "[Owner]");
+		const ownerLine = this.#activeTab === "live"
+			? owner + this.#theme.fg("toolTitle", this.#scopeTitle(Math.max(0, width - visibleWidth("[Owner]"))))
+			: owner;
+		const rendered = [
+			...(attention.length ? [this.#theme.fg("toolTitle", this.#theme.bold("Attention Inbox")), ...attention] : []),
+			ownerLine + (ownerFocused && this.#selectionSpinnerItem?.description
+				? this.#theme.fg("dim", ` ${this.#selectionSpinnerItem.description}`) : ""),
+			...agents,
+			...(!hasAgents ? [this.#theme.fg("dim", this.#activeTab === "live" ? "  No live Agents" : "  No dormant Agents")] : []),
 		];
+		// Pinned Owner replaces its list row. Reserve missing window/header slots so
+		// moving across the boundary does not resize the established detail layout.
+		const targetRows = this.#visibleRows + FOCUSED_DETAIL_ROWS +
+			(this.#activeTab === "live" ? MAX_LIVE_SECTION_HEADER_ROWS : 1) +
+			(!hasAgents ? 1 : 0);
+		while (rendered.length < targetRows) rendered.push("");
+		return [...rendered, ...listLines.slice(visibleItems.length)];
 	}
 
 	#focusedDetailLines(item: AgentSelectorItem, width: number): string[] {
@@ -578,6 +563,25 @@ class AgentSelectorSurface implements Component {
 
 	#zoomIn(): void {
 		const selected = this.#items[this.#selectedIndex];
+		if (selected?.kind === "owner") {
+			const owner = this.#ownerStatus();
+			let ancestor = [...this.#options.live, ...this.#options.dormant].find(
+				({ agentId }) => agentId === this.#scopeAgentId,
+			);
+			while (ancestor?.directSpawnerAgentId && ancestor.directSpawnerAgentId !== owner.agentId) {
+				const parentId = ancestor.directSpawnerAgentId;
+				ancestor = [...this.#options.live, ...this.#options.dormant].find(
+					({ agentId }) => agentId === parentId,
+				);
+			}
+			this.#scopeAgentId = owner.agentId;
+			const rootAgents = this.#liveItems().filter(({ kind }) => kind === "agent");
+			// Root browsing targets an Agent, not the higher-priority Attention Inbox.
+			this.#selectedValueByTab.live = rootAgents.find(({ value }) => value === ancestor?.agentId)?.value
+				?? rootAgents[0]?.value ?? owner.agentId;
+			this.#list = this.#createList();
+			return;
+		}
 		if (!selected?.status) return;
 		const firstChild = this.#options.live.find(
 			(status) => status.directSpawnerAgentId === selected.value,
@@ -611,15 +615,15 @@ class AgentSelectorSurface implements Component {
 				({ agentId }) => agentId === current?.directSpawnerAgentId,
 			);
 		}
-		if (labels.length === 0) return "Agents";
+		if (labels.length === 0) return "[›]";
 		const visibleLabels = labels.slice(-MAX_BREADCRUMB_AGENT_SEGMENTS);
 		const title = () =>
-			`Agents / ${labels.length > visibleLabels.length ? "… / " : ""}${visibleLabels.join(" / ")}`;
+			`[›] ${labels.length > visibleLabels.length ? "… / " : ""}${visibleLabels.join(" / ")}`;
 		while (visibleLabels.length > 1 && visibleWidth(title()) > width) {
 			visibleLabels.shift();
 		}
 		if (visibleWidth(title()) <= width) return title();
-		const prefix = labels.length > 1 ? "… / " : "";
+		const prefix = labels.length > 1 ? "[›] … / " : "[›] ";
 		return `${prefix}${truncateToWidth(
 			visibleLabels.at(-1) ?? "",
 			Math.max(1, width - visibleWidth(prefix)),
@@ -647,14 +651,6 @@ class AgentSelectorSurface implements Component {
 			noMatch: (text) => this.#theme.fg("muted", text),
 		};
 	}
-}
-
-function liveSectionKind(
-	item: AgentSelectorItem,
-): "attention" | "agent" {
-	return item.kind === "decide" || item.kind === "attention"
-		? "attention"
-		: item.kind;
 }
 
 function fitOverlayContent(lines: string[], maximumRows: number): string[] {

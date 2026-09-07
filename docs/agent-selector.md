@@ -1,25 +1,31 @@
 # Agent selector and view
 
-`/agents` first opens a centered roster overlay. The framed selector is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` owns focus movement, wrapping, and scrolling. `/agents owner` trims its argument and returns directly to the exact mounted Workflow Owner presentation without opening the selector; it is a harmless no-op when Owner is already mounted. Other arguments fail with `Usage: /agents [owner]`.
+`/agents` first opens a centered roster overlay. The framed selector is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` supplies roster rows and scrolling; the selector keeps keyboard focus linear and renders Owner/path outside the scrolling rows. `/agents owner` trims its argument and returns directly to the exact mounted Workflow Owner presentation without opening the selector; it is a harmless no-op when Owner is already mounted. Other arguments fail with `Usage: /agents [owner]`.
 
-Selecting a roster row opens that durable Agent's full-window interactive view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. Pressing `o` from either tab or any Live scope returns to that exact existing Owner presentation; Owner is a global destination rather than a roster entry.
+Enter on an Agent body opens that durable Agent's full-window interactive view. Selecting the already-mounted participant simply closes the selector without reopening or replacing its view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. The pinned `[Owner]` button is focusable from either tab and every Live scope. Enter on it (or the global `o` shortcut) returns to that exact existing Owner presentation; Owner is a global destination rather than a roster entry.
 
 Agent selection prepares the target mode before dismissing the roster. The focused row shows an animated loading indicator throughout preparation. When switching between children, the current selector keeps rendering until the replacement frame takes over; the previous Runtime remains retained through the handoff. The selector retains input focus during asynchronous preparation, so typing, paste, Enter, or Escape cannot fall through to the Owner editor between selection and child attachment.
 
 ## Live roster
 
-Live uses one continuous list across two adjacent sections:
+Live uses one linear, non-circular focus order: Attention items, the pinned Owner button, then scoped Agent bodies. Up on the first item and Down on the last item stay put.
 
 - **Attention Inbox** contains Owner-visible Human `DECIDE` items and exhausted Operational `ATTENTION` items. A `DECIDE` row identifies the requesting Agent and shows a bounded one-line question preview. The first attention item receives initial focus. Selecting `DECIDE` opens that Agent's full-window view at its pending request and focuses its native editor. Selecting an Operational `ATTENTION` item with exactly one affected Agent opens that Agent's full-window view without changing the incident. Multi-Agent attention remains informational, and Enter leaves the selector open.
-- **Agents** contains the current scope's direct ordinary children in creation order. Live Moderators appear at the Owner scope as standalone participants. Each row uses the human-facing work status: `active`, `compacting`, `idle`, `waiting` with its reason, `starting`, or `ending`.
+- **Scoped Agents**, below `[Owner][›]` and the current path, contains the current scope's direct ordinary children in creation order. Live Moderators appear at the Owner scope as standalone participants. Each row uses the human-facing work status: `active`, `compacting`, `idle`, `waiting` with its reason, `starting`, or `ending`.
 
-Right Arrow or `l` enters the focused ordinary Agent's child scope. Left Arrow or `h` returns to its parent and refocuses that Agent. Breadcrumbs omit Owner, retain the newest three Agent scopes, and tighten to the available width.
+Without Attention, initial focus prefers the selected non-Owner Agent, then the first Agent in scope, then Owner. Opening from Owner therefore starts on the first available Agent.
+
+Agent bodies and hierarchy browsing are separate actions: Enter opens the Agent; Right Arrow or `l` activates its trailing `[N children ›]` control. Child controls add no extra Up/Down focus stop. A leaf has no child control.
+
+On Live Owner, Right Arrow or `l` activates the separate `[›]` root action without opening Owner. At root it focuses the first Agent; from a nested scope it refocuses the previous top-level ancestor when available, otherwise the first root Agent. Left Arrow or `h` returns to the parent scope and refocuses the Agent along the previous path.
+
+The Owner/path line stays visible while the roster scrolls, below any visible Attention rows. The chevron replaces the first path separator: `[Owner][›] Architecture / Research`. Breadcrumbs retain at most the newest three Agent scopes and replace older segments with informational `…` as width tightens, preserving Owner and prioritizing the current scope. At widths too narrow for the current label, that label is truncated.
 
 Opening a live Agent view attaches its Agent Runtime's complete Pi mode. `interactive_selection` retains that Runtime without itself admitting or prolonging a Run. Run failure or ordinary termination may end the exact Run while keeping a ready Runtime and view attached, leaving the Agent Dormant. Termination that wins during Runtime initialization instead cancels the unusable Runtime and closes its view without waiting for startup UI. Returning to Owner or switching Agents removes Runtime retention; an unselected Dormant Runtime is then disposed, while live work follows ordinary Run retention.
 
 ## Dormant roster
 
-Dormant is a flat list of every verified ordinary Agent and Moderator without a current Run. It follows Pi resume recency: latest user or assistant activity, then native session creation time. Moderator rows include their role and compact trigger description.
+Dormant has a pinned, focusable `[Owner]` button without a child chevron or a separate section heading. This global Home action does not classify Owner as dormant. Below it is a flat list of every verified ordinary Agent and Moderator without a current Run. It follows Pi resume recency: latest user or assistant activity, then native session creation time. Moderator rows include their role and compact trigger description.
 
 Selecting a Dormant Agent prepares its ordinary configured Agent Runtime over persisted evidence. The same session supplies its configured tool allowlist, extension-controlled active tools, extensions, editor, footer, commands, shortcuts, and extension UI before and during later work. Selection itself does not admit a Run, initialize Run-scoped Request relationships, invoke the model, or append transcript evidence; observation remains `phase: "dormant"`.
 
@@ -41,7 +47,7 @@ All input is routed directly to the selected child PTY. Printable text, paste, c
 
 - press `o` to return to the exact mounted Owner presentation;
 - select another Agent to retarget the same full-window attachment without exposing the Owner editor; or
-- select the current Agent to keep the existing mode.
+- select the current Agent to close the selector and keep the exact existing mode.
 
 Pi's fullscreen transcript viewport and editor dock coexist. Page Up/Page Down, Home/End, configured prompt navigation, and mouse scrolling move the transcript while the editor remains available. At the tail, new output follows automatically. Scrolling away preserves the inspected region until the native end action restores tail following. Resize updates the selected PTY and lets the child TUI reflow its complete native frame within the available rows.
 
@@ -56,11 +62,12 @@ The focused roster row reserves four detail lines:
 3. Dormant or current Run semantics with compact Retention Reasons;
 4. provider/model, thinking level, and queued-input count.
 
-An absent description leaves its line empty, keeping the overlay height stable as focus moves.
+An absent description leaves its line empty, keeping the overlay height stable as focus moves. On very short terminals, detail lines are trimmed only as needed to keep the focused summary, pinned Owner boundary, and frame visible.
 
 - Tab or Shift-Tab: switch Live and Dormant
 - `o`: return to Owner
-- Up/Down or `k`/`j`: move focus
-- Right/Left or `l`/`h`: enter or leave a Live ordinary-Agent scope
-- Enter: perform the focused row's action
+- Up/Down or `k`/`j`: move linearly through Attention, Owner, and Agent bodies; stop at both boundaries
+- Right or `l`: browse Live Owner/root or activate the focused Agent's trailing child control
+- Left or `h`: return to the parent Live scope and refocus the previous path
+- Enter: perform the focused body or Owner action
 - Escape: close the selector
