@@ -1,7 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRunState } from "../runtime/agent-runtime-supervisor.ts";
-import { compactAgentIdentity } from "./agent-identity.ts";
 
 export type AgentWorkStatus =
 	| Readonly<{ kind: "active" | "compacting" }>
@@ -49,8 +48,7 @@ export function formatSelectedAgentIdentity(
 	theme: Theme,
 ): string {
 	const label = theme.fg("accent", theme.bold(identity.label));
-	const compactIdentity = compactAgentIdentity(identity.agentId);
-	const separator = theme.fg("dim", ` · ${compactIdentity} · `);
+	const separator = theme.fg("dim", ` · ${identity.agentId} · `);
 	return `${label}${separator}${formatAgentWorkStatus(identity.status, theme)}`;
 }
 

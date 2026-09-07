@@ -15,7 +15,6 @@ import {
 
 import {
 	formatAgentIdentity,
-	type AgentIdentityDetail,
 	type AgentLabelResolver,
 } from "../presentation/agent-identity.ts";
 import { BodyPreview } from "../presentation/body-preview.ts";
@@ -74,7 +73,6 @@ export function renderMessageProjection(
 			projection,
 			theme,
 			resolveAgentLabel,
-			options.expanded ? "full" : "compact",
 		),
 		0,
 		0,
@@ -103,7 +101,6 @@ function renderHeader(
 	projection: ModelVisibleMessage,
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver,
-	identityDetail: AgentIdentityDetail,
 ): string {
 	return [
 		theme.fg(
@@ -115,7 +112,6 @@ function renderHeader(
 			` from ${formatAgentIdentity(
 				projection.fromAgentId,
 				resolveAgentLabel,
-				identityDetail,
 			)}`,
 		),
 	].join("");

@@ -5,7 +5,7 @@ import type { AgentCreationPreset } from "../templates/agent-templates.ts";
 import { validateAgentCreationPreset } from "./agent-creation-preset.ts";
 import { resolveModeratorAgentMetadata } from "./agent-metadata.ts";
 import type { ToolCallPointer } from "./identities.ts";
-import { ProtocolInvariantError } from "./identities.ts";
+import { ProtocolInvariantError, isToolCallPointer } from "./identities.ts";
 import {
 	AGENT_IDENTITY_CUSTOM_TYPE,
 	MODERATOR_INPUT_CUSTOM_TYPE,
@@ -25,6 +25,7 @@ export type EntryPointer = Readonly<{
 }>;
 
 export type ModeratorIdentity = Readonly<{
+	sessionId: string;
 	agentId: string;
 	workflowId: string;
 	directSpawnerAgentId: null;
@@ -43,7 +44,7 @@ export function isModeratorIdentity(
 		directSpawnerAgentId: string | null;
 	}>,
 ): identity is ModeratorIdentity {
-	return identity.agentId !== identity.workflowId &&
+	return "creationPreset" in identity &&
 		identity.directSpawnerAgentId === null;
 }
 
@@ -98,6 +99,7 @@ export type ModelVisibleModeratorInput = Readonly<{
 	content: string;
 	display: true;
 	details: Readonly<{
+		sessionId: string;
 		agentId: string;
 		workflowId: string;
 		metadata: ModeratorIdentity["metadata"];
@@ -121,6 +123,7 @@ export function createModelVisibleModeratorInput(
 		display: true,
 		details: {
 			agentId: identity.agentId,
+			sessionId: identity.sessionId,
 			workflowId: identity.workflowId,
 			metadata: identity.metadata,
 			creationPreset: identity.creationPreset,
@@ -142,7 +145,7 @@ export function validateCommittedModeratorInput(options: {
 	input: ModeratorInput;
 }): void {
 	const { transcript, identity, input } = options;
-	if (transcript.sessionId !== identity.agentId) {
+	if (transcript.sessionId !== identity.sessionId) {
 		throw new ProtocolInvariantError(
 			"Moderator Input does not match its Pi session identity",
 		);
@@ -181,6 +184,7 @@ export function validateCommittedModeratorInput(options: {
 	}
 	const expectedDetails = {
 		agentId: identity.agentId,
+			sessionId: identity.sessionId,
 		workflowId: identity.workflowId,
 		metadata: identity.metadata,
 		creationPreset: identity.creationPreset,
@@ -238,12 +242,14 @@ export function validateColdModeratorInput(options: {
 	const input = validateModeratorInput(inputValue);
 	const details = requireExactRecord(entry.details, [
 		"agentId",
+		"sessionId",
 		"workflowId",
 		"metadata",
 		"creationPreset",
 	]);
 	if (
-		details.agentId !== options.sessionId ||
+		!isIdentifier(details.agentId) ||
+		details.sessionId !== options.sessionId ||
 		!isIdentifier(details.workflowId) ||
 		details.workflowId === options.sessionId
 	) {
@@ -262,7 +268,8 @@ export function validateColdModeratorInput(options: {
 	}
 	return {
 		identity: {
-			agentId: options.sessionId,
+			agentId: details.agentId,
+			sessionId: options.sessionId,
 			workflowId: details.workflowId,
 			directSpawnerAgentId: null,
 			creationPreset: validateAgentCreationPreset(details.creationPreset),
@@ -431,23 +438,12 @@ function validateRequestSet(value: unknown): ModeratorRequestSet {
 }
 
 function validateToolCallPointer(value: unknown): ToolCallPointer {
-	const pointer = requireExactRecord(value, ["agentId", "entryId", "toolCallId"]);
-	if (
-		!isIdentifier(pointer.agentId) ||
-		!isIdentifier(pointer.entryId) ||
-		!isIdentifier(pointer.toolCallId)
-	) {
-		throw new ProtocolInvariantError("Moderator Input Request source is invalid");
-	}
-	return {
-		agentId: pointer.agentId,
-		entryId: pointer.entryId,
-		toolCallId: pointer.toolCallId,
-	};
+	if (!isToolCallPointer(value)) throw new ProtocolInvariantError("Moderator Input Request source is invalid");
+	return value;
 }
 
 function pointerKey(pointer: ToolCallPointer): string {
-	return `${pointer.agentId}\0${pointer.entryId}\0${pointer.toolCallId}`;
+	return `${pointer.workflowId}\0${pointer.agentId}\0${pointer.entryId}\0${pointer.toolCallId}`;
 }
 
 function requireExactRecord(

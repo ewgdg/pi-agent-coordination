@@ -14,8 +14,8 @@ const plainTheme = {
 } as unknown as Theme;
 
 const labels = new Map([
-	["research-agent", "Researcher"],
-	["review-agent", "Reviewer"],
+	["a2", "Researcher"],
+	["a3", "Reviewer"],
 ]);
 const resolveAgentLabel = (agentId: string) => labels.get(agentId);
 
@@ -43,8 +43,8 @@ test("Agent Wait rendering shows snapshot responders, then their Answers", () =>
 
 	const progress = {
 		waitingFor: [
-			{ requestMessageId: "request-research", responderAgentId: "research-agent" },
-			{ requestMessageId: "request-review", responderAgentId: "review-agent" },
+			{ requestMessageId: "request-research", responderAgentId: "a2" },
+			{ requestMessageId: "request-review", responderAgentId: "a3" },
 		],
 	};
 	const waiting = renderAgentWaitResult(
@@ -58,8 +58,8 @@ test("Agent Wait rendering shows snapshot responders, then their Answers", () =>
 		waiting.split("\n").map((line) => line.trimEnd()).join("\n"),
 		[
 			"waiting for 2 Answers…",
-			"• Researcher · ch-agent",
-			"• Reviewer · ew-agent",
+			"• Researcher · a2",
+			"• Reviewer · a3",
 		].join("\n"),
 	);
 	assert.doesNotMatch(waiting, /request-research/);
@@ -70,10 +70,11 @@ test("Agent Wait rendering shows snapshot responders, then their Answers", () =>
 				disposition: "answer_delivered" as const,
 				requestMessageId: "request-research",
 				answerId: "answer-research",
-				fromAgentId: "research-agent",
+				fromAgentId: "a2",
 				answer: "The implementation is viable.",
 				answerSource: {
-					agentId: "research-agent",
+					workflowId: "workflow",
+					agentId: "a2",
 					entryId: "answer-entry-research",
 					toolCallId: "answer-call-research",
 				},
@@ -82,10 +83,11 @@ test("Agent Wait rendering shows snapshot responders, then their Answers", () =>
 				disposition: "answer_delivered" as const,
 				requestMessageId: "request-review",
 				answerId: "answer-review",
-				fromAgentId: "review-agent",
+				fromAgentId: "a3",
 				answer: "The race handling is sound.",
 				answerSource: {
-					agentId: "review-agent",
+					workflowId: "workflow",
+					agentId: "a3",
 					entryId: "answer-entry-review",
 					toolCallId: "answer-call-review",
 				},
@@ -102,15 +104,15 @@ test("Agent Wait rendering shows snapshot responders, then their Answers", () =>
 	assert.match(completed, /2 Answers/);
 	assert.match(
 		completed,
-		/\[Answer\] from Researcher · ch-agent\s*\nThe implementation is viable\./,
+		/\[Answer\] from Researcher · a2\s*\nThe implementation is viable\./,
 	);
 	assert.match(
 		completed,
-		/\[Answer\] from Reviewer · ew-agent\s*\nThe race handling is sound\./,
+		/\[Answer\] from Reviewer · a3\s*\nThe race handling is sound\./,
 	);
 	assert.doesNotMatch(
 		completed,
-		/Researcher · ch-agent[^\n]*The implementation is viable\./,
+		/Researcher · a2[^\n]*The implementation is viable\./,
 	);
 	assert.doesNotMatch(completed, /answerSource/);
 });

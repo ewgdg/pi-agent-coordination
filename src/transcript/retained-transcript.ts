@@ -19,6 +19,7 @@ export class RetainedTranscript {
 	readonly #requestVersions = new Map<string, number>();
 	readonly positions = new Map<string, number>();
 	readonly scopes = new Map<string, SessionEntry[]>();
+	readonly workflowByAgent = new Map<string, string>();
 	readonly #settings = new Map<string, TranscriptSettings>();
 	recency: number | undefined;
 	readonly #buckets = new Map<string, SessionEntry[]>();
@@ -81,8 +82,11 @@ export class RetainedTranscript {
 					: Date.parse(entry.timestamp);
 			if (!Number.isNaN(timestamp)) this.recency = Math.max(this.recency ?? 0, timestamp);
 		}
-		const bootstrap = bootstrapAgent(entry);
+		const identity = bootstrapIdentity(entry);
+		const bootstrap = typeof identity?.agentId === "string" ? identity.agentId : undefined;
 		if (bootstrap) {
+			if (typeof identity?.workflowId === "string")
+				this.workflowByAgent.set(bootstrap, identity.workflowId);
 			this.scopes.set(bootstrap, []);
 			this.scopeVersion++;
 			this.requestChanges.length = 0;
@@ -108,7 +112,7 @@ export class RetainedTranscript {
 			}
 		}
 		this.entries.push(entry);
-		if (bootstrap === this.inspection.sessionId)
+		if (bootstrap && identity?.sessionId === this.inspection.sessionId)
 			this.#initializeProjections?.(this.inspection, bootstrap);
 		if (entry.type === "message" && entry.message.role === "toolResult") {
 			for (const requestId of this.#requestsByToolCall.get(entry.message.toolCallId) ?? [])
@@ -284,19 +288,12 @@ export function entryKeys(entry: SessionEntry): string[] {
 	return [...new Set(keys)];
 }
 
-export function bootstrapAgent(entry: SessionEntry): string | undefined {
-	const data =
-		entry.type === "custom" && entry.customType === "agent-coordination.identity"
-			? entry.data
-			: entry.type === "custom_message" && entry.customType === "agent-coordination.moderator-input"
-				? entry.details
-				: undefined;
-	return typeof data === "object" &&
-		data !== null &&
-		"agentId" in data &&
-		typeof data.agentId === "string"
-		? data.agentId
-		: undefined;
+function bootstrapIdentity(entry: SessionEntry): Record<string, unknown> | undefined {
+	const data = entry.type === "custom" && entry.customType === "agent-coordination.identity"
+		? entry.data : entry.type === "custom_message" && entry.customType === "agent-coordination.moderator-input"
+		? entry.details : undefined;
+	return typeof data === "object" && data !== null && !Array.isArray(data)
+		? data as Record<string, unknown> : undefined;
 }
 
 /** Use the transcript's one shared index, including plain inspection fixtures. */

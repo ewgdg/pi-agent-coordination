@@ -88,7 +88,7 @@ test("committed preparation intent stays outside the model-visible Request proje
 		},
 	};
 	const sessionManager = SessionManager.inMemory(process.cwd(), { id: fromAgentId });
-	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: fromAgentId });
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { sessionId: sessionManager.getSessionId(), workflowId: "workflow", agentId: fromAgentId });
 	const entryId = sessionManager.appendMessage(fauxAssistantMessage(
 		fauxToolCall("agent_message", input, { id: toolCallId }),
 		{ stopReason: "toolUse" },
@@ -106,7 +106,8 @@ test("committed preparation intent stays outside the model-visible Request proje
 	if (message.kind !== "request") throw new Error("Expected a committed Request");
 	assert.deepEqual(message.contextPreparation, input.contextPreparation);
 	assert.deepEqual(createMessageDeliveryItem(message), {
-		source: { agentId: fromAgentId, entryId, toolCallId },
+		source: {
+		workflowId: "workflow", agentId: fromAgentId, entryId, toolCallId },
 		projection: {
 			kind: "request",
 			requestMessageId: message.messageId,

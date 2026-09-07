@@ -67,7 +67,7 @@ export function registerAgentsCommand(
 				const selection = createAgentSelectionSession(view, status.agentId);
 				const action = {
 					kind: "select_agent" as const,
-					agentId: status.workflowId,
+					agentId: view.selectionRoster().live.find((agent) => agent.role === "owner")!.agentId,
 				};
 				await selection.prepare(action);
 				await selection.complete(action);

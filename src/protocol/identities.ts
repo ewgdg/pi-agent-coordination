@@ -1,14 +1,13 @@
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
-import { createHash } from "node:crypto";
+import { allocateWorkflowId } from "./workflow-ids.ts";
 
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 
-const IDENTITY_PREFIX = "agent-coordination";
-
 export type ToolCallPointer = Readonly<{
+	workflowId: string;
 	agentId: string;
 	entryId: string;
 	toolCallId: string;
@@ -65,7 +64,8 @@ export function resolveCommittedToolCall(options: {
 			const match = matches[0];
 			if (!match) throw new Error("Tool call source narrowing failed");
 			return {
-				source: { agentId, entryId: match.entry.id, toolCallId },
+				source: {
+				workflowId: workflowOf(transcript, agentId), agentId, entryId: match.entry.id, toolCallId },
 				input: match.input,
 			};
 		},
@@ -77,7 +77,11 @@ export function compareCommittedToolCallOrder(
 	left: ToolCallPointer,
 	right: ToolCallPointer,
 ): number {
-	if (left.agentId !== right.agentId || left.agentId !== transcript.sessionId) {
+	if (
+		left.agentId !== right.agentId ||
+		left.workflowId !== workflowOf(transcript, left.agentId) ||
+		left.workflowId !== right.workflowId
+	) {
 		throw new ProtocolInvariantError("tool call order comparison crosses Agent identities");
 	}
 	const leftEntry = (indexedState(transcript).positions.get(left.entryId) ?? -1);
@@ -102,35 +106,24 @@ export function compareCommittedToolCallOrder(
 	return leftCall - rightCall;
 }
 
-export function deriveMessageIdentity(source: ToolCallPointer): string {
-	return deriveProtocolIdentity("message", source);
+export function resolveMessageIdentity(source: ToolCallPointer): string {
+	if (!isToolCallPointer(source)) throw new ProtocolInvariantError("Message source is invalid");
+	return allocateWorkflowId({ workflowId: source.workflowId, domain: "m", source: toolCallPointerKey(source) });
 }
 
-export function deriveHumanRequestIdentity(source: ToolCallPointer): string {
-	return deriveProtocolIdentity("human_request", source);
+export function workflowOf(transcript: TranscriptInspection, agentId: string): string {
+	const workflowId = indexedState(transcript).workflowByAgent.get(agentId);
+	if (workflowId !== undefined) return workflowId;
+	throw new ProtocolInvariantError(`Agent ${agentId} has no Workflow identity`);
 }
 
-function deriveProtocolIdentity(
-	kind: "message" | "human_request",
-	source: ToolCallPointer,
-): string {
-	for (const [name, value] of Object.entries(source)) {
-		if (value.length === 0 || value.includes("\0")) {
-			throw new ProtocolInvariantError(`${name} is not a valid identity constituent`);
-		}
-	}
-	return createHash("sha256")
-		.update(
-			[
-				IDENTITY_PREFIX,
-				kind,
-				source.agentId,
-				source.entryId,
-				source.toolCallId,
-			].join("\0"),
-			"utf8",
-		)
-		.digest("base64url");
+export function isToolCallPointer(value: unknown): value is ToolCallPointer {
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+	const keys = Object.keys(value);
+	return keys.length === 4 && ["workflowId", "agentId", "entryId", "toolCallId"].every((key) => {
+		const field = (value as Record<string, unknown>)[key];
+		return typeof field === "string" && field.length > 0 && !field.includes("\0");
+	});
 }
 
 export function sameToolCallPointer(
@@ -138,6 +131,7 @@ export function sameToolCallPointer(
 	right: ToolCallPointer,
 ): boolean {
 	return (
+		left.workflowId === right.workflowId &&
 		left.agentId === right.agentId &&
 		left.entryId === right.entryId &&
 		left.toolCallId === right.toolCallId
@@ -146,6 +140,7 @@ export function sameToolCallPointer(
 
 export function toolCallPointerKey(pointer: ToolCallPointer): string {
 	return JSON.stringify([
+		pointer.workflowId,
 		pointer.agentId,
 		pointer.entryId,
 		pointer.toolCallId,

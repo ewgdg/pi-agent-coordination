@@ -552,6 +552,7 @@ test("single-Agent Operational ATTENTION opens the affected Agent", async () => 
 				obligations: {
 					total: 1,
 					sources: [{
+						workflowId: "workflow",
 						agentId: "requester-agent",
 						entryId: "request-entry",
 						toolCallId: "request-call",
@@ -641,6 +642,7 @@ function agentStatus(
 	directSpawnerAgentId: string | null,
 ): AgentRosterStatus {
 	return {
+		role: label === "Owner" ? "owner" as const : directSpawnerAgentId === null ? "moderator" as const : "ordinary" as const,
 		agentId,
 		workflowId: "owner",
 		label,

@@ -78,17 +78,20 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 	} as unknown as MessageCoordinator;
 	const agents = new Map<string, AgentRecord>([
 		["owner", record({
+			sessionId: "owner",
 			agentId: "owner",
 			workflowId: "owner",
 			directSpawnerAgentId: null,
 			metadata: { label: "Owner", description: "Workflow Owner" },
 		}, {} as AgentRuntimeHost, ownerTranscript)],
 		[targetAgentId, record({
+			sessionId: targetAgentId,
 			agentId: targetAgentId,
 			workflowId: "owner",
 			directSpawnerAgentId: "owner",
 			creationPreset: null,
-			spawnSource: { agentId: "owner", entryId: "spawn-entry", toolCallId: "spawn-call" },
+			spawnSource: {
+			workflowId: "owner", agentId: "owner", entryId: "spawn-entry", toolCallId: "spawn-call" },
 			metadata: { label: "Starting Target" },
 		}, targetHost, emptyTranscript(targetAgentId))],
 	]);
@@ -147,7 +150,7 @@ function transcriptWithRunControl(
 	input: Readonly<{ operation: "terminate"; agentId: string }>,
 ): AgentTranscript {
 	const sessionManager = SessionManager.inMemory(process.cwd(), { id: agentId });
-	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { sessionId: sessionManager.getSessionId(), workflowId: "workflow", agentId });
 	sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_control", input, { id: toolCallId }),

@@ -141,9 +141,9 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		}
 	}
 
-	static bindOwner(runtime: AgentSessionRuntime): AgentRuntimeSupervisor {
+	static bindOwner(runtime: AgentSessionRuntime, agentId: string): AgentRuntimeSupervisor {
 		return new AgentRuntimeSupervisor({
-			agentId: runtime.session.sessionId,
+			agentId,
 			initialRuntime: InProcessHostedRuntime.fromSession({
 				session: runtime.session,
 				services: runtime.services,

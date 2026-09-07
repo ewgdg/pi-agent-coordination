@@ -37,6 +37,7 @@ function agent(options: {
 	failed?: boolean;
 }): AgentActivitySnapshot["scope"] {
 	return {
+		role: options.agentId === "owner" ? "owner" as const : options.parent === null ? "moderator" as const : "ordinary" as const,
 		agentId: options.agentId,
 		workflowId: "owner",
 		label: options.label,
@@ -119,7 +120,7 @@ test("activity extension publishes native model-selection changes", async () => 
 
 test("activity installs as one persistent native above-editor widget", () => {
 	const snapshots = source({
-		scope: agent({ agentId: "leaf-12345678", label: "Leaf", parent: "owner" }),
+		scope: agent({ agentId: "a2", label: "Leaf", parent: "owner" }),
 		children: [],
 		answerMode: false,
 		humanAttention: [],
@@ -144,7 +145,7 @@ test("activity installs as one persistent native above-editor widget", () => {
 		{ requestRender() {} } as unknown as TUI,
 		theme,
 	);
-	assert.match(dock.render(80).join("\n"), /Leaf.*12345678.*idle/);
+	assert.match(dock.render(80).join("\n"), /Leaf.*a2.*idle/);
 	dock.dispose();
 });
 
@@ -273,7 +274,7 @@ test("Owner activity renders direct children without requiring attention", () =>
 test("nested Agent activity shows identity and only its direct children", () => {
 	const { dock } = createDock({
 		scope: agent({
-			agentId: "agent-researcher-12345678",
+			agentId: "a2",
 			label: "Researcher",
 			parent: "owner",
 			run: {
@@ -284,8 +285,8 @@ test("nested Agent activity shows identity and only its direct children", () => 
 			},
 		}),
 		children: [
-			agent({ agentId: "source-scout", label: "Source Scout", parent: "agent-researcher-12345678" }),
-			agent({ agentId: "synthesizer", label: "Synthesizer", parent: "agent-researcher-12345678" }),
+			agent({ agentId: "source-scout", label: "Source Scout", parent: "a2" }),
+			agent({ agentId: "synthesizer", label: "Synthesizer", parent: "a2" }),
 		],
 		answerMode: false,
 		humanAttention: [{
@@ -300,7 +301,7 @@ test("nested Agent activity shows identity and only its direct children", () => 
 	const rendered = dock.render(160).join("\n");
 	assert.match(
 		rendered,
-		/^<accent><bold>Researcher<\/bold><\/accent><dim> · 12345678 · <\/dim><success>active<\/success>/,
+		/^<accent><bold>Researcher<\/bold><\/accent><dim> · a2 · <\/dim><success>active<\/success>/,
 	);
 	assert.match(rendered, /Source Scout/);
 	assert.match(rendered, /Synthesizer/);
@@ -311,7 +312,7 @@ test("nested Agent activity shows identity and only its direct children", () => 
 test("leaf selection keeps only the plain identity directly above the editor", () => {
 	const { dock } = createDock({
 		scope: agent({
-			agentId: "leaf-agent-87654321",
+			agentId: "a2",
 			label: "Leaf",
 			parent: "owner",
 		}),
@@ -322,7 +323,7 @@ test("leaf selection keeps only the plain identity directly above the editor", (
 	});
 
 	assert.deepEqual(dock.render(120), [
-		"<accent><bold>Leaf</bold></accent><dim> · 87654321 · </dim><dim>idle</dim>",
+		"<accent><bold>Leaf</bold></accent><dim> · a2 · </dim><dim>idle</dim>",
 	]);
 	dock.dispose();
 });
@@ -330,7 +331,7 @@ test("leaf selection keeps only the plain identity directly above the editor", (
 test("selected Agent activity projects Answer mode directly above its native editor", () => {
 	const { dock } = createDock({
 		scope: agent({
-			agentId: "requester-12345678",
+			agentId: "a2",
 			label: "Requester",
 			parent: "owner",
 			run: {
@@ -404,7 +405,7 @@ test("activity updates volatile state and rebinds scope without retaining a stal
 	assert.match(stripTerminalSequences(dock.render(100).join("\n")), /Live Child.*idle/);
 
 	snapshots.publish({
-		scope: agent({ agentId: "nested-12345678", label: "Nested", parent: "owner" }),
+		scope: agent({ agentId: "a2", label: "Nested", parent: "owner" }),
 		children: [],
 		answerMode: false,
 		humanAttention: [],
@@ -413,7 +414,7 @@ test("activity updates volatile state and rebinds scope without retaining a stal
 	assert.equal(renderRequests(), 1);
 	assert.match(
 		stripTerminalSequences(dock.render(100).join("\n")).replace(/<[^>]+>/g, ""),
-		/Nested · 12345678 · idle/,
+		/Nested · a2 · idle/,
 	);
 	assert.equal(snapshots.handlerCount(), 1);
 	dock.dispose();

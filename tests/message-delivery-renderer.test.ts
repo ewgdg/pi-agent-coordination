@@ -22,9 +22,9 @@ const plainTheme = {
 	bold: (text: string) => text,
 } as unknown as Theme;
 
-test("collapsed Message Delivery shows type, sender label, compact identity, and a ten-line body snippet", () => {
+test("collapsed Message Delivery shows type, sender label, canonical identity, and a ten-line body snippet", () => {
 	initTheme("dark");
-	const senderAgentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+	const senderAgentId = "a2";
 	const fullBody = [
 		"Context ".repeat(10),
 		"second-line evidence. ",
@@ -44,8 +44,7 @@ test("collapsed Message Delivery shows type, sender label, compact identity, and
 	).render(60).join("\n");
 
 	assert.match(rendered, /Message/);
-	assert.match(rendered, /from Researcher · 983c81e3/);
-	assert.doesNotMatch(rendered, new RegExp(senderAgentId));
+	assert.match(rendered, /from Researcher · a2/);
 	assert.match(rendered, /second-line evidence/);
 	assert.match(rendered, /…/);
 	assert.doesNotMatch(rendered, /Distinctive ending/);
@@ -88,7 +87,7 @@ test("collapsed Message Delivery puts a dim truncation hint after ten visible bo
 
 test("expanded Message Delivery shows each human-readable type and complete body", () => {
 	initTheme("dark");
-	const requesterAgentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+	const requesterAgentId = "a2";
 	const projections: ModelVisibleMessage[] = [
 		{
 			kind: "request",
@@ -145,7 +144,7 @@ test("Owner and participant extensions register the Message Delivery renderer", 
 		MESSAGE_DELIVERY_CUSTOM_TYPE,
 	);
 	if (!ownerRenderer) throw new Error("Owner Message Delivery renderer is unavailable");
-	const ownerAgentId = ownerHost.session.sessionId;
+	const ownerAgentId = ownerHost.agentId;
 	const ownerComponent = ownerRenderer(
 		customDelivery([{
 			kind: "message",
@@ -158,7 +157,7 @@ test("Owner and participant extensions register the Message Delivery renderer", 
 	);
 	if (!ownerComponent) throw new Error("Owner Message Delivery did not render");
 	const ownerDelivery = ownerComponent.render(80).join("\n");
-	assert.match(ownerDelivery, new RegExp(`from Owner · ${ownerAgentId.slice(-8)}`));
+	assert.match(ownerDelivery, new RegExp(`from Owner · ${ownerAgentId}`));
 
 	for (const host of hosts) {
 		assert.equal(
@@ -179,6 +178,7 @@ function customDelivery(projections: readonly ModelVisibleMessage[]) {
 		display: true,
 		details: {
 			messages: projections.map((_, index) => ({
+				workflowId: "workflow",
 				agentId: "sender-agent",
 				entryId: `entry-${index}`,
 				toolCallId: `call-${index}`,

@@ -15,7 +15,7 @@ test("a Steer Request preempting Agent Wait commits one Delivery across turn_end
 		persistent: true,
 		processVisibleModel: true,
 	});
-	const ownerId = host.session.sessionId;
+	const ownerId = host.agentId;
 	const question = "Which format should the child use?";
 	const decision = "Use the concise format.";
 	const result = "The child completed its work.";

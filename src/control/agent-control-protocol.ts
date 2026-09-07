@@ -59,6 +59,7 @@ const EntryPointerSchema = closed({
 	entryId: NonEmptyStringSchema,
 });
 const ToolCallPointerSchema = closed({
+	workflowId: NonEmptyStringSchema,
 	agentId: NonEmptyStringSchema,
 	entryId: NonEmptyStringSchema,
 	toolCallId: NonEmptyStringSchema,
@@ -190,6 +191,7 @@ const AgentRunStateSchema = Type.Union([
 const AgentStatusProperties = {
 	agentId: NonEmptyStringSchema,
 	workflowId: NonEmptyStringSchema,
+	role: Type.Union([Type.Literal("owner"), Type.Literal("ordinary"), Type.Literal("moderator")]),
 	label: NonEmptyStringSchema,
 	description: Type.Optional(Type.String()),
 	directSpawnerAgentId: Type.Union([NonEmptyStringSchema, Type.Null()]),
@@ -639,7 +641,7 @@ export const RuntimeSnapshotSchema = closed({
 	loadContextFiles: Type.Boolean(),
 });
 
-/** Bridge-proven version-seven method payload/result map. */
+/** Bridge-proven version-eight method payload/result map. */
 export const agentControlMethods = {
 	"runtime.snapshot": { request: EmptySchema, response: RuntimeSnapshotSchema },
 	"runtime.executionBegin": {
@@ -764,10 +766,11 @@ export const agentControlMethods = {
 	},
 } as const satisfies AgentControlProtocol["methods"];
 
-/** Bridge-proven version-seven event payload map. */
+/** Bridge-proven version-eight event payload map. */
 export const agentControlEvents = {
 	"runtime.ready": {
-		payload: closed({ sessionId: NonEmptyStringSchema, mode: Type.Literal("tui"), hasUI: Type.Literal(true) }),
+		payload: closed({
+	sessionId: NonEmptyStringSchema, mode: Type.Literal("tui"), hasUI: Type.Literal(true) }),
 	},
 	"runtime.snapshot.changed": { payload: RuntimeSnapshotSchema },
 	"runtime.input.submissionAcknowledged": {

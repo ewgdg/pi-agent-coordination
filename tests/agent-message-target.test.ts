@@ -11,7 +11,7 @@ import {
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { RequestEvidence } from "../src/coordination/request-evidence.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
-import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { resolveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 
 const agents = [
@@ -171,13 +171,13 @@ test("recipient Delivery binding precedes a later unique suffix match", () => {
 		}, { id: toolCallId }),
 		{ stopReason: "toolUse" },
 	));
-	const source = { agentId: authorAgentId, entryId, toolCallId };
+	const source = { workflowId: "workflow-owner", agentId: authorAgentId, entryId, toolCallId };
 	const originalTargetSession = session(originalTargetAgentId);
 	const delivery = createMessageDelivery([{
 		source,
 		projection: {
 			kind: "message",
-			messageId: deriveMessageIdentity(source),
+			messageId: resolveMessageIdentity(source),
 			fromAgentId: authorAgentId,
 			content,
 		},
@@ -316,13 +316,13 @@ test("an error result plus Request Delivery remains contradictory evidence", () 
 		isError: true,
 		timestamp: Date.now(),
 	});
-	const source = { agentId: authorAgentId, entryId, toolCallId };
+	const source = { workflowId: "workflow-owner", agentId: authorAgentId, entryId, toolCallId };
 	const targetSession = session(targetAgentId);
 	const delivery = createMessageDelivery([{
 		source,
 		projection: {
 			kind: "request",
-			requestMessageId: deriveMessageIdentity(source),
+			requestMessageId: resolveMessageIdentity(source),
 			fromAgentId: authorAgentId,
 			question: input.question,
 		},
@@ -360,14 +360,14 @@ test("persisted selector results must name a known or quarantined full identity"
 		}, { id: toolCallId }),
 		{ stopReason: "toolUse" },
 	));
-	const source = { agentId: authorAgentId, entryId, toolCallId };
+	const source = { workflowId: "workflow-owner", agentId: authorAgentId, entryId, toolCallId };
 	authorSession.appendMessage({
 		role: "toolResult",
 		toolCallId,
 		toolName: "agent_message",
 		content: [{ type: "text", text: "Malformed target." }],
 		details: {
-			messageId: deriveMessageIdentity(source),
+			messageId: resolveMessageIdentity(source),
 			targetAgentId: "unknown-target",
 			messageStatus: "sent",
 		},
@@ -389,7 +389,7 @@ test("persisted selector results must name a known or quarantined full identity"
 
 function session(agentId: string): SessionManager {
 	const manager = SessionManager.inMemory(process.cwd(), { id: agentId });
-	manager.appendCustomEntry("agent-coordination.identity", { agentId });
+	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow-owner", agentId });
 	return manager;
 }
 
@@ -400,6 +400,7 @@ function record(
 ): AgentRecord {
 	return {
 		identity: {
+			sessionId: agentId,
 			agentId,
 			workflowId: "workflow-owner",
 			directSpawnerAgentId: null,

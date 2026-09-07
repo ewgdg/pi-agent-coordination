@@ -113,7 +113,6 @@ export function renderAgentWaitResult(
 			? ` from ${formatAgentIdentity(
 				responderAgentId,
 				resolveAgentLabel,
-				options.expanded ? "full" : "compact",
 			)}`
 			: "";
 		container.addChild(new Text(
@@ -232,7 +231,6 @@ export function renderAgentControlResult(
 		` · ${formatAgentIdentity(
 			details.agentId,
 			resolveAgentLabel,
-			options.expanded ? "full" : "compact",
 		)}`,
 	);
 }
@@ -340,7 +338,6 @@ function agentStatusReceipt(
 		theme.bold(formatKnownAgentIdentity(
 			status.agentId,
 			status.label,
-			options.expanded ? "full" : "compact",
 		)),
 	);
 	const workStatus = formatAgentWorkStatus(

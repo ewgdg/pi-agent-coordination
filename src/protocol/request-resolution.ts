@@ -1,8 +1,9 @@
+import { workflowOf } from "./identities.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
-	deriveMessageIdentity,
+	resolveMessageIdentity,
 	compareCommittedToolCallOrder,
 	ProtocolInvariantError,
 	sameToolCallPointer,
@@ -105,7 +106,7 @@ export function inspectCanonicalRequestResolution(options: {
 					resultRequestId !== deliveryRequestId
 				) {
 					throw new ProtocolInvariantError(
-						`Agent Answer ${deriveMessageIdentity(source)} result and Delivery name different Requests`,
+						`Agent Answer ${resolveMessageIdentity(source)} result and Delivery name different Requests`,
 					);
 				}
 				const correlatedRequestId = resultRequestId ?? deliveryRequestId;
@@ -349,10 +350,11 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 				}
 				if (input.operation === "poll" || input.operation === "retry") continue;
 				const source = {
-					source: { agentId: authorAgentId, entryId: entry.id, toolCallId: part.id },
+					source: {
+					workflowId: workflowOf(transcript, authorAgentId), agentId: authorAgentId, entryId: entry.id, toolCallId: part.id },
 					input,
 				};
-				const messageId = deriveMessageIdentity(source.source);
+				const messageId = resolveMessageIdentity(source.source);
 				const matches = facts.byMessage.get(messageId) ?? [];
 				matches.push(source);
 				facts.byMessage.set(messageId, matches);
@@ -460,7 +462,7 @@ function answerSourcesForRequest(options: {
 		const source = findAuthoredAgentMessageSource({
 			authorAgentId: request.targetAgentId,
 			transcript: responderTranscript,
-			messageId: deriveMessageIdentity(pointer),
+			messageId: resolveMessageIdentity(pointer),
 		});
 		if (source) candidates.set(source.source.toolCallId, source);
 	}

@@ -1,5 +1,7 @@
 # Agent messaging and Requests
 
+Agent and Message IDs are short canonical Workflow-local addresses, such as `a2` and `m3`. The globally unique Workflow ID and each Agent's separate Pi session binding are described in [Protocol identities](protocol-identities.md).
+
 Every authenticated ordinary Agent can send an immutable free-form Message or correlated Request to a known Agent in the same Workflow. Each authored Message fixes either Deferred or Steer Delivery.
 
 - Deferred waits until the recipient's current work settles and receives its own model turn.
@@ -86,7 +88,7 @@ An ordinary Message receipt returns its source-derived `messageId`. An Agent Req
 
 ## Delivery presentation
 
-The recipient transcript renders each delivered item as a readable message block. Its collapsed view shows the Message type, sender label with the final eight characters of the Agent identity, and the first ten terminal-width-aware rows of the body. A standalone dim ellipsis on the following line marks a truncated preview. Outgoing Message and Request tool calls use the same body preview, label, and compact identity format for the receiver. Expanding the block shows the sender label with the full Agent identity and the complete Message, Request question, Answer, or Cancellation reason with Markdown formatting. Batched Deliveries keep each item's sender and type visible instead of presenting the protocol JSON.
+The recipient transcript renders each delivered item as a readable message block. Its collapsed view shows the Message type, sender label with the complete canonical Agent ID, and the first ten terminal-width-aware rows of the body. A standalone dim ellipsis on the following line marks a truncated preview. Outgoing Message and Request tool calls use the same body preview, label, and canonical Agent ID format for the receiver. Expanding the block shows the sender label with the full Agent identity and the complete Message, Request question, Answer, or Cancellation reason with Markdown formatting. Batched Deliveries keep each item's sender and type visible instead of presenting the protocol JSON.
 
 ## Request one Answer
 

@@ -454,6 +454,7 @@ const evidencePointer = Type.Union([
 		{
 			agentId: Type.String({ minLength: 1 }),
 			entryId: Type.String({ minLength: 1 }),
+			workflowId: Type.String({ minLength: 1 }),
 			toolCallId: Type.String({ minLength: 1 }),
 		},
 		{ additionalProperties: false },
@@ -468,7 +469,8 @@ const moderatorControlParameters = objectRootUnion(Type.Union([
 				{
 					agentId: Type.String({ minLength: 1 }),
 					entryId: Type.String({ minLength: 1 }),
-					toolCallId: Type.String({ minLength: 1 }),
+					workflowId: Type.String({ minLength: 1 }),
+			toolCallId: Type.String({ minLength: 1 }),
 				},
 				{ additionalProperties: false },
 			),

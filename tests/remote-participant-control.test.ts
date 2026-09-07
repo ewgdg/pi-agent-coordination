@@ -12,6 +12,7 @@ import {
 } from "../src/process-runtime/remote-participant-control.ts";
 
 const status = {
+	role: "ordinary" as const,
 	agentId: "observed-agent",
 	workflowId: "workflow",
 	label: "Observed",
@@ -90,7 +91,8 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 	await proxies.lifecycle.primaryInputQueued();
 	assert.equal(await proxies.lifecycle.humanInputMode(), "answer");
 	assert.equal(await proxies.lifecycle.toolResultCommitting({
-		message: { role: "user", content: "candidate", timestamp: 1 },
+		message: {
+	role: "user", content: "candidate", timestamp: 1 },
 	}), undefined);
 	await proxies.lifecycle.toolExecutionStarted({ toolCallId: "tool-1", toolName: "read" });
 	await proxies.lifecycle.safeBoundaryReached();
@@ -139,7 +141,8 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 		["runtime.primaryInputQueued", {}, undefined],
 		["runtime.humanInputMode", {}, undefined],
 		["runtime.guardToolResult", {
-			message: { role: "user", content: "candidate", timestamp: 1 },
+			message: {
+		role: "user", content: "candidate", timestamp: 1 },
 		}, undefined],
 		["runtime.toolExecutionStart", { toolCallId: "tool-1", toolName: "read" }, undefined],
 		["runtime.safeBoundary", {}, undefined],

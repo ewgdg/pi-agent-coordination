@@ -288,7 +288,7 @@ export class WorkflowCoordinator {
 		this.#ownerIdentity = identity;
 		this.#agents.set(identity.agentId, {
 			identity,
-			host: AgentRuntimeSupervisor.bindOwner(runtime),
+			host: AgentRuntimeSupervisor.bindOwner(runtime, identity.agentId),
 			transcript: transcriptFromSessionManager(runtime.session.sessionManager),
 			children: [],
 		});

@@ -17,7 +17,7 @@ import {
 	validateChildProcessBootstrap,
 } from "../src/control/control-protocol-schemas.ts";
 
-const identity = { protocolVersion: 7, workflowId: "workflow", agentId: "agent" } as const;
+const identity = { protocolVersion: 8, workflowId: "workflow", agentId: "agent" } as const;
 
 test("Control Endpoint and child bootstrap descriptors are closed and versioned", () => {
 	const endpoint = { transport: "unix", address: "/tmp/control.sock" } as const;
@@ -26,7 +26,7 @@ test("Control Endpoint and child bootstrap descriptors are closed and versioned"
 		address: "\\\\.\\pipe\\pi-ac-control",
 	} as const;
 	const bootstrap = {
-		protocolVersion: 7,
+		protocolVersion: 8,
 		endpoint,
 		connectionToken: "token",
 		workflowId: "workflow",
@@ -87,7 +87,7 @@ test("Control frame schema is a closed hello/request/response/event/cancel union
 	}), false);
 });
 
-test("every version-seven method and event has TypeBox payload/result schemas", () => {
+test("every version-eight method and event has TypeBox payload/result schemas", () => {
 	assert.deepEqual(Object.keys(agentControlMethods), [
 		"runtime.snapshot",
 		"runtime.executionBegin",
@@ -190,6 +190,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 				}] }),
 				display: true,
 				details: { messages: [{
+					workflowId: "workflow",
 					agentId: "requester-1",
 					entryId: "entry-1",
 					toolCallId: "request-1",
@@ -360,6 +361,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 	}), false);
 	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
 		matches: [{
+			role: "ordinary" as const,
 			agentId: "child",
 			workflowId: "workflow",
 			label: "Child",
@@ -378,6 +380,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 	}), false);
 	assert.equal(Check(agentControlMethods["coordination.observe"].response, {
 		matches: Array.from({ length: 51 }, (_, index) => ({
+			role: `child-${index}` === "workflow" ? "owner" as const : "owner" === null ? "moderator" as const : "ordinary" as const,
 			agentId: `child-${index}`,
 			workflowId: "workflow",
 			label: "Child",
@@ -392,6 +395,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 	}), false);
 	const selectorSnapshot = {
 		live: [{
+			role: "owner" as const,
 			agentId: "workflow",
 			workflowId: "workflow",
 			label: "Owner",
@@ -421,7 +425,8 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		operationalAttention: [{
 			trigger: {
 				kind: "operation_review",
-				toolCall: { agentId: "child", entryId: "entry", toolCallId: "tool" },
+				toolCall: {
+				workflowId: "workflow", agentId: "child", entryId: "entry", toolCallId: "tool" },
 				reviewIntervalMs: 1_000,
 			},
 			affectedAgents: [{ agentId: "child", label: "Child" }],
@@ -487,7 +492,8 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 				content: "{\"messages\":[]}",
 				display: true,
 				details: {
-					messages: [{ agentId: "sender", entryId: "entry", toolCallId: "call" }],
+					messages: [{
+				workflowId: "workflow", agentId: "sender", entryId: "entry", toolCallId: "call" }],
 				},
 			},
 			triggerTurn: true,
@@ -503,7 +509,8 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 				content: "{\"messages\":[]}",
 				display: true,
 				details: {
-					messages: [{ agentId: "sender", entryId: "entry", toolCallId: "call" }],
+					messages: [{
+				workflowId: "workflow", agentId: "sender", entryId: "entry", toolCallId: "call" }],
 				},
 			},
 			triggerTurn: false,

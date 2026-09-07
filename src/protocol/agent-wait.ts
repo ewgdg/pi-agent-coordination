@@ -1,10 +1,12 @@
+import { isToolCallPointer } from "./identities.ts";
+import { workflowOf } from "./identities.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
 	compareCommittedToolCallOrder,
-	deriveMessageIdentity,
+	resolveMessageIdentity,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
 	type ToolCallPointer,
@@ -128,6 +130,9 @@ export function inspectCommittedAgentWaitResult(options: {
 	);
 	for (let index = 0; index < requestSources.length; index += 1) {
 		const source = requestSources[index]!;
+		const answer = result.answers[index]!;
+		if (answer.disposition === "answer_delivered" && answer.answerSource.workflowId !== source.workflowId)
+			throw new ProtocolInvariantError("Agent Wait Answer crosses Workflow scope");
 		if (
 			compareCommittedToolCallOrder(options.transcript, source, call.source) >= 0 ||
 			(index > 0 && compareCommittedToolCallOrder(
@@ -168,7 +173,7 @@ export function validateAgentWaitResult(value: unknown): AgentWaitResult {
 				typeof candidate.answerId !== "string" ||
 				typeof candidate.fromAgentId !== "string" ||
 				typeof candidate.answer !== "string" || candidate.answer.length === 0 ||
-				candidate.answerId !== deriveMessageIdentity(candidate.answerSource) ||
+				candidate.answerId !== resolveMessageIdentity(candidate.answerSource) ||
 				candidate.fromAgentId !== candidate.answerSource.agentId
 			) throw new ProtocolInvariantError("Agent Wait delivered Answer is invalid");
 			return candidate as AgentWaitAnswer;
@@ -234,11 +239,12 @@ function findCallerRequestSource(options: {
 					(part.name !== "agent_message" || part.arguments.operation !== "request"))
 			) continue;
 			const source = {
+				workflowId: workflowOf(options.transcript, options.agentId),
 				agentId: options.agentId,
 				entryId: entry.id,
 				toolCallId: part.id,
 			};
-			if (deriveMessageIdentity(source) === options.requestMessageId) matches.push(source);
+			if (resolveMessageIdentity(source) === options.requestMessageId) matches.push(source);
 		}
 	}
 	if (matches.length !== 1) {
@@ -260,13 +266,6 @@ function sameKeys(value: Record<string, unknown>, expected: readonly string[]): 
 		keys.every((key, index) => key === sortedExpected[index]);
 }
 
-function isToolCallPointer(value: unknown): value is ToolCallPointer {
-	return isRecord(value) &&
-		sameKeys(value, ["agentId", "entryId", "toolCallId"]) &&
-		typeof value.agentId === "string" && value.agentId.length > 0 &&
-		typeof value.entryId === "string" && value.entryId.length > 0 &&
-		typeof value.toolCallId === "string" && value.toolCallId.length > 0;
-}
 
 function isEntryPointer(
 	value: unknown,

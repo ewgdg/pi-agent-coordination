@@ -51,7 +51,8 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		);
 	assert.ok(ownerIdentity && ownerIdentity.type === "custom");
 	assert.deepEqual(ownerIdentity.data, {
-		agentId: host.session.sessionId,
+		sessionId: host.session.sessionId,
+		agentId: host.agentId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: null,
 		metadata: { label: "Owner", description: "Workflow Owner" },
@@ -68,7 +69,8 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		host.session.extensionRunner.createContext(),
 	);
 	assert.deepEqual(statusResult.details, {
-		agentId: host.session.sessionId,
+		role: host.agentId === host.agentId ? "owner" as const : null === null ? "moderator" as const : "ordinary" as const,
+		agentId: host.agentId,
 		workflowId: host.session.sessionId,
 		label: "Owner",
 		description: "Workflow Owner",
@@ -76,7 +78,7 @@ test("interactive Pi boots one observable Owner while preserving native interact
 		primaryEvidence: {
 			transcriptPath: null,
 			inspectedThrough: {
-				agentId: host.session.sessionId,
+				agentId: host.agentId,
 				entryId: ownerIdentity.id,
 			},
 		},
@@ -154,7 +156,7 @@ test("native Owner replacement closes every retained source Workflow process", a
 	const childAgentId = (spawnResult.details as { agentId: string }).agentId;
 
 	await host.runtime.newSession();
-	await waitForNoRuntimeArtifacts(host.session.sessionId);
+	await waitForNoRuntimeArtifacts(host.agentId);
 	assert.ok(host.runtime.session.getToolDefinition("agent_spawn"));
 	const observe = host.runtime.session.getToolDefinition("agent_observe");
 	assert.ok(observe);
@@ -244,7 +246,7 @@ test("orderly shutdown disposes retained child and Moderator processes plus Owne
 	const disposalCounts = new Map([
 		[childAgentId, 0],
 		[moderatorAgentId, 0],
-		[host.session.sessionId, 0],
+		[host.agentId, 0],
 	]);
 	const nativeDispose = AgentSession.prototype.dispose;
 	AgentSession.prototype.dispose = function countWorkflowDisposal() {
@@ -258,16 +260,16 @@ test("orderly shutdown disposes retained child and Moderator processes plus Owne
 	};
 	try {
 		await host.runtime.dispose();
-		assert.equal(host.runtime.session.sessionId, host.session.sessionId);
+		assert.equal(host.runtime.session.sessionId, host.agentId);
 		assert.deepEqual(
 			Object.fromEntries(disposalCounts),
 			{
 				[childAgentId]: 0,
 				[moderatorAgentId]: 0,
-				[host.session.sessionId]: 1,
+				[host.agentId]: 1,
 			},
 		);
-		await waitForNoRuntimeArtifacts(host.session.sessionId);
+		await waitForNoRuntimeArtifacts(host.agentId);
 	} finally {
 		AgentSession.prototype.dispose = nativeDispose;
 	}
@@ -323,7 +325,7 @@ test("child AgentSession patches cannot affect process shutdown or Owner disposa
 		await host.runtime.dispose();
 		assert.equal(childDisposeCalls, 0);
 		assert.equal(ownerDisposeCalls, 1);
-		await waitForNoRuntimeArtifacts(host.session.sessionId);
+		await waitForNoRuntimeArtifacts(host.agentId);
 	} finally {
 		AgentSession.prototype.abort = nativeAbort;
 		AgentSession.prototype.dispose = nativeDispose;

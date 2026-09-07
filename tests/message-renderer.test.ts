@@ -20,7 +20,7 @@ const plainTheme = {
 	bold: (text: string) => text,
 } as unknown as Theme;
 
-const targetAgentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+const targetAgentId = "a2";
 const targetAgent = targetAgentId;
 const resolveLabel = (agentId: string) =>
 	agentId === targetAgentId ? "Researcher" : undefined;
@@ -47,15 +47,14 @@ function renderResult(
 		.join("\n");
 }
 
-test("send call shows the [Send] badge, compact target identity, and bounded content preview", () => {
+test("send call shows the [Send] badge, canonical target identity, and bounded content preview", () => {
 	const rendered = renderCall({
 		operation: "send",
 		targetAgent,
 		content: "Context ".repeat(100) + "Distinctive ending.",
 	});
 	assert.match(rendered, /\[Send\]/);
-	assert.match(rendered, /to Researcher · 983c81e3/);
-	assert.doesNotMatch(rendered, new RegExp(targetAgentId));
+	assert.match(rendered, /to Researcher · a2/);
 	assert.doesNotMatch(rendered, /\{"messages"/);
 	assert.match(rendered, /Context/);
 	assert.match(rendered, /…/);
@@ -91,7 +90,7 @@ test("request call shows the [Request] badge and question preview", () => {
 		question: "Please review the design proposal.",
 	});
 	assert.match(rendered, /\[Request\]/);
-	assert.match(rendered, /to Researcher · 983c81e3/);
+	assert.match(rendered, /to Researcher · a2/);
 	assert.match(rendered, /review the design proposal/);
 	assert.doesNotMatch(rendered, /\[Send\]/);
 });
@@ -135,7 +134,7 @@ test("answer and cancel calls show their own badges with payload and correlation
 		targetAgentId,
 	).render(60).join("\n");
 	assert.match(answer, /\[Answer\]/);
-	assert.match(answer, /to Researcher · 983c81e3/);
+	assert.match(answer, /to Researcher · a2/);
 	assert.match(answer, /answer is accepted/);
 
 	const cancel = renderCall({
@@ -194,6 +193,7 @@ test("answer_delivered result shows the shared bounded answer preview with trunc
 		fromAgentId: "responder-agent",
 		answer,
 		answerSource: {
+			workflowId: "workflow",
 			agentId: "responder-agent",
 			entryId: "entry-2",
 			toolCallId: "call-2",
