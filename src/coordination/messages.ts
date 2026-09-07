@@ -336,39 +336,57 @@ export class MessageCoordinator {
 		const recipients = new Map<AgentRecord, {
 			handle: AgentRunHandle | undefined;
 			sequence: number;
-		}>(requestIds.map(requestId => {
+			requestIds: string[];
+			reconciling: boolean;
+		}>();
+		for (const requestId of requestIds) {
 			const request = this.#requestEvidence.requireCallerAuthoredMessage(requester, requestId);
 			if (request.kind !== "request") throw new Error(`invariant_violation: ${requestId} is not a Request`);
 			const responder = this.#requireAgent(request.targetAgentId);
-			return [responder, {
-				handle: responder.host.currentHandle(),
-				sequence: responder.host.latestStartedRunSequence(),
-			}];
-		}));
+			let intent = recipients.get(responder);
+			if (!intent) {
+				intent = {
+					handle: responder.host.currentHandle(),
+					sequence: responder.host.latestStartedRunSequence(),
+					requestIds: [],
+					reconciling: false,
+				};
+				recipients.set(responder, intent);
+			}
+			intent.requestIds.push(requestId);
+		}
 		return async () => {
-			await Promise.all(requestIds.map(async requestId => {
-				const request = this.#requestEvidence.requireRequest(requestId);
-				const responder = this.#requireAgent(request.targetAgentId);
-				const intent = recipients.get(responder)!;
-				await responder.host.lane.run(async () => {
-					if (!isWaiting() || this.#isShuttingDown() || responder.host.currentRunFailed() ||
-						responder.host.observe().phase === "ending") return;
-					if (this.#requestEvidence.findAnswer(request) || this.#requestEvidence.findCancellation(request)) return;
-					// A fresh Wait may start a Dormant recipient. A later termination,
-					// failure or successor Run ends this Wait's readmission authority.
-					// Inspecting an already delivered Request does not consume dormant admission.
-					if (intent.handle
-						? !responder.host.isCurrent(intent.handle)
-						: responder.host.latestStartedRunSequence() !== intent.sequence ||
-							responder.host.currentHandle() !== undefined
-					) return;
-					const receipt = await this.#retryRequestInLane(requester, responder, request);
-					intent.handle = responder.host.currentHandle();
-					if ("messageStatus" in receipt && receipt.messageStatus !== "sent" &&
-						receipt.reason !== "policy_rejected") {
-						throw new Error(`Agent Wait cannot ensure Request ${requestId} Delivery: ${receipt.reason}`);
-					}
-				});
+			await Promise.all([...recipients].map(async ([responder, intent]) => {
+				// A busy lane owns only its own pass. Later ticks still maintain
+				// other recipients without accumulating work behind this lane.
+				if (intent.reconciling) return;
+				intent.reconciling = true;
+				try {
+					await responder.host.lane.run(async () => {
+						for (const requestId of intent.requestIds) {
+							if (!isWaiting() || this.#isShuttingDown() || responder.host.currentRunFailed() ||
+								responder.host.observe().phase === "ending") return;
+							const request = this.#requestEvidence.requireRequest(requestId);
+							if (this.#requestEvidence.findAnswer(request) || this.#requestEvidence.findCancellation(request)) continue;
+							// A fresh Wait may start a Dormant recipient. A later termination,
+							// failure or successor Run ends this Wait's readmission authority.
+							// Inspecting delivered work leaves dormant admission available.
+							if (intent.handle
+								? !responder.host.isCurrent(intent.handle)
+								: responder.host.latestStartedRunSequence() !== intent.sequence ||
+									responder.host.currentHandle() !== undefined
+							) return;
+							const receipt = await this.#retryRequestInLane(requester, responder, request);
+							intent.handle = responder.host.currentHandle();
+							if ("messageStatus" in receipt && receipt.messageStatus !== "sent" &&
+								receipt.reason !== "policy_rejected") {
+								throw new Error(`Agent Wait cannot ensure Request ${requestId} Delivery: ${receipt.reason}`);
+							}
+						}
+					});
+				} finally {
+					intent.reconciling = false;
+				}
 			}));
 		};
 	}
