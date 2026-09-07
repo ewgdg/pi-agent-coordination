@@ -1,4 +1,3 @@
-import { agentIdOfSessionFile } from "./support/agent-identity.ts";
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -794,7 +793,7 @@ async function waitForChildSessionFile(
 	);
 	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
-		const child = sessions.find(({ path }) => agentIdOfSessionFile(path) === agentId);
+		const child = sessions.find(({ id }) => id === agentId);
 		if (child) return child.path;
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}

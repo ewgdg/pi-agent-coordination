@@ -1,4 +1,3 @@
-import { agentIdOfSessionFile } from "./support/agent-identity.ts";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import test from "node:test";
@@ -19,7 +18,7 @@ import type {
 	AgentWaitClock,
 } from "../src/coordination/agent-waits.ts";
 import type { AgentWaitAnswer } from "../src/protocol/agent-wait.ts";
-import { resolveMessageIdentity } from "../src/protocol/identities.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { answerSourceDeliveryRequestId } from "../src/protocol/request-resolution.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
@@ -53,8 +52,7 @@ test("Request commitment retains its requester and Delivery obligates its respon
 	const sourceEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(sourceEntry);
 	const source = {
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: sourceEntry.id,
 		toolCallId,
 	};
@@ -103,7 +101,7 @@ test("Request commitment retains its requester and Delivery obligates its respon
 			{
 				kind: "request",
 				requestMessageId: requestId,
-				fromAgentId: harness.host.agentId,
+				fromAgentId: harness.host.session.sessionId,
 				question: input.question,
 			},
 		],
@@ -221,7 +219,7 @@ test("a prepared continuation Request crosses retry scheduling into child workin
 		messages: [{
 			kind: "request",
 			requestMessageId: receipt.requestMessageId,
-			fromAgentId: harness.host.agentId,
+			fromAgentId: harness.host.session.sessionId,
 			question: input.question,
 		}],
 	});
@@ -240,12 +238,12 @@ test("an active responder rejects ordinary Message authorship to its requester w
 		fauxAssistantMessage([
 			fauxToolCall("agent_message", {
 				operation: "send",
-				targetAgent: harness.host.agentId,
+				targetAgent: harness.host.session.sessionId,
 				content: "This provisional finding must not enter the Answer route.",
 			}, { id: rejectedCallId }),
 			fauxToolCall("agent_message", {
 				operation: "request",
-				targetAgent: harness.host.agentId,
+				targetAgent: harness.host.session.sessionId,
 				question: "Which requester decision is required before the curated Answer?",
 			}, { id: reverseRequestCallId }),
 			fauxToolCall("agent_message", {
@@ -297,7 +295,6 @@ test("an active responder rejects ordinary Message authorship to its requester w
 	);
 	assert.ok(rejectedSourceEntry);
 	const rejectedSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: rejectedSourceEntry.id,
 		toolCallId: rejectedCallId,
@@ -333,7 +330,7 @@ test("ordinary Message authorship to the requester resumes after Answer commitme
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
 				operation: "send",
-				targetAgent: harness.host.agentId,
+				targetAgent: harness.host.session.sessionId,
 				content: "Independent communication is available after Answer commitment.",
 			}, { id: sendCallId }),
 			{ stopReason: "toolUse" },
@@ -368,7 +365,7 @@ test("ordinary Message authorship to the requester resumes after Cancellation De
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
 				operation: "send",
-				targetAgent: harness.host.agentId,
+				targetAgent: harness.host.session.sessionId,
 				content: "Independent communication is available after Cancellation Delivery.",
 			}, { id: sendCallId }),
 			{ stopReason: "toolUse" },
@@ -446,8 +443,7 @@ test("a responder receives only the front Request and promotion preserves author
 	const firstEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(firstEntry);
 	const firstSource = {
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: firstEntry.id,
 		toolCallId: firstCallId,
 	};
@@ -492,8 +488,7 @@ test("a responder receives only the front Request and promotion preserves author
 	const secondEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(secondEntry);
 	const secondSource = {
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: secondEntry.id,
 		toolCallId: secondCallId,
 	};
@@ -599,8 +594,7 @@ test("an id-less Answer resolves the active Request and promotes the next Reques
 		const entry = harness.host.session.sessionManager.getLeafEntry();
 		assert.ok(entry);
 		const source = {
-			workflowId: harness.host.session.sessionId,
-			agentId: harness.host.agentId,
+			agentId: harness.host.session.sessionId,
 			entryId: entry.id,
 			toolCallId,
 		};
@@ -826,8 +820,7 @@ test("only the requester may cancel and an Agent without an active Request canno
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -939,8 +932,7 @@ test("one active Request accepts one Answer and rejects another Answer in the sa
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -1033,7 +1025,6 @@ test("one active Request accepts one Answer and rejects another Answer in the sa
 	);
 	assert.ok(answerSourceEntry);
 	const answerId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerSourceEntry.id,
 		toolCallId: firstAnswerCallId,
@@ -1097,7 +1088,6 @@ test("one active Request accepts one Answer and rejects another Answer in the sa
 					JSON.stringify({
 						messages: [
 							{
-								workflowId: "workflow",
 								agentId: harness.childId,
 								entryId: answerSourceEntry.id,
 								toolCallId: firstAnswerCallId,
@@ -1149,8 +1139,7 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -1202,7 +1191,6 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 	);
 	assert.ok(answerSourceEntry);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerSourceEntry.id,
 		toolCallId: answerToolCallId,
@@ -1271,7 +1259,7 @@ test("Request retry retrieves a committed Answer whose Delivery was lost", async
 		requestMessageId: requestId,
 		answerId,
 		deliveryEvidence: {
-			agentId: harness.host.agentId,
+			agentId: harness.host.session.sessionId,
 			entryId: retrievalEntry.id,
 		},
 	});
@@ -1300,8 +1288,7 @@ test("Agent Wait retrieves an outstanding Answer and rejects a join once none re
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -1347,7 +1334,6 @@ test("Agent Wait retrieves an outstanding Answer and rejects a join once none re
 	);
 	assert.ok(answerSourceEntry);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerSourceEntry.id,
 		toolCallId: answerToolCallId,
@@ -1611,8 +1597,7 @@ test("Agent Wait excludes Requests authored after its call in the same tool batc
 		),
 	);
 	const firstRequestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: sourceEntryId,
 		toolCallId: firstRequestToolCallId,
 	});
@@ -1694,8 +1679,7 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -1750,7 +1734,6 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 	);
 	assert.ok(answerSourceEntry);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerSourceEntry.id,
 		toolCallId: answerToolCallId,
@@ -1815,7 +1798,7 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 	);
 	assert.equal(
 		answerSourceDeliveryRequestId({
-			requesterAgentId: harness.host.agentId,
+			requesterAgentId: harness.host.session.sessionId,
 			transcript: transcriptFromSessionManager(
 				harness.host.session.sessionManager,
 			).inspect(),
@@ -1837,7 +1820,7 @@ test("Agent Wait retrieval retires a queued direct Answer Delivery before it can
 		requestMessageId: requestId,
 		answerId,
 		deliveryEvidence: {
-			agentId: harness.host.agentId,
+			agentId: harness.host.session.sessionId,
 			entryId: waitResultEntry.id,
 		},
 	});
@@ -1899,8 +1882,7 @@ test("Request retry retrieval retires a queued direct Answer Delivery before it 
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -1947,7 +1929,6 @@ test("Request retry retrieval retires a queued direct Answer Delivery before it 
 	);
 	assert.ok(answerSourceEntry);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerSourceEntry.id,
 		toolCallId: answerToolCallId,
@@ -1997,7 +1978,7 @@ test("Request retry retrieval retires a queued direct Answer Delivery before it 
 	);
 	assert.equal(
 		answerSourceDeliveryRequestId({
-			requesterAgentId: harness.host.agentId,
+			requesterAgentId: harness.host.session.sessionId,
 			transcript: transcriptFromSessionManager(
 				harness.host.session.sessionManager,
 			).inspect(),
@@ -2030,7 +2011,7 @@ test("a retired Delivery dispatch callback cannot bypass a later queued Message"
 		},
 	});
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-stale-dispatch-wait");
-	ownerAgentId = harness.host.agentId;
+	ownerAgentId = harness.host.session.sessionId;
 	const requestInput = {
 		operation: "request" as const,
 		targetAgent: harness.childId,
@@ -2046,7 +2027,6 @@ test("a retired Delivery dispatch callback cannot bypass a later queued Message"
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
 		agentId: ownerAgentId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
@@ -2117,14 +2097,12 @@ test("a retired Delivery dispatch callback cannot bypass a later queued Message"
 	assert.ok(answerSourceEntry);
 	assert.ok(followUpSourceEntry);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerSourceEntry.id,
 		toolCallId: answerToolCallId,
 	};
 	const answerId = deriveMessageId(answerSource);
 	const followUpSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: followUpSourceEntry.id,
 		toolCallId: followUpToolCallId,
@@ -2234,7 +2212,7 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 			return "defer";
 		},
 	});
-	ownerAgentId = harness.host.agentId;
+	ownerAgentId = harness.host.session.sessionId;
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-rearbitrated-wait");
 	const requestInput = {
 		operation: "request" as const,
@@ -2251,8 +2229,7 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -2306,7 +2283,6 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 	);
 	assert.ok(answerSourceEntry);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerSourceEntry.id,
 		toolCallId: answerToolCallId,
@@ -2398,7 +2374,7 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 	assert.ok(directDeliveryEntry);
 	assert.equal(
 		answerSourceDeliveryRequestId({
-			requesterAgentId: harness.host.agentId,
+			requesterAgentId: harness.host.session.sessionId,
 			transcript: transcriptFromSessionManager(
 				harness.host.session.sessionManager,
 			).inspect(),
@@ -2414,7 +2390,7 @@ test("Answer retrievals re-arbitrate when direct Answer Delivery commits first",
 				requestMessageId: requestId,
 				answerId,
 				deliveryEvidence: {
-					agentId: harness.host.agentId,
+					agentId: harness.host.session.sessionId,
 					entryId: directDeliveryEntry.id,
 				},
 			},
@@ -2471,8 +2447,7 @@ test("an exact-Run fence prevents a resolved Agent Wait from becoming Answer Del
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -2517,7 +2492,6 @@ test("an exact-Run fence prevents a resolved Agent Wait from becoming Answer Del
 	);
 	assert.ok(answerSourceEntry);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerSourceEntry.id,
 		toolCallId: answerToolCallId,
@@ -2555,7 +2529,7 @@ test("an exact-Run fence prevents a resolved Agent Wait from becoming Answer Del
 	harness.host.session.sessionManager.appendMessage(guardedMessage);
 	harness.view.reconcileCommittedToolResults();
 	assert.equal(answerSourceDeliveryRequestId({
-		requesterAgentId: harness.host.agentId,
+		requesterAgentId: harness.host.session.sessionId,
 		transcript: transcriptFromSessionManager(
 			harness.host.session.sessionManager,
 		).inspect(),
@@ -2588,7 +2562,7 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 		},
 	);
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-preempted-fence-wait");
-	const ownerAgentId = harness.host.agentId;
+	const ownerAgentId = harness.host.session.sessionId;
 	const selectedRequestToolCallId = "request-before-preemption-fence";
 	const selectedRequestInput = {
 		operation: "request" as const,
@@ -2606,7 +2580,6 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 	const selectedRequestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(selectedRequestEntry);
 	const selectedRequestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
 		agentId: ownerAgentId,
 		entryId: selectedRequestEntry.id,
 		toolCallId: selectedRequestToolCallId,
@@ -2754,8 +2727,7 @@ test("Agent Wait parks the Owner Run until the pending Answer commits", async (t
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -2870,7 +2842,7 @@ test("primary input in a selected child preempts Agent Wait before its next mode
 			recipientAgentId === ownerAgentId ? "confirmed_failure" : undefined,
 	});
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-child-human-preemption");
-	ownerAgentId = harness.host.agentId;
+	ownerAgentId = harness.host.session.sessionId;
 	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
 	const directionMarker = "CHILD_WAIT_FOR_PRIMARY_HUMAN_INPUT";
 	const humanDirection = "Redirect the selected child before its Answer arrives.";
@@ -2982,7 +2954,7 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 	);
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-reverse-request-wait");
 	responderAgentId = harness.childId;
-	const ownerAgentId = harness.host.agentId;
+	const ownerAgentId = harness.host.session.sessionId;
 	const originalRequestToolCallId = "request-before-reverse-preemption";
 	const originalQuestion = "Ask the requester for one decision before answering.";
 	const originalRequestInput = {
@@ -3001,7 +2973,6 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 	const originalRequestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(originalRequestEntry);
 	const originalRequestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
 		agentId: ownerAgentId,
 		entryId: originalRequestEntry.id,
 		toolCallId: originalRequestToolCallId,
@@ -3196,7 +3167,7 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 		},
 	});
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-third-party-wait");
-	ownerAgentId = harness.host.agentId;
+	ownerAgentId = harness.host.session.sessionId;
 	const spawnThirdPartyToolCallId = "spawn-third-party-requester";
 	const spawnThirdPartyInput = {
 		request: "Wait for a trigger, then ask the Owner an unrelated Request.",
@@ -3233,7 +3204,6 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 	const selectedRequestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(selectedRequestEntry);
 	const selectedRequestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
 		agentId: ownerAgentId,
 		entryId: selectedRequestEntry.id,
 		toolCallId: selectedRequestToolCallId,
@@ -3425,7 +3395,7 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 		},
 	);
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-completion-race-wait");
-	ownerAgentId = harness.host.agentId;
+	ownerAgentId = harness.host.session.sessionId;
 	const selectedRequestToolCallId = "request-before-completion-race";
 	const selectedRequestInput = {
 		operation: "request" as const,
@@ -3443,7 +3413,6 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 	const selectedRequestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(selectedRequestEntry);
 	const selectedRequestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
 		agentId: ownerAgentId,
 		entryId: selectedRequestEntry.id,
 		toolCallId: selectedRequestToolCallId,
@@ -3474,7 +3443,6 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 	const selectedAnswerToolCallId = "answer-at-preemption-race-boundary";
 	const selectedAnswer = "The completed aggregate wins the race.";
 	let selectedAnswerSource: {
-		workflowId: string;
 		agentId: string;
 		entryId: string;
 		toolCallId: string;
@@ -3493,7 +3461,6 @@ test("a completed outstanding aggregate wins the inbound Request preemption race
 			),
 		);
 		selectedAnswerSource = {
-			workflowId: "workflow",
 			agentId: harness.childId,
 			entryId,
 			toolCallId: selectedAnswerToolCallId,
@@ -3661,8 +3628,7 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -3713,7 +3679,6 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 		),
 	);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerEntryId,
 		toolCallId: answerToolCallId,
@@ -3778,8 +3743,7 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -3818,8 +3782,7 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 	const cancellationEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(cancellationEntry);
 	const cancellationSource = {
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: cancellationEntry.id,
 		toolCallId: cancelToolCallId,
 	};
@@ -3870,7 +3833,7 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 				kind: "request_cancellation",
 				cancellationId,
 				requestMessageId: requestId,
-				fromAgentId: harness.host.agentId,
+				fromAgentId: harness.host.session.sessionId,
 				reason: cancelInput.reason,
 			},
 		],
@@ -3884,8 +3847,7 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 					JSON.stringify({
 						messages: [
 							{
-								workflowId: harness.host.session.sessionId,
-								agentId: harness.host.agentId,
+								agentId: harness.host.session.sessionId,
 								entryId: requestEntry.id,
 								toolCallId: requestToolCallId,
 							},
@@ -3972,8 +3934,7 @@ test("Cancellation delivered to a busy responder suppresses its queued Request",
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestSource = {
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestCallId,
 	};
@@ -4004,8 +3965,7 @@ test("Cancellation delivered to a busy responder suppresses its queued Request",
 	const cancellationEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(cancellationEntry);
 	const cancellationSource = {
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: cancellationEntry.id,
 		toolCallId: cancelCallId,
 	};
@@ -4067,8 +4027,7 @@ test("Cancellation Delivery wins the responder lane before a later Answer", asyn
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -4107,8 +4066,7 @@ test("Cancellation Delivery wins the responder lane before a later Answer", asyn
 	const cancellationEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(cancellationEntry);
 	const cancellationId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: cancellationEntry.id,
 		toolCallId: cancelToolCallId,
 	});
@@ -4194,8 +4152,7 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 	const requestEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(requestEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
@@ -4248,7 +4205,6 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 	);
 	assert.ok(answerSourceEntry);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: answerSourceEntry.id,
 		toolCallId: answerToolCallId,
@@ -4270,8 +4226,7 @@ test("Answer commit and Cancellation commit remain canonical across crossed Deli
 	const cancellationEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(cancellationEntry);
 	const cancellationSource = {
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: cancellationEntry.id,
 		toolCallId: cancelToolCallId,
 	};
@@ -4472,8 +4427,7 @@ test("a Creation Request occupies the same incoming Request slot", async (t) => 
 	const ordinaryEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(ordinaryEntry);
 	const ordinarySource = {
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: ordinaryEntry.id,
 		toolCallId: ordinaryCallId,
 	};
@@ -4550,8 +4504,7 @@ test("residual inspection rejects an Answer result naming an unknown Request", a
 	const answerEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(answerEntry);
 	const answerId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: answerEntry.id,
 		toolCallId: answerCallId,
 	});
@@ -4586,7 +4539,7 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 				"agent_message",
 				{
 					operation: "request",
-					targetAgent: harness.host.agentId,
+					targetAgent: harness.host.session.sessionId,
 					question: "Answer after this exact requester Run has failed.",
 				},
 				{ id: childRequestCallId },
@@ -4641,7 +4594,6 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 	);
 	assert.ok(requestSourceEntry);
 	const requestId = deriveMessageId({
-		workflowId: harness.host.session.sessionId,
 		agentId: harness.childId,
 		entryId: requestSourceEntry.id,
 		toolCallId: childRequestCallId,
@@ -4667,8 +4619,7 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 	const answerEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(answerEntry);
 	const answerSource = {
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+		agentId: harness.host.session.sessionId,
 		entryId: answerEntry.id,
 		toolCallId: answerCallId,
 	};
@@ -4927,12 +4878,11 @@ function requireToolResult(
 }
 
 function deriveMessageId(source: {
-	workflowId: string;
 	agentId: string;
 	entryId: string;
 	toolCallId: string;
 }): string {
-	return resolveMessageIdentity(source);
+	return deriveMessageIdentity(source);
 }
 
 function retentionCount(
@@ -4953,7 +4903,7 @@ async function waitForChildSessionFile(
 	);
 	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
-		const child = sessions.find(({ path }) => agentIdOfSessionFile(path) === childId);
+		const child = sessions.find(({ id }) => id === childId);
 		if (child) return child.path;
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}

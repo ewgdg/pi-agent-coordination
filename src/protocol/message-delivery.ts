@@ -10,9 +10,7 @@ import {
 	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
 import {
-	resolveMessageIdentity,
-	isToolCallPointer,
-	workflowOf,
+	deriveMessageIdentity,
 	ProtocolInvariantError,
 	sameToolCallPointer,
 	toolCallPointerKey,
@@ -145,7 +143,7 @@ export function validateDeliveredMessageEvidence(
 ): void {
 	if (
 		delivery.projection.fromAgentId !== delivery.source.agentId ||
-		projectionIdentity(delivery.projection) !== resolveMessageIdentity(delivery.source)
+		projectionIdentity(delivery.projection) !== deriveMessageIdentity(delivery.source)
 	) {
 		throw new ProtocolInvariantError(
 			"Message Delivery projection identity differs from its source",
@@ -204,8 +202,6 @@ function readMessageDeliveries(options: {
 				const { sources, projections } = parseMessageDelivery(entry.details, entry.content);
 				for (let index = 0; index < sources.length; index += 1) {
 					const source = sources[index]!;
-					if (source.workflowId !== workflowOf(transcript, recipientAgentId))
-						throw new ProtocolInvariantError("Message Delivery crosses Workflow scope");
 					const projection = projections[index]!;
 					deliveries.push({
 						source,
@@ -261,8 +257,23 @@ function parseDeliverySources(value: unknown): ToolCallPointer[] {
 		throw new ProtocolInvariantError("Message Delivery sources must not be empty");
 	}
 	const sources = record.messages.map((source) => {
-		if (!isToolCallPointer(source)) throw new ProtocolInvariantError("Message Delivery source is invalid");
-		return source;
+		const pointer = requireExactRecord(
+			source,
+			["agentId", "entryId", "toolCallId"],
+			"Message Delivery source",
+		);
+		if (
+			!isProtocolString(pointer.agentId) ||
+			!isProtocolString(pointer.entryId) ||
+			!isProtocolString(pointer.toolCallId)
+		) {
+			throw new ProtocolInvariantError("Message Delivery source is invalid");
+		}
+		return {
+			agentId: pointer.agentId,
+			entryId: pointer.entryId,
+			toolCallId: pointer.toolCallId,
+		};
 	});
 	for (let index = 0; index < sources.length; index += 1) {
 		if (

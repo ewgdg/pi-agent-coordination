@@ -151,7 +151,6 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 
 		const customMessage = createMessageDelivery([{
 			source: {
-				workflowId: "workflow",
 				agentId: "hosted-runtime-sender",
 				entryId: "hosted-runtime-source-entry",
 				toolCallId: "hosted-runtime-source-call",
@@ -495,7 +494,6 @@ for (const failure of ["channel_loss", "process_kill"] as const) {
 
 function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers<"ordinary"> {
 	const status = {
-		role: agentId === "hosted-runtime-test-workflow" ? "owner" as const : "hosted-runtime-test-workflow" === null ? "moderator" as const : "ordinary" as const,
 		agentId,
 		workflowId: "hosted-runtime-test-workflow",
 		label: "Hosted Child",

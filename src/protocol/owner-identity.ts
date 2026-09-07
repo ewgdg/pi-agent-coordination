@@ -1,4 +1,3 @@
-import { allocateWorkflowId } from "./workflow-ids.ts";
 import type {
 	AgentSessionRuntime,
 	SessionEntry,
@@ -15,7 +14,6 @@ export { AGENT_IDENTITY_CUSTOM_TYPE } from "./custom-entry-types.ts";
 
 export type OwnerIdentity = Readonly<{
 	agentId: string;
-	sessionId: string;
 	workflowId: string;
 	directSpawnerAgentId: null;
 	metadata: Readonly<{
@@ -43,14 +41,14 @@ export function adoptOrValidateOwnerIdentity(
 			entry.type === "custom" && entry.customType === AGENT_IDENTITY_CUSTOM_TYPE,
 	);
 	const matchingIdentityEntries = identityEntries.filter(
-		(entry) => isRecord(entry.data) && entry.data.sessionId === sessionId,
+		(entry) => isRecord(entry.data) && entry.data.agentId === sessionId,
 	);
 	const matchingModeratorEntries = entries.filter(
 		(entry) =>
 			entry.type === "custom_message" &&
 			entry.customType === MODERATOR_INPUT_CUSTOM_TYPE &&
 			isRecord(entry.details) &&
-			entry.details.sessionId === sessionId,
+			entry.details.agentId === sessionId,
 	);
 
 	if (matchingModeratorEntries.length > 0) {
@@ -63,7 +61,7 @@ export function adoptOrValidateOwnerIdentity(
 			throw new InvalidOwnerIdentityError("current Pi session is a child Agent");
 		}
 		const identity = createCanonicalOwnerIdentity(sessionId);
-		if (!isCanonicalOwnerIdentity(currentIdentity.data, identity)) {
+		if (!isCanonicalOwnerIdentity(currentIdentity.data, sessionId)) {
 			// The current session is authoritative. Append a fresh cutoff so stale
 			// Identity data, including child-shaped fork remnants, is historical only.
 			sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, identity);
@@ -98,33 +96,29 @@ export function adoptOrValidateOwnerIdentity(
 
 function createCanonicalOwnerIdentity(sessionId: string): OwnerIdentity {
 	return {
-		agentId: allocateWorkflowId({
-		workflowId: sessionId, domain: "a", source: sessionId }),
-		sessionId,
+		agentId: sessionId,
 		workflowId: sessionId,
 		directSpawnerAgentId: null,
 		metadata: resolveOwnerAgentMetadata(),
 	};
 }
 
-function isCanonicalOwnerIdentity(value: unknown, identity: OwnerIdentity): boolean {
+function isCanonicalOwnerIdentity(value: unknown, sessionId: string): boolean {
 	return isRecord(value) &&
-		value.agentId === identity.agentId &&
-		value.sessionId === identity.sessionId &&
-		value.workflowId === identity.workflowId &&
+		value.agentId === sessionId &&
+		value.workflowId === sessionId &&
 		value.directSpawnerAgentId === null &&
 		!("spawnSource" in value);
 }
 
 function isValidCurrentChildIdentity(value: unknown, sessionId: string): boolean {
-	return isValidChildIdentity(value) && value.sessionId === sessionId;
+	return isValidChildIdentity(value) && value.agentId === sessionId;
 }
 
 function isValidChildIdentity(
 	value: unknown,
 ): value is Record<string, unknown> & {
 	agentId: string;
-	sessionId: string;
 	workflowId: string;
 	directSpawnerAgentId: string;
 	spawnSource: Record<string, unknown>;
@@ -133,7 +127,6 @@ function isValidChildIdentity(
 		!isRecord(value) ||
 		!hasExactKeys(value, [
 			"agentId",
-			"sessionId",
 			"workflowId",
 			"directSpawnerAgentId",
 			"spawnSource",
@@ -142,10 +135,11 @@ function isValidChildIdentity(
 		]) ||
 		!isIdentifier(value.agentId) ||
 		!isIdentifier(value.workflowId) ||
+		value.workflowId === value.agentId ||
 		!isIdentifier(value.directSpawnerAgentId) ||
 		value.directSpawnerAgentId === value.agentId ||
 		!isRecord(value.spawnSource) ||
-		!hasExactKeys(value.spawnSource, ["workflowId", "agentId", "entryId", "toolCallId"]) ||
+		!hasExactKeys(value.spawnSource, ["agentId", "entryId", "toolCallId"]) ||
 		value.spawnSource.agentId !== value.directSpawnerAgentId ||
 		!isIdentifier(value.spawnSource.entryId) ||
 		!isIdentifier(value.spawnSource.toolCallId) ||

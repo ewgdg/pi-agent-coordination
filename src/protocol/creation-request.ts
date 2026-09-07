@@ -2,7 +2,7 @@ import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import type { ChildAgentIdentity } from "./child-identity.ts";
 import {
-	resolveMessageIdentity,
+	deriveMessageIdentity,
 	type ToolCallPointer,
 } from "./identities.ts";
 import type { Message } from "./message.ts";
@@ -21,7 +21,7 @@ export function resolveCreationRequest(options: {
 	return {
 		kind: "request",
 		origin: "agent_spawn",
-		messageId: resolveMessageIdentity(childIdentity.spawnSource),
+		messageId: deriveMessageIdentity(childIdentity.spawnSource),
 		workflowId: childIdentity.workflowId,
 		fromAgentId: childIdentity.directSpawnerAgentId,
 		targetAgentId: childIdentity.agentId,

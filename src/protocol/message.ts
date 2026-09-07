@@ -1,11 +1,11 @@
-import { isToolCallPointer, workflowOf } from "./identities.ts";
+import { resolveAgentMessageReferences } from "./message-reference.ts";
 import { coordinationEntries, indexedState } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import type { ContextPreparation } from "../policy/working-zone-preparation.ts";
 
 import { inspectCommittedAgentWaitResult, type AgentWaitAnswer } from "./agent-wait.ts";
 import {
-	resolveMessageIdentity,
+	deriveMessageIdentity,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
 	sameToolCallPointer,
@@ -131,7 +131,7 @@ export function resolveCommittedMessage(options: {
 		source,
 		(): Message => {
 			const common = {
-				messageId: resolveMessageIdentity(source),
+				messageId: deriveMessageIdentity(source),
 				workflowId,
 				fromAgentId,
 				targetAgentId: resolvedTargetAgentId,
@@ -187,7 +187,7 @@ export function resolveCommittedAnswer(options: {
 	}
 	return {
 		kind: "answer",
-		messageId: resolveMessageIdentity(source),
+		messageId: deriveMessageIdentity(source),
 		workflowId: request.workflowId,
 		fromAgentId: responderAgentId,
 		targetAgentId: request.fromAgentId,
@@ -218,7 +218,7 @@ export function resolveCommittedCancellation(options: {
 		toolCallId,
 		toolName: "agent_message",
 	});
-	const committedInput = validateAgentMessageInput(input);
+	const committedInput = resolveAgentMessageReferences(transcript, source, validateAgentMessageInput(input));
 	if (committedInput.operation !== "cancel") {
 		throw new Error("invalid_input: Agent Message operation does not author a Cancellation");
 	}
@@ -229,7 +229,7 @@ export function resolveCommittedCancellation(options: {
 	}
 	return {
 		kind: "request_cancellation",
-		messageId: resolveMessageIdentity(source),
+		messageId: deriveMessageIdentity(source),
 		workflowId: request.workflowId,
 		fromAgentId: requesterAgentId,
 		targetAgentId: request.targetAgentId,
@@ -306,10 +306,10 @@ export function inspectAgentMessageAuthorResult(
 		requestId,
 		resolvedTargetAgentId,
 	} = options;
-	if (source.agentId !== authorAgentId || source.workflowId !== workflowOf(transcript, authorAgentId)) {
+	if (source.agentId !== authorAgentId) {
 		throw new ProtocolInvariantError("Agent Message source names another author");
 	}
-	const messageId = resolveMessageIdentity(source);
+	const messageId = deriveMessageIdentity(source);
 	if (input.operation === "answer" && requestId === undefined) {
 		throw new Error("invariant_violation: Agent Answer inspection requires its Request");
 	}
@@ -647,12 +647,11 @@ function answerRetrievalFacts(options: {
 					if (
 						!sameStringList(Object.keys(details).sort(), expectedKeys) ||
 						!isToolCallPointer(details.answerSource) ||
-						details.answerSource.workflowId !== workflowOf(transcript, requesterAgentId) ||
 						typeof details.answerId !== "string" ||
 						typeof details.requestMessageId !== "string" ||
 						typeof details.fromAgentId !== "string" ||
 						typeof details.answer !== "string" ||
-						details.answerId !== resolveMessageIdentity(details.answerSource) ||
+						details.answerId !== deriveMessageIdentity(details.answerSource) ||
 						details.fromAgentId !== details.answerSource.agentId
 					) {
 						throw new ProtocolInvariantError("Answer Retrieval evidence is invalid");
@@ -766,6 +765,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isToolCallPointer(value: unknown): value is ToolCallPointer {
+	return (
+		isRecord(value) &&
+		typeof value.agentId === "string" &&
+		value.agentId.length > 0 &&
+		typeof value.entryId === "string" &&
+		value.entryId.length > 0 &&
+		typeof value.toolCallId === "string" &&
+		value.toolCallId.length > 0
+	);
+}
 
 function sameStringList(left: readonly string[], right: readonly string[]): boolean {
 	return left.length === right.length && left.every((value, index) => value === right[index]);

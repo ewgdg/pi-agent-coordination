@@ -1,12 +1,10 @@
 # Owner Workflow
 
-Agent and Message IDs are short canonical Workflow-local addresses, such as `a2` and `m3`. The globally unique Workflow ID and each Agent's separate Pi session binding are described in [Protocol identities](protocol-identities.md).
-
 Loading `pi-agent-coordination` in an interactive Pi TUI establishes the current Pi session as the Workflow Owner. No separate start command is required. Coordination associates Pi's public Runtime registration and TUI session binding with the current `SessionManager`, then borrows that native Runtime without taking disposal authority.
 
 Before creating the coordination runtime, bootstrap loads and validates the optional user [Workflow Policy](workflow-policy.md). Invalid initial policy prevents runtime creation without appending Owner Identity.
 
-On first activation, the package appends one non-model-visible `agent-coordination.identity` entry. The Pi session ID is the global Workflow ID, while the Owner receives a separate allocated local Agent ID and records its Pi session binding, and Owner metadata is fixed to the canonical Owner role. Resolved Owner Runtime configuration and resources are not copied into Identity.
+On first activation, the package appends one non-model-visible `agent-coordination.identity` entry. The Pi session identity is both the Agent identity and Workflow identity, and Owner metadata is fixed to the canonical Owner role. Resolved Owner Runtime configuration and resources are not copied into Identity.
 
 On later activation, the package canonicalizes ordinary Identity evidence using the live Pi session for both Owner identity IDs and current Owner metadata. Malformed or copied ordinary Identity entries are treated as historical during recovery; bootstrap appends one current-scope Owner Identity when needed while preserving the old evidence. A structurally valid child Identity for the current session remains a child, and a distinct Moderator Input remains a separate role bootstrap.
 

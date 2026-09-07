@@ -11,17 +11,14 @@ test("each Message in one ordered batch has independent Delivery proof", () => {
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: sessionManager.getSessionId(), workflowId: "workflow",
 		agentId: recipientAgentId,
 	});
 	const firstSource = {
-		workflowId: "workflow",
 		agentId: "sender-agent",
 		entryId: "sender-entry-one",
 		toolCallId: "sender-call-one",
 	};
 	const secondSource = {
-		workflowId: "workflow",
 		agentId: "sender-agent",
 		entryId: "sender-entry-two",
 		toolCallId: "sender-call-two",
@@ -89,11 +86,9 @@ test("Agent Request Delivery exposes requestMessageId as its correlation identit
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: sessionManager.getSessionId(), workflowId: "workflow",
 		agentId: recipientAgentId,
 	});
 	const source = {
-		workflowId: "workflow",
 		agentId: "requester-agent",
 		entryId: "requester-entry",
 		toolCallId: "requester-call",
@@ -129,11 +124,9 @@ test("host-authored Obligation Reminders do not become Agent Message evidence", 
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: sessionManager.getSessionId(), workflowId: "workflow",
 		agentId: recipientAgentId,
 	});
 	const source = {
-		workflowId: "workflow",
 		agentId: "sender-agent",
 		entryId: "sender-entry",
 		toolCallId: "sender-call",
@@ -179,11 +172,9 @@ test("one Delivery batch cannot repeat a Message source", () => {
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: sessionManager.getSessionId(), workflowId: "workflow",
 		agentId: recipientAgentId,
 	});
 	const source = {
-		workflowId: "workflow",
 		agentId: "sender-agent",
 		entryId: "sender-entry",
 		toolCallId: "sender-call",

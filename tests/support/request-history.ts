@@ -3,7 +3,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentRecord } from "../../src/coordination/agent-record.ts";
 import { transcriptFromSessionManager } from "../../src/pi-integration/session-manager-transcript.ts";
 import { createMessageDelivery } from "../../src/protocol/message-delivery.ts";
-import { resolveMessageIdentity, type ToolCallPointer } from "../../src/protocol/identities.ts";
+import { deriveMessageIdentity, type ToolCallPointer } from "../../src/protocol/identities.ts";
 import { AgentRuntimeSupervisor } from "../../src/runtime/agent-runtime-supervisor.ts";
 
 /** Committed two-Agent conversations, independent of a model or live Run. */
@@ -23,7 +23,7 @@ export function requestHistory() {
 			targetAgent: "responder",
 			question,
 		});
-		const requestId = resolveMessageIdentity(source);
+		const requestId = deriveMessageIdentity(source);
 		appendResult(requester.manager, source, {
 			requestMessageId: requestId,
 			targetAgentId: "responder",
@@ -46,7 +46,7 @@ export function requestHistory() {
 			answer: "Completed.",
 		});
 		appendResult(responder.manager, source, {
-			messageId: resolveMessageIdentity(source),
+			messageId: deriveMessageIdentity(source),
 			requestMessageId: requestId,
 			messageStatus: "sent",
 		});
@@ -54,7 +54,7 @@ export function requestHistory() {
 			source,
 			projection: {
 				kind: "answer",
-				answerId: resolveMessageIdentity(source),
+				answerId: deriveMessageIdentity(source),
 				requestMessageId: requestId,
 				fromAgentId: "responder",
 				answer: "Completed.",
@@ -65,10 +65,9 @@ export function requestHistory() {
 
 function participant(agentId: string) {
 	const manager = SessionManager.inMemory(process.cwd(), { id: agentId });
-	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "requester", agentId });
+	manager.appendCustomEntry("agent-coordination.identity", { agentId });
 	const record: AgentRecord = {
 		identity: {
-			sessionId: agentId,
 			agentId,
 			workflowId: "requester",
 			directSpawnerAgentId: null,
@@ -95,7 +94,7 @@ function appendCall(
 			stopReason: "toolUse",
 		}),
 	);
-	return { workflowId: "requester", agentId: author.record.identity.agentId, entryId, toolCallId };
+	return { agentId: author.record.identity.agentId, entryId, toolCallId };
 }
 function appendResult(
 	manager: SessionManager,

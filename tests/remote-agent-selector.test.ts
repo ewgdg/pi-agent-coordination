@@ -23,7 +23,6 @@ import {
 import type { PostMortemAgentView } from "../src/presentation/post-mortem-agent-view-surface.ts";
 
 const ownerStatus = {
-	role: "owner" as const,
 	agentId: "owner",
 	workflowId: "owner",
 	label: "Owner",

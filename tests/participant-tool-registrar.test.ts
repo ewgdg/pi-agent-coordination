@@ -52,7 +52,6 @@ const roleToolNames = {
 } as const;
 
 const agentStatus = {
-	role: "ordinary" as const,
 	agentId: "child-agent",
 	workflowId: "workflow",
 	label: "Child",

@@ -174,7 +174,7 @@ export function registerRemoteAgentsCommand(
 			if (parseAgentsCommandArgument(args) === "owner") {
 				const snapshot = await presentation.snapshot();
 				const owner = snapshot.live.find(
-					(status) => status.role === "owner",
+					(status) => status.agentId === status.workflowId,
 				);
 				if (!owner) throw new Error("Agent selector roster has no live Owner");
 				await presentation.select({

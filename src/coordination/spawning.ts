@@ -1,5 +1,5 @@
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { allocateWorkflowId } from "../protocol/workflow-ids.ts";
+import { uuidv7 } from "@earendil-works/pi-ai";
 import { isDeepStrictEqual } from "node:util";
 
 import type { AgentRecord } from "./agent-record.ts";
@@ -17,7 +17,7 @@ import {
 } from "../protocol/child-identity.ts";
 import { validateConversationForkTranscript } from "../protocol/conversation-fork.ts";
 import {
-	resolveMessageIdentity,
+	deriveMessageIdentity,
 	ProtocolInvariantError,
 	resolveCommittedSpawnSource,
 	toolCallPointerKey,
@@ -131,8 +131,8 @@ export class DefaultChildSpawner {
 		this.#assertUnclaimedSpawnSource(source);
 
 		let metadata: ReturnType<typeof resolveOrdinaryAgentMetadata>;
-		const agentId = allocateWorkflowId({ workflowId: parent.identity.workflowId, domain: "a", source: toolCallPointerKey(source) });
-		const requestId = resolveMessageIdentity(source);
+		const agentId = uuidv7();
+		const requestId = deriveMessageIdentity(source);
 		let prepared: Awaited<
 			ReturnType<ProcessChildSessionFactory["prepareOrdinaryRun"]>
 		>;
@@ -178,7 +178,6 @@ export class DefaultChildSpawner {
 
 		const identity: ChildAgentIdentity = {
 			agentId,
-			sessionId: sessionManager.getSessionId(),
 			workflowId: parent.identity.workflowId,
 			directSpawnerAgentId: callerAgentId,
 			spawnSource: source,

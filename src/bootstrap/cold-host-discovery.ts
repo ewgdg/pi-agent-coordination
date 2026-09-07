@@ -82,11 +82,11 @@ type ModeratorCandidate = CandidateBase & {
 type Candidate = OrdinaryCandidate | ModeratorCandidate;
 
 class CandidateError extends Error {
-	readonly reference: Readonly<{ workflowId: string; agentId: string }> | undefined;
+	readonly agentId: string | undefined;
 
-	constructor(message: string, reference?: Readonly<{ workflowId: string; agentId: string }>) {
+	constructor(message: string, agentId?: string) {
 		super(message);
-		this.reference = reference;
+		this.agentId = agentId;
 	}
 }
 
@@ -116,21 +116,13 @@ export async function discoverColdWorkflow(options: {
 	const candidates: Candidate[] = [];
 	const quarantinedAgentIds = new Set<string>();
 	let unreadableCandidateCount = 0;
-	let foreignCandidateCount = 0;
 	for (const filename of filenames) {
 		try {
-			const candidate = await readCandidate(join(directory, filename));
-			// Local IDs may repeat in another Workflow; foreign evidence cannot poison
-			// this Workflow's duplicate detection or ancestry map.
-			if (candidate.identity.workflowId !== ownerIdentity.workflowId) {
-				foreignCandidateCount++;
-				continue;
-			}
-			candidates.push(candidate);
+			candidates.push(await readCandidate(join(directory, filename)));
 		} catch (error) {
 			unreadableCandidateCount += 1;
-			if (error instanceof CandidateError && error.reference?.workflowId === ownerIdentity.workflowId) {
-				quarantinedAgentIds.add(error.reference.agentId);
+			if (error instanceof CandidateError && error.agentId) {
+				quarantinedAgentIds.add(error.agentId);
 			}
 		}
 	}
@@ -162,6 +154,10 @@ export async function discoverColdWorkflow(options: {
 		}
 	}
 	for (const candidate of candidates) {
+		if (candidate.identity.workflowId !== ownerIdentity.workflowId) {
+			candidate.invalid = true;
+			quarantinedAgentIds.add(candidate.identity.agentId);
+		}
 		if (candidate.role === "moderator") continue;
 		const parentTranscript = candidate.identity.directSpawnerAgentId === ownerIdentity.agentId
 			? transcriptFromSessionManager(ownerSessionManager)
@@ -294,6 +290,21 @@ export async function discoverColdWorkflow(options: {
 	for (const candidate of moderators) {
 		transcriptPathByAgentId.set(candidate.identity.agentId, candidate.path);
 	}
+	const currentWorkflowCandidateIds = new Set(
+		candidates
+			.filter(({ identity }) => identity.workflowId === ownerIdentity.workflowId)
+			.map(({ identity }) => identity.agentId),
+	);
+	const foreignCandidateIds = new Set(
+		candidates
+			.filter(({ identity }) => identity.workflowId !== ownerIdentity.workflowId)
+			.map(({ identity }) => identity.agentId),
+	);
+	const quarantinedWorkflowAgentIds = new Set(
+		[...quarantinedAgentIds].filter((agentId) =>
+			currentWorkflowCandidateIds.has(agentId) || !foreignCandidateIds.has(agentId)
+		),
+	);
 	return {
 		agents: [
 			...ordered.map((candidate) => ({
@@ -311,9 +322,9 @@ export async function discoverColdWorkflow(options: {
 		transcriptPathByAgentId,
 		agentIdBySpawnSource,
 		quarantinedAgentIds,
-		quarantinedWorkflowAgentIds: quarantinedAgentIds,
+		quarantinedWorkflowAgentIds,
 		quarantinedCandidateCount:
-			unreadableCandidateCount + foreignCandidateCount + candidates.filter(({ invalid }) => invalid).length,
+			unreadableCandidateCount + candidates.filter(({ invalid }) => invalid).length,
 	};
 }
 
@@ -323,26 +334,16 @@ async function readCandidate(path: string): Promise<Candidate> {
 	try {
 		inspection = await transcript.refresh();
 	} catch (error) {
-		throw new CandidateError(error instanceof Error ? error.message : "candidate transcript is unreadable");
+		throw new CandidateError(error instanceof Error ? error.message : "candidate transcript is unreadable", transcript.snapshot()?.header?.id);
 	}
 	const header = validateHeader(inspection.header);
 	const entryValues = inspection.entries;
-	const bootstrap = entryValues.findLast((entry) => {
-		const value = entry.type === "custom" && entry.customType === "agent-coordination.identity"
-			? entry.data : entry.type === "custom_message" && entry.customType === MODERATOR_INPUT_CUSTOM_TYPE
-			? entry.details : undefined;
-		return isRecord(value) && value.sessionId === header.id;
-	});
-	const claimed = bootstrap?.type === "custom" ? bootstrap.data
-		: bootstrap?.type === "custom_message" ? bootstrap.details : undefined;
-	const reference = isRecord(claimed) && isIdentifier(claimed.workflowId) && isIdentifier(claimed.agentId)
-		? { workflowId: claimed.workflowId, agentId: claimed.agentId } : undefined;
 	try {
 		validateNativeEntries(entryValues);
 	} catch (error) {
 		throw new CandidateError(
 			error instanceof Error ? error.message : "candidate transcript entries are invalid",
-			reference,
+			header.id,
 		);
 	}
 	const entries = entryValues;
@@ -357,7 +358,7 @@ async function readCandidate(path: string): Promise<Candidate> {
 		if (
 			entries.some((entry) => entry.type === "custom_message" &&
 				entry.customType === MODERATOR_INPUT_CUSTOM_TYPE &&
-				isRecord(entry.details) && entry.details.sessionId === header.id)
+				isRecord(entry.details) && entry.details.agentId === header.id)
 		) {
 			candidateIdentity = {
 				role: "moderator",
@@ -378,7 +379,7 @@ async function readCandidate(path: string): Promise<Candidate> {
 	} catch (error) {
 		throw new CandidateError(
 			error instanceof Error ? error.message : "candidate Identity is invalid",
-			reference,
+			header.id,
 		);
 	}
 	return {
@@ -413,6 +414,7 @@ function validateHeader(value: unknown): SessionHeader & { version: number } {
 	) {
 		throw new CandidateError(
 			"candidate native session header is invalid",
+			isIdentifier(value.id) ? value.id : undefined,
 		);
 	}
 	return value as unknown as SessionHeader & { version: number };

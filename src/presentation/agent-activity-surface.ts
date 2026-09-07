@@ -89,7 +89,7 @@ export class AgentActivityDock implements Component {
 	render(width: number): string[] {
 		const safeWidth = Math.max(1, width);
 		const snapshot = this.#snapshot;
-		const ownerScope = snapshot.scope.role === "owner";
+		const ownerScope = snapshot.scope.agentId === snapshot.scope.workflowId;
 		const identityLines = ownerScope
 			? []
 			: [formatSelectedAgentIdentity({

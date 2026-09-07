@@ -1,7 +1,5 @@
 # Agent spawning
 
-Agent and Message IDs are short canonical Workflow-local addresses, such as `a2` and `m3`. The globally unique Workflow ID and each Agent's separate Pi session binding are described in [Protocol identities](protocol-identities.md).
-
 Every ordinary Agent can create one fresh child per `agent_spawn` call:
 
 ```ts
@@ -115,7 +113,7 @@ After child Identity commit, the Creation Request uses the ordinary [Request pro
 - `spawnStatus: "not_created"` — validation failed before child Identity committed. `failedStage` and `reason` report where and why.
 - `spawnStatus: "unknown"` — confirmation was lost at a boundary where effects may exist. Candidate Agent and Request Message identities are returned when available.
 
-Created and uncertain receipts include the effective runtime configuration only after it has resolved and passed resource validation. A created receipt returns `agentId` and `requestMessageId`; an uncertain receipt names them as candidates. Collapsed native rendering shows the Spawn and Message statuses, the Agent as `label · Agent ID` showing the complete canonical ID, model, thinking level, and any confirmed failure stage and reason. Expanded rendering identifies the Agent as `label · Agent ID`, followed by the exact structured receipt and effective configuration.
+Created and uncertain receipts include the effective runtime configuration only after it has resolved and passed resource validation. A created receipt returns `agentId` and `requestMessageId`; an uncertain receipt names them as candidates. Collapsed native rendering shows the Spawn and Message statuses, the Agent as `label · compact identity` using the final eight identity characters, model, thinking level, and any confirmed failure stage and reason. Expanded rendering identifies the Agent as `label · full identity`, followed by the exact structured receipt and effective configuration.
 
 Repeating `agent_spawn` creates a sibling. Unfiltered direct-child search returns children in canonical spawn-call order; filtered results use relevance first and that order as their deterministic tie-breaker. Observation is passive and supports exact status lookup plus bounded composable search over authorized Agent scopes. It returns identity, structural relationship, and live Run state without exposing a Pi session or Run handle; search never prepares a dormant Runtime.
 

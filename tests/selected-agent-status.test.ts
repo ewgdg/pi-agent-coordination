@@ -15,7 +15,7 @@ const theme = {
 
 const identity = {
 	label: "Researcher",
-	agentId: "a2",
+	agentId: "019fa1ff-6e95-761e-b4ce-7415983c81e3",
 };
 
 test("selected Agent identity gives every work status its specified theme role", () => {
@@ -36,7 +36,7 @@ test("selected Agent identity gives every work status its specified theme role",
 	for (const { status, role, label } of cases) {
 		assert.equal(
 			formatSelectedAgentIdentity({ ...identity, status }, theme),
-			`<accent><bold>Researcher</bold></accent><dim> · a2 · </dim><${role}>${label}</${role}>`,
+			`<accent><bold>Researcher</bold></accent><dim> · 983c81e3 · </dim><${role}>${label}</${role}>`,
 		);
 	}
 });

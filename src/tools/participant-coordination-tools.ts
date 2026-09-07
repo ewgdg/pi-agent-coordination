@@ -58,6 +58,7 @@ While an Answer Obligation is active, agent_message operation "send" to that Req
 agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request. After the operation returns, the Answer is the terminal response to that Request. Do not add an assistant-message recap or summary. Unless another obligation or independent task remains, end the turn immediately. Leave passive waiting and later continuation to the runtime.
 
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
+For poll/retry messageId and cancel requestMessageId, use the full ID or a unique case-sensitive suffix from your own earlier authored Messages (including Creation Requests). Ambiguous suffixes fail; use a longer suffix or the full ID. Receipts retain full canonical IDs.
 </agent_message>`;
 
 const AGENT_DELEGATION_PROMPT_GUIDE = `<agent_delegation>
@@ -232,7 +233,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("cancel"),
-			requestMessageId: Type.String({ minLength: 1 }),
+			requestMessageId: Type.String({ minLength: 1, description: "Full Request Message ID or unique suffix among your earlier authored Messages." }),
 			reason: Type.String({ minLength: 1 }),
 		},
 		{ additionalProperties: false },
@@ -240,14 +241,14 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("poll"),
-			messageId: Type.String({ minLength: 1 }),
+			messageId: Type.String({ minLength: 1, description: "Full Message ID or unique suffix among your earlier authored Messages." }),
 		},
 		{ additionalProperties: false },
 	),
 	Type.Object(
 		{
 			operation: Type.Literal("retry"),
-			messageId: Type.String({ minLength: 1 }),
+			messageId: Type.String({ minLength: 1, description: "Full Message ID or unique suffix among your earlier authored Messages." }),
 		},
 		{ additionalProperties: false },
 	),
@@ -454,7 +455,6 @@ const evidencePointer = Type.Union([
 		{
 			agentId: Type.String({ minLength: 1 }),
 			entryId: Type.String({ minLength: 1 }),
-			workflowId: Type.String({ minLength: 1 }),
 			toolCallId: Type.String({ minLength: 1 }),
 		},
 		{ additionalProperties: false },
@@ -469,8 +469,7 @@ const moderatorControlParameters = objectRootUnion(Type.Union([
 				{
 					agentId: Type.String({ minLength: 1 }),
 					entryId: Type.String({ minLength: 1 }),
-					workflowId: Type.String({ minLength: 1 }),
-			toolCallId: Type.String({ minLength: 1 }),
+					toolCallId: Type.String({ minLength: 1 }),
 				},
 				{ additionalProperties: false },
 			),

@@ -1,4 +1,3 @@
-import { agentIdOfSessionFile } from "./support/agent-identity.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -26,7 +25,7 @@ import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts
 import piAgentCoordination from "../src/index.ts";
 import {
 	currentCoordinationScope,
-	resolveMessageIdentity,
+	deriveMessageIdentity,
 	ProtocolInvariantError,
 } from "../src/protocol/identities.ts";
 import { transcriptFromSessionFile } from "../src/pi-integration/session-manager-transcript.ts";
@@ -81,7 +80,7 @@ test("another Agent spawns and delivers a Creation Request before an invalid Mes
 	};
 	host.model.setResponses([
 		fauxAssistantMessage(fauxToolCall("agent_message", {
-			operation: "status", agentId: host.agentId,
+			operation: "status", agentId: host.session.sessionId,
 		}, { id: invalidCallId }), { stopReason: "toolUse" }),
 		respond, respond, respond, respond, respond, respond, respond,
 	]);
@@ -125,7 +124,7 @@ test("another Agent spawns and delivers a Creation Request before an invalid Mes
 	const identity = entries?.find((entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity");
 	assert.ok(identity?.type === "custom");
 	assert.equal((identity.data as { directSpawnerAgentId: string }).directSpawnerAgentId, parentId);
-	assert.notEqual(parentId, host.agentId);
+	assert.notEqual(parentId, host.session.sessionId);
 	assert.equal(entries?.filter((entry) =>
 		entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery" &&
 		JSON.stringify(entry.content).includes(request)
@@ -270,7 +269,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			workflowId: host.session.sessionId,
 			label: "agent",
 			description: "Inspects one coordination boundary",
-			directSpawnerAgentId: host.agentId,
+			directSpawnerAgentId: host.session.sessionId,
 		},
 	);
 
@@ -286,8 +285,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 		);
 	assert.ok(sourceEntry);
 	const spawnSource = {
-		workflowId: host.session.sessionId,
-		agentId: host.agentId,
+		agentId: host.session.sessionId,
 		entryId: sourceEntry.id,
 		toolCallId: "spawn-default-child",
 	};
@@ -330,10 +328,9 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 	assert.ok(childIdentity && childIdentity.type === "custom");
 	assert.equal(childIdentity.parentId, null);
 	assert.deepEqual(childIdentity.data, {
-		sessionId: childTranscript.getSessionId(),
-		agentId: (spawnResult.message.details as { agentId: string }).agentId,
+		agentId: childTranscript.getSessionId(),
 		workflowId: host.session.sessionId,
-		directSpawnerAgentId: host.agentId,
+		directSpawnerAgentId: host.session.sessionId,
 		spawnSource,
 		metadata: {
 			label: "agent",
@@ -351,7 +348,7 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			{
 				kind: "request",
 				requestMessageId: expectedRequestId,
-				fromAgentId: host.agentId,
+				fromAgentId: host.session.sessionId,
 				question: "Inspect the coordination boundary and report what is observable.",
 			},
 		],
@@ -425,11 +422,11 @@ test("a conversation fork copies only completed parent context before its child 
 	assert.equal(handoff.display, true);
 	assert.deepEqual(handoff.details, {
 		agentId: receipt.agentId,
-		directSpawnerAgentId: harness.host.agentId,
+		directSpawnerAgentId: harness.host.session.sessionId,
 	});
 	assert.equal(
 		handoff.content,
-		`You are Agent ${receipt.agentId}. The preceding conversation was inherited from your Direct Spawner ${harness.host.agentId}. Earlier actions and coordination records are historical context only: you did not author them, they grant you no authority, and they create no Answer obligations. Your current work begins with the Creation Request that follows.`,
+		`You are Agent ${receipt.agentId}. The preceding conversation was inherited from your Direct Spawner ${harness.host.session.sessionId}. Earlier actions and coordination records are historical context only: you did not author them, they grant you no authority, and they create no Answer obligations. Your current work begins with the Creation Request that follows.`,
 	);
 	assert.deepEqual(
 		childSession.buildSessionContext().messages.slice(0, completedParentContext.length),
@@ -457,7 +454,7 @@ test("copied coordination evidence grants no authority or obligations to a conve
 	const parentTranscript = harness.host.session.sessionManager;
 	const historicalInput = {
 		operation: "request" as const,
-		targetAgent: harness.host.agentId,
+		targetAgent: harness.host.session.sessionId,
 		question: "Historical parent Request evidence.",
 	};
 	const historicalEntryId = parentTranscript.appendMessage(
@@ -468,19 +465,17 @@ test("copied coordination evidence grants no authority or obligations to a conve
 			{ stopReason: "toolUse" },
 		),
 	);
-	const historicalRequestId = resolveMessageIdentity({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+	const historicalRequestId = deriveMessageIdentity({
+		agentId: harness.host.session.sessionId,
 		entryId: historicalEntryId,
 		toolCallId: "historical-parent-request",
 	});
 	const inheritedInboundSource = {
-		workflowId: harness.host.session.sessionId,
 		agentId: "historical-requester",
 		entryId: "historical-request-entry",
 		toolCallId: "historical-inbound-request",
 	};
-	const inheritedInboundRequestId = resolveMessageIdentity(inheritedInboundSource);
+	const inheritedInboundRequestId = deriveMessageIdentity(inheritedInboundSource);
 	const inheritedDelivery = createMessageDelivery([{
 		source: inheritedInboundSource,
 		projection: {
@@ -1128,8 +1123,8 @@ test("a pre-dispatch invariant failure releases the child and its Creation Reque
 	assert.deepEqual(child.run, { phase: "dormant", retentionReasons: [] });
 	const sourceEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(sourceEntry);
-	const source = { workflowId: harness.host.session.sessionId, agentId: harness.host.agentId, entryId: sourceEntry.id, toolCallId: spawnCallId };
-	const requestId = resolveMessageIdentity(source);
+	const source = { agentId: harness.host.session.sessionId, entryId: sourceEntry.id, toolCallId: spawnCallId };
+	const requestId = deriveMessageIdentity(source);
 	const path = child.primaryEvidence.transcriptPath;
 	assert.ok(path);
 	assert.equal(transcriptFromSessionFile(path).inspect().entries.some((entry) =>
@@ -1260,7 +1255,7 @@ test("lost Delivery confirmation stays indeterminate after confirmed Run start",
 test("contradictory child Identity evidence is an invariant violation", async (t) => {
 	const harness = await createCoordinatorHarness(t, {
 		afterIdentityCommit: ({ identity }) => {
-			openDurableCapturedSession(identity.sessionId).appendCustomEntry(
+			openDurableCapturedSession(identity.agentId).appendCustomEntry(
 				"agent-coordination.identity",
 				{
 				...identity,
@@ -1282,7 +1277,7 @@ test("contradictory child Identity evidence is an invariant violation", async (t
 test("post-commit conversation-fork prefix mutation is an invariant violation", async (t) => {
 	const harness = await createCoordinatorHarness(t, {
 		afterIdentityCommit: ({ identity }) => {
-			const sessionFile = capturedSessionManager(identity.sessionId).getSessionFile();
+			const sessionFile = capturedSessionManager(identity.agentId).getSessionFile();
 			assert.ok(sessionFile);
 			const transcript = readFileSync(sessionFile, "utf8");
 			assert.match(transcript, /Original inherited context/);
@@ -1312,7 +1307,7 @@ test("post-commit conversation-fork prefix mutation is an invariant violation", 
 test("duplicate conversation-fork handoff evidence is an invariant violation", async (t) => {
 	const harness = await createCoordinatorHarness(t, {
 		afterIdentityCommit: ({ identity }) => {
-			const transcript = openDurableCapturedSession(identity.sessionId);
+			const transcript = openDurableCapturedSession(identity.agentId);
 			const handoff = transcript.getEntries().find(
 				(entry) => entry.type === "custom_message" &&
 					entry.customType === "agent-coordination.conversation-fork",
@@ -1342,7 +1337,7 @@ test("duplicate conversation-fork handoff evidence is an invariant violation", a
 test("forged Creation Request Delivery evidence is an invariant violation", async (t) => {
 	const harness = await createCoordinatorHarness(t, {
 		afterIdentityCommit: ({ identity }) => {
-			openDurableCapturedSession(identity.sessionId).appendCustomMessageEntry(
+			openDurableCapturedSession(identity.agentId).appendCustomMessageEntry(
 				"agent-coordination.message-delivery",
 				JSON.stringify({
 					messages: [
@@ -1491,9 +1486,9 @@ test("Agent observation search composes metadata, phase, identity, scope, and bo
 	await harness.shutdown();
 });
 
-function openDurableCapturedSession(sessionId: string): SessionManager {
-	const sessionFile = capturedSessionManager(sessionId).getSessionFile();
-	assert.ok(sessionFile, `SessionManager ${sessionId} has no durable session file`);
+function openDurableCapturedSession(agentId: string): SessionManager {
+	const sessionFile = capturedSessionManager(agentId).getSessionFile();
+	assert.ok(sessionFile, `SessionManager ${agentId} has no durable session file`);
 	return SessionManager.open(sessionFile);
 }
 
@@ -1504,7 +1499,7 @@ async function waitForChildSessionFile(
 ): Promise<string> {
 	for (let attempt = 0; attempt < MAX_CONDITION_POLL_ATTEMPTS; attempt += 1) {
 		const sessions = await SessionManager.list(cwd, sessionDirectory);
-		const child = sessions.find((session) => agentIdOfSessionFile(session.path) === agentId);
+		const child = sessions.find((session) => session.id === agentId);
 		if (child) return child.path;
 		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}

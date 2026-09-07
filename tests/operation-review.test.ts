@@ -275,5 +275,5 @@ function pointer(
 	entryId: string,
 	toolCallId: string,
 ): ToolCallPointer {
-	return { workflowId: "workflow", agentId, entryId, toolCallId };
+	return { agentId, entryId, toolCallId };
 }

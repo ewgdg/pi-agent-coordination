@@ -25,7 +25,7 @@ const host = await createManuallyManagedUnboundTestOwnerHost(piAgentCoordination
 	implicitModeratorResponses: false,
 	additionalExtensionPaths: [PROBE_EXTENSION],
 });
-const ownerId = host.agentId;
+const ownerId = host.session.sessionId;
 const mode = new InteractiveMode(host.runtime, { verbose: false });
 await mode.init();
 void mode.run().catch((error: unknown) => {

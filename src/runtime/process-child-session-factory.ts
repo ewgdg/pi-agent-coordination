@@ -144,6 +144,7 @@ export class ProcessChildSessionFactory {
 		return SessionManager.create(
 			prepared.configuration.cwd,
 			this.workflowSessionDirectory(),
+			{ id: prepared.agentId },
 		);
 	}
 
@@ -354,7 +355,7 @@ export class ProcessChildSessionFactory {
 		const admittedSnapshot = record.host.effectiveRuntimeSnapshot();
 		if (admittedSnapshot) {
 			const snapshot = await record.host.synchronizeRuntimeState();
-			if (snapshot.sessionId !== record.identity.sessionId) {
+			if (snapshot.sessionId !== record.identity.agentId) {
 				throw new Error(
 					"invariant_violation: Parent Runtime snapshot does not match Agent Identity",
 				);
@@ -454,7 +455,7 @@ export class ProcessChildSessionFactory {
 			workflowId: identity.workflowId,
 			agentId: identity.agentId,
 			role: prepared.role,
-			expectedSessionId: identity.sessionId,
+			expectedSessionId: identity.agentId,
 			sessionPath,
 			configuration: prepared.configuration,
 			...(prepared.initialTools === undefined

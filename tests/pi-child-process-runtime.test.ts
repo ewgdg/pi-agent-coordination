@@ -494,7 +494,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 
 		const omittedItem = {
 			source: {
-				workflowId: "workflow",
 				agentId: "working-zone-requester",
 				entryId: "omitted-request-entry",
 				toolCallId: "omitted-request-call",
@@ -529,7 +528,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		));
 		const activeSteerItem = {
 			source: {
-				workflowId: "workflow",
 				agentId: "working-zone-requester",
 				entryId: "active-steer-entry",
 				toolCallId: "active-steer-call",
@@ -578,7 +576,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 
 		const optionalFailureItem = {
 			source: {
-				workflowId: "workflow",
 				agentId: "working-zone-requester",
 				entryId: "optional-failure-entry",
 				toolCallId: "optional-failure-call",
@@ -623,7 +620,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 
 		const cancelledItem = {
 			source: {
-				workflowId: "workflow",
 				agentId: "working-zone-requester",
 				entryId: "cancelled-preparation-entry",
 				toolCallId: "cancelled-preparation-call",
@@ -674,7 +670,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 
 		const preparedItem = {
 			source: {
-				workflowId: "workflow",
 				agentId: "working-zone-requester",
 				entryId: "prepared-request-entry",
 				toolCallId: "prepared-request-call",
@@ -839,7 +834,6 @@ test("an idle child defers threshold compaction until later work is admitted", {
 
 		const customMessage = createMessageDelivery([{
 			source: {
-				workflowId: "workflow",
 				agentId: "compaction-gateway-sender",
 				entryId: "compaction-gateway-source-entry",
 				toolCallId: "compaction-gateway-source-call",
@@ -953,7 +947,6 @@ test("an idle child defers threshold compaction until later work is admitted", {
 
 		const cancelledMessage = createMessageDelivery([{
 			source: {
-				workflowId: "workflow",
 				agentId: "cancelled-compaction-sender",
 				entryId: "cancelled-compaction-source-entry",
 				toolCallId: "cancelled-compaction-source-call",
@@ -1000,7 +993,6 @@ test("an idle child defers threshold compaction until later work is admitted", {
 
 		const interruptedMessage = createMessageDelivery([{
 			source: {
-				workflowId: "workflow",
 				agentId: "interrupted-compaction-sender",
 				entryId: "interrupted-compaction-source-entry",
 				toolCallId: "interrupted-compaction-source-call",
@@ -1049,7 +1041,6 @@ test("an idle child defers threshold compaction until later work is admitted", {
 
 		const nonTurnMessage = createMessageDelivery([{
 			source: {
-				workflowId: "workflow",
 				agentId: "non-turn-sender",
 				entryId: "non-turn-source-entry",
 				toolCallId: "non-turn-source-call",
@@ -1442,7 +1433,6 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 	})}\n`, { mode: 0o600 });
 	const ownerCalls: unknown[] = [];
 	const observeReceipt = {
-		role: "ordinary" as const,
 		agentId,
 		workflowId: "process-coordination-workflow",
 		label: "Remote Child",
@@ -1735,7 +1725,6 @@ function processSelectorSnapshot(childAgentId: string): Awaited<ReturnType<
 		directSpawnerAgentId: string | null,
 		retentionReason: "owner_host_binding" | "interactive_selection",
 	) => ({
-		role: agentId === "process-runtime-test-workflow" ? "owner" as const : directSpawnerAgentId === null ? "moderator" as const : "ordinary" as const,
 		agentId,
 		workflowId: "process-runtime-test-workflow",
 		label,

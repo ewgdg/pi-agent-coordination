@@ -9,7 +9,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { inspectCommittedAgentWaitResult } from "../src/protocol/agent-wait.ts";
-import { resolveMessageIdentity } from "../src/protocol/identities.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import {
 	inspectAgentMessageAuthorResult,
 	type Message,
@@ -27,9 +27,8 @@ test("an Answer call resolves its target from the correlated delivered Request",
 	const responderAgentId = "answer-render-responder";
 	const requesterAgentId = "answer-render-requester";
 	const responder = SessionManager.inMemory(process.cwd(), { id: responderAgentId });
-	responder.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { sessionId: responder.getSessionId(), workflowId: "workflow", agentId: responderAgentId });
+	responder.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: responderAgentId });
 	const requestSource = {
-		workflowId: "workflow",
 		agentId: requesterAgentId,
 		entryId: "request-entry",
 		toolCallId: "request-call",
@@ -39,7 +38,7 @@ test("an Answer call resolves its target from the correlated delivered Request",
 		JSON.stringify({
 			messages: [{
 				kind: "request",
-				requestMessageId: resolveMessageIdentity(requestSource),
+				requestMessageId: deriveMessageIdentity(requestSource),
 				fromAgentId: requesterAgentId,
 				question: "Return the rendered Answer.",
 			}],
@@ -69,7 +68,6 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 	const responderAgentId = "answer-correlation-responder";
 	const responder = SessionManager.inMemory(process.cwd(), { id: responderAgentId });
 	responder.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: responder.getSessionId(), workflowId: "workflow",
 		agentId: responderAgentId,
 	});
 	const answerToolCallId = "answer-with-contradictory-delivery";
@@ -83,12 +81,11 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 		),
 	);
 	const answerSource = {
-		workflowId: "workflow",
 		agentId: responderAgentId,
 		entryId: answerEntryId,
 		toolCallId: answerToolCallId,
 	};
-	const answerId = resolveMessageIdentity(answerSource);
+	const answerId = deriveMessageIdentity(answerSource);
 	responder.appendMessage({
 		role: "toolResult",
 		toolCallId: answerToolCallId,
@@ -111,7 +108,6 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 	const requesterAgentId = "answer-correlation-requester";
 	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
 	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: requester.getSessionId(), workflowId: "workflow",
 		agentId: requesterAgentId,
 	});
 	requester.appendCustomMessageEntry(
@@ -137,7 +133,6 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 		targetAgentId: responderAgentId,
 		deliveryMode: "deferred",
 		source: {
-			workflowId: "workflow",
 			agentId: requesterAgentId,
 			entryId: "request-entry",
 			toolCallId: "request-call",
@@ -158,7 +153,6 @@ test("Delivery-only Answer correlation skips another Request from the same reque
 	const responderAgentId = "delivery-only-answer-responder";
 	const responder = SessionManager.inMemory(process.cwd(), { id: responderAgentId });
 	responder.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: responder.getSessionId(), workflowId: "workflow",
 		agentId: responderAgentId,
 	});
 	const answerToolCallId = "delivery-only-answer";
@@ -172,16 +166,14 @@ test("Delivery-only Answer correlation skips another Request from the same reque
 		),
 	);
 	const answerSource = {
-		workflowId: "workflow",
 		agentId: responderAgentId,
 		entryId: answerEntryId,
 		toolCallId: answerToolCallId,
 	};
-	const answerId = resolveMessageIdentity(answerSource);
+	const answerId = deriveMessageIdentity(answerSource);
 	const requesterAgentId = "shared-answer-requester";
 	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
 	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: requester.getSessionId(), workflowId: "workflow",
 		agentId: requesterAgentId,
 	});
 	requester.appendCustomMessageEntry(
@@ -207,7 +199,6 @@ test("Delivery-only Answer correlation skips another Request from the same reque
 		targetAgentId: responderAgentId,
 		deliveryMode: "deferred",
 		source: {
-			workflowId: "workflow",
 			agentId: requesterAgentId,
 			entryId: `${messageId}-entry`,
 			toolCallId: `${messageId}-call`,
@@ -250,11 +241,9 @@ test("native Answer Retrieval reconstructs result-less Answer correlation", () =
 	const requesterAgentId = "answer-retrieval-requester";
 	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
 	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: requester.getSessionId(), workflowId: "workflow",
 		agentId: requesterAgentId,
 	});
 	const answerSource = {
-		workflowId: "workflow",
 		agentId: "answer-retrieval-responder",
 		entryId: "answer-source-entry",
 		toolCallId: "answer-source-call",
@@ -267,7 +256,7 @@ test("native Answer Retrieval reconstructs result-less Answer correlation", () =
 		details: {
 			disposition: "answer_delivered",
 			requestMessageId: "retrieved-request",
-			answerId: resolveMessageIdentity(answerSource),
+			answerId: deriveMessageIdentity(answerSource),
 			fromAgentId: answerSource.agentId,
 			answer: "Recovered without an Answer author result.",
 			answerSource,
@@ -286,11 +275,9 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 	const requesterAgentId = "wait-result-requester";
 	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
 	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: requester.getSessionId(), workflowId: "workflow",
 		agentId: requesterAgentId,
 	});
 	const answerSource = {
-		workflowId: "workflow",
 		agentId: "wait-result-responder",
 		entryId: "wait-answer-entry",
 		toolCallId: "wait-answer-call",
@@ -306,8 +293,7 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 			{ stopReason: "toolUse" },
 		),
 	);
-	const requestMessageId = resolveMessageIdentity({
-		workflowId: "workflow",
+	const requestMessageId = deriveMessageIdentity({
 		agentId: requesterAgentId,
 		entryId: requestEntryId,
 		toolCallId: requestToolCallId,
@@ -323,7 +309,7 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 		answers: [{
 			disposition: "answer_delivered",
 			requestMessageId,
-			answerId: resolveMessageIdentity(answerSource),
+			answerId: deriveMessageIdentity(answerSource),
 			fromAgentId: answerSource.agentId,
 			answer: "Recovered through the aggregate wait result.",
 			answerSource,
@@ -349,7 +335,7 @@ test("Agent Wait result is requester-side Delivery proof for each returned Answe
 test("a completed Agent Wait rejects a Request authored after its call", () => {
 	const requesterAgentId = "forged-wait-result-requester";
 	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
-	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { sessionId: requester.getSessionId(), workflowId: "workflow", agentId: requesterAgentId });
+	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: requesterAgentId });
 	const waitToolCallId = "wait-before-forged-request";
 	requester.appendMessage(
 		fauxAssistantMessage(
@@ -368,14 +354,12 @@ test("a completed Agent Wait rejects a Request authored after its call", () => {
 			{ stopReason: "toolUse" },
 		),
 	);
-	const laterRequestMessageId = resolveMessageIdentity({
-		workflowId: "workflow",
+	const laterRequestMessageId = deriveMessageIdentity({
 		agentId: requesterAgentId,
 		entryId: laterRequestEntryId,
 		toolCallId: laterRequestToolCallId,
 	});
 	const answerSource = {
-		workflowId: "workflow",
 		agentId: "later-responder",
 		entryId: "later-answer-entry",
 		toolCallId: "later-answer-call",
@@ -384,7 +368,7 @@ test("a completed Agent Wait rejects a Request authored after its call", () => {
 		answers: [{
 			disposition: "answer_delivered",
 			requestMessageId: laterRequestMessageId,
-			answerId: resolveMessageIdentity(answerSource),
+			answerId: deriveMessageIdentity(answerSource),
 			fromAgentId: answerSource.agentId,
 			answer: "This later Answer cannot belong to the earlier Wait.",
 			answerSource,
@@ -414,7 +398,6 @@ test("a preempted Agent Wait is a non-error result without Answer Delivery proof
 	const requesterAgentId = "preempted-wait-requester";
 	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
 	requester.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
-		sessionId: requester.getSessionId(), workflowId: "workflow",
 		agentId: requesterAgentId,
 	});
 	const waitToolCallId = "preempted-agent-wait-call";
@@ -448,7 +431,6 @@ test("a preempted Agent Wait is a non-error result without Answer Delivery proof
 		requesterAgentId,
 		transcript,
 		source: {
-			workflowId: "workflow",
 			agentId: "unanswered-responder",
 			entryId: "unanswered-entry",
 			toolCallId: "unanswered-call",
@@ -460,7 +442,7 @@ test("a schema-invalid Agent Message authors no protocol evidence before or afte
 	const agentId = "schema-rejected-message-author";
 	const rejectedToolCallId = "invalid-cancel-arguments";
 	const sessionManager = SessionManager.inMemory(process.cwd(), { id: agentId });
-	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { sessionId: sessionManager.getSessionId(), workflowId: "workflow", agentId });
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
 	sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
@@ -495,7 +477,7 @@ test("a successful result cannot turn a malformed Agent Message into authored ev
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const agentId = sessionManager.getSessionId();
 	const toolCallId = "malformed-message-with-success";
-	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { sessionId: sessionManager.getSessionId(), workflowId: "workflow", agentId });
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
 	sessionManager.appendMessage(fauxAssistantMessage(
 		fauxToolCall("agent_message", { operation: "status" }, { id: toolCallId }),
 		{ stopReason: "toolUse" },
@@ -520,7 +502,7 @@ test("an answer-required rejection does not author a retryable Message", () => {
 		content: "This provisional finding must remain local.",
 	};
 	const sessionManager = SessionManager.inMemory(process.cwd(), { id: agentId });
-	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { sessionId: sessionManager.getSessionId(), workflowId: "workflow", agentId });
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
 	const entryId = sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", input, { id: toolCallId }),
@@ -544,8 +526,7 @@ test("an answer-required rejection does not author a retryable Message", () => {
 	assert.equal(inspectAgentMessageAuthorResult({
 		authorAgentId: agentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
-		source: {
-		workflowId: "workflow", agentId, entryId, toolCallId },
+		source: { agentId, entryId, toolCallId },
 		input,
 		resolvedTargetAgentId: input.targetAgent,
 	}), "not_created");
@@ -561,21 +542,21 @@ test("selector-authored Message inspection accepts its resolved target identity"
 		content: "Inspect the canonical target binding.",
 	};
 	const sessionManager = SessionManager.inMemory(process.cwd(), { id: agentId });
-	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { sessionId: sessionManager.getSessionId(), workflowId: "workflow", agentId });
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
 	const entryId = sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", input, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
-	const source = { workflowId: "workflow", agentId, entryId, toolCallId };
+	const source = { agentId, entryId, toolCallId };
 	sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId,
 		toolName: "agent_message",
 		content: [{ type: "text", text: "Message admitted." }],
 		details: {
-			messageId: resolveMessageIdentity(source),
+			messageId: deriveMessageIdentity(source),
 			targetAgentId,
 			messageStatus: "sent",
 		},

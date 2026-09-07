@@ -48,7 +48,7 @@ test("a dormant parent retains creation preset rules while descendant catalogues
 	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
 	const ownerRecord: AgentRecord = {
 		identity: ownerIdentity,
-		host: AgentRuntimeSupervisor.bindOwner(host.runtime, host.runtime.session.sessionId),
+		host: AgentRuntimeSupervisor.bindOwner(host.runtime),
 		transcript: transcriptFromSessionManager(host.session.sessionManager),
 		children: ["dormant-parent"],
 	};
@@ -56,12 +56,10 @@ test("a dormant parent retains creation preset rules while descendant catalogues
 	parentSession.appendCustomEntry("agent-coordination.identity", { marker: true });
 	const parentRecord = {
 		identity: {
-			sessionId: "dormant-parent",
 			agentId: "dormant-parent",
 			workflowId: ownerIdentity.workflowId,
 			directSpawnerAgentId: ownerIdentity.agentId,
 			spawnSource: {
-				workflowId: ownerIdentity.workflowId,
 				agentId: ownerIdentity.agentId,
 				entryId: "parent-spawn-entry",
 				toolCallId: "parent-spawn-call",
@@ -148,7 +146,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
 	const ownerRecord: AgentRecord = {
 		identity: ownerIdentity,
-		host: AgentRuntimeSupervisor.bindOwner(host.runtime, host.runtime.session.sessionId),
+		host: AgentRuntimeSupervisor.bindOwner(host.runtime),
 		transcript: transcriptFromSessionManager(host.session.sessionManager),
 		children: ["live-parent"],
 	};
@@ -171,12 +169,10 @@ test("a live parent contributes its current synchronized Runtime state", async (
 	let synchronizations = 0;
 	const parentRecord = {
 		identity: {
-			sessionId: "live-parent",
 			agentId: "live-parent",
 			workflowId: ownerIdentity.workflowId,
 			directSpawnerAgentId: ownerIdentity.agentId,
 			spawnSource: {
-				workflowId: ownerIdentity.workflowId,
 				agentId: ownerIdentity.agentId,
 				entryId: "live-parent-spawn-entry",
 				toolCallId: "live-parent-spawn-call",
@@ -694,7 +690,7 @@ test("prefetched selections stay fixed until reload; captured presets outlive th
 	await bindTestOwnerHost(host, "tui");
 	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
 	const owner: AgentRecord = {
-		identity: ownerIdentity, host: AgentRuntimeSupervisor.bindOwner(host.runtime, host.runtime.session.sessionId),
+		identity: ownerIdentity, host: AgentRuntimeSupervisor.bindOwner(host.runtime),
 		transcript: transcriptFromSessionManager(host.session.sessionManager), children: [],
 	};
 	const factory = new ProcessChildSessionFactory({
@@ -743,7 +739,7 @@ test("Moderator creation captures present and absent presets independently of la
 	await bindTestOwnerHost(host, "tui");
 	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
 	const owner: AgentRecord = {
-		identity: ownerIdentity, host: AgentRuntimeSupervisor.bindOwner(host.runtime, host.runtime.session.sessionId),
+		identity: ownerIdentity, host: AgentRuntimeSupervisor.bindOwner(host.runtime),
 		transcript: transcriptFromSessionManager(host.session.sessionManager), children: [],
 	};
 	const factory = new ProcessChildSessionFactory({
