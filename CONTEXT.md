@@ -5,19 +5,19 @@ This context defines durable Agent identities and their transient live coordinat
 ## Language
 
 **Agent Identity**:
-The immutable transcript bootstrap facts for one Agent, bound to its expected Pi session identity. The ordinary Identity entry creates a Workflow Owner when its Agent ID equals its Workflow ID, or a spawned Agent when it names a Direct Spawner, matching Agent Spawn source, display metadata, and its captured `creationPreset`. A runtime-created Moderator instead receives one atomic Moderator Input bootstrap containing its Workflow relationship, display metadata, captured `creationPreset`, and model-visible creation reason. Resolved Runtime configuration is not Agent Identity.
+The immutable transcript bootstrap facts for one Agent, bound to its expected Pi session identity. The ordinary Identity entry creates a Workflow Owner when its bound Pi session ID equals its Workflow ID and it has no Direct Spawner, or a spawned Agent when it names a Direct Spawner, matching Agent Spawn source, display metadata, and its captured `creationPreset`. A runtime-created Moderator instead receives one atomic Moderator Input bootstrap containing its Workflow relationship, display metadata, captured `creationPreset`, and model-visible creation reason. Resolved Runtime configuration is not Agent Identity.
 
 **Owner Identity Canonicalization**:
-The canonical interpretation of ordinary Identity evidence using the live Pi session for both Owner identity IDs and current Owner metadata. Malformed or copied ordinary Identity evidence is historical during recovery, and one current-scope Owner bootstrap may be appended when needed; a structurally valid child Identity for the current session remains a child. A distinct Moderator Input remains a separate role bootstrap.
+The canonical interpretation of ordinary Identity evidence using the live Pi session for global Workflow identity, its stable allocated local Agent ID, and current Owner metadata. Malformed or copied ordinary Identity evidence is historical during recovery, and one current-scope Owner bootstrap may be appended when needed; a structurally valid child Identity for the current session remains a child. A distinct Moderator Input remains a separate role bootstrap.
 
 **Owner Fork**:
 A native Pi fork or clone of a Workflow Owner into a fresh independent Workflow. Its fresh Owner Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no Message, Request, authority, or child relationship in the new Workflow. Forking a child Agent or Moderator is not admitted.
 
 **Protocol Identity**:
-A stable identity derived from the canonical Pi invocation that first creates a coordination fact, using the fact kind to keep identities from different domains distinct. Agent Identity uses the Pi session identity directly, and Workflow identity is the Workflow Owner's Agent identity.
+A short, stable canonical identity allocated within a Workflow: Agents and Messages occupy separate domains. A Request uses its Message identity. The canonical source retains its assignment across retries, replay and recovery; allocations are never reused. Workflow identity is globally unique and equals its Owner's Pi session identity. Each Agent is separately bound to its Pi session. References outside an enclosing Workflow pair the Workflow identity with the local identity.
 
 **Evidence Pointer**:
-A durable reference to one Pi transcript entry or to one exact tool call within an assistant entry. An entry pointer contains its Agent and transcript-entry identities; a tool-call pointer additionally contains the native tool-call identity.
+A durable reference to one Pi transcript entry or to one exact tool call within an assistant entry. An entry pointer contains its Agent and transcript-entry identities within an enclosing Workflow; a tool-call pointer explicitly contains the Workflow and native tool-call identities as well.
 
 **Append Watermark**:
 An Agent transcript entry pointer through which an all-branch inspection included every complete physical append. It identifies the observation boundary, not an active-branch position or a promise about later appends.
@@ -57,7 +57,7 @@ One operation available to each authenticated ordinary Agent—a Workflow Owner 
 An Agent Spawn mode that copies the Direct Spawner's active conversation only through the completed context immediately before the assistant entry containing the canonical Spawn call. It creates a new child in the same Workflow rather than a new Workflow. The fresh matching child Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no authority, Message visibility, child relationship, or Answer obligation. One model-visible handoff after that cutoff identifies inherited authorship before the ordinary Creation Request. A Conversation Fork cannot select an Agent Template or provide Agent Spawn Configuration, and its first provider request preserves the parent's prompt lineage for cache affinity without claiming a cache hit.
 
 **Creation Request**:
-The ordinary Agent Request authored by an Agent Spawn invocation as its child's initial work. Its identity derives from that invocation as a Message, while the matching child Agent Identity supplies its recipient and makes it canonical. It then uses ordinary fixed-mode delivery, retry, cancellation, Answer, and Answer Retrieval semantics without becoming an Agent lifecycle result.
+The ordinary Agent Request authored by an Agent Spawn invocation as its child's initial work. Its Message identity is allocated for that invocation, while the matching child Agent Identity supplies its recipient and makes it canonical. It then uses ordinary fixed-mode delivery, retry, cancellation, Answer, and Answer Retrieval semantics without becoming an Agent lifecycle result.
 
 **Agent Delegation**:
 Assignment of one bounded work unit to another Agent through an Agent Request or an Agent Spawn Creation Request. A Request for existing information or a decision need not delegate work. Once admitted, the responder owns delegated work until its Agent Answer commits or the Request is cancelled; the requester and concurrent delegates keep their work disjoint unless the Request explicitly asks for an independent cross-check.

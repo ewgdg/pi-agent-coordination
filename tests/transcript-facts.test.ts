@@ -14,13 +14,13 @@ import {
 	createMessageDelivery,
 	inspectMessageDeliveries,
 } from "../src/protocol/message-delivery.ts";
-import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { resolveMessageIdentity } from "../src/protocol/identities.ts";
 
 test("incremental facts equal clean reconstruction across appends, compaction and scope replacement", async () => {
 	const root = await mkdtemp(join(tmpdir(), "transcript-facts-"));
 	const file = join(root, "session.jsonl");
 	const manager = SessionManager.inMemory(root, { id: "facts" });
-	const identity = manager.appendCustomEntry("agent-coordination.identity", { agentId: "facts" });
+	const identity = manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow", agentId: "facts" });
 	await writeFile(
 		file,
 		`${[manager.getHeader(), ...manager.getEntries()].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
@@ -51,13 +51,13 @@ test("incremental facts equal clean reconstruction across appends, compaction an
 			{ stopReason: "toolUse" },
 		),
 	);
-	const source = { agentId: "facts", entryId, toolCallId };
+	const source = { workflowId: "workflow", agentId: "facts", entryId, toolCallId };
 	const delivery = createMessageDelivery([
 		{
 			source,
 			projection: {
 				kind: "request",
-				requestMessageId: deriveMessageIdentity(source),
+				requestMessageId: resolveMessageIdentity(source),
 				fromAgentId: "facts",
 				question: "Retain this obligation.",
 			},
@@ -77,7 +77,7 @@ test("incremental facts equal clean reconstruction across appends, compaction an
 	await compare();
 	assert.equal(sources(remote.inspect()).length, 1);
 	assert.equal(remote.diagnostics()?.reconstructions, 1);
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "facts" });
+	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow", agentId: "facts" });
 	await compare();
 	assert.equal(sources(remote.inspect()).length, 0);
 	assert.equal(deliveries(remote.inspect()).length, 0);

@@ -192,7 +192,7 @@ test("failure, termination, and Workflow shutdown each dispose their exact proje
 
 test("native-host clean release retains the borrowed Runtime and Owner binding", async (t) => {
 	const owner = await createTestOwnerHost(t, () => undefined);
-	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
+	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime, owner.runtime.session.sessionId);
 	const firstHandle = host.currentHandle();
 	assert.ok(firstHandle);
 
@@ -207,7 +207,7 @@ test("native-host clean release retains the borrowed Runtime and Owner binding",
 
 test("native-host Run Failure retains the borrowed Runtime for a successor Run", async (t) => {
 	const owner = await createTestOwnerHost(t, () => undefined);
-	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
+	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime, owner.runtime.session.sessionId);
 	const firstHandle = host.currentHandle();
 	assert.ok(firstHandle);
 	const originalDispose = owner.session.dispose.bind(owner.session);
@@ -237,7 +237,7 @@ test("native-host Run Failure retains the borrowed Runtime for a successor Run",
 
 test("failed successor admission also preserves the native-host Runtime", async (t) => {
 	const owner = await createTestOwnerHost(t, () => undefined);
-	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
+	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime, owner.runtime.session.sessionId);
 	await host.lane.run(() => host.discardAndEndInLane("failure"));
 	const originalDispose = owner.session.dispose.bind(owner.session);
 	let sessionDisposals = 0;
@@ -265,7 +265,7 @@ test("failed successor admission also preserves the native-host Runtime", async 
 
 test("Workflow shutdown leaves native Owner disposal to its host after its Run already ended", async (t) => {
 	const owner = await createTestOwnerHost(t, () => undefined);
-	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime);
+	const host = AgentRuntimeSupervisor.bindOwner(owner.runtime, owner.runtime.session.sessionId);
 	await host.lane.run(() => host.discardAndEndInLane("failure"));
 
 	let nativeDisposals = 0;
@@ -616,7 +616,7 @@ test("Runtime Host confirms user and custom Delivery transcript commits", async 
 		fauxAssistantMessage("User Delivery completed."),
 		fauxAssistantMessage("Custom Delivery completed."),
 	]);
-	const runtimeHost = AgentRuntimeSupervisor.bindOwner(ownerHost.runtime);
+	const runtimeHost = AgentRuntimeSupervisor.bindOwner(ownerHost.runtime, ownerHost.runtime.session.sessionId);
 	const userContent = [{ type: "text" as const, text: "Commit this user Delivery." }];
 	const userDelivery = runtimeHost.deliverInLane(
 		{ kind: "user", content: userContent },
@@ -634,6 +634,7 @@ test("Runtime Host confirms user and custom Delivery transcript commits", async 
 
 	const customMessage = createMessageDelivery([{
 		source: {
+			workflowId: "workflow",
 			agentId: ownerHost.session.sessionId,
 			entryId: "host-delivery-source",
 			toolCallId: "host-delivery-tool-call",

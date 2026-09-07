@@ -63,7 +63,8 @@ test("native fork is cancelled for a matching Moderator bootstrap", async (t) =>
 		"Investigate one current Workflow condition.",
 		true,
 		{
-			agentId: host.session.sessionId,
+			sessionId: host.session.sessionId,
+			agentId: host.agentId,
 			workflowId: "source-workflow",
 			creationPreset: null,
 			metadata: {
@@ -103,11 +104,13 @@ test("offline fork preparation repairs copied child evidence into the current Ow
 		persistent: true,
 	});
 	source.session.sessionManager.appendCustomEntry("agent-coordination.identity", {
+		sessionId: source.session.sessionId,
 		agentId: source.session.sessionId,
 		workflowId: "source-workflow",
 		directSpawnerAgentId: "source-parent",
 		creationPreset: null,
 		spawnSource: {
+			workflowId: "source-workflow",
 			agentId: "source-parent",
 			entryId: "source-spawn-entry",
 			toolCallId: "source-spawn-call",
@@ -145,7 +148,7 @@ test("offline fork preparation repairs copied child evidence into the current Ow
 				(entry) =>
 					entry.type === "custom" &&
 					entry.customType === "agent-coordination.identity" &&
-					(entry.data as { agentId?: unknown }).agentId === prepared.session.sessionId,
+					(entry.data as { sessionId?: unknown }).sessionId === prepared.session.sessionId,
 			),
 			true,
 		);
@@ -266,14 +269,14 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 		const currentIdentities = identities.filter(
 			(entry) =>
 				entry.type === "custom" &&
-				(entry.data as { agentId?: unknown }).agentId === forkOwner.sessionId,
+				(entry.data as { sessionId?: unknown }).sessionId === forkOwner.sessionId,
 		);
 		assert.equal(currentIdentities.length, 1);
 		assert.equal(
 			identities.some(
 				(entry) =>
 					entry.type === "custom" &&
-					(entry.data as { agentId?: unknown }).agentId === sourceOwnerId,
+					(entry.data as { sessionId?: unknown }).sessionId === sourceOwnerId,
 			),
 			true,
 		);
@@ -282,7 +285,8 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 				? currentIdentities[0].data
 				: undefined,
 			{
-				agentId: forkOwner.sessionId,
+				sessionId: forkOwner.sessionId,
+				agentId: "a1",
 				workflowId: forkOwner.sessionId,
 				directSpawnerAgentId: null,
 				metadata: { label: "Owner", description: "Workflow Owner" },
@@ -335,7 +339,7 @@ test("native Owner clone creates an isolated Workflow after nested coordination"
 			forkChildren.matches[0]?.primaryEvidence.transcriptPath ?? "",
 			new RegExp(Buffer.from(forkOwner.sessionId, "utf8").toString("base64url")),
 		);
-		assert.notEqual(forkChildId, directChildId);
+		assert.equal(forkChildId, directChildId);
 		assert.notEqual(forkChildId, nestedChildId);
 	} finally {
 		await host.runtime.dispose();
@@ -386,7 +390,7 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 			(entry) =>
 				entry.type === "custom" &&
 				entry.customType === "agent-coordination.identity" &&
-				(entry.data as { agentId?: unknown }).agentId === sourceOwnerId,
+				(entry.data as { sessionId?: unknown }).sessionId === sourceOwnerId,
 		);
 		assert.ok(sourceIdentity);
 		sourceOwner.sessionManager.branch(sourceIdentity.id);

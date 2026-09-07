@@ -40,7 +40,7 @@ test("AgentTranscript asks its reader for a fresh inspection every time", () => 
 
 test("local SessionManager consumers share retained transcript evidence", () => {
 	const sessionManager = SessionManager.inMemory("/workflow", { id: "agent-1" });
-	sessionManager.appendCustomEntry("agent-coordination.identity", { agentId: "agent-1" });
+	sessionManager.appendCustomEntry("agent-coordination.identity", { sessionId: sessionManager.getSessionId(), workflowId: "workflow", agentId: "agent-1" });
 	const transcript = transcriptFromSessionManager(sessionManager);
 
 	const before = transcript.inspect();
@@ -65,11 +65,13 @@ test("new Agent transcript materialization persists only its creation Identity",
 		id: "agent-materialized",
 	});
 	prepared.appendCustomEntry("agent-coordination.identity", {
+		sessionId: "agent-materialized",
 		agentId: "agent-materialized",
 		workflowId: "workflow-materialized",
 		directSpawnerAgentId: "parent-materialized",
 		creationPreset: null,
 		spawnSource: {
+			workflowId: "workflow-materialized",
 			agentId: "parent-materialized",
 			entryId: "spawn-entry",
 			toolCallId: "spawn-tool-call",
@@ -96,11 +98,13 @@ test("new Agent transcript header uses the first Runtime working directory witho
 		id: "agent-effective-cwd",
 	});
 	prepared.appendCustomEntry("agent-coordination.identity", {
+		sessionId: "agent-effective-cwd",
 		agentId: "agent-effective-cwd",
 		workflowId: "workflow-effective-cwd",
 		directSpawnerAgentId: "parent-effective-cwd",
 		creationPreset: null,
 		spawnSource: {
+			workflowId: "workflow-effective-cwd",
 			agentId: "parent-effective-cwd",
 			entryId: "spawn-entry",
 			toolCallId: "spawn-tool-call",
@@ -115,11 +119,13 @@ test("new Agent transcript header uses the first Runtime working directory witho
 	assert.deepEqual(identityEntry?.type === "custom"
 		? identityEntry.data
 		: undefined, {
+		sessionId: "agent-effective-cwd",
 		agentId: "agent-effective-cwd",
 		workflowId: "workflow-effective-cwd",
 		directSpawnerAgentId: "parent-effective-cwd",
 		creationPreset: null,
 		spawnSource: {
+			workflowId: "workflow-effective-cwd",
 			agentId: "parent-effective-cwd",
 			entryId: "spawn-entry",
 			toolCallId: "spawn-tool-call",
@@ -134,6 +140,7 @@ test("new Moderator transcript materialization validates its Input bootstrap", a
 		id: "moderator-materialized",
 	});
 	const identity = {
+		sessionId: "moderator-materialized",
 		agentId: "moderator-materialized",
 		workflowId: "workflow-materialized",
 		directSpawnerAgentId: null,
@@ -144,6 +151,7 @@ test("new Moderator transcript materialization validates its Input bootstrap", a
 		trigger: {
 			kind: "operation_review" as const,
 			toolCall: {
+				workflowId: "workflow",
 				agentId: "reviewed-agent",
 				entryId: "reviewed-entry",
 				toolCallId: "reviewed-tool-call",
@@ -182,7 +190,7 @@ test("transcript materialization rejects missing role bootstrap evidence", async
 test("file-backed transcript inspections reopen durable evidence written by another authority", async () => {
 	const root = await mkdtemp(join(tmpdir(), "agent-transcript-"));
 	const writer = SessionManager.create(root, join(root, "sessions"), { id: "agent-file" });
-	writer.appendCustomEntry("agent-coordination.identity", { agentId: "agent-file" });
+	writer.appendCustomEntry("agent-coordination.identity", { sessionId: writer.getSessionId(), workflowId: "workflow", agentId: "agent-file" });
 	const sessionFile = writer.getSessionFile();
 	assert.ok(sessionFile);
 	const header = writer.getHeader();
@@ -253,7 +261,7 @@ function inspection(sessionId: string, entryId: string): TranscriptInspection {
 
 test("unchanged local reads reuse evidence without reprocessing prior facts or rebuilding context", () => {
 	const manager = SessionManager.inMemory("/workflow", { id: "retained" });
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "retained" });
+	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow", agentId: "retained" });
 	const transcript = transcriptFromSessionManager(manager);
 	const first = transcript.inspect();
 	const getEntries = manager.getEntries.bind(manager);
@@ -302,7 +310,7 @@ test("concurrent consumers share catch-up and a current read sees every committe
 
 test("local physical appends survive moving back to a previously inspected branch", () => {
 	const manager = SessionManager.inMemory("/workflow", { id: "branches" });
-	const root = manager.appendCustomEntry("agent-coordination.identity", { agentId: "branches" });
+	const root = manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow", agentId: "branches" });
 	const transcript = transcriptFromSessionManager(manager);
 	transcript.inspect();
 	manager.appendCustomEntry("hidden-branch", {});
@@ -315,13 +323,13 @@ test("file replacement and truncate-regrowth reconstruct disposable state", asyn
 	const root = await mkdtemp(join(tmpdir(), "transcript-replace-"));
 	const file = join(root, "session.jsonl");
 	const manager = SessionManager.inMemory(root, { id: "replace" });
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "replace" });
+	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow", agentId: "replace" });
 	const body = () => `${[manager.getHeader(), ...manager.getEntries()].map(entry => JSON.stringify(entry)).join("\n")}\n`;
 	await writeFile(file, body());
 	const transcript = transcriptFromSessionFile(file);
 	assert.equal(transcript.inspect().entries.length, 1);
 	manager.newSession({ id: "replacement" });
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "replacement" });
+	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow", agentId: "replacement" });
 	manager.appendCustomEntry("large-marker", { text: "larger".repeat(100) });
 	await writeFile(file, body());
 	assert.equal(transcript.inspect().sessionId, "replacement");
@@ -334,7 +342,7 @@ test("async catch-up yields and includes appends made while consuming a backlog"
 	const root = await mkdtemp(join(tmpdir(), "transcript-backlog-"));
 	const file = join(root, "session.jsonl");
 	const manager = SessionManager.inMemory(root, { id: "backlog" });
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "backlog" });
+	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow", agentId: "backlog" });
 	for (let i = 0; i < 2000; i++) manager.appendCustomEntry("marker", { i });
 	await writeFile(file, `${[manager.getHeader(), ...manager.getEntries()].map(entry => JSON.stringify(entry)).join("\n")}\n`);
 	const transcript = transcriptFromSessionFile(file);
@@ -356,7 +364,7 @@ test("unchanged reads do no history work and fixed appends consume only their by
 	const root = await mkdtemp(join(tmpdir(), "transcript-work-"));
 	const file = join(root, "session.jsonl");
 	const manager = SessionManager.inMemory(root, { id: "work" });
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "work" });
+	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow", agentId: "work" });
 	for (let i = 0; i < 1000; i++) manager.appendCustomEntry("marker", { i });
 	await writeFile(file, `${[manager.getHeader(), ...manager.getEntries()].map(entry => JSON.stringify(entry)).join("\n")}\n`);
 	const transcript = transcriptFromSessionFile(file);
@@ -379,7 +387,7 @@ test("unchanged reads do no history work and fixed appends consume only their by
 
 test("a second refresh observes an append after the first read finished but before its promise settled", async () => {
 	const manager = SessionManager.inMemory("/workflow", { id: "refresh-race" });
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "refresh-race" });
+	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "workflow", agentId: "refresh-race" });
 	const transcript = transcriptFromSessionManager(manager);
 	await transcript.refresh();
 	const first = transcript.refresh();
@@ -405,8 +413,10 @@ test("rewriting an incomplete tail never splices old bytes into a new committed 
 test("cold child bootstrap accepts only creation rules, not effective configuration or discovery metadata", () => {
 	const session = SessionManager.inMemory("/project", { id: "preset-child" });
 	const identity = {
+		sessionId: "preset-child",
 		agentId: "preset-child", workflowId: "owner", directSpawnerAgentId: "owner",
-		spawnSource: { agentId: "owner", entryId: "spawn-entry", toolCallId: "spawn-call" },
+		spawnSource: {
+		workflowId: "owner", agentId: "owner", entryId: "spawn-entry", toolCallId: "spawn-call" },
 		metadata: { label: "preset-child" },
 		creationPreset: { systemPromptMode: "append", systemPrompt: "", loadContextFiles: true },
 	};

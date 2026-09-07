@@ -1,3 +1,4 @@
+import { agentIdOfSessionFile } from "./support/agent-identity.ts";
 import assert from "node:assert/strict";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -12,7 +13,7 @@ import {
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
-import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { resolveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import {
 	executeRegisteredTool,
@@ -84,11 +85,13 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 	const grandchildTranscript = SessionManager.create(effectiveCwd, workflowDirectory);
 	const grandchildAgentId = grandchildTranscript.getSessionId();
 	grandchildTranscript.appendCustomEntry("agent-coordination.identity", {
+		sessionId: grandchildAgentId,
 		agentId: grandchildAgentId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: spawned.agentId,
 		creationPreset: null,
 		spawnSource: {
+			workflowId: host.session.sessionId,
 			agentId: spawned.agentId,
 			entryId: nestedSpawnEntryId,
 			toolCallId: "spawn-nested-before-reopen",
@@ -181,11 +184,12 @@ test("a fresh Owner host rediscovers a conversation-fork child without copied ob
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	const historicalSource = {
+		workflowId: host.session.sessionId,
 		agentId: "historical-requester",
 		entryId: "historical-request-entry",
 		toolCallId: "historical-inbound-request",
 	};
-	const historicalRequestId = deriveMessageIdentity(historicalSource);
+	const historicalRequestId = resolveMessageIdentity(historicalSource);
 	const historicalDelivery = createMessageDelivery([{
 		source: historicalSource,
 		projection: {
@@ -338,11 +342,12 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		),
 	);
 	const outboundSource = {
-		agentId: host.session.sessionId,
+		workflowId: host.session.sessionId,
+		agentId: host.agentId,
 		entryId: outboundEntryId,
 		toolCallId: "request-quarantined-child",
 	};
-	const outboundRequestId = deriveMessageIdentity(outboundSource);
+	const outboundRequestId = resolveMessageIdentity(outboundSource);
 	const outboundReceipt = {
 		requestMessageId: outboundRequestId,
 		targetAgentId: first.agentId,
@@ -370,12 +375,14 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	const foreignTranscript = SessionManager.create(host.cwd, directory);
 	const foreignAgentId = foreignTranscript.getSessionId();
 	foreignTranscript.appendCustomEntry("agent-coordination.identity", {
+		sessionId: foreignAgentId,
 		agentId: foreignAgentId,
 		workflowId: "foreign-workflow",
-		directSpawnerAgentId: host.session.sessionId,
+		directSpawnerAgentId: host.agentId,
 		creationPreset: null,
 		spawnSource: {
-			agentId: host.session.sessionId,
+			workflowId: "foreign-workflow",
+			agentId: host.agentId,
 			entryId: foreignSpawnEntryId,
 			toolCallId: "spawn-foreign-candidate",
 		},
@@ -386,7 +393,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	const firstTranscript = SessionManager.open(firstFile);
 	const inboundRequestInput = {
 		operation: "request" as const,
-		targetAgent: host.session.sessionId,
+		targetAgent: host.agentId,
 		question: "Remain answer-owed even when the requester transcript is quarantined.",
 	};
 	const inboundEntryId = firstTranscript.appendMessage(
@@ -398,11 +405,12 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		),
 	);
 	const inboundSource = {
+		workflowId: host.session.sessionId,
 		agentId: first.agentId,
 		entryId: inboundEntryId,
 		toolCallId: "request-from-quarantined-child",
 	};
-	const inboundRequestId = deriveMessageIdentity(inboundSource);
+	const inboundRequestId = resolveMessageIdentity(inboundSource);
 	const inboundDelivery = createMessageDelivery([
 		{
 			source: inboundSource,
@@ -423,7 +431,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	const firstIdentity = firstTranscript.getEntries()[0];
 	assert.ok(firstIdentity?.type === "custom");
 	const firstIdentityData = firstIdentity.data as {
-		spawnSource: { agentId: string; entryId: string; toolCallId: string };
+		spawnSource: { workflowId: string; agentId: string; entryId: string; toolCallId: string };
 	};
 	const nestedSpawnEntryId = firstTranscript.appendMessage(
 		fauxAssistantMessage(
@@ -441,11 +449,13 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	);
 	const nestedAgentId = nestedTranscript.getSessionId();
 	nestedTranscript.appendCustomEntry("agent-coordination.identity", {
+		sessionId: nestedAgentId,
 		agentId: nestedAgentId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: first.agentId,
 		creationPreset: null,
 		spawnSource: {
+			workflowId: host.session.sessionId,
 			agentId: first.agentId,
 			entryId: nestedSpawnEntryId,
 			toolCallId: "spawn-dependent-grandchild",
@@ -457,6 +467,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	const duplicateTranscript = SessionManager.create(host.cwd, directory);
 	const duplicateAgentId = duplicateTranscript.getSessionId();
 	duplicateTranscript.appendCustomEntry("agent-coordination.identity", {
+		sessionId: duplicateTranscript.getSessionId(), workflowId: "workflow",
 		...(firstIdentity.data as Record<string, unknown>),
 		agentId: duplicateAgentId,
 	});
@@ -475,7 +486,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	);
 	const cyclicAgentIds = await writeCyclicCandidates(
 		directory,
-		host.session.sessionId,
+		host.agentId,
 		host.cwd,
 	);
 	const bytesBeforeAdmission = await snapshotDirectory(directory);
@@ -762,7 +773,7 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 	]);
 	const request = await executeTool(host, "agent_message", "self-request-before-branch", {
 		operation: "request",
-		targetAgent: host.session.sessionId,
+		targetAgent: host.agentId,
 		question: "Remain unresolved on an abandoned physical branch.",
 	}) as { requestMessageId: string };
 	await waitForTranscriptEntry(
@@ -1153,15 +1164,16 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 		JSON.stringify({
 			trigger: {
 				kind: "obligation_stall",
-				agentId: host.session.sessionId,
+				agentId: host.agentId,
 				obligations: { total: 0, sources: [] },
 			},
 			inspectedThrough: [
-				{ agentId: host.session.sessionId, entryId: ownerIdentity.id },
+				{ agentId: host.agentId, entryId: ownerIdentity.id },
 			],
 		}),
 		true,
 		{
+			sessionId: malformedAgentId,
 			agentId: malformedAgentId,
 			workflowId: host.session.sessionId,
 			creationPreset: null,
@@ -1330,7 +1342,7 @@ async function waitForModeratorSession(
 					(entry) => entry.type === "custom_message" &&
 						entry.customType === "agent-coordination.moderator-input",
 				)
-			) return { agentId: sessionManager.getSessionId(), path };
+			) return { agentId: agentIdOfSessionFile(path)!, path };
 		}
 		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
@@ -1368,7 +1380,7 @@ async function waitForSessionFile(
 		for (const filename of await readdir(directory)) {
 			if (!filename.endsWith(".jsonl")) continue;
 			const path = join(directory, filename);
-			if (SessionManager.open(path).getSessionId() === agentId) return path;
+			if (agentIdOfSessionFile(path) === agentId) return path;
 		}
 		await new Promise<void>((resolve) => setTimeout(resolve, 1));
 	}
@@ -1452,11 +1464,13 @@ async function writeCyclicCandidates(
 			timestamp,
 			customType: "agent-coordination.identity",
 			data: {
+				sessionId: candidate.agentId,
 				agentId: candidate.agentId,
 				workflowId,
 				directSpawnerAgentId: candidate.directSpawnerAgentId,
 				creationPreset: null,
 				spawnSource: {
+					workflowId: "workflow",
 					agentId: candidate.directSpawnerAgentId,
 					entryId: candidate.claimedSourceEntryId,
 					toolCallId: candidate.claimedSourceToolCallId,

@@ -1,3 +1,4 @@
+import { allocateWorkflowId } from "../../src/protocol/workflow-ids.ts";
 import {
 	createFauxCore,
 	fauxAssistantMessage,
@@ -90,6 +91,7 @@ export type TestUi = ExtensionUIContext & {
 };
 
 export type TestOwnerHost = {
+	readonly agentId: string;
 	cwd: string;
 	services: AgentSessionServices;
 	session: AgentSession;
@@ -275,6 +277,8 @@ async function createUnboundTestOwnerHostWithRuntime(
 	const deferredCleanups: Array<() => void | Promise<void>> = [];
 	let disposal: Promise<void> | undefined;
 	const host: TestOwnerHost = {
+		get agentId() { return allocateWorkflowId({
+		workflowId: initial.session.sessionId, domain: "a", source: initial.session.sessionId }); },
 		cwd,
 		services: initial.services,
 		session: initial.session,

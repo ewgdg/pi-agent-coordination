@@ -64,7 +64,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		"requestMessageId",
 	]);
 	const longContent = "Direction ".repeat(200).trim();
-	const receiverAgentId = host.session.sessionId;
+	const receiverAgentId = host.agentId;
 	const args = {
 		operation: "send" as const,
 		targetAgent: receiverAgentId,
@@ -87,7 +87,6 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	};
 	const callText = tool.renderCall(args, plainTheme, renderContext).render(160).join("\n");
 	assert.match(callText, new RegExp(`Owner · ${receiverAgentId.slice(-8)}`));
-	assert.doesNotMatch(callText, new RegExp(receiverAgentId));
 	assert.match(callText, /steer/);
 	assert.equal(callText.includes(longContent), false);
 	assert.match(callText, /…/);
@@ -204,6 +203,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 				fromAgentId: "responder-agent",
 				answer: "Recovered immutable Answer.",
 				answerSource: {
+					workflowId: host.session.sessionId,
 					agentId: "responder-agent",
 					entryId: "answer-entry",
 					toolCallId: "answer-call",
@@ -309,7 +309,7 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 	};
 	const receipt = {
 		spawnStatus: "created" as const,
-		agentId: "agent-identity-1234567890",
+		agentId: "a2",
 		requestMessageId: "request-identity",
 		messageStatus: "sent" as const,
 		effectiveConfiguration,
@@ -322,8 +322,7 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 	).render(160).join("\n");
 	assert.match(collapsedText, /created/);
 	assert.match(collapsedText, /sent/);
-	assert.match(collapsedText, /Researcher · 34567890/);
-	assert.doesNotMatch(collapsedText, new RegExp(receipt.agentId));
+	assert.match(collapsedText, /Researcher · a2/);
 	assert.match(collapsedText, /provider\/model/);
 	assert.match(collapsedText, /high/);
 	assert.equal(collapsedText.includes(effectiveConfiguration.cwd), false);

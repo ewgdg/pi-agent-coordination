@@ -12,8 +12,10 @@ test("exhausted handling remains a passive attention source without a duplicate 
 			requests: {
 				total: 2,
 				sources: [
-					{ agentId: "agent-alpha", entryId: "request-a", toolCallId: "call-a" },
-					{ agentId: "agent-bravo", entryId: "request-b", toolCallId: "call-b" },
+					{
+					workflowId: "workflow", agentId: "agent-alpha", entryId: "request-a", toolCallId: "call-a" },
+					{
+				workflowId: "workflow", agentId: "agent-bravo", entryId: "request-b", toolCallId: "call-b" },
 				],
 			},
 		},

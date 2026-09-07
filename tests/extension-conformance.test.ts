@@ -139,7 +139,7 @@ test("coordination renderers keep routine receipts compact", async (t) => {
 			},
 			callLines: 1,
 			collapsedLines: 2,
-			summary: /Researcher · ld-agent.*idle/s,
+			summary: /Researcher · child-agent.*idle/s,
 			expandedDetail: /Researcher/,
 		},
 		{
@@ -165,7 +165,7 @@ test("coordination renderers keep routine receipts compact", async (t) => {
 			details: { agentId: "child-agent", disposition: "held" },
 			callLines: 1,
 			collapsedLines: 1,
-			summary: /held .* Researcher · ld-agent/,
+			summary: /held .* Researcher · child-agent/,
 			expandedDetail: /disposition/,
 		},
 		{
@@ -233,7 +233,7 @@ test("coordination renderers keep routine receipts compact", async (t) => {
 	await moderatorHost.runtime.dispose();
 });
 
-test("Agent Observe rendering consistently shows labels with compact identities", () => {
+test("Agent Observe rendering consistently shows labels with canonical IDs", () => {
 	const dimmed: string[] = [];
 	const trackingTheme = {
 		fg(color: string, text: string) {
@@ -242,7 +242,7 @@ test("Agent Observe rendering consistently shows labels with compact identities"
 		},
 		bold: (text: string) => text,
 	} as unknown as Theme;
-	const agentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+	const agentId = "a2";
 	const resolveAgentLabel = (candidateAgentId: string) =>
 		candidateAgentId === agentId ? "Researcher" : undefined;
 	const details = {
@@ -263,8 +263,8 @@ test("Agent Observe rendering consistently shows labels with compact identities"
 	)
 		.render(120)
 		.map((line) => line.trimEnd());
-	assert.deepEqual(call, ["observe status · Researcher · 983c81e3"]);
-	assert.ok(dimmed.includes("Researcher · 983c81e3"));
+	assert.deepEqual(call, ["observe status · Researcher · a2"]);
+	assert.ok(dimmed.includes("Researcher · a2"));
 
 	const result = {
 		content: [{ type: "text" as const, text: JSON.stringify(details) }],
@@ -276,7 +276,7 @@ test("Agent Observe rendering consistently shows labels with compact identities"
 		trackingTheme,
 		{ args: explicitArgs },
 	).render(120).map((line) => line.trimEnd());
-	assert.deepEqual(explicitResult, ["Researcher · 983c81e3", "idle"]);
+	assert.deepEqual(explicitResult, ["Researcher · a2", "idle"]);
 	const expandedResult = renderAgentObserveResult(
 		result,
 		{ expanded: true, isPartial: false },
@@ -291,19 +291,18 @@ test("Agent Observe rendering consistently shows labels with compact identities"
 		trackingTheme,
 		{ args: { operation: "status" } },
 	).render(120).map((line) => line.trimEnd());
-	assert.deepEqual(selfResult, ["Researcher · 983c81e3", "idle"]);
+	assert.deepEqual(selfResult, ["Researcher · a2", "idle"]);
 });
 
-test("Agent Control rendering consistently shows labels with compact identities", () => {
-	const agentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+test("Agent Control rendering consistently shows labels with canonical IDs", () => {
+	const agentId = "a2";
 	const resolveAgentLabel = (candidateAgentId: string) =>
 		candidateAgentId === agentId ? "Researcher" : undefined;
 	const args = { operation: "interrupt" as const, agentId };
 	const call = renderAgentControlCall(args, plainTheme, resolveAgentLabel)
 		.render(120)
 		.join("\n");
-	assert.match(call, /control interrupt · Researcher · 983c81e3/);
-	assert.doesNotMatch(call, new RegExp(agentId));
+	assert.match(call, /control interrupt · Researcher · a2/);
 
 	const result = renderAgentControlResult(
 		{
@@ -314,8 +313,7 @@ test("Agent Control rendering consistently shows labels with compact identities"
 		plainTheme,
 		resolveAgentLabel,
 	).render(120).join("\n");
-	assert.match(result, /held · Researcher · 983c81e3/);
-	assert.doesNotMatch(result, new RegExp(agentId));
+	assert.match(result, /held · Researcher · a2/);
 
 	const expandedResult = renderAgentControlResult(
 		{
@@ -338,7 +336,7 @@ test("Agent Control renders a sent Resume receipt in the Message receipt languag
 		},
 		bold: (text: string) => text,
 	} as unknown as Theme;
-	const agentId = "019fa1ff-6e95-761e-b4ce-7415983c81e3";
+	const agentId = "a2";
 	const rendered = renderAgentControlResult(
 		{
 			content: [{ type: "text", text: "sent" }],
@@ -349,7 +347,7 @@ test("Agent Control renders a sent Resume receipt in the Message receipt languag
 		() => "Researcher",
 	).render(120).join("\n");
 
-	assert.match(rendered, /sent · Researcher · 983c81e3/);
+	assert.match(rendered, /sent · Researcher · a2/);
 	assert.ok(colors.some(([color, text]) => color === "success" && text === "sent"));
 });
 

@@ -1,5 +1,6 @@
+import { resolveMessageIdentity } from "../src/protocol/identities.ts";
+import { agentIdOfSessionFile } from "./support/agent-identity.ts";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,22 +81,12 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 	const sourceEntry = host.session.sessionManager.getLeafEntry();
 	assert.ok(sourceEntry);
 	const source = {
-		agentId: host.session.sessionId,
+		workflowId: host.session.sessionId,
+		agentId: host.agentId,
 		entryId: sourceEntry.id,
 		toolCallId,
 	};
-	const expectedMessageId = createHash("sha256")
-		.update(
-			[
-				"agent-coordination",
-				"message",
-				source.agentId,
-				source.entryId,
-				source.toolCallId,
-			].join("\0"),
-			"utf8",
-		)
-		.digest("base64url");
+	const expectedMessageId = "m3";
 
 	host.model.setResponses([
 		fauxAssistantMessage("I received the direct Deferred Message."),
@@ -146,7 +137,7 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 			{
 				kind: "message",
 				messageId: expectedMessageId,
-				fromAgentId: host.session.sessionId,
+				fromAgentId: host.agentId,
 				content: sourceInput.content,
 			},
 		],
@@ -243,18 +234,7 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 	);
 	const absentSourceEntry = host.session.sessionManager.getLeafEntry();
 	assert.ok(absentSourceEntry);
-	const absentMessageId = createHash("sha256")
-		.update(
-			[
-				"agent-coordination",
-				"message",
-				host.session.sessionId,
-				absentSourceEntry.id,
-				absentToolCallId,
-			].join("\0"),
-			"utf8",
-		)
-		.digest("base64url");
+	const absentMessageId = resolveMessageIdentity({ workflowId: host.session.sessionId, agentId: host.agentId, entryId: absentSourceEntry.id, toolCallId: absentToolCallId });
 	host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: absentToolCallId,
@@ -318,18 +298,7 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 	);
 	const unresolvedSourceEntry = host.session.sessionManager.getLeafEntry();
 	assert.ok(unresolvedSourceEntry);
-	const unresolvedMessageId = createHash("sha256")
-		.update(
-			[
-				"agent-coordination",
-				"message",
-				host.session.sessionId,
-				unresolvedSourceEntry.id,
-				unresolvedToolCallId,
-			].join("\0"),
-			"utf8",
-		)
-		.digest("base64url");
+	const unresolvedMessageId = resolveMessageIdentity({ workflowId: host.session.sessionId, agentId: host.agentId, entryId: unresolvedSourceEntry.id, toolCallId: unresolvedToolCallId });
 	const pollUnresolvedId = "poll-unresolved-message";
 	const pollUnresolvedInput = {
 		operation: "poll" as const,
@@ -436,22 +405,12 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 	const sourceEntry = host.session.sessionManager.getLeafEntry();
 	assert.ok(sourceEntry);
 	const source = {
-		agentId: host.session.sessionId,
+		workflowId: host.session.sessionId,
+		agentId: host.agentId,
 		entryId: sourceEntry.id,
 		toolCallId: sendToolCallId,
 	};
-	const messageId = createHash("sha256")
-		.update(
-			[
-				"agent-coordination",
-				"message",
-				source.agentId,
-				source.entryId,
-				source.toolCallId,
-			].join("\0"),
-			"utf8",
-		)
-		.digest("base64url");
+	const messageId = resolveMessageIdentity({ workflowId: host.session.sessionId, agentId: source.agentId, entryId: source.entryId, toolCallId: source.toolCallId });
 	const sendResult = await agentMessage.execute(
 		sendToolCallId,
 		sendInput,
@@ -580,6 +539,7 @@ test("a Message to a dormant child starts a successor Run and releases it after 
 	const sourceEntry = host.session.sessionManager.getLeafEntry();
 	assert.ok(sourceEntry);
 	const source = {
+		workflowId: host.session.sessionId,
 		agentId: identity.agentId,
 		entryId: sourceEntry.id,
 		toolCallId: sendToolCallId,
@@ -700,7 +660,7 @@ test("ordinary Agent labels use its coordination neighborhood while ID suffixes 
 		assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
 	}
 	assert.deepEqual(admittedRecipientIds, [
-		harness.host.session.sessionId,
+		harness.host.agentId,
 		sibling.agentId,
 	]);
 
@@ -768,7 +728,8 @@ test("retry keeps the Agent resolved by the original selector after labels becom
 	const sourceEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(sourceEntry);
 	const source = {
-		agentId: harness.host.session.sessionId,
+		workflowId: harness.host.session.sessionId,
+		agentId: harness.host.agentId,
 		entryId: sourceEntry.id,
 		toolCallId: sourceToolCallId,
 	};
@@ -1159,6 +1120,7 @@ test("poll rejects malformed Message Delivery evidence for another source", asyn
 		true,
 		{
 			messages: [{
+				workflowId: harness.host.session.sessionId,
 				agentId: "another-agent",
 				entryId: "another-entry",
 				toolCallId: "another-call",
@@ -1286,6 +1248,7 @@ test("poll rejects a hidden custom message as Delivery evidence", async (t) => {
 		false,
 		{
 			messages: [{
+				workflowId: harness.host.session.sessionId,
 				agentId: "another-agent",
 				entryId: "another-entry",
 				toolCallId: "hidden-delivery-call",
@@ -1371,18 +1334,7 @@ test("only the original sender can poll a Message", async (t) => {
 	);
 	const sourceEntry = host.session.sessionManager.getLeafEntry();
 	assert.ok(sourceEntry);
-	const messageId = createHash("sha256")
-		.update(
-			[
-				"agent-coordination",
-				"message",
-				host.session.sessionId,
-				sourceEntry.id,
-				sendToolCallId,
-			].join("\0"),
-			"utf8",
-		)
-		.digest("base64url");
+	const messageId = resolveMessageIdentity({ workflowId: host.session.sessionId, agentId: host.agentId, entryId: sourceEntry.id, toolCallId: sendToolCallId });
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
@@ -1876,13 +1828,13 @@ test("Steer freezes an ordered batch after active generation and before the next
 						{
 							kind: "message",
 							messageId: first.receipt.messageId,
-							fromAgentId: harness.host.session.sessionId,
+							fromAgentId: harness.host.agentId,
 							content: "Apply the first redirect.",
 						},
 						{
 							kind: "message",
 							messageId: second.receipt.messageId,
-							fromAgentId: harness.host.session.sessionId,
+							fromAgentId: harness.host.agentId,
 							content: "Then apply the second redirect.",
 						},
 				]);
@@ -1955,7 +1907,8 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 	const lateSourceEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(lateSourceEntry);
 	const lateSource = {
-		agentId: harness.host.session.sessionId,
+		workflowId: harness.host.session.sessionId,
+		agentId: harness.host.agentId,
 		entryId: lateSourceEntry.id,
 		toolCallId: lateToolCallId,
 	};
@@ -2000,7 +1953,7 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 					{
 						kind: "message",
 						messageId: first.receipt.messageId,
-						fromAgentId: harness.host.session.sessionId,
+						fromAgentId: harness.host.agentId,
 						content: "Enter the first frozen batch.",
 					},
 				]);
@@ -2017,7 +1970,7 @@ test("a Steer Message admitted after freeze waits for the following safe boundar
 					messageId: lateReceipt && "messageId" in lateReceipt
 						? lateReceipt.messageId
 						: undefined,
-					fromAgentId: harness.host.session.sessionId,
+					fromAgentId: harness.host.agentId,
 					content: "Wait for the following safe boundary.",
 				},
 			]);
@@ -2132,7 +2085,7 @@ test("Steer waits for an already-issued parallel tool batch even when tools fini
 					{
 						kind: "message",
 						messageId: steer.receipt.messageId,
-						fromAgentId: harness.host.session.sessionId,
+						fromAgentId: harness.host.agentId,
 						content: "Apply this only after both issued tools finish.",
 					},
 				]);
@@ -2273,7 +2226,7 @@ async function waitForChildSessionFile(
 	);
 	for (let attempt = 0; attempt < 500; attempt += 1) {
 		const sessions = await SessionManager.list(host.cwd, workflowDirectory);
-		const child = sessions.find(({ id }) => id === childId);
+		const child = sessions.find(({ path }) => agentIdOfSessionFile(path) === childId);
 		if (child) return child.path;
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
@@ -2376,7 +2329,8 @@ async function authorMessage(
 	const sourceEntry = harness.host.session.sessionManager.getLeafEntry();
 	assert.ok(sourceEntry);
 	const source = {
-		agentId: harness.host.session.sessionId,
+		workflowId: harness.host.session.sessionId,
+		agentId: harness.host.agentId,
 		entryId: sourceEntry.id,
 		toolCallId,
 	};
@@ -2400,7 +2354,7 @@ async function authorMessage(
 
 async function waitForDelivery(
 	harness: Awaited<ReturnType<typeof createDormantChildHarness>>,
-	source: { agentId: string; entryId: string; toolCallId: string },
+	source: { workflowId: string; agentId: string; entryId: string; toolCallId: string },
 ): Promise<void> {
 	const childSessionFile = await waitForChildSessionFile(
 		harness.host,
@@ -2459,7 +2413,7 @@ async function releaseBoundaryTool(
 
 function hasDelivery(
 	entries: ReturnType<SessionManager["getEntries"]>,
-	source: { agentId: string; entryId: string; toolCallId: string },
+	source: { workflowId: string; agentId: string; entryId: string; toolCallId: string },
 ): boolean {
 	return entries.some(
 		(entry) =>
@@ -2471,7 +2425,7 @@ function hasDelivery(
 
 function deliveryContainsSource(
 	details: unknown,
-	source: { agentId: string; entryId: string; toolCallId: string },
+	source: { workflowId: string; agentId: string; entryId: string; toolCallId: string },
 ): boolean {
 	if (typeof details !== "object" || details === null || !("messages" in details)) {
 		return false;

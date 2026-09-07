@@ -15,6 +15,7 @@ import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 export type ChildAgentIdentity = Readonly<{
 	agentId: string;
+	sessionId: string;
 	workflowId: string;
 	directSpawnerAgentId: string;
 	spawnSource: ToolCallPointer;
@@ -31,7 +32,7 @@ export function commitChildAgentIdentity(
 	identity: ChildAgentIdentity,
 	options?: { inheritedConversation?: boolean },
 ): void {
-	if (sessionManager.getSessionId() !== identity.agentId) {
+	if (sessionManager.getSessionId() !== identity.sessionId) {
 		throw new Error("Child Identity Agent ID does not match its Pi session");
 	}
 	const entries = sessionManager.getEntries();
@@ -55,7 +56,7 @@ export function validateCommittedChildIdentity(
 	expected: ChildAgentIdentity,
 	options?: { inheritedConversation?: boolean },
 ): void {
-	if (transcript.sessionId !== expected.agentId) {
+	if (transcript.sessionId !== expected.sessionId) {
 		throw new ProtocolInvariantError("child Identity does not match its Pi session identity");
 	}
 	const ordinaryIdentities = transcript.entries.filter(
@@ -85,7 +86,7 @@ export function validateColdChildIdentity(options: {
 }): ChildAgentIdentity {
 	const identityEntries = options.entries.filter(
 		(entry) => entry.type === "custom" && entry.customType === AGENT_IDENTITY_CUSTOM_TYPE &&
-			isRecord(entry.data) && entry.data.agentId === options.sessionId,
+			isRecord(entry.data) && entry.data.sessionId === options.sessionId,
 	);
 	if (identityEntries.length !== 1) {
 		throw new ProtocolInvariantError(
@@ -98,28 +99,32 @@ export function validateColdChildIdentity(options: {
 	}
 	const identity = requireExactRecord(identityEntry.data, [
 		"agentId",
+		"sessionId",
 		"workflowId",
 		"directSpawnerAgentId",
 		"spawnSource",
 		"creationPreset",
 		"metadata",
 	]);
-	if (identity.agentId !== options.sessionId) {
+	if (identity.sessionId !== options.sessionId) {
 		throw new ProtocolInvariantError("child Identity does not match its Pi session identity");
 	}
 	if (
+		!isIdentifier(identity.agentId) ||
 		!isIdentifier(identity.workflowId) ||
 		!isIdentifier(identity.directSpawnerAgentId) ||
-		identity.directSpawnerAgentId === options.sessionId
+		identity.directSpawnerAgentId === identity.agentId
 	) {
 		throw new ProtocolInvariantError("child Identity authority is invalid");
 	}
 	const spawnSource = requireExactRecord(identity.spawnSource, [
+		"workflowId",
 		"agentId",
 		"entryId",
 		"toolCallId",
 	]);
 	if (
+		spawnSource.workflowId !== identity.workflowId ||
 		spawnSource.agentId !== identity.directSpawnerAgentId ||
 		!isIdentifier(spawnSource.entryId) ||
 		!isIdentifier(spawnSource.toolCallId)
@@ -139,11 +144,13 @@ export function validateColdChildIdentity(options: {
 		throw new ProtocolInvariantError("child Identity description is invalid");
 	}
 	return {
-		agentId: options.sessionId,
+		agentId: identity.agentId,
+		sessionId: options.sessionId,
 		creationPreset: validateAgentCreationPreset(identity.creationPreset),
 		workflowId: identity.workflowId,
 		directSpawnerAgentId: identity.directSpawnerAgentId,
 		spawnSource: {
+			workflowId: identity.workflowId,
 			agentId: spawnSource.agentId,
 			entryId: spawnSource.entryId,
 			toolCallId: spawnSource.toolCallId,

@@ -69,7 +69,6 @@ export function renderAgentSpawnResult(
 			` · ${formatKnownAgentIdentity(
 				agentId,
 				spawnLabel(context.args),
-				options.expanded ? "full" : "compact",
 			)}`,
 		);
 	}

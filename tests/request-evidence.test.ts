@@ -7,7 +7,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { RequestEvidence } from "../src/coordination/request-evidence.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
-import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { resolveMessageIdentity } from "../src/protocol/identities.ts";
 import { AgentTranscript } from "../src/transcript/agent-transcript.ts";
 import { requestHistory } from "./support/request-history.ts";
 import { inspectAnswerDelivery } from "../src/protocol/message.ts";
@@ -38,7 +38,7 @@ test("a scope replacement discards a yielding relationship reconstruction", asyn
 	for (const participant of [history.requester, history.responder]) {
 		const agentId = participant.record.identity.agentId;
 		participant.manager.newSession({ id: agentId });
-		participant.manager.appendCustomEntry("agent-coordination.identity", { agentId });
+		participant.manager.appendCustomEntry("agent-coordination.identity", { sessionId: participant.manager.getSessionId(), workflowId: "requester", agentId });
 	}
 	assert.deepEqual(evidence.residualRelationshipsFor(history.requester.record), { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
 	assert.deepEqual(await pending, { awaitingAnswerRequestIds: [], answerOwedRequestIds: [] });
@@ -97,7 +97,7 @@ test("a rejected later Cancellation cannot invalidate an earlier Agent Wait", ()
 		}),
 	);
 	const evidence = new RequestEvidence(history.agents);
-	const waitSource = { agentId: "requester", entryId, toolCallId };
+	const waitSource = { workflowId: "requester", agentId: "requester", entryId, toolCallId };
 	assert.deepEqual(evidence.outstandingRequestIdsAt(history.requester.record, waitSource), [
 		requestId,
 	]);
@@ -175,9 +175,10 @@ test("Creation Request lookup trusts loaded identity and creation input without 
 			{ stopReason: "toolUse" },
 		),
 	);
-	const source = { agentId: "owner", entryId, toolCallId };
+	const source = { workflowId: "owner", agentId: "owner", entryId, toolCallId };
 	const child = record("worker");
 	child.identity = {
+		sessionId: "worker",
 		agentId: "worker",
 		workflowId: "owner",
 		directSpawnerAgentId: "owner",
@@ -204,7 +205,7 @@ test("Creation Request lookup trusts loaded identity and creation input without 
 			[child.identity.agentId, child],
 		]),
 	);
-	const requestId = deriveMessageIdentity(source);
+	const requestId = resolveMessageIdentity(source);
 
 	assert.deepEqual(evidence.requireRequest(requestId), {
 		kind: "request",
@@ -223,9 +224,10 @@ function record(
 	agentId: string,
 	manager = SessionManager.inMemory(process.cwd(), { id: agentId }),
 ): AgentRecord {
-	manager.appendCustomEntry("agent-coordination.identity", { agentId });
+	manager.appendCustomEntry("agent-coordination.identity", { sessionId: manager.getSessionId(), workflowId: "owner", agentId });
 	return {
 		identity: {
+			sessionId: agentId,
 			agentId,
 			workflowId: "owner",
 			directSpawnerAgentId: null,

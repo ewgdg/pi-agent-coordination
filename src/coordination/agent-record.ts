@@ -1,3 +1,4 @@
+import { isModeratorIdentity } from "../protocol/moderator-input.ts";
 import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
@@ -30,6 +31,7 @@ export type AgentRecord = {
 };
 
 export type AgentStatus = Readonly<{
+	role: "owner" | "ordinary" | "moderator";
 	agentId: string;
 	workflowId: string;
 	label: string;
@@ -67,6 +69,7 @@ export function statusOf(
 	return {
 		agentId: record.identity.agentId,
 		workflowId: record.identity.workflowId,
+		role: record.identity.directSpawnerAgentId !== null ? "ordinary" : isModeratorIdentity(record.identity) ? "moderator" : "owner",
 		label: metadata.label,
 		...(!("description" in metadata) || metadata.description === undefined
 			? {}

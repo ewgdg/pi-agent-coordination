@@ -49,6 +49,7 @@ test("Obligation Reminder inspection proves one exact runtime-authored Delivery"
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
+		sessionId: sessionManager.getSessionId(), workflowId: "workflow",
 		agentId: recipientAgentId,
 	});
 	const reminder = createModelVisibleObligationReminder({
