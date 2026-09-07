@@ -98,6 +98,7 @@ const view = {
 		return undefined;
 	},
 	reconcileHumanToolResults() {},
+	refreshTranscriptFacts() {},
 	async reachSafeBoundary() {},
 	async beginExecution() {},
 	async ensureExecution() {},
