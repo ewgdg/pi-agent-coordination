@@ -73,8 +73,13 @@ The full targeted `participant-tool-registrar.test.ts` file has one unrelated pr
 
 ## Outcomes and handoff
 
-Implementation, documentation, targeted validation, and task-owned commits are complete. Parent owns independent review, push, and PR publication; this worktree has not changed the live workflow or parent checkout. Review should focus on exact-Run authority in the shared reconciliation closure and Answer/preemption arbitration while asynchronous maintenance is pending.
+Initial implementation, documentation, targeted validation, and task-owned commits were handed off. Independent review found two delivery-progress interactions; the plan is reopened for their bounded fixes. Parent owns further review, push, and PR publication; this worktree has not changed the live workflow or parent checkout. Review should focus on exact-Run authority in the shared reconciliation closure and Answer/preemption arbitration while asynchronous maintenance is pending.
 
 ## Model-facing description follow-up
 
 The user requested renewal intent at the tool-description interface without duplicate guidance. Moved the concise behavior into `agent_wait.description` and removed its explanatory prompt-guide paragraph. The role-specific tool-metadata contract test went red before the description change; all five focused Wait/guidance/prompt/metadata tests, typecheck, and diff checks pass afterward. Lifecycle detail remains in the supported-behavior docs.
+
+## Independent-review fixes
+
+1. Fixed: inspecting an already delivered Request on a Dormant responder consumed the initial-admission flag and stranded a later undelivered sibling. Removed that redundant flag: only an actual Run start changes the captured handle/sequence fence. The regression fails before the fix (responder remains Dormant), then verifies normal startup, causal sibling ordering, both original Request Deliveries, and completed Answer proof. `npm run test:fast -- --file=wait-request-recovery.test.ts`: 16 pass; typecheck and diff check pass.
+2. Pending: shared in-flight maintenance across the whole snapshot lets one busy recipient lane suppress subsequent recovery passes for other recipients. Move coalescing to each recipient and keep periodic reconciliation independent of slow lanes. Add regression and focused ending/failure/replacement lifecycle controls.
