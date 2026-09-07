@@ -90,7 +90,8 @@ control, ancestor paths (including wide characters), informational details and
 omitted/current breadcrumbs, hover without keyboard-focus movement, middle/right
 buttons, roster-scoped wheel scrolling, resize/clipping and hit targets after
 scrolling, full-screen editor isolation before and during asynchronous preparation,
-and loading feedback across resize. The standard selector and remote-selection
+loading feedback across resize, and pointer actions independent of customized keyboard
+confirmation bindings. The standard selector and remote-selection
 suites retain keyboard and already-mounted-participant contracts.
 
 Run only the relevant presentation suites:

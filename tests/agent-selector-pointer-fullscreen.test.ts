@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import xterm from "@xterm/headless";
 import type { ExtensionUIContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { Editor, TuiAltScreen, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Editor, TuiAltScreen, getKeybindings, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { AgentRosterStatus } from "../src/coordination/workflow-coordinator.ts";
 import { openAgentSelectorSurface, type AgentSelectorAction, type AgentSelectorOptions } from "../src/presentation/agent-selector-surface.ts";
 
@@ -296,4 +296,39 @@ test("visible breadcrumb cells navigate; omitted/current segments and clipped co
 	clipped.terminal.mouse(0, child.x - 1, child.y, true);
 	await clipped.frame();
 	assert.deepEqual(await clipped.result, { kind: "select_agent", agentId: "branch" });
+});
+
+test("pointer opening is independent of confirmation bindings while keyboard uses them", { timeout: 5_000 }, async (t) => {
+	const keybindings = getKeybindings();
+	const previousBindings = keybindings.getUserBindings();
+	t.after(() => keybindings.setUserBindings(previousBindings));
+	keybindings.setUserBindings({
+		...previousBindings,
+		"tui.select.confirm": "space",
+		"tui.select.down": "enter",
+	});
+
+	const agent = await harness(t);
+	await agent.click("Other");
+	assert.equal(agent.resolved, true, "Agent click must not dispatch a confirmation key");
+	assert.deepEqual(await agent.result, { kind: "select_agent", agentId: "other" });
+
+	const owner = await harness(t);
+	await owner.click("[Owner]");
+	assert.equal(owner.resolved, true);
+	assert.deepEqual(await owner.result, { kind: "select_agent", agentId: "owner" });
+
+	const attention = await harness(t, {
+		humanAttention: [{ requestId: "decision", agentId: "branch", agentLabel: "Branch", question: "Proceed?" }],
+	});
+	await attention.click("DECIDE");
+	assert.equal(attention.resolved, true);
+	assert.deepEqual(await attention.result, { kind: "decide", requestId: "decision", agentId: "branch" });
+
+	const keyboard = await harness(t);
+	await keyboard.input("\r");
+	assert.equal(keyboard.resolved, false, "rebound Enter moves selection rather than confirming");
+	assert.match((await keyboard.frame()).join("\n"), /→ Other/);
+	await keyboard.input(" ");
+	assert.deepEqual(await keyboard.result, { kind: "select_agent", agentId: "other" });
 });

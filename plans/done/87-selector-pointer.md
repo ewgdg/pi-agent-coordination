@@ -38,3 +38,8 @@ The existing SelectList remains authoritative for keyboard and wheel selection. 
 Pointer support is fullscreen-only (Pi regular terminal mode owns its mouse input). Wheel uses SelectList's one-step selection scrolling and excludes tabs, Owner/path, details, help, borders and modal surroundings. Fullscreen validation uses the actual renderer with a headless terminal, not a claimed manual PTY session. Durable verification logs are stored in the agent artifacts output for this task; maintained behavior and reproducible commands are in docs/agent-selector.md and docs/agent-view-acceptance.md.
 
 All implementation changes are committed locally; publication belongs to the parent review workflow.
+
+## Review follow-up: configurable confirmation keys
+A real fullscreen regression reproduced pointer opening failing when confirmation was rebound to Space and Enter was bound to navigation. Pointer activation now invokes the shared item-selection action directly; keyboard input still dispatches through SelectList and its configured bindings. The regression checks Agent, Owner and Attention clicks, verifies rebound keyboard behavior, and restores the previous bindings after the test.
+
+Validation: regression failed before the fix and passed afterward; all 67 focused tests, typecheck and diff whitespace checks pass.
