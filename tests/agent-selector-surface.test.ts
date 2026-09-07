@@ -70,7 +70,7 @@ test("a long Live roster stays bounded and scrolls from the selected Agent", asy
 	assert.ok(rendered.length <= 13, `rendered ${rendered.length} rows in a 15-row terminal`);
 	assert.ok(rendered.every((line) => visibleWidth(line) <= 80));
 	assert.match(rendered.join("\n"), /Agent 10/);
-	assert.match(rendered.join("\n"), /\(10\/19\)/);
+	assert.match(rendered.join("\n"), /\(11\/20\)/);
 	assert.match(rendered.find((line) => line.includes("Agent 10")) ?? "", /→ Agent 10/);
 	assert.match(rendered[0] ?? "", /^┌─+┐$/);
 	assert.match(rendered.at(-1) ?? "", /^└─+┘$/);
@@ -117,7 +117,7 @@ test("Live remains terminal-bounded across Attention and Agent sections", async 
 
 	const rendered = harness.component.render(80);
 	assert.match(rendered.join("\n"), /Attention Inbox/);
-	assert.match(rendered.join("\n"), /│\s+Agents\s+│/);
+	assert.match(rendered.join("\n"), /\[Owner\]\[›\]/);
 	assert.doesNotMatch(rendered.join("\n"), /│\s+Owner\s+│/);
 	assert.match(rendered.join("\n"), /o Owner · Tab views/);
 	assert.ok(rendered.length <= 21, `rendered ${rendered.length} rows in a 24-row terminal`);
@@ -310,7 +310,7 @@ test("Live shows direct children and navigates Agent scopes", async () => {
 
 	harness.component.handleInput?.("l");
 	const researcherScope = harness.component.render(80).join("\n");
-	assert.match(researcherScope, /Agents \/ Researcher/);
+	assert.match(researcherScope, /\[Owner\]\[›\] Researcher/);
 	assert.match(researcherScope, /Source Scout/);
 	assert.match(researcherScope, /Synthesizer/);
 	assert.doesNotMatch(researcherScope, /Builder|Reviewer/);
@@ -325,7 +325,7 @@ test("Live shows direct children and navigates Agent scopes", async () => {
 		/→ Researcher/,
 	);
 	harness.component.handleInput?.("\x1b[C");
-	assert.match(harness.component.render(80).join("\n"), /Agents \/ Researcher/);
+	assert.match(harness.component.render(80).join("\n"), /\[Owner\]\[›\] Researcher/);
 	harness.component.handleInput?.("\x1b[D");
 	assert.match(
 		harness.component.render(80).find((line) => line.includes("Researcher")) ?? "",
@@ -524,7 +524,7 @@ test("Live uses one attention-first list and dispatches the exact Human Request"
 	const lines = harness.component.render(80);
 	const attentionHeader = lines.findIndex((line) => line.includes("Attention Inbox"));
 	const decideRow = lines.findIndex((line) => line.includes("DECIDE 1"));
-	const agentsHeader = lines.findIndex((line) => /│\s+Agents\s+│/.test(line));
+	const agentsHeader = lines.findIndex((line) => /\[Owner\]\[›\]/.test(line));
 	assert.ok(attentionHeader < decideRow);
 	assert.ok(decideRow < agentsHeader);
 	assert.doesNotMatch(lines.join("\n"), /→?\s*Owner\s+live/);
@@ -605,7 +605,7 @@ test("multi-Agent Operational ATTENTION keeps the overlay open when Enter has no
 	assert.equal(await selection, undefined);
 });
 
-test("Live breadcrumbs omit Owner and keep the newest three Agent scopes", async () => {
+test("Live breadcrumbs pin Owner and keep the newest three Agent scopes", async () => {
 	const harness = surfaceHarness(30);
 	const selection = openAgentSelectorSurface(harness.ui, {
 		live: [
@@ -623,14 +623,14 @@ test("Live breadcrumbs omit Owner and keep the newest three Agent scopes", async
 	assert.ok(harness.component);
 
 	const rendered = harness.component.render(80).join("\n");
-	assert.match(rendered, /Agents \/ … \/ Beta \/ Gamma \/ Delta/);
-	assert.doesNotMatch(rendered, /Agents \/ Owner|Agents \/ Alpha/);
+	assert.match(rendered, /\[Owner\]\[›\] … \/ Beta \/ Gamma \/ Delta/);
+	assert.doesNotMatch(rendered, /\[›\] Owner|\[›\] Alpha/);
 	const narrow = harness.component.render(30).join("\n");
-	assert.match(narrow, /Agents \/ … \/ Gamma \/ Delta/);
+	assert.match(narrow, /\[Owner\]\[›\] … \/ Delta/);
 	assert.doesNotMatch(narrow, /Beta/);
-	const veryNarrow = harness.component.render(15);
+	const veryNarrow = harness.component.render(24);
 	assert.match(veryNarrow.join("\n"), /Delta/);
-	assert.ok(veryNarrow.every((line) => visibleWidth(line) <= 15));
+	assert.ok(veryNarrow.every((line) => visibleWidth(line) <= 24));
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -815,4 +815,174 @@ test("a disappeared selection's fallback stays focused on subsequent refreshes",
 	assert.match(harness.component!.render(80).join("\n"), /→ Sibling/);
 	harness.component!.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
+});
+
+test("Owner is a pinned button in a linear keyboard focus order", async () => {
+	const harness = surfaceHarness(24);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null), agentStatus("child", "Child", "owner")],
+		dormant: [], selectedAgentId: "owner",
+	});
+	const component = harness.component!;
+	assert.match(component.render(80).join("\n"), /→ Child/);
+	component.handleInput?.("j");
+	assert.match(component.render(80).join("\n"), /→ Child/);
+	component.handleInput?.("k");
+	assert.match(component.render(80).join("\n"), /\[\[Owner\]\]\[›\]/);
+	assert.doesNotMatch(component.render(80).join("\n"), /→ /);
+	component.handleInput?.("\x1b[A");
+	component.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
+});
+
+test("Owner child action returns to root and preserves the top-level ancestor", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [
+			agentStatus("owner", "Owner", null),
+			agentStatus("first", "First", "owner"),
+			agentStatus("branch", "Branch", "owner"),
+			agentStatus("nested", "Nested", "branch"),
+			agentStatus("leaf", "Leaf", "nested"),
+		], dormant: [], selectedAgentId: "leaf",
+	});
+	const component = harness.component!;
+	component.handleInput?.("k");
+	component.handleInput?.("l");
+	assert.match(component.render(80).join("\n"), /→ Branch/);
+	assert.doesNotMatch(component.render(80).join("\n"), /\[›\] Nested/);
+	component.handleInput?.("k");
+	component.handleInput?.("k");
+	component.handleInput?.("\x1b[C");
+	assert.match(component.render(80).join("\n"), /→ First/);
+	component.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "first" });
+});
+
+test("Attention, Owner and Agents form one non-circular order", async () => {
+	const harness = surfaceHarness(24);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null), agentStatus("child", "Child", "owner")],
+		dormant: [], selectedAgentId: "child",
+		humanAttention: [{ requestId: "request", agentId: "child", agentLabel: "Child", question: "Proceed?" }],
+	});
+	const component = harness.component!;
+	for (const key of ["k", "\x1b[A"]) {
+		component.handleInput?.(key);
+		assert.match(component.render(80).join("\n"), /→ DECIDE/);
+	}
+	component.handleInput?.("j");
+	assert.match(component.render(80).join("\n"), /\[\[Owner\]\]\[›\]/);
+	assert.doesNotMatch(component.render(80).join("\n"), /→ /);
+	component.handleInput?.("\x1b[B");
+	assert.match(component.render(80).join("\n"), /→ Child/);
+	component.handleInput?.("\x1b[B");
+	assert.match(component.render(80).join("\n"), /→ Child/);
+	component.handleInput?.("k");
+	component.handleInput?.("l");
+	assert.match(component.render(80).join("\n"), /→ Child/);
+	component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("Dormant pins Owner without a chevron or heading and Enter selects Owner", async () => {
+	const harness = surfaceHarness(24);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [dormantAgentStatus("child", "Child", "owner")], selectedAgentId: "child",
+	});
+	const component = harness.component!;
+	assert.match(component.render(80).join("\n"), /→ Child/);
+	component.handleInput?.("j");
+	assert.match(component.render(80).join("\n"), /→ Child/);
+	component.handleInput?.("k");
+	component.handleInput?.("k");
+	component.handleInput?.("l");
+	const rendered = component.render(80).join("\n");
+	assert.match(rendered, /\[\[Owner\]\]/);
+	assert.doesNotMatch(rendered, /Dormant Agents|\[›\]|→ /);
+	component.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
+});
+
+test("nested Owner path stays visible while scrolling and children remain a trailing action", async () => {
+	const harness = surfaceHarness(15);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [
+			agentStatus("owner", "Owner", null),
+			agentStatus("branch", "Branch", "owner"),
+			...Array.from({ length: 20 }, (_, index) => agentStatus("child-" + index, "Child " + index, "branch")),
+			agentStatus("grandchild", "Grandchild", "child-10"),
+		], dormant: [], selectedAgentId: "child-10",
+	});
+	const component = harness.component!;
+	let rendered = component.render(80);
+	assert.match(rendered.join("\n"), /\[Owner\]\[›\] Branch/);
+	assert.match(rendered.join("\n"), /→ Child 10.*\[1 child ›\]\s+│/);
+	component.handleInput?.("j");
+	rendered = component.render(80);
+	assert.match(rendered.join("\n"), /\[Owner\]\[›\] Branch/);
+	assert.match(rendered.join("\n"), /→ Child 11/);
+	assert.ok(rendered.length <= 13);
+	component.handleInput?.("k");
+	component.handleInput?.("\x1b[C");
+	assert.match(component.render(80).join("\n"), /→ Grandchild/);
+	component.handleInput?.("h");
+	component.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child-10" });
+});
+
+test("Owner root browsing falls back to a root Agent when its ancestor is Dormant", async () => {
+	const harness = surfaceHarness(24);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [
+			agentStatus("owner", "Owner", null),
+			agentStatus("root", "Root", "owner"),
+			agentStatus("leaf", "Leaf", "sleeping"),
+		], dormant: [dormantAgentStatus("sleeping", "Sleeping", "owner")],
+		selectedAgentId: "leaf",
+		humanAttention: [{ requestId: "request", agentId: "leaf", agentLabel: "Leaf", question: "Proceed?" }],
+	});
+	const component = harness.component!;
+	component.handleInput?.("j");
+	component.handleInput?.("l");
+	assert.match(component.render(80).join("\n"), /→ Root/);
+	component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("focused Owner keeps preparation feedback and input ownership until selection completes", async () => {
+	const harness = surfaceHarness(24);
+	let release!: () => void;
+	const pending = new Promise<void>((resolve) => { release = resolve; });
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)],
+		dormant: [], selectedAgentId: "owner",
+		prepareSelection: () => pending,
+	});
+	const component = harness.component!;
+	component.handleInput?.("\r");
+	try {
+		assert.match(component.render(80).join("\n"), /\[\[Owner\]\].*loading/);
+		component.handleInput?.("\x1b");
+		assert.equal(harness.resolved, false);
+	} finally {
+		release();
+	}
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
+});
+
+test("short Attention view retains its focused summary and pinned Owner boundary", async () => {
+	const harness = surfaceHarness(10);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null), agentStatus("child", "Child", "owner")],
+		dormant: [], selectedAgentId: "owner",
+		humanAttention: [{ requestId: "request", agentId: "child", agentLabel: "Child", question: "Proceed?" }],
+	});
+	const rendered = harness.component!.render(80);
+	assert.ok(rendered.length <= 8);
+	assert.match(rendered.join("\n"), /→ DECIDE/);
+	assert.match(rendered.join("\n"), /\[Owner\]\[›\]/);
+	harness.component!.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
 });

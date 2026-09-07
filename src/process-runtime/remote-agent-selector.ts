@@ -86,6 +86,9 @@ export function createAgentSelectionSession(
 			if (action.kind === "decide" && !isPendingDecision(action)) {
 				throw new Error("stale_request: Human Request is no longer pending");
 			}
+			// Selecting the mounted participant only closes the selector. Do not
+			// reacquire its presentation, which could replace the live attachment.
+			if (action.kind === "select_agent" && action.agentId === selectedAgentId) return;
 			const selection = await view.openAgentPresentation(action.agentId);
 			if (selection.kind === "post_mortem") postMortemAgentView = selection;
 			else preparedAgentView = selection.view;

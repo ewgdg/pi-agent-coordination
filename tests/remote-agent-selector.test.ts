@@ -138,7 +138,7 @@ test("local registered /agents owner returns through the authoritative selection
 	const ownerCommand = captureCommand((pi) => registerAgentsCommand(pi, () => ownerView));
 	await ownerCommand.handler("owner", { ui } as unknown as ExtensionCommandContext);
 
-	assert.deepEqual(opened, ["owner", "owner"]);
+	assert.deepEqual(opened, ["owner"]);
 });
 
 test("remote registered /agents owner selects Owner without opening the selector", async () => {
@@ -340,6 +340,50 @@ test("post-mortem agents outcome propagates without transcript contents", async 
 		preparationError: "Unavailable",
 		outcome: "agents",
 	});
+});
+
+test("selecting the already-mounted participant closes without reopening its view", async () => {
+	let opens = 0;
+	const session = createAgentSelectionSession(presentationView({
+		openAgentPresentation: async () => {
+			opens += 1;
+			throw new Error("already-mounted participant was reopened");
+		},
+	}), "target");
+
+	const action = { kind: "select_agent", agentId: "target" } as const;
+	await session.prepare(action);
+	await session.complete(action);
+
+	assert.equal(opens, 0);
+});
+
+test("deciding on the already-mounted participant still focuses its Human Request", async () => {
+	let opens = 0;
+	let focused: readonly [string, string] | undefined;
+	const view = presentationView({
+		humanAttention: () => [{
+			requestId: "request",
+			agentId: "target",
+			agentLabel: "Target",
+			question: "Proceed?",
+		}],
+		openAgentPresentation: async () => {
+			opens += 1;
+			return { kind: "selected" };
+		},
+		focusHumanAnswer: async (agentId, requestId) => {
+			focused = [agentId, requestId];
+		},
+	});
+	const session = createAgentSelectionSession(view, "target");
+	const action = { kind: "decide", requestId: "request", agentId: "target" } as const;
+
+	await session.prepare(action);
+	await session.complete(action);
+
+	assert.equal(opens, 1);
+	assert.deepEqual(focused, ["target", "request"]);
 });
 
 test("a successful Dormant selection acquires its Runtime exactly once", async () => {
