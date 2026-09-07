@@ -1,7 +1,7 @@
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
-	resolveMessageIdentity,
+	deriveMessageIdentity,
 	resolveCommittedToolCall,
 	type ToolCallPointer,
 } from "./identities.ts";
@@ -102,7 +102,7 @@ export function createSupervisoryResumeMessage(options: {
 	return {
 		kind: "message",
 		origin: "agent_control",
-		messageId: resolveMessageIdentity(options.source),
+		messageId: deriveMessageIdentity(options.source),
 		workflowId: options.workflowId,
 		fromAgentId: options.fromAgentId,
 		targetAgentId: options.input.agentId,

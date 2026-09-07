@@ -1,3 +1,5 @@
+import { resolveCommittedToolCall } from "../protocol/identities.ts";
+import { resolveAgentMessageReferences } from "../protocol/message-reference.ts";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
@@ -191,11 +193,14 @@ export class MessageCoordinator {
 			message.details.disposition !== "answer_delivered"
 		) return undefined;
 		const caller = this.#requireAgent(callerAgentId);
-		const input = resolveCommittedAgentMessageInput({
+		let input = resolveCommittedAgentMessageInput({
 			agentId: callerAgentId,
 			transcript: caller.transcript.inspect(),
 			toolCallId: message.toolCallId,
 		});
+		input = resolveAgentMessageReferences(caller.transcript.inspect(), resolveCommittedToolCall({
+			agentId: callerAgentId, transcript: caller.transcript.inspect(), toolCallId: message.toolCallId, toolName: "agent_message",
+		}).source, input);
 		if (input.operation !== "retry") return undefined;
 		const request = this.#requestEvidence.requireCallerAuthoredMessage(
 			caller,
@@ -545,7 +550,7 @@ export class MessageCoordinator {
 	): Promise<AgentMessageReceipt> {
 		await this.refreshTranscriptFacts();
 		const caller = this.#requireAgent(callerAgentId);
-		const committedInput = resolveCommittedAgentMessageInput({
+		let committedInput = resolveCommittedAgentMessageInput({
 			agentId: callerAgentId,
 			transcript: caller.transcript.inspect(),
 			toolCallId,
@@ -553,6 +558,9 @@ export class MessageCoordinator {
 		if (!sameAgentMessageInput(committedInput, providedInput)) {
 			throw new Error("invariant_violation: executed Agent Message input differs from its source");
 		}
+		committedInput = resolveAgentMessageReferences(caller.transcript.inspect(), resolveCommittedToolCall({
+			agentId: callerAgentId, transcript: caller.transcript.inspect(), toolCallId, toolName: "agent_message",
+		}).source, committedInput);
 		if (committedInput.operation === "send" || committedInput.operation === "request") {
 			return this.send(callerAgentId, toolCallId, committedInput);
 		}

@@ -105,7 +105,7 @@ test("repeated Agent view attachment does not replay either session startup life
 	const starts = (await readProbeEvidence(evidencePath)).filter(
 		(entry) => entry.kind === "session_start",
 	);
-	assert.equal(starts.filter((entry) => entry.sessionId === host.agentId).length, 1);
+	assert.equal(starts.filter((entry) => entry.sessionId === host.session.sessionId).length, 1);
 	assert.equal(starts.filter((entry) => entry.sessionId === agentId).length, 1);
 	assert.notEqual(starts.find((entry) => entry.sessionId === agentId)?.pid, process.pid);
 	assert.equal(host.runtime.session, host.session);
@@ -202,7 +202,7 @@ test("a third-party child-view command remains unique and does not interfere wit
 	const starts = (await readProbeEvidence(evidencePath)).filter(
 		(entry) => entry.kind === "session_start",
 	);
-	assert.equal(starts.find((entry) => entry.sessionId === host.agentId)?.childViewCommandCount, 1);
+	assert.equal(starts.find((entry) => entry.sessionId === host.session.sessionId)?.childViewCommandCount, 1);
 	assert.equal(starts.find((entry) => entry.sessionId === agentId)?.childViewCommandCount, 1);
 	assert.equal(
 		host.ui.notifications.some(({ message }) => message.includes("child-view")),
@@ -210,7 +210,7 @@ test("a third-party child-view command remains unique and does not interfere wit
 	);
 	await commands[0]?.handler("", host.session.extensionRunner.createCommandContext());
 	await waitForProbeEvidence(evidencePath, (entries) => entries.some(
-		(entry) => entry.kind === "command" && entry.sessionId === host.agentId,
+		(entry) => entry.kind === "command" && entry.sessionId === host.session.sessionId,
 	));
 
 });
@@ -312,8 +312,7 @@ async function assertLlamaInference(
 	const model = modelRuntime.getModel("llama.cpp", LLAMA_MODEL_ID);
 	assert.ok(model);
 	const response = await modelRuntime.completeSimple(model, {
-		messages: [{
-	role: "user", content: prompt, timestamp: Date.now() }],
+		messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 	});
 	assert.equal(response.stopReason, "stop");
 	assert.deepEqual(response.content, [{ type: "text", text: "llama conformance response" }]);
@@ -350,8 +349,7 @@ async function startMockLlamaRouter(): Promise<{
 				model: LLAMA_MODEL_ID,
 				choices: [{
 					index: 0,
-					delta: {
-					role: "assistant", content: "llama conformance response" },
+					delta: { role: "assistant", content: "llama conformance response" },
 					finish_reason: null,
 				}],
 			})}\n\n`);

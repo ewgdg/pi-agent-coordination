@@ -64,7 +64,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		"requestMessageId",
 	]);
 	const longContent = "Direction ".repeat(200).trim();
-	const receiverAgentId = host.agentId;
+	const receiverAgentId = host.session.sessionId;
 	const args = {
 		operation: "send" as const,
 		targetAgent: receiverAgentId,
@@ -87,6 +87,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	};
 	const callText = tool.renderCall(args, plainTheme, renderContext).render(160).join("\n");
 	assert.match(callText, new RegExp(`Owner · ${receiverAgentId.slice(-8)}`));
+	assert.doesNotMatch(callText, new RegExp(receiverAgentId));
 	assert.match(callText, /steer/);
 	assert.equal(callText.includes(longContent), false);
 	assert.match(callText, /…/);
@@ -102,7 +103,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		renderContext,
 	).render(160).join("\n");
 	assert.match(resultText, /sent/);
-	assert.match(resultText, new RegExp(messageId));
+	assert.match(resultText, new RegExp(messageId.slice(-8)));
 
 	const deferredText = tool.renderCall(
 		{
@@ -160,7 +161,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 			reason: "The result is no longer needed.",
 		} },
 	).render(160).join("\n");
-	assert.match(cancellationText, /request-message-identity/);
+	assert.match(cancellationText, /identity/);
 
 	const existingCancellationText = tool.renderResult(
 		{
@@ -174,7 +175,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		plainTheme,
 		renderContext,
 	).render(160).join("\n");
-	assert.match(existingCancellationText, /cancellation-message-identity/);
+	assert.match(existingCancellationText, /identity/);
 
 	const answerRequiredText = tool.renderResult(
 		{
@@ -191,7 +192,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	).render(160).join("\n");
 	assert.match(answerRequiredText, /rejected/);
 	assert.match(answerRequiredText, /answer_required/);
-	assert.match(answerRequiredText, /active-request-identity/);
+	assert.match(answerRequiredText, /identity/);
 
 	const retrievalText = tool.renderResult(
 		{
@@ -203,7 +204,6 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 				fromAgentId: "responder-agent",
 				answer: "Recovered immutable Answer.",
 				answerSource: {
-					workflowId: host.session.sessionId,
 					agentId: "responder-agent",
 					entryId: "answer-entry",
 					toolCallId: "answer-call",
@@ -215,7 +215,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		renderContext,
 	).render(160).join("\n");
 	assert.match(retrievalText, /answer_delivered/);
-	assert.match(retrievalText, /answer-identity/);
+	assert.match(retrievalText, /answer · identity/);
 	assert.match(retrievalText, /Recovered immutable Answer/);
 
 	await host.runtime.dispose();
@@ -309,7 +309,7 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 	};
 	const receipt = {
 		spawnStatus: "created" as const,
-		agentId: "a2",
+		agentId: "agent-identity-1234567890",
 		requestMessageId: "request-identity",
 		messageStatus: "sent" as const,
 		effectiveConfiguration,
@@ -322,7 +322,8 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 	).render(160).join("\n");
 	assert.match(collapsedText, /created/);
 	assert.match(collapsedText, /sent/);
-	assert.match(collapsedText, /Researcher · a2/);
+	assert.match(collapsedText, /Researcher · 34567890/);
+	assert.doesNotMatch(collapsedText, new RegExp(receipt.agentId));
 	assert.match(collapsedText, /provider\/model/);
 	assert.match(collapsedText, /high/);
 	assert.equal(collapsedText.includes(effectiveConfiguration.cwd), false);

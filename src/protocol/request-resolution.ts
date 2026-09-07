@@ -1,9 +1,9 @@
-import { workflowOf } from "./identities.ts";
+import { resolveAgentMessageReferences } from "./message-reference.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
-	resolveMessageIdentity,
+	deriveMessageIdentity,
 	compareCommittedToolCallOrder,
 	ProtocolInvariantError,
 	sameToolCallPointer,
@@ -106,7 +106,7 @@ export function inspectCanonicalRequestResolution(options: {
 					resultRequestId !== deliveryRequestId
 				) {
 					throw new ProtocolInvariantError(
-						`Agent Answer ${resolveMessageIdentity(source)} result and Delivery name different Requests`,
+						`Agent Answer ${deriveMessageIdentity(source)} result and Delivery name different Requests`,
 					);
 				}
 				const correlatedRequestId = resultRequestId ?? deliveryRequestId;
@@ -344,17 +344,18 @@ function authoredFacts(options: { authorAgentId: string; transcript: TranscriptI
 				let input: AgentMessageInput;
 				try {
 					input = validateAgentMessageInput(part.arguments);
+					if (input.operation === "poll" || input.operation === "retry") continue;
+					input = resolveAgentMessageReferences(transcript, { agentId: authorAgentId, entryId: entry.id, toolCallId: part.id }, input);
 				} catch {
 					facts.invalidCalls.push(part.id);
 					continue;
 				}
 				if (input.operation === "poll" || input.operation === "retry") continue;
 				const source = {
-					source: {
-					workflowId: workflowOf(transcript, authorAgentId), agentId: authorAgentId, entryId: entry.id, toolCallId: part.id },
+					source: { agentId: authorAgentId, entryId: entry.id, toolCallId: part.id },
 					input,
 				};
-				const messageId = resolveMessageIdentity(source.source);
+				const messageId = deriveMessageIdentity(source.source);
 				const matches = facts.byMessage.get(messageId) ?? [];
 				matches.push(source);
 				facts.byMessage.set(messageId, matches);
@@ -462,7 +463,7 @@ function answerSourcesForRequest(options: {
 		const source = findAuthoredAgentMessageSource({
 			authorAgentId: request.targetAgentId,
 			transcript: responderTranscript,
-			messageId: resolveMessageIdentity(pointer),
+			messageId: deriveMessageIdentity(pointer),
 		});
 		if (source) candidates.set(source.source.toolCallId, source);
 	}

@@ -1,3 +1,4 @@
+import { formatMessageIdentity } from "../presentation/message-identity.ts";
 import type {
 	AgentToolResult,
 	Theme,
@@ -31,6 +32,7 @@ export function renderAgentMessageCall(
 			theme,
 			resolveAgentLabel,
 			answerTargetAgentId,
+			expanded,
 		),
 		0,
 		0,
@@ -71,6 +73,7 @@ function renderMessageCallHeader(
 	theme: Theme,
 	resolveAgentLabel: AgentLabelResolver,
 	answerTargetAgentId: string | undefined,
+	expanded: boolean,
 ): string {
 	// Badge and body reuse the delivered-message theme roles (customMessageLabel /
 	// customMessageText) so sent and delivered coordination content speak one visual
@@ -96,9 +99,9 @@ function renderMessageCallHeader(
 			text += theme.fg("warning", " · steer");
 		}
 	} else if (args.operation === "cancel") {
-		text += theme.fg("dim", ` · ${args.requestMessageId}`);
+		text += theme.fg("dim", ` · ${formatMessageIdentity(args.requestMessageId, expanded)}`);
 	} else if (args.operation === "poll" || args.operation === "retry") {
-		text += theme.fg("dim", ` · ${args.messageId}`);
+		text += theme.fg("dim", ` · ${formatMessageIdentity(args.messageId, expanded)}`);
 	}
 	return text;
 }
@@ -151,13 +154,13 @@ export function renderAgentMessageResult(
 		: receipt.disposition;
 	let text = theme.fg(messageReceiptStatusColor(disposition), disposition);
 	if ("messageId" in receipt) {
-		text += theme.fg("dim", ` · ${receipt.messageId}`);
+		text += theme.fg("dim", ` · ${formatMessageIdentity(receipt.messageId, options.expanded)}`);
 	} else if ("requestMessageId" in receipt) {
-		text += theme.fg("dim", ` · ${receipt.requestMessageId}`);
+		text += theme.fg("dim", ` · ${formatMessageIdentity(receipt.requestMessageId, options.expanded)}`);
 	} else if ("answerMessageId" in receipt) {
-		text += theme.fg("dim", ` · ${receipt.answerMessageId}`);
+		text += theme.fg("dim", ` · ${formatMessageIdentity(receipt.answerMessageId, options.expanded)}`);
 	} else {
-		text += theme.fg("dim", ` · ${receipt.cancellationMessageId}`);
+		text += theme.fg("dim", ` · ${formatMessageIdentity(receipt.cancellationMessageId, options.expanded)}`);
 	}
 	container.addChild(new Text(text, 0, 0));
 	if (
@@ -167,7 +170,7 @@ export function renderAgentMessageResult(
 	) {
 		container.addChild(new Spacer(1));
 		container.addChild(new Text(
-			theme.fg("dim", `answer · ${receipt.answerId}`),
+			theme.fg("dim", `answer · ${formatMessageIdentity(receipt.answerId, options.expanded)}`),
 			0,
 			0,
 		));

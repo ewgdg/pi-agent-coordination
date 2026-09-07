@@ -66,9 +66,8 @@ export async function initializeOwnerWorkflow(options: {
 				runtime.services.diagnostics.push(reloaded.diagnostic);
 			}
 		}
-		const { agentId } = adoptOrValidateOwnerIdentity(runtime);
-		await existing.coordinator.refreshAgentTemplateSnapshot(agentId);
-		const resolveView = () => existing.coordinator.forAgent(agentId);
+		await existing.coordinator.refreshAgentTemplateSnapshot(runtime.session.sessionId);
+		const resolveView = () => existing.coordinator.forAgent(runtime.session.sessionId);
 		installResolvedAgentActivityDock(ctx.ui, resolveView);
 		bindHiddenOwnerAgentExtension({
 			pi,

@@ -1,4 +1,3 @@
-import { allocateWorkflowId } from "../protocol/workflow-ids.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { setImmediate } from "node:timers/promises";
@@ -617,7 +616,7 @@ export class OperationalIncidentCoordinator {
 			throw new Error("invariant_violation: Workflow Owner is unavailable");
 		}
 		this.#sessionFactory.admitProcessRuntimePlatform();
-		const agentId = allocateWorkflowId({ workflowId: this.#ownerIdentity.workflowId, domain: "a", source: uuidv7() });
+		const agentId = uuidv7();
 		const prepared = await this.#sessionFactory.prepareModeratorRun({ agentId });
 		const sessionManager = this.#sessionFactory.createStagingSession(prepared);
 		if (this.#isShuttingDown()) return;
@@ -629,7 +628,6 @@ export class OperationalIncidentCoordinator {
 		const metadata = resolveModeratorAgentMetadata(handling.snapshot.kind);
 		const identity: ModeratorIdentity = {
 			agentId,
-			sessionId: sessionManager.getSessionId(),
 			workflowId: this.#ownerIdentity.workflowId,
 			directSpawnerAgentId: null,
 			creationPreset: prepared.creationPreset,

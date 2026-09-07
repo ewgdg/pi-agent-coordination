@@ -1,13 +1,19 @@
 # Agent messaging and Requests
 
-Agent and Message IDs are short canonical Workflow-local addresses, such as `a2` and `m3`. The globally unique Workflow ID and each Agent's separate Pi session binding are described in [Protocol identities](protocol-identities.md).
-
 Every authenticated ordinary Agent can send an immutable free-form Message or correlated Request to a known Agent in the same Workflow. Each authored Message fixes either Deferred or Steer Delivery.
 
 - Deferred waits until the recipient's current work settles and receives its own model turn.
 - Steer waits for the current generation and its complete issued tool batch, then redirects the next model turn without aborting work or rolling back effects.
 
 Omitting `deliveryMode` selects Deferred.
+
+## Short Message references
+
+`poll.messageId`, `retry.messageId`, and `cancel.requestMessageId` accept a full canonical ID or a unique case-sensitive suffix. Whitespace around the reference is ignored. Matching considers the caller's earlier authored Message sources, including Spawn Creation Requests; exact IDs take precedence. Ambiguity is rejected, so use a longer suffix or the full ID. Normal authorship, Message-kind, and Delivery validation still applies.
+
+Full IDs remain literal references subject to existing evidence checks. For suffix expansion, the referring committed tool call fixes the candidate history. Later Messages cannot change what that call resolves to, including during retry, transcript reopen, or reconstruction. Receipts and Request relationships keep the full canonical ID. This uses retained transcript indexes without a separate allocation database or alias registry.
+
+Collapsed Message tool rendering shows the final eight characters. Expand to see the full ID if that suffix is ambiguous. Structured tool results retain full IDs. Agent IDs remain Pi session IDs, with the existing Agent suffix matching described below. Message IDs remain deterministic source-derived hashes. This does not add cross-Workflow messaging or change Request scheduling.
 
 ## Select a recipient
 
@@ -88,7 +94,7 @@ An ordinary Message receipt returns its source-derived `messageId`. An Agent Req
 
 ## Delivery presentation
 
-The recipient transcript renders each delivered item as a readable message block. Its collapsed view shows the Message type, sender label with the complete canonical Agent ID, and the first ten terminal-width-aware rows of the body. A standalone dim ellipsis on the following line marks a truncated preview. Outgoing Message and Request tool calls use the same body preview, label, and canonical Agent ID format for the receiver. Expanding the block shows the sender label with the full Agent identity and the complete Message, Request question, Answer, or Cancellation reason with Markdown formatting. Batched Deliveries keep each item's sender and type visible instead of presenting the protocol JSON.
+The recipient transcript renders each delivered item as a readable message block. Its collapsed view shows the Message type, sender label with the final eight characters of the Agent identity, and the first ten terminal-width-aware rows of the body. A standalone dim ellipsis on the following line marks a truncated preview. Outgoing Message and Request tool calls use the same body preview, label, and compact identity format for the receiver. Expanding the block shows the sender label with the full Agent identity and the complete Message, Request question, Answer, or Cancellation reason with Markdown formatting. Batched Deliveries keep each item's sender and type visible instead of presenting the protocol JSON.
 
 ## Request one Answer
 

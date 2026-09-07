@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
-	resolveMessageIdentity,
+	deriveHumanRequestIdentity,
 	ProtocolInvariantError,
 	resolveCommittedToolCall,
 	type ToolCallPointer,
@@ -60,7 +60,7 @@ export function resolveCommittedHumanRequest(options: {
 		throw new Error("invariant_violation: Human Request input differs from its committed call");
 	}
 	return {
-		requestId: resolveMessageIdentity(committed.source),
+		requestId: deriveHumanRequestIdentity(committed.source),
 		requesterAgentId: options.agentId,
 		source: committed.source,
 		question: input.question,

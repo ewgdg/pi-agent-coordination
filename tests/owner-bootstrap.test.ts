@@ -196,8 +196,7 @@ test("an Owner Identity repairs a stale id with a current bootstrap", async (t) 
 	assert.deepEqual(
 		identityEntries[1]?.type === "custom" ? identityEntries[1].data : undefined,
 		{
-			sessionId: host.session.sessionId,
-			agentId: host.agentId,
+			agentId: host.session.sessionId,
 			workflowId: host.session.sessionId,
 			directSpawnerAgentId: null,
 			metadata: { label: "Owner", description: "Workflow Owner" },
@@ -238,14 +237,13 @@ test("an Owner Identity repairs contradictory role metadata", async (t) => {
 
 test("a Moderator bootstrap can recover through native /new", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
-	const failedSessionId = host.agentId;
+	const failedSessionId = host.session.sessionId;
 	host.session.sessionManager.appendCustomMessageEntry(
 		"agent-coordination.moderator-input",
 		"{}",
 		true,
 		{
-			sessionId: host.session.sessionId,
-			agentId: host.agentId,
+			agentId: host.session.sessionId,
 			workflowId: "workflow-owner",
 			creationPreset: null,
 			metadata: {
@@ -287,7 +285,7 @@ test("a resumed Owner admits coordination evidence after its Identity cutoff", a
 				"agent_message",
 				{
 					operation: "send",
-					targetAgent: host.agentId,
+					targetAgent: host.session.sessionId,
 					content: "Persist legitimate current-scope coordination evidence.",
 				},
 				{ id: "owner-self-message-before-reopen" },
@@ -301,7 +299,7 @@ test("a resumed Owner admits coordination evidence after its Identity cutoff", a
 		"owner-self-message-before-reopen",
 		{
 			operation: "send",
-			targetAgent: host.agentId,
+			targetAgent: host.session.sessionId,
 			content: "Persist legitimate current-scope coordination evidence.",
 		},
 		undefined,
@@ -544,7 +542,6 @@ test("a valid child Identity is not reclassified as Workflow Owner", async (t) =
 		directSpawnerAgentId: "direct-spawner",
 		creationPreset: null,
 		spawnSource: {
-			workflowId: "workflow-owner",
 			agentId: "direct-spawner",
 			entryId: "assistant-entry",
 			toolCallId: "spawn-call",
@@ -579,8 +576,7 @@ test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async (t)
 		"{}",
 		true,
 		{
-			sessionId: host.session.sessionId,
-			agentId: host.agentId,
+			agentId: host.session.sessionId,
 			workflowId: "workflow-owner",
 			creationPreset: null,
 			metadata: {
@@ -628,8 +624,7 @@ function assertOwnerToolsRegisteredButInactive(host: TestOwnerHost): void {
 
 function ownerIdentityFor(host: TestOwnerHost) {
 	return {
-		sessionId: host.session.sessionId,
-		agentId: host.agentId,
+		agentId: host.session.sessionId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: null,
 		metadata: { label: "Owner" },

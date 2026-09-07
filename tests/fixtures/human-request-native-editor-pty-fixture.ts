@@ -25,7 +25,6 @@ const answerPromise = new Promise<HumanAnswerCandidate>((resolve) => {
 const activityHandlers = new Set<() => void>();
 
 const status = () => ({
-	role: "ordinary" as const,
 	agentId: "pty-agent",
 	workflowId: "pty-owner",
 	label: "Requester",

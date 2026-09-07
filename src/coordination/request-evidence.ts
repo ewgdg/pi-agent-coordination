@@ -12,7 +12,7 @@ import {
 } from "../protocol/creation-request.ts";
 import {
 	compareCommittedToolCallOrder,
-	resolveMessageIdentity,
+	deriveMessageIdentity,
 	resolveCommittedToolCall,
 	type ToolCallPointer,
 } from "../protocol/identities.ts";
@@ -110,7 +110,7 @@ export class RequestEvidence {
 		});
 		const durable = this.#resolveAuthoredMessage(
 			responder,
-			resolveMessageIdentity(committed.source),
+			deriveMessageIdentity(committed.source),
 		);
 		if (durable?.kind === "answer") matches.set(durable.messageId, durable);
 		if (matches.size > 1) {
@@ -382,7 +382,7 @@ export class RequestEvidence {
 					"spawnSource" in child.identity &&
 					child.identity.directSpawnerAgentId === agent.identity.agentId
 				)
-					creationIds.push(resolveMessageIdentity(child.identity.spawnSource));
+					creationIds.push(deriveMessageIdentity(child.identity.spawnSource));
 			}
 		}
 		const cursors = new Map<AgentRecord, RelationshipCursor>();
@@ -627,7 +627,7 @@ export class RequestEvidence {
 		}
 		this.#throwIfUnavailableDeliveryEvidence(
 			`Message ${messageId} depends on quarantined Agent proof`,
-			({ source }) => resolveMessageIdentity(source) === messageId,
+			({ source }) => deriveMessageIdentity(source) === messageId,
 		);
 		throw new Error(`unknown_identity: Message ${messageId}`);
 	}
@@ -717,7 +717,7 @@ export class RequestEvidence {
 			if (!("spawnSource" in child.identity)) continue;
 			if (child.identity.spawnSource.toolCallId.length === 0) continue;
 			if (
-				(child.creationRequest?.messageId ?? resolveMessageIdentity(child.identity.spawnSource)) !==
+				(child.creationRequest?.messageId ?? deriveMessageIdentity(child.identity.spawnSource)) !==
 				requestId
 			)
 				continue;

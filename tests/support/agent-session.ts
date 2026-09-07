@@ -71,7 +71,7 @@ export async function openLiveAgentView(
 	while (selector.render(80).some((line) => line.includes("Agents / "))) {
 		selector.handleInput?.("h");
 	}
-	if (!selectAgentInCurrentTree(selector, agentId, host.agentId)) {
+	if (!selectAgentInCurrentTree(selector, agentId, host.session.sessionId)) {
 		selector.handleInput?.("\x1b");
 		await command;
 		assert.fail(`Agent ${agentId} is absent from the Live selector hierarchy`);

@@ -16,7 +16,7 @@ import {
 } from "../src/coordination/workflow-coordinator.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
-import { resolveMessageIdentity } from "../src/protocol/identities.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
 	WorkflowPolicyStore,
@@ -390,7 +390,7 @@ test("one Supervisory Resume Message commits alone before ordinary held backlog"
 		[{
 			kind: "message",
 			messageId: resumed.messageId,
-			fromAgentId: harness.host.agentId,
+			fromAgentId: harness.host.session.sessionId,
 			content: "Resume this exact held Run with explicit direction.",
 		}],
 	);
@@ -739,9 +739,8 @@ test("Agent Wait rejects when any unanswered work is owned by a Dormant responde
 			),
 	);
 	assert.ok(spawnSourceEntry);
-	const creationRequestId = resolveMessageIdentity({
-		workflowId: harness.host.session.sessionId,
-		agentId: harness.host.agentId,
+	const creationRequestId = deriveMessageIdentity({
+		agentId: harness.host.session.sessionId,
 		entryId: spawnSourceEntry.id,
 		toolCallId: spawnToolCallId,
 	});

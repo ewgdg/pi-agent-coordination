@@ -256,7 +256,6 @@ test("child selector keeps animating until the replacement frame takes over", { 
 	} as ExtensionUIContext;
 	const selection = openAgentSelectorSurface(selectorUi, {
 		live: ["owner", "first", "second"].map((agentId) => ({
-			role: agentId === "owner" ? "owner" as const : "ordinary" as const,
 			agentId, workflowId: "owner", label: agentId,
 			directSpawnerAgentId: agentId === "owner" ? null : "owner",
 			primaryEvidence: { transcriptPath: null, inspectedThrough: { agentId, entryId: agentId } },

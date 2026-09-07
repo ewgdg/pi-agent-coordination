@@ -441,7 +441,8 @@ class AgentSelectorSurface implements Component {
 		const children = childCount === 0
 			? undefined
 			: `${childCount} ${childCount === 1 ? "child" : "children"} ›`;
-		const moderator = status.role === "moderator";
+		const moderator = status.agentId !== status.workflowId &&
+			status.directSpawnerAgentId === null;
 		return {
 			value: status.agentId,
 			label: status.label,
@@ -457,7 +458,7 @@ class AgentSelectorSurface implements Component {
 
 	#ownerStatus(): AgentRosterStatus {
 		const owner = this.#options.live.find(
-			(status) => status.role === "owner",
+			(status) => status.agentId === status.workflowId,
 		);
 		if (!owner) throw new Error("Agent selector roster has no live Owner");
 		return owner;

@@ -25,7 +25,7 @@ import {
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
-import { resolveMessageIdentity } from "../src/protocol/identities.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
 	executeAndCommitRegisteredTool,
@@ -501,8 +501,7 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 	);
 	const spawnSourceEntry = host.session.sessionManager.getLeafEntry();
 	assert.ok(spawnSourceEntry);
-	const creationRequestId = resolveMessageIdentity({
-		workflowId: host.session.sessionId,
+	const creationRequestId = deriveMessageIdentity({
 		agentId: identity.agentId,
 		entryId: spawnSourceEntry.id,
 		toolCallId: "spawn-preflight-retention-worker",
@@ -1944,7 +1943,7 @@ async function openSelectedAgentView(
 	agentId: string,
 ): Promise<Readonly<{ command: Promise<void>; view: Component }>> {
 	const { command, surface: selector } = await openAgentsSurface(host);
-	if (!selectAgentInCurrentTree(selector, agentId, host.agentId)) {
+	if (!selectAgentInCurrentTree(selector, agentId, host.session.sessionId)) {
 		selector.handleInput?.("\x1b");
 		await command;
 		assert.fail(`Agent ${agentId} is absent from the Live selector hierarchy`);

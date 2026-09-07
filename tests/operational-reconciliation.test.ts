@@ -10,7 +10,7 @@ import { MessageCoordinator } from "../src/coordination/messages.ts";
 import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
-import { resolveMessageIdentity } from "../src/protocol/identities.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { AgentRuntimeSupervisor } from "../src/runtime/agent-runtime-supervisor.ts";
 import { ProcessChildSessionFactory } from "../src/runtime/process-child-session-factory.ts";
@@ -102,7 +102,7 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 	let inspect: (snapshot: TranscriptInspection) => void = () => undefined;
 	const owner: AgentRecord = {
 		identity,
-		host: AgentRuntimeSupervisor.bindOwner(host.runtime, host.runtime.session.sessionId),
+		host: AgentRuntimeSupervisor.bindOwner(host.runtime),
 		transcript: new AgentTranscript({
 			read() {
 				const snapshot = reader.inspect();
@@ -159,12 +159,11 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 			fauxToolCall("agent_spawn", { request: `Complete ${childId}.` }, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		));
-		const source = { workflowId: host.session.sessionId, agentId: identity.agentId, entryId, toolCallId };
+		const source = { agentId: identity.agentId, entryId, toolCallId };
 		const child: AgentRecord = {
 			identity: {
-				sessionId: childId,
 				agentId: childId,
-				workflowId: identity.workflowId,
+				workflowId: identity.agentId,
 				directSpawnerAgentId: identity.agentId,
 				creationPreset: null,
 				spawnSource: source,
@@ -179,7 +178,7 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 		};
 		agents.set(childId, child);
 		owner.children.push(childId);
-		const requestId = resolveMessageIdentity(source);
+		const requestId = deriveMessageIdentity(source);
 		owner.host.addRetentionReason("awaiting_answer", requestId);
 		return requestId;
 	}

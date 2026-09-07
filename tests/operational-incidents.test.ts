@@ -17,7 +17,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
-import { agentIdOfSessionFile } from "./support/agent-identity.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import piAgentCoordination from "../src/index.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
@@ -25,7 +24,7 @@ import {
 	WorkflowPolicyStore,
 	parseWorkflowPolicy,
 } from "../src/policy/workflow-policy.ts";
-import { resolveMessageIdentity } from "../src/protocol/identities.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import {
 	bindTestOwnerHost,
@@ -87,8 +86,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	);
 	assert.ok(spawnSourceEntry);
 	const spawnSource = {
-		workflowId: host.session.sessionId,
-		agentId: host.agentId,
+		agentId: host.session.sessionId,
 		entryId: spawnSourceEntry.id,
 		toolCallId: "spawn-stalled-agent",
 	};
@@ -110,7 +108,6 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		inspectedThrough: Array<{ agentId: string; entryId: string }>;
 	};
 	assert.deepEqual(moderatorInput.details, {
-		sessionId: moderator.id,
 		creationPreset: null,
 		agentId: moderator.id,
 		workflowId: host.session.sessionId,
@@ -131,7 +128,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	assert.equal(reminders.length, 1);
 	assert.ok(reminders[0]?.type === "custom_message");
 	assert.deepEqual(JSON.parse(reminders[0].content as string), {
-		requestMessageId: resolveMessageIdentity(spawnSource),
+		requestMessageId: deriveMessageIdentity(spawnSource),
 		requestSnippet: "Answer this Creation Request after completing the work.",
 		guidance:
 			"You still owe an Answer to this Request. Call agent_message with operation \"answer\" now. Unless another obligation or independent task remains, end the turn immediately afterward.",
@@ -415,7 +412,7 @@ test("an overdue root call starts a Moderator outside full child capacity", asyn
 			assert.ok(content);
 			const trigger = (JSON.parse(content) as {
 				trigger: {
-					toolCall: { workflowId: string; agentId: string; entryId: string; toolCallId: string };
+					toolCall: { agentId: string; entryId: string; toolCallId: string };
 				};
 			}).trigger;
 			await moderatorGate;
@@ -475,14 +472,13 @@ test("an overdue root call starts a Moderator outside full child capacity", asyn
 	const input = JSON.parse(inputEntry.content) as {
 		trigger: {
 			kind: string;
-			toolCall: { workflowId: string; agentId: string; entryId: string; toolCallId: string };
+			toolCall: { agentId: string; entryId: string; toolCallId: string };
 			reviewIntervalMs: number;
 		};
 	};
 	assert.deepEqual(input.trigger, {
 		kind: "operation_review",
 		toolCall: {
-			workflowId: host.session.sessionId,
 			agentId: child.agentId,
 			entryId: input.trigger.toolCall.entryId,
 			toolCallId: "overdue-root-call",
@@ -646,7 +642,7 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 					"agent_message",
 					{
 						operation: "request",
-						targetAgent: host.agentId,
+						targetAgent: host.session.sessionId,
 						question: "What outcome should I preserve?",
 					},
 					{ id: "request-owner-outcome" },
@@ -672,7 +668,7 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 		"Create an Agent that will request Owner guidance.",
 	);
 	await waitForCondition(async () => {
-		const owner = await observeStatus(host, host.agentId);
+		const owner = await observeStatus(host, host.session.sessionId);
 		return owner.run.retentionReasons.some(({ reason }) => reason === "answer_owed");
 	});
 
@@ -708,7 +704,7 @@ test("an unexpectedly ended answer-obligated Owner Run creates a Run Failure Mod
 		};
 	}).trigger;
 	assert.equal(trigger.kind, "run_failure");
-	assert.equal(trigger.agentId, host.agentId);
+	assert.equal(trigger.agentId, host.session.sessionId);
 	assert.equal(trigger.runSequence, 1);
 	assert.equal(trigger.obligations.total, 1);
 
@@ -1111,7 +1107,7 @@ test("a Moderator observes the Workflow and controls only non-Owner Runs", async
 					),
 					fauxToolCall(
 						"agent_control",
-						{ operation: "interrupt", agentId: host.agentId },
+						{ operation: "interrupt", agentId: host.session.sessionId },
 						{ id: "moderator-interrupt-owner" },
 					),
 				],
@@ -1292,7 +1288,7 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 					"agent_message",
 					{
 						operation: "request",
-						targetAgent: host.agentId,
+						targetAgent: host.session.sessionId,
 						question: "Should restoring this work take priority over current Owner work?",
 					},
 					{ id: "moderator-request-owner-judgment" },
@@ -1339,8 +1335,7 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 	assert.ok(requestSource);
 	assert.equal(
 		requestId,
-		resolveMessageIdentity({
-			workflowId: host.session.sessionId,
+		deriveMessageIdentity({
 			agentId: moderator.id,
 			entryId: requestSource.id,
 			toolCallId: "moderator-request-owner-judgment",
@@ -1348,7 +1343,7 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 	);
 
 	await waitForCondition(async () => {
-		const owner = await observeStatus(host, host.agentId);
+		const owner = await observeStatus(host, host.session.sessionId);
 		const moderatorStatus = await observeStatus(host, moderator.id);
 		return owner.run.retentionReasons.some(
 			({ reason }) => reason === "answer_owed",
@@ -1376,7 +1371,7 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 		"answer-moderator-escalation",
 	);
 	await waitForCondition(async () => {
-		const owner = await observeStatus(host, host.agentId);
+		const owner = await observeStatus(host, host.session.sessionId);
 		const moderatorStatus = await observeStatus(host, moderator.id);
 		return !owner.run.retentionReasons.some(
 			({ reason }) => reason === "answer_owed",
@@ -1433,13 +1428,13 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 		trigger: {
 			agentId: string;
 			obligations: {
-				sources: Array<{ workflowId: string; agentId: string; entryId: string; toolCallId: string }>;
+				sources: Array<{ agentId: string; entryId: string; toolCallId: string }>;
 			};
 		};
 	};
 	const requestSource = parsedInput.trigger.obligations.sources[0];
 	assert.ok(requestSource);
-	const requestId = resolveMessageIdentity(requestSource);
+	const requestId = deriveMessageIdentity(requestSource);
 
 	const routePostReminderResponse = (context: Context) => {
 		const transcript = JSON.stringify(context.messages);
@@ -2911,14 +2906,13 @@ async function findModerators(
 		"utf8",
 	).toString("base64url")}`;
 	const sessions = await SessionManager.list(host.cwd, workflowDirectory);
-	return sessions.flatMap(({ path }) => {
+	return sessions.flatMap(({ id, path }) => {
 		const isModerator = SessionManager.open(path).getEntries().some(
 			(entry) =>
 				entry.type === "custom_message" &&
 				entry.customType === "agent-coordination.moderator-input",
 		);
-		const id = agentIdOfSessionFile(path);
-		return isModerator && id ? [{ id, path }] : [];
+		return isModerator ? [{ id, path }] : [];
 	});
 }
 
@@ -2942,7 +2936,7 @@ async function sessionPathFor(
 		"utf8",
 	).toString("base64url")}`;
 	const session = (await SessionManager.list(host.cwd, workflowDirectory)).find(
-		(candidate) => agentIdOfSessionFile(candidate.path) === agentId,
+		(candidate) => candidate.id === agentId,
 	);
 	assert.ok(session);
 	return session.path;
@@ -3574,7 +3568,7 @@ test("blocked Delivery detects a Creation Request stranded before scheduler admi
 	assert.equal(trigger.reason.kind, "scheduling_failure");
 	const leafSource = trigger.requests.sources.find((source: {toolCallId: string}) => source.toolCallId === "pre-admission-leaf");
 	assert.ok(leafSource);
-	assert.equal(trigger.delivery.messageId, resolveMessageIdentity(leafSource));
+	assert.equal(trigger.delivery.messageId, deriveMessageIdentity(leafSource));
 	assert.equal(owner.status(trigger.delivery.recipientAgentId).run.phase, "dormant");
 	assert.ok(trigger.agentIds.includes(parent.agentId));
 	assert.equal(starts, 2);

@@ -1,4 +1,3 @@
-import { isToolCallPointer } from "./identities.ts";
 import type { ToolCallPointer } from "./identities.ts";
 import type { EntryPointer } from "./moderator-input.ts";
 import { isDeepStrictEqual } from "node:util";
@@ -113,9 +112,19 @@ export function validateModeratorControlInput(
 }
 
 function isEvidencePointer(value: unknown): value is EvidencePointer {
-	return isToolCallPointer(value) || (isRecord(value) &&
-		hasExactKeys(value, ["agentId", "entryId"]) &&
-		isNonEmptyString(value.agentId) && isNonEmptyString(value.entryId));
+	if (!isRecord(value)) return false;
+	const keys = Object.keys(value);
+	if (
+		keys.length !== 2 &&
+		keys.length !== 3
+	) return false;
+	if (!isNonEmptyString(value.agentId) || !isNonEmptyString(value.entryId)) {
+		return false;
+	}
+	return keys.length === 2
+		? hasExactKeys(value, ["agentId", "entryId"])
+		: hasExactKeys(value, ["agentId", "entryId", "toolCallId"]) &&
+			isNonEmptyString(value.toolCallId);
 }
 
 function hasExactKeys(
