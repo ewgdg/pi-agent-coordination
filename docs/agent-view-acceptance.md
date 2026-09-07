@@ -77,3 +77,28 @@ git diff --check
 ```
 
 The real integration gate starts a Herdr-managed Pi Owner, delegates to a process child, waits for the child's Answer, confirms the final session reference remains the Owner session, confirms Herdr reaches `done` or underlying `idle`, and verifies no child process or transient Runtime artifact remains.
+
+## Fullscreen selector pointer controls
+
+`tests/agent-selector-pointer-fullscreen.test.ts` mounts the actual selector through
+`TuiAltScreen.showOverlay`, sends terminal mouse reports through its real input
+callback, and inspects the rendered screen with `@xterm/headless`. A mounted native
+Editor records any input that escapes the selector.
+
+Coverage includes tab/participant/Owner actions, the complete trailing child
+control, ancestor paths (including wide characters), informational details and
+omitted/current breadcrumbs, hover without keyboard-focus movement, middle/right
+buttons, roster-scoped wheel scrolling, resize/clipping and hit targets after
+scrolling, full-screen editor isolation before and during asynchronous preparation,
+and loading feedback across resize. The standard selector and remote-selection
+suites retain keyboard and already-mounted-participant contracts.
+
+Run only the relevant presentation suites:
+
+```sh
+node --test tests/agent-selector-surface.test.ts tests/agent-selector-pointer-fullscreen.test.ts tests/remote-agent-selector.test.ts tests/agent-view-surface.test.ts
+npm run typecheck
+```
+
+This verifies the real fullscreen renderer in-process, not a manual terminal session.
+Pi's regular terminal mode does not route component mouse input.
