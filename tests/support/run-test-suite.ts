@@ -22,6 +22,7 @@ const PROCESS_TEST_FILES = new Set([
 	"agent-view.test.ts",
 	"cold-host-recovery.test.ts",
 	"coordinated-workflow-pty.test.ts",
+	"deferred-request-after-answer.test.ts",
 	"detached-child-ui-pty.test.ts",
 	"execution-scheduler.test.ts",
 	"human-request-pty.test.ts",

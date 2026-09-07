@@ -660,17 +660,21 @@ export class MessageDeliveryScheduler {
 			this.#freezeSteerInLane(record, steer);
 			return;
 		}
-		// A settled Run may become active before Pi processes admission. followUp
-		// preserves Deferred ordering, while triggerTurn starts a standalone Idle turn.
+		// A parked Owner is settled-equivalent but still natively active. After an
+		// Answer, Pi continues from a tool result without first draining followUp;
+		// use its steering queue so this Delivery precedes that continuation.
+		// Truly settled Runs retain followUp ordering if they become active during admission.
+		const parked = this.#parkedRunByAgent.get(record.identity.agentId);
+		const deliverAs = parked && record.host.isCurrent(parked) ? "steer" : "followUp";
 		const { completion } = this.#dispatchInLane(record, [delivery],
 			"customMessage" in delivery
 				? {
 					kind: "custom",
 					message: delivery.customMessage,
 					triggerTurn: true,
-					deliverAs: "followUp",
+					deliverAs,
 				}
-				: createRuntimeMessageDelivery([delivery], "followUp"),
+				: createRuntimeMessageDelivery([delivery], deliverAs),
 		);
 		this.#activeDeferredByAgent.set(record.identity.agentId, {
 			delivery,
@@ -740,6 +744,9 @@ export class MessageDeliveryScheduler {
 			!this.#eligibleDeliveries(pending).includes(delivery) ||
 			this.#activeWaitPreemptionByAgent.has(record.identity.agentId)
 		) return false;
+		// Native steering is one-at-a-time: earlier input can start Agent Wait
+		// while this Request is still queued. Its reservation already owns Delivery.
+		if (this.hasDispatchReservation(record.identity.agentId, delivery.messageId)) return true;
 		const { completion } = this.#dispatchInLane(record, [delivery],
 			"customMessage" in delivery
 				? {
