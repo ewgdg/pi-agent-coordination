@@ -16,7 +16,7 @@ export function requestHistory() {
 	let sequence = 0;
 	return { requester, responder, agents, request, answer };
 
-	function request(from = requester, to = responder) {
+	function request(from = requester, to = responder, delivered = true) {
 		const question = `Question ${++sequence}`;
 		const source = appendCall(from, `request-${sequence}`, {
 			operation: "request",
@@ -29,7 +29,7 @@ export function requestHistory() {
 			targetAgentId: to.record.identity.agentId,
 			messageStatus: "sent",
 		});
-		appendDelivery(to.manager, {
+		if (delivered) appendDelivery(to.manager, {
 			source,
 			projection: {
 				kind: "request",
