@@ -385,7 +385,7 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	assert.deepEqual(toolMetadata(ordinary, "agent_wait"), {
 		label: "Wait for Answers",
 		description:
-			"Join all captured outstanding Agent Requests' committed Answers. Calling Wait renews intent by restoring missing same-identity Request delivery scheduling; primary human input or an eligible inbound Request may preempt.",
+			"Join all captured outstanding Agent Requests' committed Answers. Calling Wait renews intent and restores missing Request delivery scheduling without creating duplicate Requests; primary human input or an eligible inbound Request may preempt.",
 		promptSnippet:
 			"Join all outstanding Agent Request Answers unless primary human input or an inbound Agent Request preempts the wait.",
 		renderShell: undefined,
