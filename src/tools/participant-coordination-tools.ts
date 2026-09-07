@@ -319,7 +319,10 @@ const agentSpawnParameters = objectRootUnion(Type.Union([
 			request: Type.String({ minLength: 1 }),
 			conversation: Type.Literal("fork"),
 			label: Type.Optional(Type.String({ minLength: 1 })),
-			description: Type.Optional(Type.String({ minLength: 1 })),
+			description: Type.Optional(Type.String({
+				minLength: 1,
+				description: "Brief scope summary for display and Agent search; not task instructions.",
+			})),
 		},
 		{ additionalProperties: false },
 	),
@@ -330,7 +333,10 @@ const agentSpawnParameters = objectRootUnion(Type.Union([
 				Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
 			),
 			label: Type.Optional(Type.String({ minLength: 1 })),
-			description: Type.Optional(Type.String({ minLength: 1 })),
+			description: Type.Optional(Type.String({
+				minLength: 1,
+				description: "Brief scope summary for display and Agent search; not task instructions.",
+			})),
 			config: Type.Optional(agentSpawnConfigurationParameters),
 		},
 		{ additionalProperties: false },
