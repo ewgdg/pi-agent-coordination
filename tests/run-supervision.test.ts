@@ -289,7 +289,7 @@ test("a Hold blocks admitted Request, Answer, and Cancellation Delivery", async 
 		question: heldRequestText,
 	});
 	const heldAnswer = await harness.messageAs(owner, "answer-admitted-while-held", {
-		operation: "answer",
+		operation: "answer", requestId: outgoing.requestMessageId,
 		answer: heldAnswerText,
 	});
 	const heldCancellation = await harness.messageAs(
@@ -697,7 +697,7 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 	await harness.messageAs(
 		{ session: harness.host.session, view: harness.ownerView },
 		"answer-residual-request-after-termination",
-		{ operation: "answer", answer: "The Owner answered the residual Request." },
+		{ operation: "answer", requestId: outgoingRequest.requestMessageId, answer: "The Owner answered the residual Request." },
 	);
 	await child.waitForIdle();
 	harness.host.model.setResponses([

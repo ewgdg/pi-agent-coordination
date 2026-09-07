@@ -16,54 +16,55 @@ export function requestHistory() {
 	let sequence = 0;
 	return { requester, responder, agents, request, answer };
 
-	function request() {
+	function request(from = requester, to = responder) {
 		const question = `Question ${++sequence}`;
-		const source = appendCall(requester, `request-${sequence}`, {
+		const source = appendCall(from, `request-${sequence}`, {
 			operation: "request",
-			targetAgent: "responder",
+			targetAgent: to.record.identity.agentId,
 			question,
 		});
 		const requestId = deriveMessageIdentity(source);
-		appendResult(requester.manager, source, {
+		appendResult(from.manager, source, {
 			requestMessageId: requestId,
-			targetAgentId: "responder",
+			targetAgentId: to.record.identity.agentId,
 			messageStatus: "sent",
 		});
-		appendDelivery(responder.manager, {
+		appendDelivery(to.manager, {
 			source,
 			projection: {
 				kind: "request",
 				requestMessageId: requestId,
-				fromAgentId: "requester",
+				fromAgentId: from.record.identity.agentId,
 				question,
 			},
 		});
 		return requestId;
 	}
-	function answer(requestId: string) {
-		const source = appendCall(responder, `answer-${++sequence}`, {
+	function answer(requestId: string, from = responder, to = requester) {
+		const source = appendCall(from, `answer-${++sequence}`, {
 			operation: "answer",
+			requestId,
 			answer: "Completed.",
 		});
-		appendResult(responder.manager, source, {
+		appendResult(from.manager, source, {
 			messageId: deriveMessageIdentity(source),
 			requestMessageId: requestId,
 			messageStatus: "sent",
 		});
-		appendDelivery(requester.manager, {
+		appendDelivery(to.manager, {
 			source,
 			projection: {
 				kind: "answer",
 				answerId: deriveMessageIdentity(source),
 				requestMessageId: requestId,
-				fromAgentId: "responder",
+				fromAgentId: from.record.identity.agentId,
 				answer: "Completed.",
 			},
 		});
 	}
 }
 
-function participant(agentId: string) {
+export function participant(agentId: string) {
 	const manager = SessionManager.inMemory(process.cwd(), { id: agentId });
 	manager.appendCustomEntry("agent-coordination.identity", { agentId });
 	const record: AgentRecord = {

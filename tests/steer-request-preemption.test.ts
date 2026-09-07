@@ -1,3 +1,4 @@
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -30,7 +31,7 @@ test("a Steer Request preempting Agent Wait commits one Delivery across turn_end
 				return text.includes("answer-child-decision")
 					? fauxAssistantMessage("Waiting for the child to finish.")
 					: fauxAssistantMessage(fauxToolCall("agent_message", {
-						operation: "answer", answer: decision,
+						operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: decision,
 					}, { id: "answer-child-decision" }), { stopReason: "toolUse" });
 			}
 			return text.includes("spawn-preempting-child")
@@ -45,7 +46,7 @@ test("a Steer Request preempting Agent Wait commits one Delivery across turn_end
 			return text.includes("answer-child-work")
 				? fauxAssistantMessage("The child has answered.")
 				: fauxAssistantMessage(fauxToolCall("agent_message", {
-					operation: "answer", answer: result,
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: result,
 				}, { id: "answer-child-work" }), { stopReason: "toolUse" });
 		}
 		if (text.includes("request-child-decision")) return fauxAssistantMessage("Waiting for the decision.");

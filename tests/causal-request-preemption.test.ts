@@ -1,0 +1,159 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { fauxAssistantMessage, fauxToolCall, type Context } from "@earendil-works/pi-ai";
+import piAgentCoordination from "../src/index.ts";
+import { createTestOwnerHost } from "./support/pi-host.ts";
+
+type Delivered = { kind: string; question?: string; requestMessageId: string; fromAgentId: string };
+function delivered(context: Context): Delivered[] {
+	return context.messages.flatMap(message => {
+		if (message.role !== "user" || !Array.isArray(message.content)) return [];
+		return message.content.flatMap(part => {
+			if (part.type !== "text") return [];
+			try { return (JSON.parse(part.text) as { messages?: Delivered[] }).messages ?? []; }
+			catch { return []; }
+		});
+	});
+}
+function call(id: string, name: string, input: Record<string, unknown>) {
+	return fauxAssistantMessage(fauxToolCall(name, input, { id }), { stopReason: "toolUse" });
+}
+for (const { extra, unrelated, siblings } of [{ extra: false, unrelated: false, siblings: false }, { extra: true, unrelated: false, siblings: false }, { extra: false, unrelated: true, siblings: false }, { extra: false, unrelated: false, siblings: true }]) test(`reverse clarification resumes delegated work with ${extra ? "two" : "one"} outgoing Requests${unrelated ? " behind an unrelated queue head" : ""}${siblings ? " and serialized sibling clarifications" : ""}`, {
+	timeout: 10_000, // Starts two real child processes and exercises their cross-process waits.
+}, async t => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+	let resumed = false;
+	let completed = false;
+	const route = (context: Context) => {
+		const text = JSON.stringify(context.messages);
+		const requests = delivered(context).filter(item => item.kind === "request");
+		const root = requests.find(item => item.question === "IMPLEMENT_ROOT");
+		const build = requests.find(item => item.question === "BUILD_CORE");
+		if (text.includes("START_CAUSAL")) {
+			if (text.includes("IMPLEMENT_COMPLETE") && (!unrelated || text.includes("UNRELATED_COMPLETE"))) { completed = true; return fauxAssistantMessage("Done"); }
+			if (unrelated && text.includes("spawn-implement") && !text.includes("queue-unrelated")) {
+				const spawn = context.messages.find(message => message.role === "toolResult" && message.toolCallId === "spawn-implement");
+				assert.ok(spawn?.role === "toolResult");
+				return call("queue-unrelated", "agent_message", { operation: "request", targetAgent: (spawn.details as { agentId: string }).agentId, question: "UNRELATED_WORK" });
+			}
+			return text.includes("spawn-implement") ? call("owner-wait", "agent_wait", {}) : call("spawn-implement", "agent_spawn", { request: "IMPLEMENT_ROOT" });
+		}
+		if (root) {
+			const other = requests.find(item => item.question === "UNRELATED_WORK");
+			if (other) {
+				assert.ok(text.includes("answer-implementation"), "unrelated queued work cannot preempt the delegated foreground");
+				return call("answer-unrelated", "agent_message", { operation: "answer", requestId: other.requestMessageId, answer: "UNRELATED_COMPLETE" });
+			}
+			const sibling = requests.find(item => item.question === "CLARIFY_SECOND");
+			if (sibling && !text.includes("answer-sibling")) {
+				assert.ok(text.includes("answer-clarification"), "a sibling cannot preempt the nested clarification");
+				return call("answer-sibling", "agent_message", { operation: "answer", requestId: sibling.requestMessageId, answer: "USE_SECOND_A" });
+			}
+			const clarification = requests.find(item => item.question === "CLARIFY_INTERFACE");
+			if (clarification && !text.includes("answer-clarification")) return call("answer-clarification", "agent_message", {
+				operation: "answer", requestId: clarification.requestMessageId.slice(-12), answer: "USE_INTERFACE_A",
+			});
+			if (text.includes("answer-clarification")) {
+				assert.match(text, /Current Request:/, "resumed focus must appear on the subsequent continuation");
+				resumed = true;
+			}
+			if (text.includes("CORE_COMPLETE") && (!extra || text.includes("EXTRA_COMPLETE"))) return call("answer-implementation", "agent_message", {
+				operation: "answer", requestId: root.requestMessageId, answer: "IMPLEMENT_COMPLETE",
+			});
+			if (!text.includes("spawn-core")) return call("spawn-core", "agent_spawn", { request: "BUILD_CORE" });
+			if (extra && !text.includes("request-extra")) {
+				const result = context.messages.find(message => message.role === "toolResult" && message.toolCallId === "spawn-core");
+				assert.ok(result?.role === "toolResult");
+				const receipt = JSON.parse(result.content.find(part => part.type === "text")!.text);
+				return call("request-extra", "agent_message", { operation: "request", targetAgent: receipt.agentId, question: "BUILD_EXTRA" });
+			}
+			return call(resumed ? "resumed-wait" : "implementation-wait", "agent_wait", {});
+		}
+		if (build) {
+			const extraRequest = requests.find(item => item.question === "BUILD_EXTRA");
+			if (extraRequest) return call("answer-extra", "agent_message", { operation: "answer", requestId: extraRequest.requestMessageId, answer: "EXTRA_COMPLETE" });
+			if (text.includes("USE_INTERFACE_A") && (!siblings || text.includes("USE_SECOND_A"))) return call("answer-core", "agent_message", { operation: "answer", requestId: build.requestMessageId, answer: "CORE_COMPLETE" });
+			if (siblings && !text.includes("request-clarification")) return fauxAssistantMessage([
+				fauxToolCall("agent_message", { operation: "request", targetAgent: build.fromAgentId, question: "CLARIFY_INTERFACE" }, { id: "request-clarification" }),
+				fauxToolCall("agent_message", { operation: "request", targetAgent: build.fromAgentId, question: "CLARIFY_SECOND" }, { id: "request-sibling" }),
+			], { stopReason: "toolUse" });
+			return text.includes("request-clarification") ? call("core-wait", "agent_wait", {}) : call("request-clarification", "agent_message", {
+				operation: "request", targetAgent: build.fromAgentId, question: "CLARIFY_INTERFACE",
+			});
+		}
+		throw new Error(`Unexpected model context: ${text}`);
+	};
+	host.model.setResponses(Array.from({ length: 30 }, () => route));
+	await host.session.prompt("START_CAUSAL");
+	await host.session.waitForIdle();
+	assert.equal(resumed, true);
+	assert.equal(completed, true);
+	assert.deepEqual(host.ui.notifications.filter(item => item.type === "error"), []);
+});
+
+test("Cancellation reaches a parked foreground and leaves downstream cleanup possible", { timeout: 10_000 }, async t => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+	let releaseCancellation!: () => void;
+	const childWaiting = new Promise<void>(resolve => { releaseCancellation = resolve; });
+	t.after(releaseCancellation);
+	let cleaned = false;
+	const route = async (context: Context) => {
+		const text = JSON.stringify(context.messages);
+		const spawn = context.messages.find(message => message.role === "toolResult" && message.toolName === "agent_spawn");
+		const receipt = spawn?.role === "toolResult" ? spawn.details as { agentId: string; requestMessageId: string } : undefined;
+		if (text.includes("CANCEL_PARKED_ROOT")) {
+			if (!receipt) return call("spawn-cancel-target", "agent_spawn", { request: "CANCELLABLE_WORK" });
+			if (text.includes("cancel-root")) return fauxAssistantMessage("Cancelled");
+			await childWaiting;
+			return call("cancel-root", "agent_message", { operation: "cancel", requestMessageId: receipt.requestMessageId, reason: "Stop this obligation" });
+		}
+		if (text.includes("CANCELLABLE_WORK")) {
+			if (delivered(context).some(item => item.kind === "request_cancellation")) {
+				if (text.includes("cleanup-core")) { cleaned = true; return fauxAssistantMessage("Cleaned up"); }
+				assert.ok(receipt);
+				return call("cleanup-core", "agent_message", { operation: "cancel", requestMessageId: receipt.requestMessageId, reason: "No longer needed" });
+			}
+			if (!receipt) return call("spawn-cancel-core", "agent_spawn", { request: "CANCEL_CORE" });
+			releaseCancellation();
+			return call("wait-cancel-core", "agent_wait", {});
+		}
+		return fauxAssistantMessage("Waiting for cancellation");
+	};
+	host.model.setResponses(Array.from({ length: 15 }, () => route));
+	await host.session.prompt("CANCEL_PARKED_ROOT");
+	const deadline = Date.now() + 3_000;
+	while (!cleaned && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+	assert.equal(cleaned, true, "the parked responder must receive Cancellation and clean up its own downstream Request");
+});
+
+test("a stale Answer reference cannot resolve the resumed parent, including source replay", { timeout: 5_000 }, async t => {
+	const { executeAndCommitRegisteredTool: execute, executeRegisteredTool } = await import("./support/agent-session.ts");
+	const { obligationStack } = await import("../src/protocol/obligation-focus.ts");
+	const { transcriptFromSessionManager } = await import("../src/pi-integration/session-manager-transcript.ts");
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
+	host.model.setResponses(Array.from({ length: 12 }, () => fauxAssistantMessage("Keep the current Request open")));
+	const agentId = host.session.sessionId;
+	const root = await execute(host.session, "agent_message", "self-root", { operation: "request", targetAgent: agentId, question: "Root work" });
+	await host.session.waitForIdle();
+	const nested = await execute(host.session, "agent_message", "self-nested", { operation: "request", targetAgent: agentId, question: "Nested clarification" });
+	await host.session.waitForIdle();
+	const nestedId = (nested.details as { requestMessageId: string }).requestMessageId;
+	const rootId = (root.details as { requestMessageId: string }).requestMessageId;
+	const answerInput = { operation: "answer", requestId: nestedId.slice(-12), answer: "Clarified" };
+	host.session.sessionManager.appendMessage(fauxAssistantMessage([
+		fauxToolCall("agent_message", answerInput, { id: "batched-answer" }),
+		fauxToolCall("agent_wait", {}, { id: "batched-wait" }),
+	], { stopReason: "toolUse" }));
+	await assert.rejects(host.session.getToolDefinition("agent_message")!.execute(
+		"batched-answer", answerInput as never, undefined, undefined, host.session.extensionRunner.createContext(),
+	), /only tool call/);
+	const result = await execute(host.session, "agent_message", "resolve-nested", answerInput);
+	assert.match(JSON.stringify(result.content), /Answered:.*Nested clarification.*Resumed:.*Root work/);
+	const frames = () => obligationStack(transcriptFromSessionManager(host.session.sessionManager).inspect(), agentId);
+	assert.equal(frames().at(-1)?.requestId, rootId);
+	const answerTool = host.session.getToolDefinition("agent_message")!;
+	const replay = await answerTool.execute("resolve-nested", answerInput as never, undefined, undefined, host.session.extensionRunner.createContext());
+	assert.equal((replay.details as { disposition: string }).disposition, "already_answered");
+	await assert.rejects(executeRegisteredTool(host.session, "agent_message", "stale-nested", answerInput), /foreground Request/);
+	assert.equal(frames().at(-1)?.requestId, rootId);
+});

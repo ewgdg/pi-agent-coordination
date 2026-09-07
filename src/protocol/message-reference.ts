@@ -1,3 +1,4 @@
+import { resolveIncomingRequestReference } from "./obligation-focus.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { coordinationEntries, indexedState } from "../transcript/retained-transcript.ts";
 import { validateAgentSpawnInput } from "./agent-spawn-input.ts";
@@ -60,6 +61,9 @@ export function resolveAgentMessageReferences(
 ): AgentMessageInput {
 	if (input.operation === "poll" || input.operation === "retry") {
 		return { ...input, messageId: resolveMessageReference(transcript, source, input.messageId) };
+	}
+	if (input.operation === "answer") {
+		return { ...input, requestId: resolveIncomingRequestReference(transcript, source, input.requestId) };
 	}
 	if (input.operation === "cancel") {
 		return { ...input, requestMessageId: resolveMessageReference(transcript, source, input.requestMessageId) };

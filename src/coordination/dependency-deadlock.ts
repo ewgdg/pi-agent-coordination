@@ -38,8 +38,9 @@ export function detectDependencyDeadlocks(options: {
 	const components = stronglyConnectedComponents(eligibleAgentIds, targetsByAgentId);
 	return components.flatMap((agentIds) => {
 		const members = new Set(agentIds);
+		// Upstream dependants cannot supply progress to the component they await.
 		const incidentRequests = requests.filter(
-			(request) => members.has(request.fromAgentId) || members.has(request.targetAgentId),
+			(request) => members.has(request.fromAgentId),
 		);
 		const isCycle = agentIds.length > 1 || incidentRequests.some(
 			(request) =>

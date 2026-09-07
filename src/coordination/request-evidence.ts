@@ -1,3 +1,4 @@
+import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
 import { indexedState, type RetainedTranscript } from "../transcript/retained-transcript.ts";
 import { setImmediate as yieldTurn } from "node:timers/promises";
 import {
@@ -224,6 +225,7 @@ export class RequestEvidence {
 		}
 		const transcript = author.transcript.inspect();
 		const requestIds = new Set(this.residualRelationshipsFor(author).awaitingAnswerRequestIds);
+		const frames = obligationStack(transcript, author.identity.agentId, waitSource);
 		for (const candidate of cancellationSourcesAfter({
 			authorAgentId: author.identity.agentId,
 			transcript,
@@ -238,7 +240,11 @@ export class RequestEvidence {
 		return [...requestIds]
 			.map((requestId) => this.requireRequest(requestId))
 			.filter(
-				(request) => compareCommittedToolCallOrder(transcript, request.source, waitSource) < 0,
+				(request) => {
+					if (compareCommittedToolCallOrder(transcript, request.source, waitSource) >= 0) return false;
+					const owners = obligationStack(transcript, author.identity.agentId, request.source);
+					return belongsToForeground(owners, frames);
+				},
 			)
 			.sort((left, right) => compareCommittedToolCallOrder(transcript, left.source, right.source))
 			.flatMap((request) => {
@@ -261,27 +267,46 @@ export class RequestEvidence {
 			});
 	}
 
-	activeRequestFor(responder: AgentRecord): Request {
-		const requestIds = this.residualRelationshipsFor(responder).answerOwedRequestIds;
-		if (requestIds.length === 0) {
-			throw new Error("invalid_input: Agent has no active Request to answer");
-		}
-		if (requestIds.length > 1) {
-			throw new Error(
-				`invariant_violation: Agent ${responder.identity.agentId} has multiple active Requests`,
-			);
-		}
-		return this.requireRequest(requestIds[0]!);
+	obligationFrames(agent: AgentRecord): readonly ObligationFrame[] {
+		const owed = new Set(this.residualRelationshipsFor(agent).answerOwedRequestIds);
+		return obligationStack(agent.transcript.inspect(), agent.identity.agentId).filter(frame => owed.has(frame.requestId));
 	}
 
-	hasActiveRequest(responder: AgentRecord): boolean {
-		const requestIds = this.residualRelationshipsFor(responder).answerOwedRequestIds;
-		if (requestIds.length > 1) {
-			throw new Error(
-				`invariant_violation: Agent ${responder.identity.agentId} has multiple active Requests`,
-			);
+	activeRequestFor(responder: AgentRecord): Request {
+		const frame = this.obligationFrames(responder).at(-1);
+		if (!frame) throw new Error("invalid_state: Agent has no active Request");
+		return this.requireRequest(frame.requestId);
+	}
+
+	foregroundOutstandingRequestIds(agent: AgentRecord): readonly string[] {
+		const transcript = agent.transcript.inspect();
+		const frames = this.obligationFrames(agent);
+		return this.residualRelationshipsFor(agent).awaitingAnswerRequestIds.filter(requestId => {
+			const source = this.requireRequest(requestId).source;
+			return belongsToForeground(obligationStack(transcript, agent.identity.agentId, source), frames);
+		});
+	}
+
+	parentRequestId(requestId: string): string | undefined {
+		const request = this.requireRequest(requestId);
+		const author = this.#requireAgent(request.fromAgentId);
+		return obligationStack(author.transcript.inspect(), request.fromAgentId, request.source).at(-1)?.requestId;
+	}
+
+	isRequestBlocked(responder: AgentRecord, requestId: string): boolean {
+		const foreground = this.obligationFrames(responder).at(-1);
+		if (!foreground) return false;
+		const run = responder.host.observe();
+		if (run.phase !== "live" || (run.attention !== "agent_wait" && run.work !== "settled")) return true;
+		const visited = new Set<string>();
+		let parent = this.parentRequestId(requestId);
+		while (parent !== undefined) {
+			if (parent === foreground.requestId) return false;
+			if (visited.has(parent)) throw new Error("invariant_violation: cyclic Request ancestry");
+			visited.add(parent);
+			parent = this.parentRequestId(parent);
 		}
-		return requestIds.length === 1;
+		return true;
 	}
 
 	residualRelationshipsFor(agent: AgentRecord): ResidualRequestRelationships {
@@ -424,10 +449,6 @@ export class RequestEvidence {
 			else graph.owed.delete(requestId);
 			yield;
 		}
-		if (graph.owed.size > 1)
-			throw new Error(
-				`invariant_violation: Agent ${agent.identity.agentId} has multiple active Requests`,
-			);
 		graph.result = {
 			awaitingAnswerRequestIds: [...graph.awaiting],
 			answerOwedRequestIds: [...graph.owed],
@@ -925,3 +946,9 @@ type RelationshipGraph = {
 	pending?: Generator<void>;
 	pendingSources?: Map<AgentRecord, RelationshipCursor>;
 };
+
+/** Removed frames pass unfinished dependencies to their nearest surviving enclosing frame. */
+function belongsToForeground(sourceFrames: readonly ObligationFrame[], currentFrames: readonly ObligationFrame[]): boolean {
+	const owner = sourceFrames.findLast(owner => currentFrames.some(frame => frame.requestId === owner.requestId));
+	return owner?.requestId === currentFrames.at(-1)?.requestId;
+}

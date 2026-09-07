@@ -1,3 +1,4 @@
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, writeFile, rename } from "node:fs/promises";
@@ -306,9 +307,9 @@ test("ordinary production spawn runs in a real child process over Owner particip
 			}),
 			{ stopReason: "toolUse" },
 		),
-		() => fauxAssistantMessage(
+		(context) => fauxAssistantMessage(
 			fauxToolCall("agent_message", {
-				operation: "answer",
+				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 				answer: "Process child answer crossed the Owner RPC boundary.",
 			}, { id: "proxied-child-message" }),
 			{ stopReason: "toolUse" },

@@ -1,3 +1,4 @@
+import type { ObligationFrame } from "../protocol/obligation-focus.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { refreshAgentTranscripts } from "./agent-record.ts";
 import { indexedState } from "../transcript/retained-transcript.ts";
@@ -203,6 +204,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	reconcileHumanToolResults(): void;
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(submissionSequence?: number): Promise<void>;
+	obligationFrames(): readonly ObligationFrame[];
 	ensureExecution(): Promise<void>;
 	beginToolExecution(toolCallId: string, toolName: string): void;
 	reconcileCommittedToolResults(): void;
@@ -579,6 +581,7 @@ export class WorkflowCoordinator {
 				this.#agentWaits.reconcileCommittedResults(agentId);
 				this.#agentWaits.reconcileCommittedAnswers();
 			},
+			obligationFrames: () => this.#messages.obligationFrames(agentId),
 			endExecution: () => this.#releaseExecution(agentId),
 		};
 	}

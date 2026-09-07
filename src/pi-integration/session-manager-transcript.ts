@@ -2,6 +2,7 @@ import { initializeCoordinationProjections } from "../protocol/coordination-proj
 import {
 	SessionManager,
 	type FileEntry,
+	type ExtensionContext,
 	type SessionEntry,
 	type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
@@ -33,12 +34,14 @@ import {
 	type TranscriptReader,
 } from "../transcript/agent-transcript.ts";
 
+type ReadonlySessionManager = ExtensionContext["sessionManager"];
+
 const READ_CHUNK_BYTES = 64 * 1024;
 const ENTRIES_PER_TURN = 256;
 const CURSOR_ANCHOR_BYTES = 128;
 
 class SessionManagerTranscriptReader implements TranscriptReader {
-	readonly #manager: SessionManager;
+	readonly #manager: ReadonlySessionManager;
 
 	#cursor = 0;
 	#state: RetainedTranscript | undefined;
@@ -61,7 +64,7 @@ class SessionManagerTranscriptReader implements TranscriptReader {
 			contextBuilds: this.#state?.contextBuilds ?? 0,
 		};
 	}
-	constructor(manager: SessionManager) {
+	constructor(manager: ReadonlySessionManager) {
 		this.#manager = manager;
 	}
 	read(): TranscriptInspection {
@@ -302,8 +305,8 @@ class SessionFileTranscriptReader implements TranscriptReader {
 	}
 }
 
-const localTranscripts = new WeakMap<SessionManager, AgentTranscript>();
-export function transcriptFromSessionManager(manager: SessionManager): AgentTranscript {
+const localTranscripts = new WeakMap<ReadonlySessionManager, AgentTranscript>();
+export function transcriptFromSessionManager(manager: ReadonlySessionManager): AgentTranscript {
 	let transcript = localTranscripts.get(manager);
 	if (!transcript) {
 		transcript = new AgentTranscript(new SessionManagerTranscriptReader(manager));

@@ -1,3 +1,4 @@
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -54,7 +55,7 @@ test("primary Owner input preempts Agent Wait before the next model turn", {
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"agent_message",
-					{ operation: "answer", answer: answerText },
+					{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: answerText },
 					{ id: answerCallId },
 				),
 				{ stopReason: "toolUse" },
@@ -230,7 +231,7 @@ test("Owner and Herdr remain working until the Creation Request Answer arrives, 
 				return fauxAssistantMessage(
 					fauxToolCall(
 						"agent_message",
-						{ operation: "answer", answer: "The background result is ready." },
+						{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The background result is ready." },
 						{ id: answerCallId },
 					),
 					{ stopReason: "toolUse" },
@@ -326,7 +327,7 @@ test("native custom input wakes a parked working Owner and remains in model cont
 				return fauxAssistantMessage(
 					fauxToolCall(
 						"agent_message",
-						{ operation: "answer", answer: "Native custom wake test complete." },
+						{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Native custom wake test complete." },
 						{ id: "answer-native-custom-wake" },
 					),
 					{ stopReason: "toolUse" },

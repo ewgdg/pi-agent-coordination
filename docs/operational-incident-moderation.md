@@ -18,7 +18,9 @@ Resumed attendance ends an asynchronous interval only before its deadline; once 
 
 A Run Failure exists after one exact non-Moderator Run, including a Workflow Owner Run, ends unexpectedly after Pi's user-configured native recovery behavior has finished and the Agent still has an unresolved Answer Obligation. The condition clears when every qualifying obligation ends or a successor Run successfully starts. When a successor starts, the host delivers a visible `agent-coordination.run-failure-recovery` to the handling Moderator at its next settled boundary, directing immediate Resolution; the remaining Answer Obligation is ordinary Workflow work. A successor that later settles without progress is evaluated independently as an Obligation Stall.
 
-A Dependency Deadlock is a normalized closed component of current ordinary Runs. Every member must be live, settled, retained solely by unresolved Request relationships internal to the component, free of required attention and Holds, and have no other progress source. Self-cycles are valid components. Any incoming or outgoing external Request edge, active or starting Run, admitted input, selection, Human attention, Hold, failed Run, or non-Request retention prevents declaration.
+An incoming upstream dependant cannot itself supply progress, and an ineligible queued Delivery is not progress. Dependencies belonging to suspended frames do not block their foreground clarification.
+
+A Dependency Deadlock is a normalized closed component of current ordinary Runs. Every member must be live, settled, retained solely by unresolved Request relationships internal to the component, free of required attention and Holds, and have no other progress source. Self-cycles are valid components. Any outgoing foreground dependency outside the component, active or starting Run, admitted input, selection, Human attention, Hold, failed Run, or non-Request retention prevents declaration.
 
 Deadlock detection is observational. It does not cancel a Request, interrupt or terminate a Run, control descendants, or grant authority.
 

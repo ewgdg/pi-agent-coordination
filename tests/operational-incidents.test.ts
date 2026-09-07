@@ -1,3 +1,6 @@
+import { obligationStack } from "../src/protocol/obligation-focus.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -247,7 +250,7 @@ test("an Answer triggered by the runtime reminder avoids Obligation Stall modera
 				fauxToolCall(
 					"agent_message",
 					{
-						operation: "answer",
+						operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 						answer: "The runtime reminder recovered the forgotten Answer.",
 					},
 					{ id: "answer-after-runtime-reminder" },
@@ -1455,7 +1458,7 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 			fauxToolCall(
 				"agent_message",
 				{
-					operation: "answer",
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 					answer: "The reminder restored enough context to answer.",
 				},
 				{ id: "answer-after-reminder" },
@@ -1480,9 +1483,8 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 			({ reason }) => reason === "answer_owed",
 		);
 	});
-	// The Answer tool result commits before Pi requests its continuation. Keep the
-	// response router installed until that exact child Run reaches its Human
-	// Request, otherwise the next Moderator responses can be consumed by the child.
+	await sendOwnerMessage(host, parsedInput.trigger.agentId,
+		"Continue the independent task after Answer clearance.", "continue-after-clearance");
 	await waitForCondition(async () => {
 		const child = await observeStatus(host, parsedInput.trigger.agentId);
 		return child.run.phase === "live" &&
@@ -1787,18 +1789,22 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 			host.session,
 			owner,
 			"spawn-first-deadlock-agent",
-			"Remain dormant until live dependency work arrives.",
+			"Start the first cycle participant.",
 		);
 		const second = await spawnFromView(
 			host.session,
 			owner,
 			"spawn-second-deadlock-agent",
-			"Remain dormant until live dependency work arrives.",
+			"Wait for my Answer while I wait for yours.",
 		);
 		assert.equal(first.messageStatus, "not_sent");
 		assert.equal(second.messageStatus, "not_sent");
 
-		const routeCycle = (context: Context) => {
+		const rootsReady = new Set<string>();
+	let releaseRoots!: () => void;
+	const bothRoots = new Promise<void>(resolve => { releaseRoots = resolve; });
+	t.after(releaseRoots);
+	const routeCycle = async (context: Context) => {
 			if (context.tools?.some(({ name }) => name === "moderator_control")) {
 				return fauxAssistantMessage("I will inspect the closed Request cycle.");
 			}
@@ -1806,6 +1812,11 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 			const latestUser = JSON.stringify(
 				[...context.messages].reverse().find(({ role }) => role === "user"),
 			);
+		if (latestUser.includes("Start the first cycle participant.")) rootsReady.add("first");
+		if (latestUser.includes("Wait for my Answer while I wait for yours.")) rootsReady.add("second");
+		if (rootsReady.size === 2) releaseRoots();
+		await bothRoots;
+
 			if (
 				latestUser.includes("Start the first cycle participant.") &&
 				!messages.includes('"id":"request-first-to-second"')
@@ -1843,36 +1854,15 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 			return fauxAssistantMessage("I am settled while the internal Request remains unresolved.");
 		};
 		host.model.setResponses(Array.from({ length: 24 }, () => routeCycle));
-		await cancelRequestFromView(
-			host.session,
-			owner,
-			"cancel-first-deadlock-creation-request",
-			first.requestMessageId,
-		);
-		await cancelRequestFromView(
-			host.session,
-			owner,
-			"cancel-second-deadlock-creation-request",
-			second.requestMessageId,
-		);
-		await waitForCondition(() =>
-			owner.status(first.agentId).run.phase === "dormant" &&
-			owner.status(second.agentId).run.phase === "dormant"
-		);
-		await sendMessageFromView(
-			host.session,
-			owner,
-			"wake-first-deadlock-agent",
-			first.agentId,
-			"Start the first cycle participant.",
-		);
+		await retryRequestFromView(host.session, owner, "deliver-first-root", first.requestMessageId);
+		await retryRequestFromView(host.session, owner, "deliver-second-root", second.requestMessageId);
 		const expectedAgentIds = [first.agentId, second.agentId].sort();
 		await waitForCondition(() => expectedAgentIds.every((agentId) => {
 			const run = owner.status(agentId).run;
 			return run.phase === "live" && run.work === "settled" &&
 				run.retentionReasons.length > 0 &&
 				run.retentionReasons.every(
-					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer",
+					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer" || reason === "pending_delivery",
 				);
 		}));
 		for (const agentId of expectedAgentIds) {
@@ -1880,7 +1870,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 			assert.equal(run.phase, "live");
 			assert.equal(
 				run.retentionReasons.every(
-					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer",
+					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer" || reason === "pending_delivery",
 				),
 				true,
 			);
@@ -1920,7 +1910,7 @@ test("a closed settled Request cycle creates one normalized Dependency Deadlock 
 			assert.equal("work" in run && run.work, "settled");
 			assert.equal(
 				run.retentionReasons.every(
-					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer",
+					({ reason }) => reason === "answer_owed" || reason === "awaiting_answer" || reason === "pending_delivery",
 				),
 				true,
 			);
@@ -1972,15 +1962,19 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 		host.session,
 		owner,
 		"spawn-first-active-cycle-agent",
-		"Remain dormant until the active-cycle probe starts.",
+		"Start the active-cycle probe.",
 	);
 	const second = await spawnFromView(
 		host.session,
 		owner,
 		"spawn-second-active-cycle-agent",
-		"Remain dormant until the active-cycle probe starts.",
+		"Create the return dependency, then remain active.",
 	);
-	const routeActiveCycle = (context: Context) => {
+	const rootsReady = new Set<string>();
+	let releaseRoots!: () => void;
+	const bothRoots = new Promise<void>(resolve => { releaseRoots = resolve; });
+	t.after(releaseRoots);
+	const routeActiveCycle = async (context: Context) => {
 		if (context.tools?.some(({ name }) => name === "moderator_control")) {
 			return fauxAssistantMessage("I will inspect the now-settled cycle.");
 		}
@@ -1988,6 +1982,11 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 		const latestUser = JSON.stringify(
 			[...context.messages].reverse().find(({ role }) => role === "user"),
 		);
+		if (latestUser.includes("Start the active-cycle probe.")) rootsReady.add("first");
+		if (latestUser.includes("Create the return dependency, then remain active.")) rootsReady.add("second");
+		if (rootsReady.size === 2) releaseRoots();
+		await bothRoots;
+
 		if (
 			latestUser.includes("Start the active-cycle probe.") &&
 			!messages.includes('"id":"request-first-active-cycle"')
@@ -2034,30 +2033,9 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 		return fauxAssistantMessage("I settled while both cycle Requests remain unresolved.");
 	};
 	host.model.setResponses(Array.from({ length: 24 }, () => routeActiveCycle));
-	await cancelRequestFromView(
-		host.session,
-		owner,
-		"cancel-first-active-cycle-creation",
-		first.requestMessageId,
-	);
-	await cancelRequestFromView(
-		host.session,
-		owner,
-		"cancel-second-active-cycle-creation",
-		second.requestMessageId,
-	);
-	await waitForCondition(() =>
-		owner.status(first.agentId).run.phase === "dormant" &&
-		owner.status(second.agentId).run.phase === "dormant"
-	);
-	await sendMessageFromView(
-		host.session,
-		owner,
-		"start-active-cycle",
-		first.agentId,
-		"Start the active-cycle probe.",
-	);
-	await executionGate.waitUntilStarted();
+	await retryRequestFromView(host.session, owner, "deliver-first-root", first.requestMessageId);
+		await retryRequestFromView(host.session, owner, "deliver-second-root", second.requestMessageId);
+		await executionGate.waitUntilStarted();
 	await waitForCondition(() => {
 		const firstRun = owner.status(first.agentId).run;
 		const secondRun = owner.status(second.agentId).run;
@@ -2074,7 +2052,7 @@ test("an active member prevents a closed Request cycle from becoming a Deadlock"
 	await waitForModeratorKind(host, "dependency_deadlock");
 });
 
-test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock", async (t) => {
+test("input, Human attention, selection, and Hold prevent a blocked Request-cycle Deadlock", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
@@ -2095,10 +2073,16 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 			host.session,
 			owner,
 			"spawn-self-cycle-agent",
-			"Remain dormant until the self-cycle probe starts.",
+			"Start the self-cycle probe.",
 		);
 		assert.equal(participant.messageStatus, "not_sent");
-		const routeSelfCycle = (context: Context) => {
+		const partner = await spawnFromView(host.session, owner, "spawn-cycle-partner", "Return the unrelated cycle dependency.");
+		const rootsReady = new Set<string>();
+		let releaseRoots!: () => void;
+		const bothRoots = new Promise<void>(resolve => { releaseRoots = resolve; });
+		t.after(releaseRoots);
+
+		const routeSelfCycle = async (context: Context) => {
 			if (context.tools?.some(({ name }) => name === "moderator_control")) {
 				return fauxAssistantMessage("I will inspect the settled self-cycle.");
 			}
@@ -2106,6 +2090,14 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 			const latestUser = JSON.stringify(
 				[...context.messages].reverse().find(({ role }) => role === "user"),
 			);
+			const isPartner = latestUser.includes("Return the unrelated cycle dependency.");
+			rootsReady.add(isPartner ? "partner" : "participant");
+			if (rootsReady.size === 2) releaseRoots();
+			await bothRoots;
+			if (isPartner) return messages.includes('"id":"request-cycle-return"')
+				? fauxAssistantMessage("The partner is settled with a blocked dependency.")
+				: fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: participant.agentId, question: "Return this unrelated dependency." }, { id: "request-cycle-return" }), { stopReason: "toolUse" });
+
 			if (
 				latestUser.includes("Start the self-cycle probe.") &&
 				!messages.includes('"id":"request-self-cycle"')
@@ -2115,8 +2107,8 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 						"agent_message",
 						{
 							operation: "request",
-							targetAgent: participant.agentId,
-							question: "Wait for this same Run to resolve itself.",
+							targetAgent: partner.agentId,
+							question: "Wait for the other root to resolve this dependency.",
 						},
 						{ id: "request-self-cycle" },
 					),
@@ -2139,20 +2131,8 @@ test("input, Human attention, selection, and Hold prevent a self-cycle Deadlock"
 			return fauxAssistantMessage("I am settled inside the unresolved self-cycle.");
 		};
 		host.model.setResponses(Array.from({ length: 16 }, () => routeSelfCycle));
-		await cancelRequestFromView(
-			host.session,
-			owner,
-			"cancel-self-cycle-creation-request",
-			participant.requestMessageId,
-		);
-		await waitForCondition(() => owner.status(participant.agentId).run.phase === "dormant");
-		await sendMessageFromView(
-			host.session,
-			owner,
-			"start-self-cycle",
-			participant.agentId,
-			"Start the self-cycle probe.",
-		);
+		await retryRequestFromView(host.session, owner, "deliver-attention-root", participant.requestMessageId);
+		await retryRequestFromView(host.session, owner, "deliver-partner-root", partner.requestMessageId);
 		await waitForCondition(() => owner.humanAttention().length === 1);
 		const paused = owner.status(participant.agentId).run;
 		assert.equal(paused.phase, "live");
@@ -3056,7 +3036,7 @@ async function answerAsOwner(
 	toolCallId: string,
 ): Promise<void> {
 	const input = {
-		operation: "answer" as const,
+		operation: "answer" as const, requestId: obligationStack(transcriptFromSessionManager(host.session.sessionManager).inspect(), host.session.sessionId).at(-1)!.requestId,
 		answer,
 	};
 	host.session.sessionManager.appendMessage(
@@ -3681,3 +3661,31 @@ test("a failed replacement bootstrap retains Owner attention and does not restag
 	assert.equal(runStarts, 1, "uncommitted replacement preparation is not a committed handling attempt");
 	assert.equal((await findModerators(host)).length, 1);
 });
+
+async function retryRequestFromView(
+	session: AgentSession,
+	view: ReturnType<WorkflowCoordinator["forAgent"]>,
+	toolCallId: string,
+	requestId: string,
+): Promise<void> {
+	const input = {
+		operation: "retry" as const,
+		messageId: requestId,
+	};
+	session.sessionManager.appendMessage(
+		fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }),
+			{ stopReason: "toolUse" },
+		),
+	);
+	const receipt = await view.message(toolCallId, input);
+	session.sessionManager.appendMessage({
+		role: "toolResult",
+		toolCallId,
+		toolName: "agent_message",
+		content: [{ type: "text", text: JSON.stringify(receipt) }],
+		details: receipt,
+		isError: false,
+		timestamp: Date.now(),
+	});
+}

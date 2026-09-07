@@ -149,6 +149,12 @@ export function renderAgentMessageResult(
 		return container;
 	}
 	const receipt = result.details;
+	if ("messageStatus" in receipt && "messageId" in receipt && "requestMessageId" in receipt && result.content.length) {
+		for (const part of result.content) {
+			if (part.type === "text") container.addChild(new Text(part.text, 0, 0));
+		}
+		return container;
+	}
 	const disposition = "messageStatus" in receipt
 		? receipt.messageStatus
 		: receipt.disposition;

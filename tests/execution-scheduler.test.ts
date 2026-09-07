@@ -1,3 +1,4 @@
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -285,10 +286,10 @@ test("a child Agent Wait releases and reacquires child execution capacity", { ti
 			fauxToolCall("agent_wait", {}, { id: "wait-for-responder" }),
 			{ stopReason: "toolUse" },
 		),
-		fauxAssistantMessage(
+		(context) => fauxAssistantMessage(
 			fauxToolCall(
 				"agent_message",
-				{ operation: "answer", answer: "The responder committed its Answer." },
+				{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The responder committed its Answer." },
 				{ id: "answer-waiting-child" },
 			),
 			{ stopReason: "toolUse" },
@@ -298,13 +299,13 @@ test("a child Agent Wait releases and reacquires child execution capacity", { ti
 			await secondChildRelease;
 			return fauxAssistantMessage("The responder Run completed.");
 		},
-		() => {
+		(context) => {
 			firstChildResumed = true;
 			firstChildDidResume();
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"agent_message",
-					{ operation: "answer", answer: "The delegated work completed." },
+					{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The delegated work completed." },
 					{ id: "answer-parent-after-wait" },
 				),
 				{ stopReason: "toolUse" },
@@ -342,10 +343,10 @@ test("an exact Run ending releases capacity without a participant execution-end 
 	});
 	const owner = coordinator.forAgent(identity.agentId);
 	host.model.setResponses([
-		fauxAssistantMessage(
+		(context) => fauxAssistantMessage(
 			fauxToolCall(
 				"agent_message",
-				{ operation: "answer", answer: "Creation work is complete." },
+				{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Creation work is complete." },
 				{ id: "answer-before-capacity-termination" },
 			),
 			{ stopReason: "toolUse" },

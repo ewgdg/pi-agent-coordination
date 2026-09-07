@@ -126,7 +126,7 @@ test("answer and cancel calls show their own badges with payload and correlation
 	initTheme("dark");
 	const answer = renderAgentMessageCall(
 		{
-			operation: "answer",
+			operation: "answer", requestId: "request-reference",
 			answer: "The answer is accepted.",
 		},
 		plainTheme,
@@ -285,4 +285,12 @@ test("Message results show a suffix collapsed and retain the full ID on expansio
 	assert.ok(collapsed.includes(messageId.slice(-8)));
 	assert.ok(!collapsed.includes(messageId));
 	assert.ok(renderResult(receipt, true, 120).includes(messageId));
+});
+
+test("Answer receipt displays only the answered and resumed transition", () => {
+	const content = "Answered: Core — clarify interface\nResumed: Owner — implement feature";
+	const rendered = renderAgentMessageResult({ content: [{ type: "text", text: content }], details: {
+		messageId: "answer", requestMessageId: "request", messageStatus: "sent",
+	} }, { expanded: false, isPartial: false }, plainTheme).render(100).join("\n");
+	assert.equal(rendered.split("\n").map(line => line.trimEnd()).join("\n"), content);
 });

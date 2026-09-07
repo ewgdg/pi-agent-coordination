@@ -109,9 +109,9 @@ export function createControlBackedChildParticipantHandlers(
 	const lifecycle: ParticipantLifecycleHandlers = {
 		async executionStarted() {
 			const submissionSequence = nativeInputIdentity?.take();
-			await request("runtime.executionBegin", {
+			return (await request("runtime.executionBegin", {
 				...(submissionSequence === undefined ? {} : { submissionSequence }),
-			});
+			})).frames;
 		},
 		async humanInputSubmitted(input) {
 			const submissionSequence = nativeInputIdentity?.current();
@@ -200,8 +200,7 @@ export async function dispatchParticipantRequestToOwner(
 	let response: unknown;
 	switch (request.method) {
 		case "runtime.executionBegin":
-			await handlers.lifecycle.executionStarted(request.payload.submissionSequence);
-			response = {};
+			response = { frames: await handlers.lifecycle.executionStarted(request.payload.submissionSequence) };
 			break;
 		case "runtime.humanInput":
 			response = {

@@ -1,3 +1,4 @@
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -520,7 +521,7 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 		) {
 			return fauxAssistantMessage(
 				fauxToolCall("agent_message", {
-					operation: "answer",
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 					answer: "The initial Agent turn settled.",
 				}, { id: "answer-preflight-retention-creation-request" }),
 				{ stopReason: "toolUse" },
@@ -1603,7 +1604,7 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 		if (requestId) {
 			return fauxAssistantMessage(
 				fauxToolCall("agent_message", {
-					operation: "answer",
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 					answer: "The viewed Agent accepted its Creation Request.",
 				}, { id: "answer-viewed-failure-creation-request" }),
 				{ stopReason: "toolUse" },
@@ -2128,7 +2129,7 @@ function creationAnswerResponses(
 		if (requestId) {
 			return fauxAssistantMessage(
 				fauxToolCall("agent_message", {
-					operation: "answer",
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 					answer: readyText,
 				}, { id: toolCallId }),
 				{ stopReason: "toolUse" },

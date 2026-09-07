@@ -1664,7 +1664,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 			},
 		},
 		lifecycle: {
-			async executionStarted() { options.executionStarted?.(); },
+			async executionStarted() { options.executionStarted?.(); return []; },
 			async humanInputSubmitted(input) {
 				return await options.humanInputSubmitted?.(input.text)
 					? "submitted"
