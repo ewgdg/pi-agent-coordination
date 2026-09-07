@@ -81,7 +81,7 @@ Primary interactive human input, a Request Cancellation, or an eligible descenda
 const AGENT_SPAWN_PROMPT_GUIDE = `<agent_spawn>
 A successful agent_spawn returns spawnStatus "created", confirming that the child exists. Its Creation Request follows the shared Agent Delegation rules.
 
-Use agent_spawn \`conversation: "fork"\` to inherit the completed current conversation independently of Runtime configuration. Omit template and config to preserve the parent setup and maximize cache reuse potential; cache hits are not guaranteed.
+For conversation forks, omit template and config to preserve the parent setup and maximize cache reuse potential; cache hits are not guaranteed.
 </agent_spawn>`;
 
 const AGENT_OBSERVE_PROMPT_GUIDE = `<agent_observe>
@@ -317,7 +317,7 @@ const agentSpawnParameters = Type.Object(
 	{
 		request: Type.String({ minLength: 1 }),
 		conversation: Type.Optional(Type.Literal("fork", {
-			description: "Inherit the completed parent conversation independently of Runtime configuration. Omit template and config to preserve the parent setup and maximize cache reuse potential; cache hits are not guaranteed.",
+			description: "Inherit the completed parent conversation independently of Runtime configuration.",
 		})),
 		template: Type.Optional(
 			Type.String({ pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$" }),
