@@ -336,7 +336,6 @@ export class MessageCoordinator {
 		const recipients = new Map<AgentRecord, {
 			handle: AgentRunHandle | undefined;
 			sequence: number;
-			initialized: boolean;
 		}>(requestIds.map(requestId => {
 			const request = this.#requestEvidence.requireCallerAuthoredMessage(requester, requestId);
 			if (request.kind !== "request") throw new Error(`invariant_violation: ${requestId} is not a Request`);
@@ -344,7 +343,6 @@ export class MessageCoordinator {
 			return [responder, {
 				handle: responder.host.currentHandle(),
 				sequence: responder.host.latestStartedRunSequence(),
-				initialized: false,
 			}];
 		}));
 		return async () => {
@@ -358,15 +356,14 @@ export class MessageCoordinator {
 					if (this.#requestEvidence.findAnswer(request) || this.#requestEvidence.findCancellation(request)) return;
 					// A fresh Wait may start a Dormant recipient. A later termination,
 					// failure or successor Run ends this Wait's readmission authority.
+					// Inspecting an already delivered Request does not consume dormant admission.
 					if (intent.handle
 						? !responder.host.isCurrent(intent.handle)
-						: intent.initialized ||
-							responder.host.latestStartedRunSequence() !== intent.sequence ||
+						: responder.host.latestStartedRunSequence() !== intent.sequence ||
 							responder.host.currentHandle() !== undefined
 					) return;
 					const receipt = await this.#retryRequestInLane(requester, responder, request);
 					intent.handle = responder.host.currentHandle();
-					intent.initialized = true;
 					if ("messageStatus" in receipt && receipt.messageStatus !== "sent" &&
 						receipt.reason !== "policy_rejected") {
 						throw new Error(`Agent Wait cannot ensure Request ${requestId} Delivery: ${receipt.reason}`);

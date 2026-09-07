@@ -127,6 +127,39 @@ test("delivered Requests are never replayed and committed Answers remain retriev
 	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), []);
 });
 
+test("a delivered Request does not consume fresh Wait admission for its undelivered sibling on a Dormant responder", async (t) => {
+	const h = harness(t);
+	const first = await h.message(h.requester, "delivered-before-stop", {
+		operation: "request", targetAgent: "responder", question: "First obligation was delivered.",
+	});
+	const sibling = await h.message(h.requester, "queued-before-stop", {
+		operation: "request", targetAgent: "responder", question: "Sibling still needs delivery.",
+	});
+	assert.ok("requestMessageId" in first && "requestMessageId" in sibling);
+	assert.equal(h.deliveries(h.responder).length, 1);
+	h.responder.stop();
+	await h.recover();
+	const waiting = h.wait("renew-mixed-delivery-snapshot");
+	await flush();
+	assert.equal(h.responder.record.host.observe().phase, "live",
+		"inspecting delivered work must leave dormant admission available for its sibling");
+	assert.equal(h.deliveries(h.responder).length, 1,
+		"the sibling stays causally queued behind the delivered foreground");
+	await h.message(h.responder, "first-answer-after-stop", {
+		operation: "answer", requestId: first.requestMessageId, answer: "First obligation completed.",
+	});
+	await h.tick();
+	assert.deepEqual(h.deliveries(h.responder).map(delivery =>
+		delivery.projection.kind === "request" && delivery.projection.requestMessageId),
+		[first.requestMessageId, sibling.requestMessageId]);
+	await h.message(h.responder, "sibling-answer-after-stop", {
+		operation: "answer", requestId: sibling.requestMessageId, answer: "Sibling completed.",
+	});
+	await h.tick();
+	h.commitWait("renew-mixed-delivery-snapshot", await waiting);
+	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), []);
+});
+
 test("a delivered unanswered Request stays awaited without starting a Dormant responder", async (t) => {
 	const h = harness(t);
 	await h.message(h.requester, "received-request", {
