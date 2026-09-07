@@ -74,3 +74,7 @@ The full targeted `participant-tool-registrar.test.ts` file has one unrelated pr
 ## Outcomes and handoff
 
 Implementation, documentation, targeted validation, and task-owned commits are complete. Parent owns independent review, push, and PR publication; this worktree has not changed the live workflow or parent checkout. Review should focus on exact-Run authority in the shared reconciliation closure and Answer/preemption arbitration while asynchronous maintenance is pending.
+
+## Model-facing description follow-up
+
+The user requested renewal intent at the tool-description interface without duplicate guidance. Moved the concise behavior into `agent_wait.description` and removed its explanatory prompt-guide paragraph. The role-specific tool-metadata contract test went red before the description change; all five focused Wait/guidance/prompt/metadata tests, typecheck, and diff checks pass afterward. Lifecycle detail remains in the supported-behavior docs.
