@@ -208,6 +208,7 @@ const AgentRosterStatusSchema = closed({
 	...AgentStatusProperties,
 	model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
 	thinking: RuntimeThinkingSchema,
+	compacting: Type.Boolean(),
 	queuedInputCount: QueuedInputCountSchema,
 });
 const AgentObserveResultSchema = Type.Union([

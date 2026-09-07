@@ -186,24 +186,42 @@ export function registerRemoteAgentsCommand(
 			let reopenSelector = true;
 			while (reopenSelector) {
 				reopenSelector = false;
-				const snapshot = await presentation.snapshot();
-				let postMortemResult: Awaited<ReturnType<typeof presentation.select>> | undefined;
-				await openAgentSelectorSurface(ctx.ui, {
-					...snapshot,
-					async prepareSelection(action) {
-						postMortemResult = await presentation.select(
-							action as RemoteAgentSelectorAction,
-						);
-					},
-					onSelectionError(error) {
-						ctx.ui.notify(
-							`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
-							"error",
-						);
-					},
+				let currentSnapshot: RemoteAgentSelectorSnapshot | undefined;
+				let publishSnapshot: ((snapshot: RemoteAgentSelectorSnapshot) => void) | undefined;
+				// Listen before the RPC: changes delivered while it is pending take
+				// precedence over its result and are replayed when the surface mounts.
+				const removeChangeHandler = presentation.addChangeHandler?.((snapshot) => {
+					currentSnapshot = snapshot;
+					publishSnapshot?.(snapshot);
 				});
-				if (postMortemResult?.kind === "post_mortem") {
-					reopenSelector = postMortemResult.outcome === "agents";
+				try {
+					const snapshot = await presentation.snapshot();
+					currentSnapshot ??= snapshot;
+					let postMortemResult: Awaited<ReturnType<typeof presentation.select>> | undefined;
+					await openAgentSelectorSurface(ctx.ui, {
+						...currentSnapshot,
+						addChangeHandler(handler) {
+							publishSnapshot = handler;
+							handler(currentSnapshot!);
+							return () => { publishSnapshot = undefined; };
+						},
+						async prepareSelection(action) {
+							postMortemResult = await presentation.select(
+								action as RemoteAgentSelectorAction,
+							);
+						},
+						onSelectionError(error) {
+							ctx.ui.notify(
+								`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
+								"error",
+							);
+						},
+					});
+					if (postMortemResult?.kind === "post_mortem") {
+						reopenSelector = postMortemResult.outcome === "agents";
+					}
+				} finally {
+					removeChangeHandler?.();
 				}
 			}
 		},

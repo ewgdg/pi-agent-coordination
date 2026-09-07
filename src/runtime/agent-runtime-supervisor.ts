@@ -788,6 +788,10 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		};
 	}
 
+	isCompacting(): boolean {
+		return this.#runtime?.runtime.isCompacting() ?? false;
+	}
+
 	queuedInputCount(): number {
 		const held = this.#heldNativeQueue;
 		return (this.#runtime?.runtime.queuedInputCount() ?? 0) +

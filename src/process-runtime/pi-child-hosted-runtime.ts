@@ -109,6 +109,10 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		return this.#compacting || this.#queuedInputCount > 0;
 	}
 
+	isCompacting(): boolean {
+		return this.#compacting;
+	}
+
 	queuedInputCount(): number {
 		return this.#queuedInputCount;
 	}
@@ -192,6 +196,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	dispose(): Promise<void> {
 		this.#disposePromise ??= (async () => {
 			this.#shutdownExpected = true;
+			this.#clearCompaction();
 			try {
 				await this.#launch.dispose();
 			} finally {
@@ -240,6 +245,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			return;
 		}
 		if (event.event === "runtime.compaction.started") {
+			if (this.#unavailable || this.#shutdownExpected) return;
 			this.#compacting = true;
 			this.#emit({ type: "state_changed" });
 			return;
@@ -349,11 +355,18 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#emit({ type: "state_changed" });
 	}
 
+	#clearCompaction(): void {
+		if (!this.#compacting) return;
+		this.#compacting = false;
+		this.#emit({ type: "state_changed" });
+	}
+
 	#fail(error: unknown): void {
 		if (this.#unavailable) return;
 		const terminalRun = this.#runObserved;
 		this.#unavailable = error;
 		this.#cancellation.abort();
+		this.#compacting = false;
 		this.#workState = "unavailable";
 		this.#currentRunId = undefined;
 		for (const waiter of [...this.#settlementWaiters]) waiter.reject(error);

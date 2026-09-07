@@ -260,7 +260,7 @@ test("child selector keeps animating until the replacement frame takes over", { 
 			directSpawnerAgentId: agentId === "owner" ? null : "owner",
 			primaryEvidence: { transcriptPath: null, inspectedThrough: { agentId, entryId: agentId } },
 			run: { phase: "live", work: "settled", attention: "none", retentionReasons: [] },
-			model: { provider: "test", modelId: "test" }, thinking: "off", queuedInputCount: 0,
+			model: { provider: "test", modelId: "test" }, thinking: "off", compacting: false, queuedInputCount: 0,
 		})),
 		dormant: [], selectedAgentId: "second",
 		prepareSelection() {

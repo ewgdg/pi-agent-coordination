@@ -171,7 +171,14 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	});
 	registerRemoteAgentsCommand(
 		pi,
-		createControlBackedChildPresentationHandlers(participantRequest),
+		{
+			...createControlBackedChildPresentationHandlers(participantRequest),
+			addChangeHandler(handler) {
+				if (!state) throw new Error("child_runtime_not_initialized");
+				const activity = requireCurrentBinding(state).activity;
+				return activity.addChangeHandler(() => handler(activity.selectorSnapshot()));
+			},
+		},
 	);
 	let participantLifecycle: ParticipantLifecycleHandlers;
 	let refreshOrdinaryAgentTools: ((refresh?: boolean) => Promise<void>) | undefined;
@@ -443,6 +450,7 @@ function createChildRuntimeBinding(
 		if (event.type === "compaction_start") {
 			void state.channel.sendEvent("runtime.compaction.started", {}).catch(() => undefined);
 		}
+		// Pi emits this edge for success, failure, and cancellation alike.
 		if (event.type === "compaction_end") {
 			void state.channel.sendEvent("runtime.compaction.completed", {}).catch(() => undefined);
 		}
@@ -1208,6 +1216,11 @@ class RemoteAgentActivitySource implements AgentActivitySource {
 			? [...selector.live, ...selector.dormant]
 				.find((agent) => agent.agentId === agentId)?.label
 			: undefined;
+	}
+
+	selectorSnapshot(): RemoteAgentSelectorSnapshot {
+		if (!this.#selector) throw new Error("child_runtime_activity_unavailable: selector snapshot is not initialized");
+		return this.#selector;
 	}
 
 	snapshot(): AgentActivitySnapshot {

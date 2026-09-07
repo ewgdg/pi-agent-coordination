@@ -4,7 +4,13 @@ import test from "node:test";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
+	ExtensionUIContext,
+	KeybindingsManager,
+	Theme,
 } from "@earendil-works/pi-coding-agent";
+
+import type { Component, TUI } from "@earendil-works/pi-tui";
+import type { RemoteAgentSelectorSnapshot } from "../src/control/agent-control-protocol.ts";
 
 import type { HumanPresentationCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
 import { registerAgentsCommand } from "../src/tools/owner-surfaces.ts";
@@ -33,6 +39,7 @@ const ownerStatus = {
 	},
 	model: { provider: "provider", modelId: "model" },
 	thinking: "high",
+	compacting: false,
 	queuedInputCount: 0,
 } as const;
 const childStatus = {
@@ -390,3 +397,71 @@ function captureCommand(register: (pi: ExtensionAPI) => void): CapturedCommand {
 	assert.ok(command);
 	return command;
 }
+
+test("remote selector uses completion delivered during snapshot acquisition, not the stale RPC result", { timeout: 5_000 }, async () => {
+	const initial = {
+		live: [ownerStatus, { ...childStatus, compacting: true }],
+		dormant: [], selectedAgentId: "child", humanAttention: [], operationalAttention: [],
+	};
+	const completed = {
+		...initial,
+		live: [ownerStatus, { ...childStatus, compacting: false }],
+	};
+	let publish: ((snapshot: RemoteAgentSelectorSnapshot) => void) | undefined;
+	let removed = false;
+	const command = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+		async snapshot() {
+			// The child receives completion while the older Owner RPC is still pending.
+			await Promise.resolve();
+			publish?.(completed);
+			return initial;
+		},
+		addChangeHandler(handler) {
+			publish = handler;
+			return () => { removed = true; publish = undefined; };
+		},
+		async select() { return { kind: "selected" }; },
+	}));
+	const ui = {
+		custom<T>(factory: (tui: TUI, theme: Theme, keys: KeybindingsManager, done: (result: T) => void) => Component) {
+			return new Promise<T>((resolve) => {
+				const component = factory({
+					terminal: { rows: 24 }, requestRender() {},
+				} as TUI, {
+					fg: (_color: string, text: string) => text,
+					bg: (_color: string, text: string) => text,
+					bold: (text: string) => text,
+				} as Theme, {} as KeybindingsManager, resolve);
+				try {
+					assert.doesNotMatch(component.render(80).join("\n"), /compacting/);
+					assert.match(component.render(80).join("\n"), /→ Child.*waiting/);
+					publish?.(initial);
+					assert.match(component.render(80).join("\n"), /→ Child.*compacting/);
+					component.handleInput?.("\x1b");
+				} finally {
+					(component as Component & { dispose(): void }).dispose();
+				}
+			});
+		},
+	} as ExtensionUIContext;
+	await command.handler("", { ui } as ExtensionCommandContext);
+	assert.equal(removed, true);
+});
+
+test("remote selector releases its subscription when snapshot acquisition fails", async () => {
+	let subscribed = false;
+	let removed = false;
+	const command = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+		async snapshot() {
+			assert.equal(subscribed, true);
+			throw new Error("snapshot failed");
+		},
+		addChangeHandler() {
+			subscribed = true;
+			return () => { removed = true; };
+		},
+		async select() { return { kind: "selected" }; },
+	}));
+	await assert.rejects(command.handler("", {} as ExtensionCommandContext), /snapshot failed/);
+	assert.equal(removed, true);
+});

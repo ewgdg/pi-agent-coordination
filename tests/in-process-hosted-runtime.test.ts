@@ -112,3 +112,24 @@ test("InProcessHostedRuntime translates Pi lifecycle and owns Pi intentions", as
 	await runtime.dispose();
 	assert.deepEqual(calls, ["clear", "abort", "wait", "dispose"]);
 });
+
+test("compaction end clears presentation before Pi releases its native controller", () => {
+ let nativeCompacting = false;
+ let emit!: (event: unknown) => void;
+ const session = {
+  get isCompacting() { return nativeCompacting; },
+  subscribe(listener: (event: unknown) => void) { emit = listener; return () => undefined; },
+ } as unknown as AgentSession;
+ const runtime = new InProcessHostedRuntime({ session, projection: undefined, inspectSnapshot: () => snapshot });
+ const states: boolean[] = [];
+ runtime.subscribe(event => { if (event.type === "state_changed") states.push(runtime.isCompacting()); });
+ for (const outcome of [{ aborted: false }, { aborted: true }, { aborted: false, errorMessage: "failed" }]) {
+  nativeCompacting = true;
+  emit({ type: "compaction_start", reason: "threshold" });
+  assert.equal(runtime.isCompacting(), true);
+  emit({ type: "compaction_end", reason: "threshold", ...outcome });
+  assert.equal(runtime.isCompacting(), false);
+  nativeCompacting = false;
+ }
+ assert.deepEqual(states, [true, false, true, false, true, false]);
+});

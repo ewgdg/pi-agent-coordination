@@ -124,3 +124,13 @@ test("selected lifecycle transitions and failure take precedence", () => {
 		{ kind: "failed" },
 	);
 });
+
+test("compaction overlays ordinary work without changing the underlying status", () => {
+ for (const work of ["active", "settled"] as const) {
+  const run = { phase: "live", work, attention: "none", retentionReasons: [] } as const;
+  assert.deepEqual(selectedAgentWorkStatus(run, false, true), { kind: "compacting" });
+  assert.deepEqual(selectedAgentWorkStatus(run, false, false), { kind: work === "active" ? "active" : "idle" });
+  assert.deepEqual(selectedAgentWorkStatus(run, true, true), { kind: "failed" });
+ }
+ assert.deepEqual(selectedAgentWorkStatus({ phase: "dormant", retentionReasons: [] }, false, true), { kind: "dormant" });
+});

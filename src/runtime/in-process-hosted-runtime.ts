@@ -19,6 +19,7 @@ import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
 
 export class InProcessHostedRuntime implements HostedAgentRuntime {
 	readonly #session: AgentSession;
+	#compacting: boolean;
 	readonly projection: HostedAgentProjection | undefined;
 	readonly #inspectSnapshot: () => EffectiveRuntimeSnapshot;
 
@@ -28,6 +29,7 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		inspectSnapshot(): EffectiveRuntimeSnapshot;
 	}) {
 		this.#session = options.session;
+		this.#compacting = options.session.isCompacting;
 		this.projection = options.projection;
 		this.#inspectSnapshot = options.inspectSnapshot;
 	}
@@ -61,6 +63,10 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 
 	hasPendingActivity(): boolean {
 		return this.#session.isCompacting || this.#session.pendingMessageCount > 0;
+	}
+
+	isCompacting(): boolean {
+		return this.#compacting;
 	}
 
 	queuedInputCount(): number {
@@ -104,9 +110,15 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 
 	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void {
 		return this.#session.subscribe((event) => {
+			// Native auto-compaction clears its controller after emitting the end event.
+			// Presentation follows the event edge rather than sampling that stale flag.
+			if (event.type === "compaction_start") this.#compacting = true;
+			if (event.type === "compaction_end") this.#compacting = false;
 			if (
 				event.type === "agent_start" ||
 				event.type === "queue_update" ||
+				event.type === "compaction_start" ||
+				event.type === "compaction_end" ||
 				event.type === "thinking_level_changed"
 			) handler({ type: "state_changed" });
 			if (event.type === "agent_end") {

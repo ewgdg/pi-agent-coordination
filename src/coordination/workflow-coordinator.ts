@@ -117,6 +117,7 @@ export type { AgentStatus } from "./agent-record.ts";
 export type AgentRosterStatus = AgentStatus & Readonly<{
 	model: ModelReference;
 	thinking: RuntimeThinkingLevel;
+	compacting: boolean;
 	queuedInputCount: number;
 }>;
 
@@ -831,6 +832,7 @@ export class WorkflowCoordinator {
 			...status,
 			model,
 			thinking,
+			compacting: record.host.isCompacting(),
 			queuedInputCount: record.host.queuedInputCount(),
 		};
 	}

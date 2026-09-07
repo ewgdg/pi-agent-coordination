@@ -81,6 +81,8 @@ export function registerAgentsCommand(
 				let physicalSurface: PhysicalAgentViewSurface | undefined;
 				const action = await openAgentSelectorSurface(ctx.ui, {
 					...createAgentSelectorSnapshot(view, selectedAgentId),
+					addChangeHandler: (handler) => view.addAgentActivityChangeHandler(() =>
+						handler(createAgentSelectorSnapshot(view, selectedAgentId))),
 					async prepareSelection(action, ownerTui) {
 						await selection.prepare(action);
 						const preparedAgentView = selection.preparedView();

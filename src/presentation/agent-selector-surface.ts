@@ -74,6 +74,7 @@ export type AgentSelectorOptions = Readonly<{
 	live: readonly AgentRosterStatus[];
 	dormant: readonly AgentRosterStatus[];
 	selectedAgentId: string;
+	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "humanAttention" | "operationalAttention">) => void): () => void;
 	humanAttention?: readonly HumanAttentionItem[];
 	operationalAttention?: readonly OperationalIncidentAttention[];
 	prepareSelection?(
@@ -113,10 +114,11 @@ class AgentSelectorSurface implements Component {
 	readonly #tui: TUI;
 	readonly #theme: Theme;
 	readonly #done: (result: AgentSelectorAction | undefined) => void;
-	readonly #options: AgentSelectorOptions;
+	#options: AgentSelectorOptions;
+	#removeChangeHandler: (() => void) | undefined;
 	#activeTab: "live" | "dormant" = "live";
 	#scopeAgentId: string;
-	#selectedValueByTab: { live: string; dormant?: string };
+	#selectedValueByTab: { live?: string; dormant?: string };
 	#items: AgentSelectorItem[] = [];
 	#selectedIndex = 0;
 	#visibleRows = 1;
@@ -153,6 +155,16 @@ class AgentSelectorSurface implements Component {
 			dormant: selectedDormant?.agentId ?? options.dormant[0]?.agentId,
 		};
 		this.#list = this.#createList();
+		this.#removeChangeHandler = options.addChangeHandler?.((snapshot) => {
+			this.#options = { ...this.#options, ...snapshot };
+			this.#list = this.#createList();
+			if (this.#selectionSpinnerTimer) {
+				this.#selectionSpinnerItem = this.#items[this.#selectedIndex];
+				this.#selectionSpinnerDescription = this.#selectionSpinnerItem?.description;
+				this.#updateSelectionSpinner();
+			}
+			this.#tui.requestRender();
+		});
 	}
 
 	handleInput(data: string): void {
@@ -198,6 +210,8 @@ class AgentSelectorSurface implements Component {
 	}
 
 	dispose(): void {
+		this.#removeChangeHandler?.();
+		this.#removeChangeHandler = undefined;
 		this.#stopSelectionSpinner();
 	}
 
@@ -262,6 +276,8 @@ class AgentSelectorSurface implements Component {
 			0,
 			this.#items.findIndex(({ value }) => value === preferredValue),
 		);
+		// Rebuilds must remember the resolved fallback, not an absent preferred item.
+		this.#selectedValueByTab[this.#activeTab] = this.#items[this.#selectedIndex]?.value;
 		list.setSelectedIndex(this.#selectedIndex);
 		list.onSelectionChange = (selected) => {
 			const index = this.#items.indexOf(selected as AgentSelectorItem);
@@ -665,7 +681,7 @@ function frameLine(
 }
 
 function formatRun(status: AgentRosterStatus, theme: Theme): string {
-	return formatAgentWorkStatus(selectedAgentWorkStatus(status.run, false), theme);
+	return formatAgentWorkStatus(selectedAgentWorkStatus(status.run, false, status.compacting), theme);
 }
 
 function formatDetailedRun(status: AgentRosterStatus): string {

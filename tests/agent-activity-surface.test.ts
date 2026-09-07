@@ -53,6 +53,7 @@ function agent(options: {
 		},
 		model: { provider: "anthropic", modelId: options.model ?? "claude-sonnet-4" },
 		thinking: options.thinking ?? "high",
+		compacting: false,
 		queuedInputCount: options.queued ?? 0,
 		failed: options.failed ?? false,
 	};
@@ -467,4 +468,19 @@ test("activity redraws and animation use published state until the source change
 	const requestsAfterSettlement = renderRequests;
 	t.mock.timers.tick(1_000);
 	assert.equal(renderRequests, requestsAfterSettlement, "settled activity stops animating");
+});
+
+test("the roster refreshes compaction and restores current activity", () => {
+ const owner = agent({ agentId: "owner", label: "Owner", parent: null });
+ const child = agent({ agentId: "child", label: "Child", parent: "owner" });
+ const initial = { scope: owner, children: [child], answerMode: false, humanAttention: [], operationalAttention: [] };
+ const harness = createDock(initial);
+ try {
+  harness.snapshots.publish({ ...initial, children: [{ ...child, compacting: true }] });
+  assert.match(harness.dock.render(200).join("\n"), /compacting/);
+  harness.snapshots.publish({ ...initial, children: [{ ...child, run: { phase: "live", work: "active", attention: "none", retentionReasons: [] } }] });
+  assert.match(harness.dock.render(200).join("\n"), />active</);
+  assert.doesNotMatch(harness.dock.render(200).join("\n"), /compacting/);
+  assert.equal(harness.renderRequests(), 2);
+ } finally { harness.dock.dispose(); }
 });

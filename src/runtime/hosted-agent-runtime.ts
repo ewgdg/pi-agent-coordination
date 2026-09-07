@@ -24,6 +24,8 @@ export interface HostedAgentRuntime {
 	synchronizeState(): Promise<void>;
 	workState(): AgentRuntimeWorkState;
 	hasPendingActivity(): boolean;
+	/** Human-facing activity only; not a scheduling or lifecycle state. */
+	isCompacting(): boolean;
 	queuedInputCount(): number;
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification;
 	cancellationSignal(): AbortSignal;

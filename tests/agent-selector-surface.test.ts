@@ -16,7 +16,7 @@ import type {
 	AgentRosterStatus,
 	AgentStatus,
 } from "../src/coordination/workflow-coordinator.ts";
-import { openAgentSelectorSurface } from "../src/presentation/agent-selector-surface.ts";
+import { type AgentSelectorOptions, openAgentSelectorSurface } from "../src/presentation/agent-selector-surface.ts";
 
 test("a long Live roster stays bounded and scrolls from the selected Agent", async () => {
 	const live = [
@@ -657,6 +657,7 @@ function agentStatus(
 		},
 		model: { provider: "test-provider", modelId: "test-model" },
 		thinking: "off",
+		compacting: false,
 		queuedInputCount: 0,
 	};
 }
@@ -681,6 +682,7 @@ function selectorAgent<T extends AgentRosterStatus>(
 ): T & {
 	model: { provider: string; modelId: string };
 	thinking: string;
+	compacting: boolean;
 	queuedInputCount: number;
 } {
 	return {
@@ -756,3 +758,61 @@ function plainTheme(): Theme {
 		bold: (text: string) => text,
 	} as Theme;
 }
+
+test("an open selector refreshes compaction and restores current work without moving focus", async () => {
+ const harness = surfaceHarness(24);
+ const owner = agentStatus("owner", "Owner", null);
+ const child = agentStatus("child", "Child", "owner");
+ let publish!: (snapshot: { live: AgentRosterStatus[]; dormant: AgentRosterStatus[] }) => void;
+ let removed = false;
+ const selection = openAgentSelectorSurface(harness.ui, {
+  live: [owner, child], dormant: [], selectedAgentId: "child",
+  addChangeHandler(handler) { publish = handler; return () => { removed = true; }; },
+ });
+ await Promise.resolve();
+ publish({ live: [owner, { ...child, compacting: true }], dormant: [] });
+ assert.match(harness.component!.render(80).join("\n"), /→ Child.*compacting/);
+ publish({ live: [owner, { ...child, compacting: false, run: { phase: "live", work: "active", attention: "none", retentionReasons: [] } }], dormant: [] });
+ assert.match(harness.component!.render(80).join("\n"), /→ Child.*active/);
+ harness.component!.handleInput?.("\x1b");
+ await selection;
+ (harness.component as Component & { dispose(): void }).dispose();
+ assert.equal(removed, true);
+});
+
+test("Owner-default focus stays on the resolved child when attention arrives", async () => {
+	const harness = surfaceHarness(24);
+	const owner = agentStatus("owner", "Owner", null);
+	const child = agentStatus("child", "Child", "owner");
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner, child], dormant: [], selectedAgentId: "owner",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	assert.match(harness.component!.render(80).join("\n"), /→ Child/);
+	publish({
+		live: [owner, child], dormant: [],
+		humanAttention: [{ requestId: "request", agentId: "child", agentLabel: "Child", question: "Proceed?" }],
+	});
+	assert.match(harness.component!.render(80).join("\n"), /→ Child/);
+	harness.component!.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child" });
+});
+
+test("a disappeared selection's fallback stays focused on subsequent refreshes", async () => {
+	const harness = surfaceHarness(24);
+	const owner = agentStatus("owner", "Owner", null);
+	const child = agentStatus("child", "Child", "owner");
+	const sibling = agentStatus("sibling", "Sibling", "owner");
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner, child, sibling], dormant: [], selectedAgentId: "child",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	publish({ live: [owner, sibling], dormant: [] });
+	assert.match(harness.component!.render(80).join("\n"), /→ Sibling/);
+	publish({ live: [owner, child, sibling], dormant: [] });
+	assert.match(harness.component!.render(80).join("\n"), /→ Sibling/);
+	harness.component!.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
+});

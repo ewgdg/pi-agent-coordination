@@ -267,3 +267,44 @@ function controlEvent(
 ): PiChildRuntimeEvent {
 	return { event, payload } as PiChildRuntimeEvent;
 }
+
+test("compaction is observable, refreshes on both edges, and clears on disposal and fault", async () => {
+ for (const terminal of ["complete", "dispose", "fault"] as const) {
+  const { runtime, emit } = createFakeRuntime();
+  await runtime.ready;
+  const states: boolean[] = [];
+  runtime.subscribe(event => { if (event.type === "state_changed") states.push(runtime.isCompacting()); });
+  emit(controlEvent("runtime.compaction.started", {}));
+  assert.equal(runtime.isCompacting(), true);
+  assert.equal(runtime.workState(), "settled");
+  if (terminal === "complete") emit(controlEvent("runtime.compaction.completed", {}));
+  if (terminal === "fault") emit(controlEvent("runtime.fault", { code: "failed", message: "failed" }));
+  if (terminal === "dispose") await runtime.dispose();
+  assert.equal(runtime.isCompacting(), false);
+  assert.deepEqual(states, [true, false]);
+  await runtime.dispose();
+ }
+});
+
+test("host presentation observes compaction changes without changing Run state and clears on termination", async () => {
+ const { runtime, emit } = createFakeRuntime();
+ const host = AgentRuntimeSupervisor.createChild({
+  agentId: "compaction-presentation",
+  startSession: async () => ({ runtime, ready: runtime.ready }),
+ });
+ await host.lane.run(() => host.startInLane());
+ const before = host.observe();
+ const states: boolean[] = [];
+ host.addStateChangeHandler(() => states.push(host.isCompacting()));
+ emit(controlEvent("runtime.compaction.started", {}));
+ assert.equal(host.isCompacting(), true);
+ assert.deepEqual(host.observe(), before);
+ emit(controlEvent("runtime.compaction.completed", {}));
+ assert.equal(host.isCompacting(), false);
+ assert.deepEqual(host.observe(), before);
+ assert.deepEqual(states, [true, false]);
+ emit(controlEvent("runtime.compaction.started", {}));
+ await host.lane.run(() => host.discardAndEndInLane("shutdown"));
+ assert.equal(host.isCompacting(), false);
+ assert.equal(host.observe().phase, "dormant");
+});

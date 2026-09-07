@@ -510,6 +510,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 		},
 		model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
 		thinking: "off" as const,
+		compacting: false,
 		queuedInputCount: 0,
 	};
 	return {

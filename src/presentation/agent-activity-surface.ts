@@ -98,6 +98,7 @@ export class AgentActivityDock implements Component {
 				status: selectedAgentWorkStatus(
 					snapshot.scope.run,
 					snapshot.scope.failed,
+					snapshot.scope.compacting,
 				),
 			}, this.#theme)];
 		const attentionLines = ownerScope
@@ -189,7 +190,7 @@ export class AgentActivityDock implements Component {
 	}
 
 	#activityGlyph(agent: LiveAgentActivityStatus, status: AgentWorkStatus): string {
-		if (status.kind === "active" || status.kind === "starting") {
+		if (status.kind === "active" || status.kind === "starting" || status.kind === "compacting") {
 			const frame = SPINNER_FRAMES[
 				Math.floor(Date.now() / SPINNER_FRAME_INTERVAL_MS) % SPINNER_FRAMES.length
 			]!;
@@ -211,7 +212,7 @@ export class AgentActivityDock implements Component {
 			.slice(0, MAX_VISIBLE_AGENT_ROWS)
 			.some((child) => {
 			const status = activityRowStatus(child);
-			return status.kind === "active" || status.kind === "starting";
+			return status.kind === "active" || status.kind === "starting" || status.kind === "compacting";
 		});
 		if (!animated) {
 			this.#stopSpinner();
@@ -241,7 +242,7 @@ function hasLiveRun(agent: AgentActivityStatus): agent is LiveAgentActivityStatu
 }
 
 function activityRowStatus(agent: LiveAgentActivityStatus): AgentWorkStatus {
-	return selectedAgentWorkStatus(agent.run, agent.failed);
+	return selectedAgentWorkStatus(agent.run, agent.failed, agent.compacting);
 }
 
 function formatActivityRowStatus(status: AgentWorkStatus, theme: Theme): string {

@@ -175,6 +175,8 @@ export interface AgentRuntimeHost {
 	hasRetentionReason(reason: AgentRetentionReason, requestId?: string): boolean;
 	requestRelationshipIds(reason: "awaiting_answer" | "answer_owed"): readonly string[];
 	residualRequestCounts(): Readonly<{ incoming: number; outgoing: number }>;
+	/** Human-facing activity only; not a scheduling or lifecycle state. */
+	isCompacting(): boolean;
 	queuedInputCount(): number;
 	releaseIfEligibleInLane(handle: AgentRunHandle): Promise<"released" | "retained" | "stale">;
 	releasePreparedRuntimeInLane(): Promise<"released" | "retained" | "stale">;

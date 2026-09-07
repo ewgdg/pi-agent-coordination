@@ -4,7 +4,7 @@ import type { AgentRunState } from "../runtime/agent-runtime-supervisor.ts";
 import { compactAgentIdentity } from "./agent-identity.ts";
 
 export type AgentWorkStatus =
-	| Readonly<{ kind: "active" }>
+	| Readonly<{ kind: "active" | "compacting" }>
 	| Readonly<{ kind: "dormant" | "idle" }>
 	| Readonly<{
 		kind: "waiting";
@@ -21,11 +21,13 @@ export type SelectedAgentIdentity = Readonly<{
 export function selectedAgentWorkStatus(
 	run: AgentRunState,
 	failed: boolean,
+	compacting = false,
 ): AgentWorkStatus {
 	if (failed) return { kind: "failed" };
 	if (run.phase === "starting") return { kind: "starting" };
 	if (run.phase === "ending") return { kind: "ending" };
 	if (run.phase === "dormant") return { kind: "dormant" };
+	if (compacting) return { kind: "compacting" };
 	if (run.attention === "input_required") {
 		return { kind: "waiting", reason: "human input" };
 	}
@@ -63,7 +65,7 @@ export function formatAgentWorkStatus(
 		? "success"
 		: status.kind === "waiting"
 			? "warning"
-			: status.kind === "starting"
+			: (status.kind === "starting" || status.kind === "compacting")
 				? "accent"
 				: status.kind === "failed"
 					? "error"
