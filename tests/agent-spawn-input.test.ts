@@ -15,23 +15,15 @@ test("Agent Spawn accepts an unconfigured conversation fork", () => {
 	});
 });
 
-test("conversation fork rejects Template and Runtime configuration inputs", () => {
-	assert.throws(
-		() => validateAgentSpawnInput({
-			request: "Do not change the forked prompt lineage.",
-			conversation: "fork",
-			template: "reviewer",
-		}),
-		/conversation fork cannot select an Agent Template/,
-	);
-	assert.throws(
-		() => validateAgentSpawnInput({
-			request: "Do not change the forked prompt lineage.",
-			conversation: "fork",
-			config: { allowedTools: ["read"] },
-		}),
-		/conversation fork cannot provide Runtime configuration/,
-	);
+test("conversation forks accept independent Template and Runtime configuration", () => {
+	for (const configuration of [
+		{ template: "reviewer" },
+		{ config: { allowedTools: ["read"] } },
+		{ template: "reviewer", config: { allowedTools: ["read"] } },
+	]) {
+		const input = { request: "Continue with the selected setup.", conversation: "fork", ...configuration };
+		assert.deepEqual(validateAgentSpawnInput(input), input);
+	}
 });
 
 test("Agent Spawn accepts allowedTools as the tool capability ceiling", () => {

@@ -28,16 +28,6 @@ export function validateAgentSpawnInput(value: Record<string, unknown>): AgentSp
 		throw new Error("invalid_input: Agent Spawn request must not be empty");
 	}
 	const conversation = validateConversation(value.conversation);
-	if (conversation === "fork" && value.template !== undefined) {
-		throw new Error(
-			"invalid_input: Agent Spawn conversation fork cannot select an Agent Template",
-		);
-	}
-	if (conversation === "fork" && value.config !== undefined) {
-		throw new Error(
-			"invalid_input: Agent Spawn conversation fork cannot provide Runtime configuration",
-		);
-	}
 	const template = optionalString(value.template, "template");
 	if (template !== undefined) {
 		if (!isAgentTemplateName(template)) {

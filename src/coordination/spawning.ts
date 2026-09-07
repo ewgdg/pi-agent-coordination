@@ -148,7 +148,9 @@ export class DefaultChildSpawner {
 				agentId,
 				parent,
 				spawnInput: input,
-				preserveParentPromptSurface: input.conversation === "fork",
+				// Configured forks use their resolved tools, not the parent active surface.
+				preserveParentPromptSurface: input.conversation === "fork" &&
+					input.template === undefined && input.config === undefined,
 			});
 		} catch (error) {
 			if (error instanceof ProtocolInvariantError) throw error;

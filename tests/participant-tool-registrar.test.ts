@@ -221,6 +221,13 @@ test("Agent Observe schema composes authorized and direct-child search filters",
 
 test("Agent Spawn schema accepts conversation forks and rejects extension path arrays", () => {
 	const schema = participantCoordinationToolSchemas.agent_spawn;
+	assert.equal(schema.type, "object");
+	assert.equal("anyOf" in schema, false);
+	assert.equal("allOf" in schema, false);
+	assert.deepEqual(schema.required, ["request"]);
+	assert.match(String(Reflect.get(schema.properties.conversation, "description") ?? ""), /Omit template and config/);
+	assert.equal(Reflect.get(schema.properties.description, "description"),
+		"Brief scope summary for display and Agent search; not task instructions.");
 	assert.equal(Value.Check(schema, {
 		request: "Continue the completed conversation.",
 		conversation: "fork",
@@ -230,15 +237,16 @@ test("Agent Spawn schema accepts conversation forks and rejects extension path a
 		conversation: "copy",
 	}), false);
 	assert.equal(Value.Check(schema, {
-		request: "Do not configure a conversation fork.",
+		request: "Configure a conversation fork.",
 		conversation: "fork",
 		config: { allowedTools: ["read"] },
-	}), false);
+	}), true);
 	assert.equal(Value.Check(schema, {
-		request: "Do not select a Template for a conversation fork.",
+		request: "Select a Template for a conversation fork.",
 		conversation: "fork",
 		template: "reviewer",
-	}), false);
+		config: { allowedTools: ["read"] },
+	}), true);
 	assert.equal(Value.Check(schema, {
 		request: "Inspect the child Runtime.",
 		config: { extensions: "inherit" },

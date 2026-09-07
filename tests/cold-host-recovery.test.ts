@@ -215,6 +215,7 @@ test("a fresh Owner host rediscovers a conversation-fork child without copied ob
 		request: "Continue with inherited conversation before host loss.",
 		conversation: "fork",
 		label: "recovered-fork",
+		config: { allowedTools: ["read"], systemPrompt: "Recovered fork setup" },
 	}) as { agentId: string };
 	const childSessionFile = await waitForSessionFile(
 		workflowSessionDirectory(host),
@@ -292,6 +293,23 @@ test("a fresh Owner host rediscovers a conversation-fork child without copied ob
 		),
 		0,
 	);
+
+	let recoveredContext: Context | undefined;
+	reopened.model.setResponses([(context) => {
+		recoveredContext = structuredClone(context);
+		return fauxAssistantMessage("Configured fork recovery observed.");
+	}]);
+	await executeTool(reopened, "agent_message", "restart-configured-fork", {
+		operation: "request",
+		targetAgent: spawned.agentId,
+		question: "Verify the configured fork after cold recovery.",
+	});
+	await waitForCondition(async () => recoveredContext !== undefined);
+	assert.match(recoveredContext!.systemPrompt ?? "", /Recovered fork setup/);
+	const recoveredTools = recoveredContext!.tools?.map(({ name }) => name) ?? [];
+	assert.ok(recoveredTools.includes("read"));
+	assert.equal(recoveredTools.includes("bash"), false);
+	assert.match(JSON.stringify(recoveredContext!.messages), /Remain an obligation of the parent only/);
 	await reopened.runtime.dispose();
 });
 

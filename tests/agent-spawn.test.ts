@@ -626,201 +626,209 @@ test("a conversation fork keeps the parent provider prefix cache-affine", async 
 	await host.runtime.dispose();
 });
 
-test("a successor Runtime retains its creation preset while resolving current project resources", async (t) => {
-	const host = await createUnboundTestOwnerHost(t, () => undefined, {
-		persistent: true,
-		processVisibleModel: true,
-	});
-	await bindTestOwnerHost(host, "tui");
-	const identity = adoptOrValidateOwnerIdentity(host.runtime);
-	const templateRoot = join(host.cwd, "template-root");
-	const effectiveCwd = join(host.cwd, "subproject");
-	await mkdir(templateRoot, { recursive: true });
-	await mkdir(join(effectiveCwd, ".agents", "agents"), { recursive: true });
-	new ProjectTrustStore(host.services.agentDir).set(effectiveCwd, true);
-	await writeFile(
-		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nTemplate context",
-	);
-	await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
-	await writeFile(
-		join(effectiveCwd, ".agents", "agents", "research.md"),
-		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: low\n---\nWrong discovery root",
-	);
+for (const conversation of [undefined, "fork"] as const) {
+	test(`a successor Runtime retains its creation preset while resolving current project resources (${conversation ?? "isolated"})`, async (t) => {
+		const host = await createUnboundTestOwnerHost(t, () => undefined, {
+			persistent: true,
+			processVisibleModel: true,
+		});
+		await bindTestOwnerHost(host, "tui");
+		const identity = adoptOrValidateOwnerIdentity(host.runtime);
+		const templateRoot = join(host.cwd, "template-root");
+		const effectiveCwd = join(host.cwd, "subproject");
+		await mkdir(templateRoot, { recursive: true });
+		await mkdir(join(effectiveCwd, ".agents", "agents"), { recursive: true });
+		new ProjectTrustStore(host.services.agentDir).set(effectiveCwd, true);
+		await writeFile(
+			join(templateRoot, "research.md"),
+			"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nTemplate context",
+		);
+		await writeFile(join(effectiveCwd, "AGENTS.md"), "Native effective-cwd context");
+		await writeFile(
+			join(effectiveCwd, ".agents", "agents", "research.md"),
+			"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: low\n---\nWrong discovery root",
+		);
 
-	let observedSystemPrompt = "";
-	let observedTools: string[] = [];
-	host.model.setResponses([
-		(context) => {
-			observedSystemPrompt = context.systemPrompt ?? "";
-			observedTools = context.tools?.map(({ name }) => name) ?? [];
-			return fauxAssistantMessage("Configured child Run observed.");
-		},
-	]);
-	let coordinator: WorkflowCoordinator;
-	coordinator = await createTestWorkflowCoordinator(host, identity, {
-		entryModulePath: "<inline:pi-agent-coordination>",
-		packageRoot: host.cwd,
-		templateRoots: (parentCwd, projectTrusted) => {
-			assert.equal(projectTrusted, true);
-			if (parentCwd === host.cwd) {
-				return [{ scope: "trusted-project", path: templateRoot }];
-			}
-			assert.equal(parentCwd, effectiveCwd);
-			return [{
-				scope: "trusted-project",
-				path: join(effectiveCwd, ".agents", "agents"),
-			}];
-		},
-	});
-	const view = coordinator.forAgent(identity.agentId);
-	const spawnInput = {
-		request: "Inspect the configured child Run.",
-		template: "research-agent",
-		description: "  Research specialist  ",
-		config: {
-			cwd: "subproject",
-			systemPrompt: "Spawn context",
-			systemPromptMode: "append" as const,
-		},
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_spawn", spawnInput, { id: "spawn-configured-child" }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const receipt = await view.spawn("spawn-configured-child", spawnInput);
-	if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
-		throw new Error(`Configured child was not created: ${JSON.stringify(receipt)}`);
-	}
-	assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
-	assert.match(
-		receipt.effectiveConfiguration.extensions[0]!,
-		/process-model-broker-extension\.mjs$/,
-	);
-	const processExtensions = receipt.effectiveConfiguration.extensions;
-	assert.deepEqual(receipt.effectiveConfiguration, {
-		cwd: effectiveCwd,
-		model: { provider: "coordination-test", modelId: "deterministic-owner" },
-		thinking: "off",
-		allowedTools: [
-			"read",
-			"agent_message",
-			"agent_wait",
-			"agent_control",
-			"agent_observe",
-			"agent_spawn",
-			"ask_user_question",
-		],
-		skills: [],
-		extensions: processExtensions,
-		systemPrompt: {
-			mode: "append",
-			body: "Template context\n\nSpawn context",
-		},
-		loadContextFiles: true,
-	});
-	assert.deepEqual(
-		view.children().map(({ label, description }) => ({ label, description })),
-		[{ label: "research-agent", description: "Research specialist" }],
-	);
-	await waitForCondition(() => observedSystemPrompt.length > 0);
-	assert.match(observedSystemPrompt, /Native effective-cwd context/);
-	assert.match(observedSystemPrompt, /Template context/);
-	assert.match(observedSystemPrompt, /Spawn context/);
-	assert.doesNotMatch(observedSystemPrompt, /Wrong discovery root/);
-	for (const toolName of receipt.effectiveConfiguration.allowedTools) {
-		assert.ok(observedTools.includes(toolName), `missing model-visible tool ${toolName}`);
-	}
+		let observedSystemPrompt = "";
+		let observedTools: string[] = [];
+		host.model.setResponses([
+			(context) => {
+				observedSystemPrompt = context.systemPrompt ?? "";
+				observedTools = context.tools?.map(({ name }) => name) ?? [];
+				return fauxAssistantMessage("Configured child Run observed.");
+			},
+		]);
+		let coordinator: WorkflowCoordinator;
+		coordinator = await createTestWorkflowCoordinator(host, identity, {
+			entryModulePath: "<inline:pi-agent-coordination>",
+			packageRoot: host.cwd,
+			templateRoots: (parentCwd, projectTrusted) => {
+				assert.equal(projectTrusted, true);
+				if (parentCwd === host.cwd) {
+					return [{ scope: "trusted-project", path: templateRoot }];
+				}
+				assert.equal(parentCwd, effectiveCwd);
+				return [{
+					scope: "trusted-project",
+					path: join(effectiveCwd, ".agents", "agents"),
+				}];
+			},
+		});
+		const view = coordinator.forAgent(identity.agentId);
+		const spawnInput = {
+			request: "Inspect the configured child Run.",
+			...(conversation === undefined ? {} : { conversation }),
+			template: "research-agent",
+			description: "  Research specialist  ",
+			config: {
+				cwd: "subproject",
+				allowedTools: ["grep"],
+				systemPrompt: "Spawn context",
+				systemPromptMode: "append" as const,
+			},
+		};
+		host.session.sessionManager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall("agent_spawn", spawnInput, { id: "spawn-configured-child" }),
+				{ stopReason: "toolUse" },
+			),
+		);
+		const receipt = await view.spawn("spawn-configured-child", spawnInput);
+		if (receipt.spawnStatus !== "created" || receipt.messageStatus !== "sent") {
+			throw new Error(`Configured child was not created: ${JSON.stringify(receipt)}`);
+		}
+		assert.equal(receipt.effectiveConfiguration.extensions.length, 1);
+		assert.match(
+			receipt.effectiveConfiguration.extensions[0]!,
+			/process-model-broker-extension\.mjs$/,
+		);
+		const processExtensions = receipt.effectiveConfiguration.extensions;
+		assert.deepEqual(receipt.effectiveConfiguration, {
+			cwd: effectiveCwd,
+			model: { provider: "coordination-test", modelId: "deterministic-owner" },
+			thinking: "off",
+			allowedTools: [
+				"grep",
+				"agent_message",
+				"agent_wait",
+				"agent_control",
+				"agent_observe",
+				"agent_spawn",
+				"ask_user_question",
+			],
+			skills: [],
+			extensions: processExtensions,
+			systemPrompt: {
+				mode: "append",
+				body: "Template context\n\nSpawn context",
+			},
+			loadContextFiles: true,
+		});
+		assert.deepEqual(
+			view.children().map(({ label, description }) => ({ label, description })),
+			[{ label: "research-agent", description: "Research specialist" }],
+		);
+		await waitForCondition(() => observedSystemPrompt.length > 0);
+		assert.match(observedSystemPrompt, /Native effective-cwd context/);
+		assert.match(observedSystemPrompt, /Template context/);
+		assert.match(observedSystemPrompt, /Spawn context/);
+		assert.doesNotMatch(observedSystemPrompt, /Wrong discovery root/);
+		assert.equal(observedTools.includes("read"), false);
+		for (const toolName of receipt.effectiveConfiguration.allowedTools) {
+			assert.ok(observedTools.includes(toolName), `missing model-visible tool ${toolName}`);
+		}
 
-	const workflowDirectory = join(
-		host.session.sessionManager.getSessionDir(),
-		"pi-agent-coordination",
-		Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
-	);
-	const childSessionFile = await waitForChildSessionFile(
-		effectiveCwd,
-		workflowDirectory,
-		receipt.agentId,
-	);
-	const configuredChildTranscript = SessionManager.open(childSessionFile);
-	const configuredChildEntries = configuredChildTranscript.getEntries();
-	const childIdentity = configuredChildEntries.find(
-		(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
-	);
-	assert.ok(childIdentity && childIdentity.type === "custom");
-	assert.deepEqual(
-		(childIdentity.data as { metadata: object }).metadata,
-		{
-			label: "research-agent",
-			description: "Research specialist",
-		},
-	);
-	assert.deepEqual(
-		configuredChildEntries.flatMap(
-			(entry) => entry.type === "custom" ? [entry.customType] : [],
-		),
-		["agent-coordination.identity"],
-	);
+		const workflowDirectory = join(
+			host.session.sessionManager.getSessionDir(),
+			"pi-agent-coordination",
+			Buffer.from(host.session.sessionId, "utf8").toString("base64url"),
+		);
+		const childSessionFile = await waitForChildSessionFile(
+			effectiveCwd,
+			workflowDirectory,
+			receipt.agentId,
+		);
+		const configuredChildTranscript = SessionManager.open(childSessionFile);
+		const configuredChildEntries = configuredChildTranscript.getEntries();
+		const childIdentity = configuredChildEntries.findLast(
+			(entry) => entry.type === "custom" && entry.customType === "agent-coordination.identity",
+		);
+		assert.ok(childIdentity && childIdentity.type === "custom");
+		assert.deepEqual(
+			(childIdentity.data as { metadata: object }).metadata,
+			{
+				label: "research-agent",
+				description: "Research specialist",
+			},
+		);
+		assert.deepEqual(
+			configuredChildEntries.flatMap(
+				(entry) => entry.type === "custom" ? [entry.customType] : [],
+			),
+			conversation === "fork"
+				? ["agent-coordination.identity", "agent-coordination.identity"]
+				: ["agent-coordination.identity"],
+		);
 
-	const agentId = receipt.agentId;
-	await waitForCondition(() => {
-		const run = view.status(agentId).run;
-		return run.phase === "live" && run.work === "settled";
+		const agentId = receipt.agentId;
+		await waitForCondition(() => {
+			const run = view.status(agentId).run;
+			return run.phase === "live" && run.work === "settled";
+		});
+		const terminationInput = { operation: "terminate" as const, agentId };
+		host.session.sessionManager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall("agent_control", terminationInput, {
+					id: "terminate-configured-child-v1",
+				}),
+				{ stopReason: "toolUse" },
+			),
+		);
+		const termination = await view.control(
+			"terminate-configured-child-v1",
+			terminationInput,
+		);
+		assert.ok("disposition" in termination);
+		assert.equal(termination.disposition, "terminated");
+		await writeFile(
+			join(templateRoot, "research.md"),
+			"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nChanged Template context",
+		);
+		await writeFile(join(effectiveCwd, "AGENTS.md"), "Changed effective-cwd context");
+		let successorSystemPrompt = "";
+		host.model.setResponses([
+			(context) => {
+				successorSystemPrompt = context.systemPrompt ?? "";
+				return fauxAssistantMessage("Dynamically prepared successor observed.");
+			},
+		]);
+		const successorInput = {
+			operation: "send" as const,
+			targetAgent: agentId,
+			content: "Start a successor from current configuration and resources.",
+		};
+		host.session.sessionManager.appendMessage(
+			fauxAssistantMessage(
+				fauxToolCall("agent_message", successorInput, { id: "start-configured-child-v2" }),
+				{ stopReason: "toolUse" },
+			),
+		);
+		const successorReceipt = await view.message(
+			"start-configured-child-v2",
+			successorInput,
+		);
+		assert.ok("messageStatus" in successorReceipt);
+		assert.equal(successorReceipt.messageStatus, "sent");
+		await waitForCondition(() => successorSystemPrompt.length > 0);
+		assert.match(successorSystemPrompt, /Changed effective-cwd context/);
+		assert.match(successorSystemPrompt, /Template context/);
+		assert.doesNotMatch(successorSystemPrompt, /Changed Template context/);
+		assert.match(successorSystemPrompt, /Spawn context/);
+		assert.doesNotMatch(successorSystemPrompt, /Native effective-cwd context/);
+		await coordinator.shutdown(async () => host.runtime.dispose());
 	});
-	const terminationInput = { operation: "terminate" as const, agentId };
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_control", terminationInput, {
-				id: "terminate-configured-child-v1",
-			}),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const termination = await view.control(
-		"terminate-configured-child-v1",
-		terminationInput,
-	);
-	assert.ok("disposition" in termination);
-	assert.equal(termination.disposition, "terminated");
-	await writeFile(
-		join(templateRoot, "research.md"),
-		"---\nname: research-agent\nuseWhen: Use for research.\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: off\nallowedTools: read\n---\nChanged Template context",
-	);
-	await writeFile(join(effectiveCwd, "AGENTS.md"), "Changed effective-cwd context");
-	let successorSystemPrompt = "";
-	host.model.setResponses([
-		(context) => {
-			successorSystemPrompt = context.systemPrompt ?? "";
-			return fauxAssistantMessage("Dynamically prepared successor observed.");
-		},
-	]);
-	const successorInput = {
-		operation: "send" as const,
-		targetAgent: agentId,
-		content: "Start a successor from current configuration and resources.",
-	};
-	host.session.sessionManager.appendMessage(
-		fauxAssistantMessage(
-			fauxToolCall("agent_message", successorInput, { id: "start-configured-child-v2" }),
-			{ stopReason: "toolUse" },
-		),
-	);
-	const successorReceipt = await view.message(
-		"start-configured-child-v2",
-		successorInput,
-	);
-	assert.ok("messageStatus" in successorReceipt);
-	assert.equal(successorReceipt.messageStatus, "sent");
-	await waitForCondition(() => successorSystemPrompt.length > 0);
-	assert.match(successorSystemPrompt, /Changed effective-cwd context/);
-	assert.match(successorSystemPrompt, /Template context/);
-	assert.doesNotMatch(successorSystemPrompt, /Changed Template context/);
-	assert.match(successorSystemPrompt, /Spawn context/);
-	assert.doesNotMatch(successorSystemPrompt, /Native effective-cwd context/);
-	await coordinator.shutdown(async () => host.runtime.dispose());
-});
+
+}
 
 test("a catalogued model under an unconfigured provider fails before Agent Identity", async (t) => {
 	const harness = await createCoordinatorHarness(t, {});
