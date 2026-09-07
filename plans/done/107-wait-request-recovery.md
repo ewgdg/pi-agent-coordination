@@ -35,11 +35,11 @@ The investigation reproduced both defects against `dd7418f`. An old Request was 
 ## Progress
 
 - Diagnosis complete; root causes reproduced using real coordination modules.
-- Fresh worktree created from origin/main (`dd7418f`). Implementation complete in two meaningful commits.
+- Fresh worktree created from origin/main (`dd7418f`). Initial implementation delivered in two meaningful commits; bounded review corrections are tracked below.
 
 - Detection regression: `npm run test:fast -- --file=answered-dependency-deadlock.test.ts` fails against original source (0 moderation attempts instead of 1), passes with unanswered graph projection. Genuine unanswered Owner dependency prevents moderation; upstream dependant stays outside normalized cycle. `dependency-deadlock.test.ts` and `npm run typecheck` pass.
 
-- Wait regression: `npm run test:fast -- --file=wait-request-recovery.test.ts` first failed with no recipient Delivery after passive recovery. Shared scheduling reconciliation made it green. Further red/green slices proved Answer notification must not queue behind recipient maintenance, independent recipient lanes must progress concurrently, and late maintenance failure must not overwrite a preempted result. The file now has 15 passing seam tests.
+- Wait regression: `npm run test:fast -- --file=wait-request-recovery.test.ts` first failed with no recipient Delivery after passive recovery. Shared scheduling reconciliation made it green. Further red/green slices proved Answer notification must not queue behind recipient maintenance, independent recipient lanes must progress concurrently, and late maintenance failure must not overwrite a preempted result. The initial file had 15 passing seam tests; independent-review regressions bring the current total to 21.
 - Updated supported behavior and generated Wait guidance. Replaced the dormant-rejection supervision test with delivered-work/no-revival coverage. The selected-child human-preemption fixture now holds an admitted delivery dispatch rather than relying on scheduling loss that Wait deliberately repairs.
 
 ## Decisions and lifecycle semantics
@@ -60,7 +60,7 @@ All commands use the project harness; the full integration suite was not run.
 - `npm run test:fast -- --file=answered-dependency-deadlock.test.ts`: 2 pass (red against original detection source, green after graph fix).
 - `npm run test:fast -- --file=dependency-deadlock.test.ts`: 3 pass.
 - `npm run test:fast -- --file=request-evidence.test.ts`: 7 pass.
-- `npm run test:fast -- --file=wait-request-recovery.test.ts`: 15 pass; recovery, same-Run loss, Hold, dormant admission, later termination, cancellation, Delivery/Answer proof, frozen and in-flight coalescing, evidence failure, sibling ordering, Creation Requests, caller fences, and asynchronous maintenance races.
+- `npm run test:fast -- --file=wait-request-recovery.test.ts`: 21 pass; recovery, same-Run loss, Hold, dormant admission, later termination, cancellation, Delivery/Answer proof, frozen and in-flight coalescing, evidence failure, sibling ordering, Creation Requests, caller fences, and asynchronous maintenance races.
 - `npm run test:process -- --file=agent-request.test.ts '--test-name-pattern=Wait|retry|Retry|cancel'`: 17 pass.
 - `npm run test:process -- --file=run-supervision.test.ts '--test-name-pattern=Agent Wait'`: 1 pass.
 - `npm run test:process -- --file=operational-incidents.test.ts '--test-name-pattern=cycle|Deadlock'`: 3 pass.
@@ -73,7 +73,7 @@ The full targeted `participant-tool-registrar.test.ts` file has one unrelated pr
 
 ## Outcomes and handoff
 
-Initial implementation, documentation, targeted validation, and task-owned commits were handed off. Independent review found two delivery-progress interactions; the plan is reopened for their bounded fixes. Parent owns further review, push, and PR publication; this worktree has not changed the live workflow or parent checkout. Review should focus on exact-Run authority in the shared reconciliation closure and Answer/preemption arbitration while asynchronous maintenance is pending.
+Initial implementation, documentation, targeted validation, and task-owned commits were handed off. Independent review found two delivery-progress interactions; both bounded corrections and their regressions are now complete. Parent owns further review, push, and PR publication; this worktree has not changed the live workflow or parent checkout. Review should focus on exact-Run authority in the shared reconciliation closure and Answer/preemption arbitration while asynchronous maintenance is pending.
 
 ## Model-facing description follow-up
 
@@ -82,4 +82,7 @@ The user requested renewal intent at the tool-description interface without dupl
 ## Independent-review fixes
 
 1. Fixed: inspecting an already delivered Request on a Dormant responder consumed the initial-admission flag and stranded a later undelivered sibling. Removed that redundant flag: only an actual Run start changes the captured handle/sequence fence. The regression fails before the fix (responder remains Dormant), then verifies normal startup, causal sibling ordering, both original Request Deliveries, and completed Answer proof. `npm run test:fast -- --file=wait-request-recovery.test.ts`: 16 pass; typecheck and diff check pass.
-2. Pending: shared in-flight maintenance across the whole snapshot lets one busy recipient lane suppress subsequent recovery passes for other recipients. Move coalescing to each recipient and keep periodic reconciliation independent of slow lanes. Add regression and focused ending/failure/replacement lifecycle controls.
+2. Fixed: shared in-flight maintenance across the whole snapshot let one busy recipient lane suppress subsequent recovery passes for other recipients. Group the fixed snapshot in canonical order per recipient, with one in-flight flag per recipient. A pass skips already-busy recipients instead of joining their Promises; independent recipients still receive fresh passes. Timer cadence no longer waits for lane work to finish. Two regressions fail before the fix: one when a lane is busy at Wait entry, and another when a lane becomes busy during a later timer pass; both now demonstrate repeated same-Run recovery for a different recipient while the busy lane remains blocked.
+3. Added focused lifecycle controls using Runtime Host observations for ending, failure, and replacement (instead of hardcoding failure false). They verify ongoing Wait never restores lost scheduling into these Runs, while an explicit fresh Wait after the lifecycle boundary restores the original Request identity. Existing mixed-delivery ordering, in-flight/frozen coalescing, Answer notification, caller fence, and late-error/preemption regressions remain green.
+
+Review-fix validation: `npm run test:fast -- --file=wait-request-recovery.test.ts` reports 21 passing tests; typecheck and diff checks pass. The focused Agent Request Wait/retry/cancellation process selection reports 17 pass; Run Supervision's Agent Wait selection reports 1 pass; the answered-dependency-deadlock seam reports 2 pass. No full suite was run. The accepted tool-description wording from `671ab97` remains untouched.

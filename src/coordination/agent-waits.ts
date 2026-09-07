@@ -60,7 +60,6 @@ type PendingAgentWait = {
 	removeAbortListener(): void;
 	removeEndedHandler(): void;
 	reconcileRequestDeliveries(): Promise<void>;
-	reconciling?: Promise<void>;
 };
 
 export class AgentWaitCoordinator {
@@ -348,11 +347,9 @@ export class AgentWaitCoordinator {
 				pending.requestMessageIds,
 			);
 			if (!completed) {
-				// Share delivery maintenance without putting Answer notification
-				// behind a busy recipient lane: proof always gets checked first.
-				await (pending.reconciling ??= pending.reconcileRequestDeliveries().finally(() => {
-					pending.reconciling = undefined;
-				}));
+				// Proof gets checked before maintenance, whose in-flight passes
+				// coalesce separately for each recipient.
+				await pending.reconcileRequestDeliveries();
 				if (pending.phase !== "waiting") return;
 				completed = this.#messages.waitAnswers(
 					pending.callerAgentId,
@@ -407,11 +404,11 @@ export class AgentWaitCoordinator {
 			ANSWER_WAIT_RECONCILIATION_INTERVAL_MS,
 			() => {
 				pending.cancelTimer = undefined;
-				void this.#reconcile(pending).finally(() => {
-					if (pending.phase === "waiting" && !pending.cancelTimer) {
-						this.#scheduleReconciliation(pending);
-					}
-				});
+				if (pending.phase !== "waiting") return;
+				// A slow recipient lane must not delay the next evidence/maintenance
+				// pass for other recipients. Each recipient coalesces its own work.
+				this.#scheduleReconciliation(pending);
+				void this.#reconcile(pending);
 			},
 		);
 	}

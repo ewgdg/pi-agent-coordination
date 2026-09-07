@@ -349,6 +349,92 @@ test("one busy recipient lane does not prevent Wait from scheduling another capt
 	release();
 });
 
+for (const busyAtEntry of [true, false]) {
+	test(`Wait keeps recovering other recipients while a lane is busy ${busyAtEntry ? "from entry" : "from a later timer pass"}`, async (t) => {
+		const h = harness(t);
+		const other = h.addRecipient("other");
+		h.responder.blocked = true;
+		other.blocked = true;
+		await h.message(h.requester, "busy-request", {
+			operation: "request", targetAgent: "responder", question: "Busy recipient.",
+		});
+		const first = await h.message(h.requester, "other-first", {
+			operation: "request", targetAgent: "other", question: "Other recipient's first work.",
+		});
+		const sibling = await h.message(h.requester, "other-sibling", {
+			operation: "request", targetAgent: "other", question: "Other recipient's sibling.",
+		});
+		assert.ok("requestMessageId" in first && "requestMessageId" in sibling);
+		await h.recover();
+		let release!: () => void;
+		const held = new Promise<void>(resolve => { release = resolve; });
+		t.after(release);
+		const holdLane = () => { void h.responder.record.host.lane.run(() => held); };
+		if (busyAtEntry) holdLane();
+		h.wait("recurring-recovery-wait");
+		await flush();
+		if (!busyAtEntry) holdLane();
+		await other.record.host.lane.run(() => h.messages.discardSchedulingInLane(other.record));
+		other.blocked = false;
+		await h.tick();
+		assert.deepEqual(h.deliveries(other).map(delivery =>
+			delivery.projection.kind === "request" && delivery.projection.requestMessageId),
+			[first.requestMessageId], "a busy recipient cannot suppress another recipient's recovery pass");
+
+		// The busy lane also cannot stop later timer passes after a second loss.
+		await other.record.host.lane.run(() => h.messages.discardSchedulingInLane(other.record));
+		await h.message(other, "other-first-answer", {
+			operation: "answer", requestId: first.requestMessageId, answer: "First work completed.",
+		});
+		await h.tick();
+		assert.deepEqual(h.deliveries(other).map(delivery =>
+			delivery.projection.kind === "request" && delivery.projection.requestMessageId),
+			[first.requestMessageId, sibling.requestMessageId]);
+		assert.equal(h.deliveries(h.responder).length, 0);
+		release();
+	});
+}
+
+for (const transition of ["ending", "failure", "replacement"] as const) {
+	test(`ongoing Wait respects recipient ${transition}; only a fresh Wait renews delivery intent`, async (t) => {
+		const h = harness(t);
+		h.responder.blocked = true;
+		const receipt = await h.message(h.requester, "request-before-lifecycle-change", {
+			operation: "request", targetAgent: "responder", question: "Keep the original delivery identity.",
+		});
+		assert.ok("requestMessageId" in receipt);
+		const waiting = h.wait("wait-before-lifecycle-change");
+		await flush();
+		await h.responder.record.host.lane.run(async () => {
+			h.messages.discardSchedulingInLane(h.responder.record);
+			if (transition === "ending") h.responder.ending = true;
+			if (transition === "failure") h.responder.failed = true;
+			if (transition === "replacement") {
+				h.responder.stop();
+				await h.responder.record.host.startInLane();
+			}
+		});
+		h.responder.blocked = false;
+		await h.tick();
+		await h.tick();
+		assert.equal(h.deliveries(h.responder).length, 0);
+		if (transition !== "replacement") {
+			h.responder.stop(transition === "failure" ? "failure" : "termination");
+			await h.tick();
+			assert.equal(h.responder.record.host.observe().phase, "dormant");
+			assert.equal(h.deliveries(h.responder).length, 0);
+		}
+		await h.preempt();
+		h.commitWait("wait-before-lifecycle-change", await waiting);
+		h.wait("fresh-wait-after-lifecycle-change");
+		await flush();
+		assert.equal(h.responder.record.host.observe().phase, "live");
+		assert.deepEqual(h.deliveries(h.responder).map(delivery =>
+			delivery.projection.kind === "request" && delivery.projection.requestMessageId),
+			[receipt.requestMessageId]);
+	});
+}
+
 test("late delivery-maintenance failure cannot replace a preempted Wait result", async (t) => {
 	let h!: ReturnType<typeof harness>;
 	h = harness(t, { afterDeliveryAdmission({ operation }) {
@@ -457,21 +543,26 @@ function runtimeParticipant(agentId: string) {
 	const proofCommits: (() => void)[] = [];
 	const settled = new Set<(handle: AgentRunHandle, state: "settled") => void>();
 	const runtime = {
-		...p, blocked: false, deferProof: false,
+		...p, blocked: false, deferProof: false, ending: false, failed: false,
 		commitPending() { for (const commit of proofCommits.splice(0)) commit(); },
 		settle() { if (handle) for (const handler of settled) handler(handle, "settled"); },
 		dispatches: [] as AgentRuntimeDelivery[],
-		stop() {
+		stop(cause: AgentRunEndCause = "termination") {
 			const previous = handle;
 			handle = undefined;
-			if (previous) for (const handler of ended) handler(previous, "termination");
+			if (previous) for (const handler of ended) handler(previous, cause);
 		},
 	};
 	p.record.host = {
 		lane: new SerialLane(),
 		currentHandle: () => handle, latestStartedRunSequence: () => sequence,
 		isCurrent: (candidate: AgentRunHandle) => candidate === handle,
-		startInLane: async () => { handle = { sequence: ++sequence }; return handle; },
+		startInLane: async () => {
+			runtime.ending = false;
+			runtime.failed = false;
+			handle = { sequence: ++sequence };
+			return handle;
+		},
 		setRunStartInitializer: () => undefined,
 		addSettledHandler: (handler: (handle: AgentRunHandle, state: "settled") => void) => {
 			settled.add(handler); return () => { settled.delete(handler); };
@@ -485,10 +576,10 @@ function runtimeParticipant(agentId: string) {
 		hasRetentionReason: () => false,
 		blocksOrdinaryDelivery: () => runtime.blocked,
 		currentWorkState: () => attention === "agent_wait" ? "active" : "settled",
-		observe: () => handle ? { phase: "live", work: attention === "agent_wait" ? "active" : "settled", attention, retentionReasons: [] } : { phase: "dormant", retentionReasons: [] },
+		observe: () => handle ? { phase: runtime.ending ? "ending" : "live", work: attention === "agent_wait" ? "active" : "settled", attention, retentionReasons: [] } : { phase: "dormant", retentionReasons: [] },
 		beginAgentWait: () => { attention = "agent_wait"; },
 		endAgentWait: () => { attention = "none"; },
-		currentRunFailed: () => false,
+		currentRunFailed: () => handle !== undefined && runtime.failed,
 		deliverInLane: (input: AgentRuntimeDelivery) => {
 			runtime.dispatches.push(input);
 			if (input.kind !== "custom") throw new Error("Expected coordination Delivery");
