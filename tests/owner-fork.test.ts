@@ -65,6 +65,7 @@ test("native fork is cancelled for a matching Moderator bootstrap", async (t) =>
 		{
 			agentId: host.session.sessionId,
 			workflowId: "source-workflow",
+			creationPreset: null,
 			metadata: {
 				label: "Moderator",
 				description: "Moderating run failure",
@@ -105,6 +106,7 @@ test("offline fork preparation repairs copied child evidence into the current Ow
 		agentId: source.session.sessionId,
 		workflowId: "source-workflow",
 		directSpawnerAgentId: "source-parent",
+		creationPreset: null,
 		spawnSource: {
 			agentId: "source-parent",
 			entryId: "source-spawn-entry",

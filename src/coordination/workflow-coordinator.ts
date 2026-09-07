@@ -454,6 +454,7 @@ export class WorkflowCoordinator {
 	}
 
 	async initialize(): Promise<void> {
+		await this.refreshAgentTemplateSnapshot(this.#ownerIdentity.agentId);
 		await this.#messages.refreshTranscriptFacts();
 		await this.#requireAgent(this.#ownerIdentity.agentId).host.initializeCurrentRunRelationships();
 	}

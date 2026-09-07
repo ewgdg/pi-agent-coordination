@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -31,7 +31,7 @@ import { createProcessModelBroker } from "./support/process-model-broker.ts";
 const TEST_TIMEOUT_MS = 45_000;
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 
-test("a dormant parent is dynamically re-resolved before each descendant Runtime preparation", async (t) => {
+test("a dormant parent retains creation preset rules while descendant catalogues load current resources", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pi-dynamic-parent-runtime-"));
 	const templateRoot = join(root, "templates");
 	await mkdir(templateRoot);
@@ -65,6 +65,11 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 				toolCallId: "parent-spawn-call",
 			},
 			metadata: { label: "dynamic-parent" },
+			creationPreset: {
+				models: [{ model: { provider: "coordination-test", modelId: "deterministic-owner" }, thinking: "high" }],
+				allowedTools: ["read", "bash"],
+				systemPromptMode: "append", loadContextFiles: true, systemPrompt: "",
+			},
 		},
 		creationInput: {
 			request: "Act as the dynamically configured parent.",
@@ -120,7 +125,7 @@ test("a dormant parent is dynamically re-resolved before each descendant Runtime
 			spawnInput: { request: "Inherit the current parent configuration." },
 		});
 		assert.equal(second.configuration.allowedTools.includes("read"), true);
-		assert.equal(second.configuration.allowedTools.includes("bash"), false);
+		assert.equal(second.configuration.allowedTools.includes("bash"), true);
 		assert.deepEqual(
 			second.agentTemplateSnapshot?.templates.find(({ name }) => name === "dynamic-parent")
 				?.allowedTools,
@@ -149,7 +154,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 	parentSession.appendCustomEntry("agent-coordination.identity", { marker: true });
 	const model = host.session.model;
 	assert.ok(model);
-	const synchronizedSnapshot = {
+	let synchronizedSnapshot: NonNullable<ReturnType<AgentRecord["host"]["effectiveRuntimeSnapshot"]>> = {
 		cwd: host.cwd,
 		model: { provider: model.provider, modelId: model.id },
 		thinking: host.session.thinkingLevel,
@@ -160,7 +165,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 		fileExtensionPaths: [],
 		projectTrusted: true,
 		sessionId: "live-parent",
-	} as const;
+	};
 	let synchronizations = 0;
 	const parentRecord = {
 		identity: {
@@ -173,6 +178,7 @@ test("a live parent contributes its current synchronized Runtime state", async (
 				toolCallId: "live-parent-spawn-call",
 			},
 			metadata: { label: "live-parent" },
+			creationPreset: null,
 		},
 		creationInput: { request: "Act as the live parent." },
 		host: {
@@ -209,6 +215,48 @@ test("a live parent contributes its current synchronized Runtime state", async (
 		assert.equal(synchronizations, 1);
 		assert.equal(prepared.configuration.allowedTools.includes("bash"), true);
 		assert.equal(prepared.configuration.allowedTools.includes("read"), false);
+
+		const omitted = await factory.prepareOrdinaryRun({
+			agentId: "omitted", parent: parentRecord, spawnInput: { request: "Inherit" },
+			creationPreset: { systemPromptMode: "append", loadContextFiles: false, systemPrompt: "Fixed rules." },
+		});
+		const explicit = await factory.prepareOrdinaryRun({
+			agentId: "explicit", parent: parentRecord,
+			spawnInput: { request: "Inherit", config: { model: { id: "inherit", thinking: "inherit" }, extensions: "inherit" } },
+			creationPreset: { allowedTools: ["read"], extensions: "none", systemPromptMode: "replace", loadContextFiles: false, systemPrompt: "Fixed rules." },
+		});
+
+		const inheritedExtension = join(root, "inherited.mjs");
+		await writeFile(inheritedExtension, "export default function () {}");
+		const inheritedSkill = join(root, "SKILL.md");
+		await writeFile(inheritedSkill, "---\nname: inherited-skill\ndescription: Inherited skill\n---\nInherited.");
+		const currentCwd = join(root, "current");
+		await mkdir(currentCwd);
+		synchronizedSnapshot = {
+			...synchronizedSnapshot,
+			model: { provider: "current-parent", modelId: "current-model" },
+			thinking: "high", allowedTools: ["grep"], cwd: currentCwd,
+			skills: ["inherited-skill"], skillSources: [{ name: "inherited-skill", filePath: inheritedSkill }],
+			fileExtensionPaths: [inheritedExtension],
+		};
+		for (const [prepared, config] of [
+			[omitted, undefined],
+			[explicit, { model: { id: "inherit", thinking: "inherit" }, extensions: "inherit" }],
+		] as const) {
+			const restarted = await factory.prepareOrdinaryRun({
+				agentId: prepared.agentId, parent: parentRecord,
+				spawnInput: { request: "Inherit", ...(config === undefined ? {} : { config }) },
+				creationPreset: prepared.creationPreset,
+			});
+			assert.deepEqual(restarted.configuration.model, { provider: "current-parent", modelId: "current-model" });
+			assert.equal(restarted.configuration.thinking, "high");
+			assert.equal(restarted.configuration.cwd, currentCwd);
+			assert.deepEqual(restarted.configuration.skills, ["inherited-skill"]);
+			assert.deepEqual(restarted.configuration.extensions, [inheritedExtension]);
+			assert.equal(restarted.configuration.allowedTools.includes(config ? "read" : "grep"), true);
+			assert.equal(restarted.configuration.systemPrompt?.body, "Fixed rules.");
+			assert.equal(restarted.configuration.loadContextFiles, false);
+		}
 	} finally {
 		await host.runtime.dispose();
 	}
@@ -274,6 +322,7 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		const owner = coordinator.forAgent(identity.agentId);
 		const input = {
 			request: "Prove the process Runtime and inspect your coordinated status.",
+			template: "process-delegate",
 			config: {
 				cwd: effectiveCwd,
 				model: { id: `${broker.providerId}/${broker.modelId}`, thinking: "inherit" as const },
@@ -300,6 +349,9 @@ test("ordinary production spawn runs in a real child process over Owner particip
 		assert.equal(initialTranscript.getHeader()?.cwd, effectiveCwd);
 		const initialEntries = initialTranscript.getEntries();
 		assert.equal(initialEntries[0]?.type, "custom");
+		assert.deepEqual((initialEntries[0].data as { creationPreset: unknown }).creationPreset, {
+			systemPromptMode: "append", loadContextFiles: true, systemPrompt: "Process child context.",
+		});
 		assert.deepEqual(
 			initialEntries.flatMap((entry) => entry.type === "custom" ? [entry.customType] : []),
 			["agent-coordination.identity"],
@@ -323,8 +375,14 @@ test("ordinary production spawn runs in a real child process over Owner particip
 
 		await waitFor(() => owner.status(receipt.agentId).run.phase === "dormant");
 		const entriesBeforeSuccessor = SessionManager.open(sessionPath).getEntries().length;
+		await rename(join(templateDirectory, "process-delegate.md"), join(templateDirectory, "renamed.md"));
+		await writeFile(join(templateDirectory, "renamed.md"), "---\nname: renamed\n---\nChanged rules.");
 		broker.appendResponses([
-			fauxAssistantMessage("Dynamically prepared successor used the same transcript."),
+			(context) => {
+				assert.match(context.systemPrompt ?? "", /Process child context\./);
+				assert.doesNotMatch(context.systemPrompt ?? "", /Changed rules\./);
+				return fauxAssistantMessage("Dynamically prepared successor used the same transcript.");
+			},
 		]);
 		const successorInput = {
 			operation: "send" as const,
@@ -623,3 +681,89 @@ function hasCode(code: string): (error: unknown) => boolean {
 	return (error) => typeof error === "object" && error !== null && "code" in error &&
 		(error as NodeJS.ErrnoException).code === code;
 }
+
+test("prefetched selections stay fixed until reload; captured presets outlive that load", { timeout: 5_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pi-template-load-"));
+	const templatePath = join(root, "implementator.md");
+	await writeFile(templatePath, "---\nname: implementator\nmodels:\n  - id: unavailable/model\n    thinking: low\n  - id: coordination-test/deterministic-owner\n    thinking: high\nallowedTools: read\n---\nOriginal rules.");
+	const host = await createUnboundTestOwnerHost(t, () => undefined, { persistent: true, processVisibleModel: true });
+	await bindTestOwnerHost(host, "tui");
+	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
+	const owner: AgentRecord = {
+		identity: ownerIdentity, host: AgentRuntimeSupervisor.bindOwner(host.runtime),
+		transcript: transcriptFromSessionManager(host.session.sessionManager), children: [],
+	};
+	const factory = new ProcessChildSessionFactory({
+		ownerRuntime: host.runtime, ownerIdentity, entryModulePath: "<inline:pi-agent-coordination>",
+		templateRoots: () => [{ scope: "test", path: root }], resolveAgent: () => owner,
+		ownerRequestHandlers() { throw new Error("Preparation only"); },
+	});
+	try {
+		const snapshot = await factory.captureTemplateSnapshotFor(owner);
+		assert.deepEqual(snapshot.templates.map(({ name }) => name), ["implementator"]);
+		await rename(templatePath, join(root, "implementor.md"));
+		await writeFile(join(root, "implementor.md"), "---\nname: implementor\nallowedTools: bash\n---\nNew rules.");
+		const input = { request: "Implement", template: "implementator" };
+		const first = await factory.prepareOrdinaryRun({ agentId: "first", parent: owner, spawnInput: input });
+		assert.equal(first.configuration.systemPrompt?.body, "Original rules.");
+		assert.deepEqual(first.creationPreset?.models, [
+			{ model: { provider: "unavailable", modelId: "model" }, thinking: "low" },
+			{ model: { provider: "coordination-test", modelId: "deterministic-owner" }, thinking: "high" },
+		]);
+		assert.equal(first.configuration.allowedTools.includes("read"), true);
+		await assert.rejects(factory.prepareOrdinaryRun({
+			agentId: "too-early", parent: owner, spawnInput: { request: "Implement", template: "implementor" },
+		}), /implementor is missing/);
+		const refreshed = await factory.captureTemplateSnapshotFor(owner);
+		assert.deepEqual(refreshed.templates.map(({ name }) => name), ["implementor"]);
+		const next = await factory.prepareOrdinaryRun({
+			agentId: "next", parent: owner, spawnInput: { request: "Implement", template: "implementor" },
+		});
+		assert.equal(next.configuration.systemPrompt?.body, "New rules.");
+		const restarted = await factory.prepareOrdinaryRun({
+			agentId: "first", parent: owner, spawnInput: input, creationPreset: first.creationPreset,
+		});
+		assert.equal(restarted.configuration.systemPrompt?.body, "Original rules.");
+		assert.equal(restarted.configuration.allowedTools.includes("read"), true);
+		await assert.rejects(factory.prepareOrdinaryRun({
+			agentId: "missing", parent: owner, spawnInput: input,
+		}), /implementator is missing/);
+	} finally {
+		await host.runtime.dispose();
+	}
+});
+
+test("Moderator creation captures present and absent presets independently of later loads", { timeout: 5_000 }, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pi-moderator-preset-"));
+	const host = await createUnboundTestOwnerHost(t, () => undefined, { persistent: true, processVisibleModel: true });
+	await bindTestOwnerHost(host, "tui");
+	const ownerIdentity = adoptOrValidateOwnerIdentity(host.runtime);
+	const owner: AgentRecord = {
+		identity: ownerIdentity, host: AgentRuntimeSupervisor.bindOwner(host.runtime),
+		transcript: transcriptFromSessionManager(host.session.sessionManager), children: [],
+	};
+	const factory = new ProcessChildSessionFactory({
+		ownerRuntime: host.runtime, ownerIdentity, entryModulePath: "<inline:pi-agent-coordination>",
+		templateRoots: () => [{ scope: "test", path: root }], resolveAgent: () => owner,
+		ownerRequestHandlers() { throw new Error("Preparation only"); },
+	});
+	try {
+		await factory.captureTemplateSnapshotFor(owner);
+		const absent = await factory.prepareModeratorRun({ agentId: "absent" });
+		assert.equal(absent.creationPreset, null);
+		await writeFile(join(root, "moderator.md"), "---\nname: moderator\nmodels:\n  - id: coordination-test/deterministic-owner\n    thinking: high\n---\nCaptured Moderator.");
+		await factory.captureTemplateSnapshotFor(owner);
+		const present = await factory.prepareModeratorRun({ agentId: "present" });
+		assert.equal(present.configuration.thinking, "high");
+		await writeFile(join(root, "moderator.md"), "---\nname: moderator\n---\nReplacement Moderator.");
+		await factory.captureTemplateSnapshotFor(owner);
+		const restarted = await factory.prepareModeratorRun({ agentId: "present", creationPreset: present.creationPreset });
+		assert.equal(restarted.configuration.systemPrompt?.body, "Captured Moderator.");
+		assert.equal(restarted.configuration.thinking, "high");
+		const restartedAbsent = await factory.prepareModeratorRun({ agentId: "absent", creationPreset: absent.creationPreset });
+		assert.equal(restartedAbsent.configuration.systemPrompt, undefined);
+		assert.equal(restartedAbsent.configuration.thinking, undefined);
+	} finally {
+		await host.runtime.dispose();
+	}
+});

@@ -3,6 +3,7 @@ import type {
 	SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 
+import { isAgentCreationPreset } from "./agent-creation-preset.ts";
 import {
 	AGENT_IDENTITY_CUSTOM_TYPE,
 	MODERATOR_INPUT_CUSTOM_TYPE,
@@ -129,6 +130,7 @@ function isValidChildIdentity(
 			"workflowId",
 			"directSpawnerAgentId",
 			"spawnSource",
+			"creationPreset",
 			"metadata",
 		]) ||
 		!isIdentifier(value.agentId) ||
@@ -140,7 +142,8 @@ function isValidChildIdentity(
 		!hasExactKeys(value.spawnSource, ["agentId", "entryId", "toolCallId"]) ||
 		value.spawnSource.agentId !== value.directSpawnerAgentId ||
 		!isIdentifier(value.spawnSource.entryId) ||
-		!isIdentifier(value.spawnSource.toolCallId)
+		!isIdentifier(value.spawnSource.toolCallId) ||
+		!isAgentCreationPreset(value.creationPreset)
 	) {
 		return false;
 	}

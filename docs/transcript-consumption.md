@@ -1,9 +1,10 @@
 # Transcript facts and incremental consumption
 
 Pi transcripts remain the durable authority. An Agent's transcript adapter retains
-physical entries and disposable indexes in memory. Loaded child Identity and
-`creationInput` are trusted records. Creation Request lookup derives and retains
-its Request from those fields without inspecting the Spawner again. Cold discovery
+physical entries and disposable indexes in memory. Loaded child Identity, its captured
+`creationPreset`, and `creationInput` are trusted records. Creation Request lookup derives
+and retains its Request from the Identity spawn pointer and `creationInput` without
+inspecting the Spawner again. Cold discovery
 reads the referenced source once to obtain the required spawn input; missing or
 unreadable required input prevents admission.
 

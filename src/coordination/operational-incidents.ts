@@ -630,6 +630,7 @@ export class OperationalIncidentCoordinator {
 			agentId,
 			workflowId: this.#ownerIdentity.workflowId,
 			directSpawnerAgentId: null,
+			creationPreset: prepared.creationPreset,
 			metadata,
 		};
 		const input: ModeratorInput = {

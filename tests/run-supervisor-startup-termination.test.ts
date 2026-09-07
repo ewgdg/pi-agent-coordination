@@ -87,6 +87,7 @@ test("termination cancels a selected starting Run before its occupied lane", asy
 			agentId: targetAgentId,
 			workflowId: "owner",
 			directSpawnerAgentId: "owner",
+			creationPreset: null,
 			spawnSource: { agentId: "owner", entryId: "spawn-entry", toolCallId: "spawn-call" },
 			metadata: { label: "Starting Target" },
 		}, targetHost, emptyTranscript(targetAgentId))],

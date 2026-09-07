@@ -245,6 +245,7 @@ test("a Moderator bootstrap can recover through native /new", async (t) => {
 		{
 			agentId: host.session.sessionId,
 			workflowId: "workflow-owner",
+			creationPreset: null,
 			metadata: {
 				label: "Moderator",
 				description: "run failure",
@@ -539,6 +540,7 @@ test("a valid child Identity is not reclassified as Workflow Owner", async (t) =
 		...ownerIdentityFor(host),
 		workflowId: "workflow-owner",
 		directSpawnerAgentId: "direct-spawner",
+		creationPreset: null,
 		spawnSource: {
 			agentId: "direct-spawner",
 			entryId: "assistant-entry",
@@ -576,6 +578,7 @@ test("a Moderator bootstrap cannot be reclassified as Workflow Owner", async (t)
 		{
 			agentId: host.session.sessionId,
 			workflowId: "workflow-owner",
+			creationPreset: null,
 			metadata: {
 				label: "Moderator",
 				description: "run failure",

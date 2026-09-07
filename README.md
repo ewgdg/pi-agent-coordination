@@ -46,6 +46,8 @@ The package adopts the current session as the Workflow Owner; no separate activa
 
 See [Agent Templates](docs/agent-spawning.md#agent-templates) for configuration details.
 
+Templates are creation presets: selecting one at spawn captures its rules in the new Agent's durable bootstrap. Later Runtime preparation uses that captured preset with the canonical spawn `config` and current resources; it does not re-select the original template. Template edits take effect for future spawns after resource reload, without changing existing Agents' presets.
+
 ### `cheap-delegate`
 
 A cost-efficient default for bounded implementation, routine execution, and targeted fact-finding.

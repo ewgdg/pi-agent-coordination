@@ -7,6 +7,7 @@ import type {
 } from "../protocol/runtime-configuration.ts";
 import type {
 	AgentTemplate,
+	AgentCreationPreset,
 	SystemPromptMode,
 } from "./agent-templates.ts";
 
@@ -47,7 +48,7 @@ export type AgentRunLaunchConfiguration = Readonly<
 
 export function resolveAgentRunConfiguration(options: {
 	inherited: InheritableRuntimeConfiguration;
-	template?: AgentTemplate;
+	template?: Exclude<AgentCreationPreset, null>;
 	overrides?: AgentSpawnConfigurationInput;
 	fixedAllowedTools: readonly string[];
 	isModelAvailable(model: ModelReference): boolean;
@@ -129,7 +130,7 @@ function resolveExtensions(
 }
 
 function resolveSystemPrompt(
-	template: AgentTemplate | undefined,
+	template: Exclude<AgentCreationPreset, null> | undefined,
 	overrides: AgentSpawnConfigurationInput | undefined,
 ): EffectiveAgentRunConfiguration["systemPrompt"] {
 	const templatePrompt = template

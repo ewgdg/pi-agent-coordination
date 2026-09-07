@@ -4,6 +4,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
+import type { AgentCreationPreset } from "../templates/agent-templates.ts";
+import { validateAgentCreationPreset } from "./agent-creation-preset.ts";
 import { validateConversationForkHandoff } from "./conversation-fork.ts";
 import { CONVERSATION_FORK_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "./owner-identity.ts";
@@ -16,6 +18,8 @@ export type ChildAgentIdentity = Readonly<{
 	workflowId: string;
 	directSpawnerAgentId: string;
 	spawnSource: ToolCallPointer;
+	/** Creation rules are committed atomically, but grant no identity or authority. */
+	creationPreset: AgentCreationPreset;
 	metadata: Readonly<{
 		label: string;
 		description?: string;
@@ -97,6 +101,7 @@ export function validateColdChildIdentity(options: {
 		"workflowId",
 		"directSpawnerAgentId",
 		"spawnSource",
+		"creationPreset",
 		"metadata",
 	]);
 	if (identity.agentId !== options.sessionId) {
@@ -135,6 +140,7 @@ export function validateColdChildIdentity(options: {
 	}
 	return {
 		agentId: options.sessionId,
+		creationPreset: validateAgentCreationPreset(identity.creationPreset),
 		workflowId: identity.workflowId,
 		directSpawnerAgentId: identity.directSpawnerAgentId,
 		spawnSource: {

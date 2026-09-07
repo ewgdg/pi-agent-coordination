@@ -181,6 +181,7 @@ export class DefaultChildSpawner {
 			workflowId: parent.identity.workflowId,
 			directSpawnerAgentId: callerAgentId,
 			spawnSource: source,
+			creationPreset: prepared.creationPreset,
 			metadata,
 		};
 		if (input.conversation !== "fork") {

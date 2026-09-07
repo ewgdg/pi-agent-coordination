@@ -7,6 +7,7 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { resolveModeratorAgentMetadata } from "../src/protocol/agent-metadata.ts";
+import { validateColdChildIdentity } from "../src/protocol/child-identity.ts";
 import { createModelVisibleModeratorInput } from "../src/protocol/moderator-input.ts";
 import {
 	AgentTranscript,
@@ -67,6 +68,7 @@ test("new Agent transcript materialization persists only its creation Identity",
 		agentId: "agent-materialized",
 		workflowId: "workflow-materialized",
 		directSpawnerAgentId: "parent-materialized",
+		creationPreset: null,
 		spawnSource: {
 			agentId: "parent-materialized",
 			entryId: "spawn-entry",
@@ -97,6 +99,7 @@ test("new Agent transcript header uses the first Runtime working directory witho
 		agentId: "agent-effective-cwd",
 		workflowId: "workflow-effective-cwd",
 		directSpawnerAgentId: "parent-effective-cwd",
+		creationPreset: null,
 		spawnSource: {
 			agentId: "parent-effective-cwd",
 			entryId: "spawn-entry",
@@ -115,6 +118,7 @@ test("new Agent transcript header uses the first Runtime working directory witho
 		agentId: "agent-effective-cwd",
 		workflowId: "workflow-effective-cwd",
 		directSpawnerAgentId: "parent-effective-cwd",
+		creationPreset: null,
 		spawnSource: {
 			agentId: "parent-effective-cwd",
 			entryId: "spawn-entry",
@@ -133,6 +137,7 @@ test("new Moderator transcript materialization validates its Input bootstrap", a
 		agentId: "moderator-materialized",
 		workflowId: "workflow-materialized",
 		directSpawnerAgentId: null,
+		creationPreset: null,
 		metadata: resolveModeratorAgentMetadata("operation_review"),
 	} as const;
 	const input = {
@@ -395,4 +400,27 @@ test("rewriting an incomplete tail never splices old bytes into a new committed 
 	const replacement = { type: "custom", id: "new-complete", parentId: null, timestamp: new Date().toISOString(), customType: "marker" };
 	await writeFile(file, `${header}${JSON.stringify(replacement)}\n`);
 	assert.deepEqual((await transcript.refresh()).entries, [replacement]);
+});
+
+test("cold child bootstrap accepts only creation rules, not effective configuration or discovery metadata", () => {
+	const session = SessionManager.inMemory("/project", { id: "preset-child" });
+	const identity = {
+		agentId: "preset-child", workflowId: "owner", directSpawnerAgentId: "owner",
+		spawnSource: { agentId: "owner", entryId: "spawn-entry", toolCallId: "spawn-call" },
+		metadata: { label: "preset-child" },
+		creationPreset: { systemPromptMode: "append", systemPrompt: "", loadContextFiles: true },
+	};
+	session.appendCustomEntry("agent-coordination.identity", identity);
+	assert.deepEqual(validateColdChildIdentity({ sessionId: "preset-child", entries: session.getEntries() }), identity);
+	for (const invalid of [
+		{ ...identity.creationPreset, name: "discovery-name" },
+		{ ...identity.creationPreset, cwd: "/resolved-parent" },
+		{ ...identity.creationPreset, extensions: ["/resolved-extension.mjs"] },
+		{ ...identity.creationPreset, models: [{ model: { provider: "provider", modelId: "model" }, thinking: "invalid" }] },
+	]) {
+		const entries = session.getEntries().map((entry) => entry.type === "custom"
+			? { ...entry, data: { ...identity, creationPreset: invalid } }
+			: entry);
+		assert.throws(() => validateColdChildIdentity({ sessionId: "preset-child", entries }), /creation preset has an invalid shape/);
+	}
 });
