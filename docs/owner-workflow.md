@@ -22,7 +22,7 @@ Owner `/new`, `/resume`, fork, and clone replacement exhaustively end the source
 
 The package registers the Owner tool definitions through Pi's `registerTool()` API when the extension loads, before `session_start`. Pi can therefore reconstruct historical custom tool calls with their native compact renderers during interactive `/resume`. Owner admission then binds those definitions to the identity-scoped coordinator through the hidden extension and activates them. Caller identity and role configuration are never model-supplied tool arguments.
 
-- `agent_spawn` creates one fresh configured child, optionally resolving a named Agent Template, and delivers its initial Creation Request.
+- `agent_spawn` creates one fresh configured child, optionally selecting a named Agent Template whose rules are captured as its creation preset, and delivers its initial Creation Request.
 - `agent_message` sends Messages, creates correlated Requests, Answers, retrieves, and cancels.
 - `agent_wait` takes a fixed snapshot of every outstanding outbound Agent Request. It rejects before parking when any unanswered Request targets a Dormant Agent; committed Answers remain retrievable from Dormant responders. Otherwise it parks the exact Owner Run until the complete Answer set is ready, primary interactive human input redirects the Owner, or an eligible inbound Agent Request preempts the Wait for attention. Explicit follow-up input remains queued. Owner execution never consumes child execution capacity. A preempted Wait consumes no Answer; a later call takes a fresh outstanding snapshot.
 - `ask_user_question` blocks the caller's exact Run on one free-form question. Its matching successful native tool result is the sole Human Answer.
@@ -58,7 +58,7 @@ Pi's version is diagnostic information, not an allowlist. Package builds use a p
 
 ## Durable and volatile state
 
-Pi transcripts are the durable authority for Agent identity, authored Messages and Requests, committed Deliveries and Answers, and recovery evidence. Agent Templates and Workflow Policy are resolved from current trusted resources; policy reload publishes complete snapshots but does not write them to transcripts.
+Pi transcripts are the durable authority for Agent identity, captured creation presets, authored Messages and Requests, committed Deliveries and Answers, and recovery evidence. A Template is selected from current trusted discovery only at creation; its rules are captured atomically in the child Identity or Moderator Input. Later Runtime preparation resolves current ancestry, resources, trust, and canonical Spawn overrides against that preset without re-selecting the Template. Workflow Policy is resolved from current trusted resources; policy reload publishes complete snapshots but does not write them to transcripts.
 
 Delivery scheduling, Owner settlement parking, execution permits, Human Request attention and Answer mode, Operational Attention, exact Run handles, Holds, and the open Agent-view attachment are volatile and bounded where their owning feature specifies a limit. They are not replayed as durable work after process loss. Polling, explicit retry, and transcript-based cold recovery are the supported recovery paths.
 

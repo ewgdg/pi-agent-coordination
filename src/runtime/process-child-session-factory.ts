@@ -28,10 +28,12 @@ import {
 } from "../templates/agent-template-discovery.ts";
 import {
 	createAgentTemplateCatalogue,
-	selectAgentTemplateForRun,
+	captureAgentCreationPreset,
+	selectAgentTemplateForCreation,
+	type AgentCreationPreset,
 	type AgentTemplate,
-	type AgentTemplateCatalogueEntry,
 	type AgentTemplateCatalogueSnapshot,
+	type AgentTemplateDiscovery,
 	type AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
 import { AgentRuntimeSupervisor } from "./agent-runtime-supervisor.ts";
@@ -59,6 +61,10 @@ type ParticipantHandlers =
 /** Launches every non-Owner Runtime in a fresh Pi process. */
 export class ProcessChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
+	readonly #templateLoads = new Map<string, Promise<Readonly<{
+		discovery: AgentTemplateDiscovery;
+		snapshot: AgentTemplateCatalogueSnapshot;
+	}>>>();
 	readonly #ownerIdentity: OwnerIdentity;
 	readonly #entryModulePath: string;
 	readonly #packageRoot: string;
@@ -100,16 +106,14 @@ export class ProcessChildSessionFactory {
 	}
 
 	/**
-	 * Dynamic preparation is deliberate product behavior: every new Runtime
-	 * re-resolves its current parent ancestry, selected Template, resources,
-	 * trust, and explicit system prompt. Never persist or reuse this resolved launch
-	 * specification for a later Runtime unless the product semantics are
-	 * explicitly changed at the user's request.
+	 * Fresh Runtimes resolve current parent inheritance and Pi resources against
+	 * Agent-owned creation rules. A resolved launch configuration is never recovery input.
 	 */
 	async prepareOrdinaryRun(options: {
 		agentId: string;
 		parent: AgentRecord;
 		spawnInput: AgentSpawnInput;
+		creationPreset?: AgentCreationPreset;
 		preserveParentPromptSurface?: boolean;
 	}): Promise<PreparedOrdinaryChildRuntime> {
 		return this.#prepareOrdinaryRun(options, new Set());
@@ -117,11 +121,15 @@ export class ProcessChildSessionFactory {
 
 	async prepareModeratorRun(options: {
 		agentId: string;
+		creationPreset?: AgentCreationPreset;
 	}): Promise<PreparedModeratorRuntime> {
 		const owner = this.#resolveAgent(this.#ownerIdentity.agentId);
 		if (!owner) throw new Error("invariant_violation: Workflow Owner is unavailable");
 		const parentRuntime = await this.#resolveCurrentRuntime(owner, new Set());
-		const template = await this.#resolveSelectedTemplate(parentRuntime, "moderator");
+		const creationPreset = options.creationPreset === undefined
+			? captureAgentCreationPreset(await this.#resolveSelectedTemplate(owner.identity.agentId, parentRuntime, "moderator"))
+			: options.creationPreset;
+		const template = creationPreset ?? undefined;
 		return prepareChildRuntime({
 			agentId: options.agentId,
 			role: "moderator",
@@ -157,6 +165,7 @@ export class ProcessChildSessionFactory {
 					agentId: identity.agentId,
 					parent,
 					spawnInput,
+					creationPreset: identity.creationPreset,
 				});
 				firstPreparation = undefined;
 				record.effectiveConfiguration = prepared.configuration;
@@ -193,6 +202,7 @@ export class ProcessChildSessionFactory {
 			startSession: async () => {
 				const prepared = firstPreparation ?? await this.prepareModeratorRun({
 					agentId: identity.agentId,
+					creationPreset: identity.creationPreset,
 				});
 				firstPreparation = undefined;
 				record.launchConfiguration = prepared.configuration;
@@ -241,8 +251,9 @@ export class ProcessChildSessionFactory {
 	async captureTemplateSnapshotFor(record: AgentRecord): Promise<AgentTemplateCatalogueSnapshot> {
 		const admittedRuntime = record.host.effectiveRuntimeSnapshot();
 		const snapshot = admittedRuntime
-			? await this.#captureTemplateSnapshotForRuntime(admittedRuntime)
+			? await this.#captureTemplateSnapshotForRuntime(record.identity.agentId, admittedRuntime)
 			: await this.#captureTemplateSnapshotForResolvedRuntime(
+				record.identity.agentId,
 				await this.#resolveCurrentRuntime(record, new Set()),
 			);
 		record.agentTemplateSnapshot = snapshot;
@@ -250,37 +261,46 @@ export class ProcessChildSessionFactory {
 	}
 
 	#captureTemplateSnapshotForResolvedRuntime(
+		agentId: string,
 		runtime: ResolvedParentRuntime,
 	): Promise<AgentTemplateCatalogueSnapshot> {
-		return this.#captureTemplateSnapshotForRuntime({
+		return this.#captureTemplateSnapshotForRuntime(agentId, {
 			cwd: runtime.configuration.cwd,
 			projectTrusted: runtime.projectTrusted,
 		});
 	}
 
 	async #captureTemplateSnapshotForRuntime(
+		agentId: string,
 		runtime: Readonly<{
 			cwd: string;
 			projectTrusted: boolean;
 		}>,
 	): Promise<AgentTemplateCatalogueSnapshot> {
-		return {
-			templates: await this.#discoverTemplateCatalogueForRuntime(
-				runtime.cwd,
-				runtime.projectTrusted,
-			),
-		};
+		return (await this.#loadTemplates(agentId, runtime, true)).snapshot;
 	}
 
-	async #discoverTemplateCatalogueForRuntime(
-		cwd: string,
-		projectTrusted: boolean,
-	): Promise<readonly AgentTemplateCatalogueEntry[]> {
-		const discovery = await discoverAgentTemplates(this.#resolveTemplateRoots(cwd, projectTrusted));
-		return createAgentTemplateCatalogue(
-			discovery.templates.values(),
-			(model) => this.#isModelAvailable(model),
-		);
+	#loadTemplates(
+		agentId: string,
+		runtime: Readonly<{ cwd: string; projectTrusted: boolean }>,
+		refresh = false,
+	) {
+		const current = this.#templateLoads.get(agentId);
+		if (current && !refresh) return current;
+		// One load owns both selection and guidance, including missing/invalid names.
+		// Cache the in-flight promise as well so concurrent spawns share that load.
+		const loading = discoverAgentTemplates(this.#resolveTemplateRoots(runtime.cwd, runtime.projectTrusted))
+			.then((discovery) => ({
+				discovery,
+				snapshot: {
+					templates: createAgentTemplateCatalogue(
+						discovery.templates.values(),
+						(model) => this.#isModelAvailable(model),
+					),
+				},
+			}));
+		this.#templateLoads.set(agentId, loading);
+		return loading;
 	}
 
 	async #prepareOrdinaryRun(
@@ -288,15 +308,17 @@ export class ProcessChildSessionFactory {
 			agentId: string;
 			parent: AgentRecord;
 			spawnInput: AgentSpawnInput;
+			creationPreset?: AgentCreationPreset;
 			preserveParentPromptSurface?: boolean;
 		},
 		resolving: Set<string>,
+		captureTemplates = true,
 	): Promise<PreparedOrdinaryChildRuntime> {
 		const parentRuntime = await this.#resolveCurrentRuntime(options.parent, resolving);
-		const template = await this.#resolveSelectedTemplate(
-			parentRuntime,
-			options.spawnInput.template,
-		);
+		const creationPreset = options.creationPreset === undefined
+			? captureAgentCreationPreset(await this.#resolveSelectedTemplate(options.parent.identity.agentId, parentRuntime, options.spawnInput.template))
+			: options.creationPreset;
+		const template = creationPreset ?? undefined;
 		const preparedRuntime = await prepareChildRuntime({
 			agentId: options.agentId,
 			role: "ordinary",
@@ -308,9 +330,11 @@ export class ProcessChildSessionFactory {
 				? {}
 				: { overrides: options.spawnInput.config }),
 		});
+		// Resolving dormant ancestry does not load a spawning Runtime or refresh its catalogue.
+		if (!captureTemplates) return preparedRuntime;
 		const prepared: PreparedOrdinaryChildRuntime = {
 			...preparedRuntime,
-			agentTemplateSnapshot: await this.#captureTemplateSnapshotForRuntime({
+			agentTemplateSnapshot: await this.#captureTemplateSnapshotForRuntime(options.agentId, {
 				cwd: preparedRuntime.configuration.cwd,
 				projectTrusted: preparedRuntime.projectTrusted,
 			}),
@@ -377,7 +401,8 @@ export class ProcessChildSessionFactory {
 				agentId: record.identity.agentId,
 				parent,
 				spawnInput: record.creationInput,
-			}, resolving);
+				creationPreset: record.identity.creationPreset,
+			}, resolving, false);
 			return {
 				configuration: prepared.configuration,
 				projectTrusted: prepared.projectTrusted,
@@ -452,15 +477,16 @@ export class ProcessChildSessionFactory {
 	}
 
 	async #resolveSelectedTemplate(
+		agentId: string,
 		parentRuntime: ResolvedParentRuntime,
 		selectedName: string | undefined,
 	): Promise<AgentTemplate | undefined> {
 		if (selectedName === undefined) return undefined;
-		return selectAgentTemplateForRun(
-			await discoverAgentTemplates(this.#resolveTemplateRoots(
-				parentRuntime.configuration.cwd,
-				parentRuntime.projectTrusted,
-			)),
+		return selectAgentTemplateForCreation(
+			(await this.#loadTemplates(agentId, {
+				cwd: parentRuntime.configuration.cwd,
+				projectTrusted: parentRuntime.projectTrusted,
+			})).discovery,
 			selectedName,
 		);
 	}

@@ -625,7 +625,7 @@ test("a conversation fork keeps the parent provider prefix cache-affine", async 
 	await host.runtime.dispose();
 });
 
-test("a successor Runtime re-resolves its current Template and project resources", async (t) => {
+test("a successor Runtime retains its creation preset while resolving current project resources", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
@@ -814,7 +814,8 @@ test("a successor Runtime re-resolves its current Template and project resources
 	assert.equal(successorReceipt.messageStatus, "sent");
 	await waitForCondition(() => successorSystemPrompt.length > 0);
 	assert.match(successorSystemPrompt, /Changed effective-cwd context/);
-	assert.match(successorSystemPrompt, /Changed Template context/);
+	assert.match(successorSystemPrompt, /Template context/);
+	assert.doesNotMatch(successorSystemPrompt, /Changed Template context/);
 	assert.match(successorSystemPrompt, /Spawn context/);
 	assert.doesNotMatch(successorSystemPrompt, /Native effective-cwd context/);
 	await coordinator.shutdown(async () => host.runtime.dispose());

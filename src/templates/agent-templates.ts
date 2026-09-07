@@ -10,6 +10,15 @@ export type AgentTemplateModelCandidate = Readonly<{
 	thinking: RuntimeThinkingLevel;
 }>;
 
+/** Agent-owned rules; no discovery metadata or resolved parent configuration. */
+export type AgentCreationPreset = Omit<AgentTemplate, "name" | "useWhen" | "sourcePath"> | null;
+
+export function captureAgentCreationPreset(template: AgentTemplate | undefined): AgentCreationPreset {
+	if (!template) return null;
+	const { name: _, useWhen: __, sourcePath: ___, ...rules } = template;
+	return structuredClone(rules);
+}
+
 export type AgentTemplate = Readonly<{
 	name: string;
 	useWhen?: string;
@@ -63,7 +72,7 @@ export type AgentTemplateDiscovery = Readonly<{
 	diagnostics: readonly AgentTemplateDiagnostic[];
 }>;
 
-export function selectAgentTemplateForRun(
+export function selectAgentTemplateForCreation(
 	discovery: AgentTemplateDiscovery,
 	selectedName: string,
 ): AgentTemplate | undefined {

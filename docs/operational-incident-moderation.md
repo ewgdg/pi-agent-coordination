@@ -66,12 +66,13 @@ Before starting a Moderator Run, the host commits one visible `agent-coordinatio
 
 - the fresh Agent and Workflow relationship;
 - fixed `moderator` metadata;
+- the captured `creationPreset` (or `null` when the reserved Template is absent);
 - one trigger snapshot;
 - up to 16 exact qualifying Request sources;
 - inspection watermarks for every affected Agent;
 - for a replacement, the previous attempt's terminal transcript pointer.
 
-Failure before this commit creates no Agent and consumes no attempt. A committed Input creates a standalone Moderator with no Direct Spawner, even if startup or its Run then fails. After Runtime admission, the host sends a hidden `agent-coordination.moderator-routine-start` message through ordinary public delivery to start the model turn; the durable identity and incident remain together in the preceding Input. Each new Moderator Runtime dynamically resolves the current Owner Runtime, current reserved `moderator` Template, resources, trust, native project context-file loading, and explicit system prompt. Without a Template model selection, it inherits the Owner model but lets Pi apply the shared default thinking level instead of inheriting the Owner's effective level. Those resolved values are not part of Moderator Input.
+Failure before this commit creates no Agent and consumes no attempt. A committed Input creates a standalone Moderator with no Direct Spawner, even if startup or its Run then fails. After Runtime admission, the host sends a hidden `agent-coordination.moderator-routine-start` message through ordinary public delivery to start the model turn; the durable identity and incident remain together in the preceding Input. Each new Moderator Runtime dynamically resolves the current Owner Runtime, the captured `creationPreset`, resources, trust, native project context-file loading, and explicit system prompt. It never re-selects the reserved `moderator` Template. Without a captured model selection, it inherits the Owner model but lets Pi apply the shared default thinking level instead of inheriting the Owner's effective level. Those resolved values are not part of Moderator Input.
 
 An Operation Review trigger contains only `kind`, the exact `toolCall` pointer, and the elapsed `reviewIntervalMs`. It carries no inferred outcome, internal-stage details, deadline timestamp, adapter state, or eager diagnostics.
 

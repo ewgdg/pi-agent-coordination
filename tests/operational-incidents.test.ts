@@ -108,6 +108,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		inspectedThrough: Array<{ agentId: string; entryId: string }>;
 	};
 	assert.deepEqual(moderatorInput.details, {
+		creationPreset: null,
 		agentId: moderator.id,
 		workflowId: host.session.sessionId,
 		metadata: {

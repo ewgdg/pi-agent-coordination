@@ -181,6 +181,7 @@ test("Creation Request lookup trusts loaded identity and creation input without 
 		agentId: "worker",
 		workflowId: "owner",
 		directSpawnerAgentId: "owner",
+		creationPreset: null,
 		spawnSource: source,
 		metadata: { label: "Worker" },
 	};

@@ -1,6 +1,8 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { isDeepStrictEqual } from "node:util";
 
+import type { AgentCreationPreset } from "../templates/agent-templates.ts";
+import { validateAgentCreationPreset } from "./agent-creation-preset.ts";
 import { resolveModeratorAgentMetadata } from "./agent-metadata.ts";
 import type { ToolCallPointer } from "./identities.ts";
 import { ProtocolInvariantError } from "./identities.ts";
@@ -26,6 +28,8 @@ export type ModeratorIdentity = Readonly<{
 	agentId: string;
 	workflowId: string;
 	directSpawnerAgentId: null;
+	/** Rules captured with this atomic bootstrap, not role/authority metadata. */
+	creationPreset: AgentCreationPreset;
 	metadata: Readonly<{
 		label: "Moderator";
 		description: string;
@@ -97,6 +101,7 @@ export type ModelVisibleModeratorInput = Readonly<{
 		agentId: string;
 		workflowId: string;
 		metadata: ModeratorIdentity["metadata"];
+		creationPreset: AgentCreationPreset;
 	}>;
 }>;
 
@@ -118,6 +123,7 @@ export function createModelVisibleModeratorInput(
 			agentId: identity.agentId,
 			workflowId: identity.workflowId,
 			metadata: identity.metadata,
+			creationPreset: identity.creationPreset,
 		},
 	};
 }
@@ -177,6 +183,7 @@ export function validateCommittedModeratorInput(options: {
 		agentId: identity.agentId,
 		workflowId: identity.workflowId,
 		metadata: identity.metadata,
+		creationPreset: identity.creationPreset,
 	};
 	if (
 		!isDeepStrictEqual(committedInput, input) ||
@@ -233,6 +240,7 @@ export function validateColdModeratorInput(options: {
 		"agentId",
 		"workflowId",
 		"metadata",
+		"creationPreset",
 	]);
 	if (
 		details.agentId !== options.sessionId ||
@@ -257,6 +265,7 @@ export function validateColdModeratorInput(options: {
 			agentId: options.sessionId,
 			workflowId: details.workflowId,
 			directSpawnerAgentId: null,
+			creationPreset: validateAgentCreationPreset(details.creationPreset),
 			metadata,
 		},
 		input,

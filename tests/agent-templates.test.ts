@@ -8,7 +8,7 @@ import { discoverAgentTemplates } from "../src/templates/agent-template-discover
 import { parseAgentTemplate } from "../src/templates/agent-template-parser.ts";
 import {
 	createAgentTemplateCatalogue,
-	selectAgentTemplateForRun,
+	selectAgentTemplateForCreation,
 } from "../src/templates/agent-templates.ts";
 import { resolveAgentRunConfiguration } from "../src/templates/agent-configuration.ts";
 import {
@@ -251,7 +251,7 @@ test("discovers whole templates by strict precedence while safely following syml
 	);
 });
 
-test("resolves inherited Runtime values, current template, explicit spawn overrides, and fixed role tools in order", () => {
+test("resolves current inherited Runtime values, preset rules, explicit spawn overrides, and fixed role tools in order", () => {
 	const configuration = resolveAgentRunConfiguration({
 		inherited: {
 			cwd: "/baseline/project",
@@ -262,8 +262,6 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 			extensions: ["/extensions/base.ts"],
 		},
 		template: {
-			name: "research-agent",
-			useWhen: "Use for research.",
 			models: [
 				{ model: { provider: "missing", modelId: "model" }, thinking: "low" },
 				{ model: { provider: "template", modelId: "model" }, thinking: "medium" },
@@ -272,7 +270,6 @@ test("resolves inherited Runtime values, current template, explicit spawn overri
 			systemPromptMode: "replace",
 			loadContextFiles: false,
 			systemPrompt: "Template context",
-			sourcePath: "/templates/research.md",
 		},
 		overrides: {
 			cwd: "subproject",
@@ -312,7 +309,6 @@ test("fails when no configured Template model is available", () => {
 				extensions: [],
 			},
 			template: {
-				name: "fallback-agent",
 				models: [
 					{ model: { provider: "missing-a", modelId: "model" }, thinking: "low" },
 					{ model: { provider: "missing-b", modelId: "model" }, thinking: "high" },
@@ -320,7 +316,6 @@ test("fails when no configured Template model is available", () => {
 				systemPromptMode: "append",
 				loadContextFiles: true,
 				systemPrompt: "",
-				sourcePath: "/templates/fallback-agent.md",
 			},
 			fixedAllowedTools: [],
 			isModelAvailable: () => false,
@@ -347,7 +342,6 @@ test("available paired spawn model override bypasses unavailable Template candid
 		systemPromptMode: "append" as const,
 		loadContextFiles: true,
 		systemPrompt: "",
-		sourcePath: "/templates/fallback-agent.md",
 	};
 	const base = {
 		inherited,
@@ -522,9 +516,9 @@ test("permits only the missing reserved Moderator Template", () => {
 		unavailable: new Map(),
 		diagnostics: [],
 	};
-	assert.equal(selectAgentTemplateForRun(discovery, "moderator"), undefined);
+	assert.equal(selectAgentTemplateForCreation(discovery, "moderator"), undefined);
 	assert.throws(
-		() => selectAgentTemplateForRun(discovery, "missing-agent"),
+		() => selectAgentTemplateForCreation(discovery, "missing-agent"),
 		/Selected Agent Template missing-agent is missing/,
 	);
 });

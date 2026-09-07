@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 
@@ -87,6 +87,7 @@ test("a fresh Owner host rediscovers one dormant child without starting its Run"
 		agentId: grandchildAgentId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: spawned.agentId,
+		creationPreset: null,
 		spawnSource: {
 			agentId: spawned.agentId,
 			entryId: nestedSpawnEntryId,
@@ -372,6 +373,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		agentId: foreignAgentId,
 		workflowId: "foreign-workflow",
 		directSpawnerAgentId: host.session.sessionId,
+		creationPreset: null,
 		spawnSource: {
 			agentId: host.session.sessionId,
 			entryId: foreignSpawnEntryId,
@@ -442,6 +444,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 		agentId: nestedAgentId,
 		workflowId: host.session.sessionId,
 		directSpawnerAgentId: first.agentId,
+		creationPreset: null,
 		spawnSource: {
 			agentId: first.agentId,
 			entryId: nestedSpawnEntryId,
@@ -630,7 +633,7 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 	assert.equal(await countModeratorSessions(workflowDirectory), 0);
 });
 
-test("cold successor re-resolves current configuration and recovers residual Creation Request retention", async (t) => {
+test("cold successor retains captured template rules after rename and recovers residual Creation Request retention", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	const templateDirectory = join(host.services.agentDir, "agents");
 	const templatePath = join(templateDirectory, "residual.md");
@@ -659,9 +662,11 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 	const ownerSessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
+	const renamedTemplatePath = join(templateDirectory, "replacement.md");
+	await rename(templatePath, renamedTemplatePath);
 	await writeFile(
-		templatePath,
-		"---\nname: residual-agent\nuseWhen: Use for residual work.\nallowedTools:\n  - read\n  - bash\n---\nCurrent context",
+		renamedTemplatePath,
+		"---\nname: replacement-agent\nuseWhen: Use for residual work.\nallowedTools:\n  - read\n  - bash\n---\nCurrent context",
 	);
 
 	const reopened = await reopenOwner(t, host, ownerSessionFile);
@@ -695,9 +700,11 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 	);
 
 	let successorTools: string[] = [];
+	let successorPrompt = "";
 	reopened.model.setResponses([
 		(context) => {
 			successorTools = context.tools?.map(({ name }) => name) ?? [];
+			successorPrompt = context.systemPrompt ?? "";
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"ask_user_question",
@@ -739,7 +746,9 @@ test("cold successor re-resolves current configuration and recovers residual Cre
 		1,
 	);
 	assert.equal(successorTools.includes("read"), true);
-	assert.equal(successorTools.includes("bash"), true);
+	assert.equal(successorTools.includes("bash"), false);
+	assert.match(successorPrompt, /Initial context/);
+	assert.doesNotMatch(successorPrompt, /Current context/);
 	await reopened.runtime.dispose();
 });
 
@@ -884,12 +893,16 @@ test("recovered authority keeps physical child order while Dormant view uses Pi 
 	await reopened.runtime.dispose();
 });
 
-test("a fresh Owner host rediscovers a standalone Moderator without reconstructing handling", async (t) => {
+test("a fresh Owner host rediscovers a standalone Moderator with its captured preset and without reconstructing handling", { timeout: 5_000 }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
 	});
+	const templateDirectory = join(host.services.agentDir, "agents");
+	const templatePath = join(templateDirectory, "moderator.md");
+	await mkdir(templateDirectory, { recursive: true });
+	await writeFile(templatePath, "---\nname: moderator\nallowedTools: read\n---\nCaptured Moderator rules.");
 	await bindTestOwnerHost(host, "tui");
 	host.model.setResponses([
 		fauxAssistantMessage(
@@ -904,13 +917,16 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 		fauxAssistantMessage("I settled without an Answer."),
 		fauxAssistantMessage("I recorded initial Moderator evidence."),
 	]);
-	await host.session.prompt("Create a Moderator that can be recovered after host loss.");
-	await host.session.waitForIdle();
+	// Outstanding Creation Requests park Owner settlement; wait for bootstrap instead.
+	const ownerPrompt = host.session.prompt("Create a Moderator that can be recovered after host loss.");
 	const directory = workflowSessionDirectory(host);
+	await mkdir(directory, { recursive: true });
 	const moderator = await waitForModeratorSession(directory);
 	const ownerSessionFile = host.session.sessionManager.getSessionFile();
 	assert.ok(ownerSessionFile);
 	await host.runtime.dispose();
+	await ownerPrompt;
+	await writeFile(templatePath, "---\nname: renamed-moderator\nallowedTools: bash\n---\nChanged Moderator rules.");
 
 	const reopened = await reopenOwner(t, host, ownerSessionFile, {
 		implicitModeratorResponses: false,
@@ -972,9 +988,11 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 	await moderatorAgents.command;
 
 	let recoveredTools: string[] = [];
+	let recoveredPrompt = "";
 	reopened.model.setResponses([
 		(context) => {
 			recoveredTools = context.tools?.map(({ name }) => name).sort() ?? [];
+			recoveredPrompt = context.systemPrompt ?? "";
 			return fauxAssistantMessage("The recovered Moderator received routing.");
 		},
 	]);
@@ -1002,15 +1020,11 @@ test("a fresh Owner host rediscovers a standalone Moderator without reconstructi
 		"agent_observe",
 		"agent_wait",
 		"ask_user_question",
-		"bash",
-		"edit",
-		"find",
-		"grep",
-		"ls",
 		"moderator_control",
 		"read",
-		"write",
 	]);
+	assert.match(recoveredPrompt, /Captured Moderator rules\./);
+	assert.doesNotMatch(recoveredPrompt, /Changed Moderator rules\./);
 	await reopened.runtime.dispose();
 });
 
@@ -1150,6 +1164,7 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 		{
 			agentId: malformedAgentId,
 			workflowId: host.session.sessionId,
+			creationPreset: null,
 			metadata: {
 				label: "Moderator",
 				description: "obligation stall",
@@ -1440,6 +1455,7 @@ async function writeCyclicCandidates(
 				agentId: candidate.agentId,
 				workflowId,
 				directSpawnerAgentId: candidate.directSpawnerAgentId,
+				creationPreset: null,
 				spawnSource: {
 					agentId: candidate.directSpawnerAgentId,
 					entryId: candidate.claimedSourceEntryId,

@@ -19,6 +19,7 @@ import {
 } from "../templates/agent-configuration.ts";
 import type {
 	AgentTemplate,
+	AgentCreationPreset,
 	AgentTemplateCatalogueSnapshot,
 } from "../templates/agent-templates.ts";
 
@@ -55,6 +56,7 @@ export type ResolvedParentRuntime = Readonly<{
 
 type PreparedRuntimeFields = Readonly<{
 	agentId: string;
+	creationPreset: AgentCreationPreset;
 	agentTemplateSnapshot?: AgentTemplateCatalogueSnapshot;
 	initialTools?: readonly string[];
 	projectTrusted: boolean;
@@ -78,7 +80,7 @@ type PrepareChildRuntimeOptions = {
 	role: AgentRuntimeRole;
 	agentDir: string;
 	parentRuntime: ResolvedParentRuntime;
-	template?: AgentTemplate;
+	template?: Exclude<AgentCreationPreset, null>;
 	overrides?: AgentSpawnConfigurationInput;
 	isModelAvailable?(model: ModelReference): boolean;
 };
@@ -158,6 +160,7 @@ export async function prepareChildRuntime(
 	);
 	const preparedFields: PreparedRuntimeFields = {
 		agentId: options.agentId,
+		creationPreset: options.template === undefined ? null : structuredClone(options.template),
 		projectTrusted,
 		skillSources: selectedSkills.map(({ name, filePath }) => ({
 			name,
@@ -180,7 +183,7 @@ export async function prepareChildRuntime(
 
 function usesPiDefaultThinking(options: Readonly<{
 	role: AgentRuntimeRole;
-	template?: AgentTemplate;
+	template?: Exclude<AgentCreationPreset, null>;
 	overrides?: AgentSpawnConfigurationInput;
 }>): boolean {
 	return options.role === "moderator" &&

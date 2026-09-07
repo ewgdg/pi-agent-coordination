@@ -76,8 +76,6 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			skillSources: [{ name: "review", filePath: inheritedSkillPath }],
 		},
 		template: {
-			name: "research-agent",
-			useWhen: "Use for research.",
 			models: [{
 				model: { provider: "template", modelId: "template-model" },
 				thinking: "medium",
@@ -88,7 +86,6 @@ test("resolves one process-safe ordinary child creation preparation without eval
 			systemPromptMode: "append",
 			loadContextFiles: true,
 			systemPrompt: "Template instructions",
-			sourcePath: join(fixture, "research-agent.md"),
 		},
 		overrides: {
 			cwd: "subproject",
@@ -101,6 +98,11 @@ test("resolves one process-safe ordinary child creation preparation without eval
 	});
 
 	assert.deepEqual(preparation, {
+		creationPreset: {
+			models: [{ model: { provider: "template", modelId: "template-model" }, thinking: "medium" }],
+			allowedTools: ["grep"], skills: ["review", "project-audit"], extensions: "inherit",
+			systemPromptMode: "append", loadContextFiles: true, systemPrompt: "Template instructions",
+		},
 		agentId: "ordinary-child",
 		role: "ordinary",
 		configuration: {
@@ -210,13 +212,10 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		agentDir,
 		parentRuntime,
 		template: {
-			name: "moderator",
-			useWhen: "Use for moderation.",
 			extensions: "none",
 			systemPromptMode: "replace",
 			loadContextFiles: false,
 			systemPrompt: "Moderator-only context",
-			sourcePath: join(fixture, "moderator.md"),
 		},
 	});
 	assert.equal(sameCwd.projectTrusted, false);
@@ -244,7 +243,6 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 		agentDir,
 		parentRuntime,
 		template: {
-			name: "moderator",
 			models: [{
 				model: { provider: "parent", modelId: "model" },
 				thinking: "high",
@@ -252,7 +250,6 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 			systemPromptMode: "append",
 			loadContextFiles: true,
 			systemPrompt: "",
-			sourcePath: join(fixture, "configured-moderator.md"),
 		},
 	});
 	assert.equal(explicitlyConfiguredModerator.configuration.thinking, "high");

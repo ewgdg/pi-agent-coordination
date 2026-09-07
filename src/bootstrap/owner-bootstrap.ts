@@ -116,7 +116,6 @@ export async function initializeOwnerWorkflow(options: {
 			.finally(() => parkingBinding?.dispose());
 		return ownerReplacementPreparation;
 	};
-	await coordinator.refreshAgentTemplateSnapshot(identity.agentId);
 	const resolveView = () => coordinator.forAgent(identity.agentId);
 	installResolvedAgentActivityDock(ctx.ui, resolveView);
 	bindHiddenOwnerAgentExtension({

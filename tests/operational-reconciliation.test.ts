@@ -165,6 +165,7 @@ async function reconciliationHarness(t: TestCleanupRegistrar) {
 				agentId: childId,
 				workflowId: identity.agentId,
 				directSpawnerAgentId: identity.agentId,
+				creationPreset: null,
 				spawnSource: source,
 				metadata: { label: childId },
 			},
