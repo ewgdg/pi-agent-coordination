@@ -59,14 +59,13 @@ test("a long Live roster stays bounded and scrolls from the selected Agent", asy
 	assert.deepEqual(overlayOptions, {
 		overlay: true,
 		overlayOptions: {
-			width: 80,
-			maxHeight: "90%",
-			anchor: "center",
-			margin: 1,
+			width: "100%",
+			maxHeight: "100%",
+			anchor: "top-left",
 		},
 	});
 	assert.ok(component);
-	const rendered = component.render(120);
+	const rendered = renderPanel(component, 120);
 	assert.ok(rendered.length <= 13, `rendered ${rendered.length} rows in a 15-row terminal`);
 	assert.ok(rendered.every((line) => visibleWidth(line) <= 80));
 	assert.match(rendered.join("\n"), /Agent 10/);
@@ -77,17 +76,17 @@ test("a long Live roster stays bounded and scrolls from the selected Agent", asy
 
 	component.handleInput?.("j");
 	assert.match(
-		component.render(120).find((line) => line.includes("Agent 11")) ?? "",
+		renderPanel(component, 120).find((line) => line.includes("Agent 11")) ?? "",
 		/→ Agent 11/,
 	);
 	component.handleInput?.("\x1b[A");
 	assert.match(
-		component.render(120).find((line) => line.includes("Agent 10")) ?? "",
+		renderPanel(component, 120).find((line) => line.includes("Agent 10")) ?? "",
 		/→ Agent 10/,
 	);
 	component.handleInput?.("\x1b[B");
 	assert.match(
-		component.render(120).find((line) => line.includes("Agent 11")) ?? "",
+		renderPanel(component, 120).find((line) => line.includes("Agent 11")) ?? "",
 		/→ Agent 11/,
 	);
 	component.handleInput?.("\x1b");
@@ -115,14 +114,14 @@ test("Live remains terminal-bounded across Attention and Agent sections", async 
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const rendered = harness.component.render(80);
+	const rendered = renderPanel(harness.component, 80);
 	assert.match(rendered.join("\n"), /Attention Inbox/);
 	assert.match(rendered.join("\n"), /\[Owner\]\[›\]/);
 	assert.doesNotMatch(rendered.join("\n"), /│\s+Owner\s+│/);
 	assert.match(rendered.join("\n"), /o Owner · Tab views/);
 	assert.ok(rendered.length <= 21, `rendered ${rendered.length} rows in a 24-row terminal`);
 	for (let move = 0; move < 10; move += 1) harness.component.handleInput?.("j");
-	assert.equal(harness.component.render(80).length, rendered.length);
+	assert.equal(renderPanel(harness.component, 80).length, rendered.length);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -137,7 +136,7 @@ test("a short terminal keeps both frame edges inside Pi's overlay height", async
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const rendered = harness.component.render(80);
+	const rendered = renderPanel(harness.component, 80);
 	assert.ok(rendered.length <= 8, `rendered ${rendered.length} rows in a 10-row terminal`);
 	assert.match(rendered[0] ?? "", /^┌─+┐$/);
 	assert.match(rendered.at(-1) ?? "", /^└─+┘$/);
@@ -172,20 +171,20 @@ test("Agent selection keeps the selector focused until view preparation complete
 	assert.ok(harness.component);
 
 	const idleAgentRow =
-		harness.component.render(80).find((line) => line.includes("→ Agent")) ?? "";
+		renderPanel(harness.component, 80).find((line) => line.includes("→ Agent")) ?? "";
 	assert.match(idleAgentRow, /→ Agent/);
 	harness.component.handleInput?.("\r");
 	await Promise.resolve();
 	assert.equal(preparedAgentId, "agent");
 	assert.equal(harness.resolved, false);
 	const pendingAgentRow =
-		harness.component.render(80).find((line) => line.includes("→")) ?? "";
+		renderPanel(harness.component, 80).find((line) => line.includes("→")) ?? "";
 	assert.match(pendingAgentRow, /→ Agent\s+⠋ loading/);
 	assert.equal(pendingAgentRow.indexOf("Agent"), idleAgentRow.indexOf("Agent"));
 	assert.doesNotMatch(pendingAgentRow, /live\/settled/);
 	await waitFor(() =>
 		!/→ Agent\s+⠋ loading/.test(
-			harness.component?.render(80).find((line) => line.includes("→")) ?? "",
+			renderPanel(harness.component, 80).find((line) => line.includes("→")) ?? "",
 		)
 	);
 	// Input remains captured by the selector during the asynchronous handoff.
@@ -212,16 +211,16 @@ test("Live and Dormant are explicit keyboard-accessible tabs", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	assert.match(harness.component.render(80).join("\n"), /\[ Live \].*Dormant/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), /\[ Live \].*Dormant/);
 	harness.component.handleInput?.("\t");
-	const dormant = harness.component.render(80).join("\n");
+	const dormant = renderPanel(harness.component, 80).join("\n");
 	assert.match(dormant, /Live.*\[ Dormant \]/);
 	assert.match(dormant, /Recent/);
 	assert.match(dormant, /Older/);
 	assert.doesNotMatch(dormant, /→ Owner/);
 
 	harness.component.handleInput?.("\x1b[Z");
-	assert.match(harness.component.render(80).join("\n"), /\[ Live \].*Dormant/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), /\[ Live \].*Dormant/);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -239,7 +238,7 @@ test("o returns to Owner from the flat Dormant roster", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const dormant = harness.component.render(80).join("\n");
+	const dormant = renderPanel(harness.component, 80).join("\n");
 	assert.match(dormant, /\[ Dormant \]/);
 	assert.match(dormant, /→ Dormant Agent/);
 	assert.doesNotMatch(dormant, /→ Owner/);
@@ -278,7 +277,7 @@ test("reopening preserves the selected Dormant Agent", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const rendered = harness.component.render(80).join("\n");
+	const rendered = renderPanel(harness.component, 80).join("\n");
 	assert.match(rendered, /Live.*\[ Dormant \]/);
 	assert.match(rendered, /→ Selected/);
 	harness.component.handleInput?.("\x1b");
@@ -302,33 +301,33 @@ test("Live shows direct children and navigates Agent scopes", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const ownerScope = harness.component.render(80).join("\n");
+	const ownerScope = renderPanel(harness.component, 80).join("\n");
 	assert.doesNotMatch(ownerScope, /→?\s*Owner\s+live/);
 	assert.match(ownerScope, /Researcher.*2 children/);
 	assert.match(ownerScope, /Builder.*1 child/);
 	assert.doesNotMatch(ownerScope, /Source Scout|Synthesizer|Reviewer/);
 
 	harness.component.handleInput?.("l");
-	const researcherScope = harness.component.render(80).join("\n");
+	const researcherScope = renderPanel(harness.component, 80).join("\n");
 	assert.match(researcherScope, /\[Owner\]\[›\] Researcher/);
 	assert.match(researcherScope, /Source Scout/);
 	assert.match(researcherScope, /Synthesizer/);
 	assert.doesNotMatch(researcherScope, /Builder|Reviewer/);
 	assert.match(
-		harness.component.render(80).find((line) => line.includes("Source Scout")) ?? "",
+		renderPanel(harness.component, 80).find((line) => line.includes("Source Scout")) ?? "",
 		/→ Source Scout/,
 	);
 
 	harness.component.handleInput?.("h");
 	assert.match(
-		harness.component.render(80).find((line) => line.includes("Researcher")) ?? "",
+		renderPanel(harness.component, 80).find((line) => line.includes("Researcher")) ?? "",
 		/→ Researcher/,
 	);
 	harness.component.handleInput?.("\x1b[C");
-	assert.match(harness.component.render(80).join("\n"), /\[Owner\]\[›\] Researcher/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), /\[Owner\]\[›\] Researcher/);
 	harness.component.handleInput?.("\x1b[D");
 	assert.match(
-		harness.component.render(80).find((line) => line.includes("Researcher")) ?? "",
+		renderPanel(harness.component, 80).find((line) => line.includes("Researcher")) ?? "",
 		/→ Researcher/,
 	);
 	harness.component.handleInput?.("\r");
@@ -354,7 +353,7 @@ test("Agent rows show the human-facing work status", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const waitingRow = harness.component.render(80).find((line) =>
+	const waitingRow = renderPanel(harness.component, 80).find((line) =>
 		line.includes("Waiting Agent")
 	) ?? "";
 	assert.match(waitingRow, /waiting \(human input\)/);
@@ -404,7 +403,7 @@ test("focused Agent details use a stable four-row budget", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const researcherLines = harness.component.render(80);
+	const researcherLines = renderPanel(harness.component, 80);
 	const researcherRendered = researcherLines.join("\n");
 	assert.match(researcherRendered, /Investigates focused questions/);
 	assert.match(researcherRendered, /researcher-full-identity/);
@@ -418,7 +417,7 @@ test("focused Agent details use a stable four-row budget", async () => {
 	);
 
 	harness.component.handleInput?.("j");
-	const builderLines = harness.component.render(80);
+	const builderLines = renderPanel(harness.component, 80);
 	assert.equal(builderLines.length, researcherLines.length);
 	assert.match(builderLines.join("\n"), /Builds the selected design/);
 	harness.component.handleInput?.("\x1b");
@@ -435,7 +434,7 @@ test("the selector uses fixed one-cell horizontal padding", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const tabs = harness.component.render(80).find((line) => line.includes("Live"));
+	const tabs = renderPanel(harness.component, 80).find((line) => line.includes("Live"));
 	assert.ok(tabs);
 	assert.equal(tabs.slice(1).search(/\S/u), 1);
 	harness.component.handleInput?.("\x1b");
@@ -463,11 +462,11 @@ test("long focused descriptions do not change horizontal padding", async () => {
 	assert.ok(harness.component);
 	harness.component.handleInput?.("\t");
 
-	const shortDescriptionLines = harness.component.render(80);
+	const shortDescriptionLines = renderPanel(harness.component, 80);
 	const shortTabs = shortDescriptionLines.find((line) => line.includes("Live"));
 	assert.ok(shortTabs);
 	harness.component.handleInput?.("j");
-	const longDescriptionLines = harness.component.render(80);
+	const longDescriptionLines = renderPanel(harness.component, 80);
 	const longTabs = longDescriptionLines.find((line) => line.includes("Live"));
 	assert.ok(longTabs);
 
@@ -491,7 +490,7 @@ test("Dormant Moderator rows show its active role description while Enter delega
 	assert.ok(harness.component);
 	harness.component.handleInput?.("\t");
 
-	const rendered = harness.component.render(80);
+	const rendered = renderPanel(harness.component, 80);
 	assert.match(rendered.join("\n"), /Moderating obligation stall/);
 	assert.match(rendered.join("\n"), /moderator-id/);
 	harness.component.handleInput?.("\r");
@@ -521,7 +520,7 @@ test("Live uses one attention-first list and dispatches the exact Human Request"
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const lines = harness.component.render(80);
+	const lines = renderPanel(harness.component, 80);
 	const attentionHeader = lines.findIndex((line) => line.includes("Attention Inbox"));
 	const decideRow = lines.findIndex((line) => line.includes("DECIDE 1"));
 	const agentsHeader = lines.findIndex((line) => /\[Owner\]\[›\]/.test(line));
@@ -565,7 +564,7 @@ test("single-Agent Operational ATTENTION opens the affected Agent", async () => 
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const rendered = harness.component.render(80).join("\n");
+	const rendered = renderPanel(harness.component, 80).join("\n");
 	assert.match(rendered, /→ ATTENTION 1 · Run Failure · Affected Agent/);
 	assert.match(rendered, /Affected Affected Agent/);
 	assert.match(rendered, /Request requester-agent\/request-entry\/request-call/);
@@ -600,7 +599,7 @@ test("multi-Agent Operational ATTENTION keeps the overlay open when Enter has no
 
 	harness.component.handleInput?.("\r");
 	assert.equal(harness.resolved, false);
-	assert.match(harness.component.render(80).join("\n"), /→ ATTENTION 1 · Dependency Deadl/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), /→ ATTENTION 1 · Dependency Deadl/);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -622,18 +621,18 @@ test("Live breadcrumbs pin Owner and keep the newest three Agent scopes", async 
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const rendered = harness.component.render(80).join("\n");
+	const rendered = renderPanel(harness.component, 80).join("\n");
 	assert.match(rendered, /\[Owner\]\[›\] … \/ Beta \/ Gamma \/ Delta/);
 	assert.doesNotMatch(rendered, /\[›\] Owner|\[›\] Alpha/);
-	const narrow = harness.component.render(30).join("\n");
+	const narrow = renderPanel(harness.component, 30).join("\n");
 	assert.match(narrow, /\[Owner\]\[›\] … \/ Delta/);
 	assert.doesNotMatch(narrow, /Beta/);
 	for (const width of [24, 20]) {
-		const veryNarrow = harness.component.render(width);
+		const veryNarrow = renderPanel(harness.component, width);
 		assert.match(veryNarrow.join("\n"), /Delta/);
 		assert.ok(veryNarrow.every((line) => visibleWidth(line) <= width));
 	}
-	const truncatedCurrentScope = harness.component.render(19);
+	const truncatedCurrentScope = renderPanel(harness.component, 19);
 	assert.match(truncatedCurrentScope.join("\n"), /\[Owner\]\[›\] Del/);
 	assert.doesNotMatch(truncatedCurrentScope.join("\n"), /… \/ /);
 	assert.ok(truncatedCurrentScope.every((line) => visibleWidth(line) <= 19));
@@ -777,9 +776,9 @@ test("an open selector refreshes compaction and restores current work without mo
  });
  await Promise.resolve();
  publish({ live: [owner, { ...child, compacting: true }], dormant: [] });
- assert.match(harness.component!.render(80).join("\n"), /→ Child.*compacting/);
+ assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Child.*compacting/);
  publish({ live: [owner, { ...child, compacting: false, run: { phase: "live", work: "active", attention: "none", retentionReasons: [] } }], dormant: [] });
- assert.match(harness.component!.render(80).join("\n"), /→ Child.*active/);
+ assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Child.*active/);
  harness.component!.handleInput?.("\x1b");
  await selection;
  (harness.component as Component & { dispose(): void }).dispose();
@@ -795,12 +794,12 @@ test("Owner-default focus stays on the resolved child when attention arrives", a
 		live: [owner, child], dormant: [], selectedAgentId: "owner",
 		addChangeHandler(handler) { publish = handler; return () => {}; },
 	});
-	assert.match(harness.component!.render(80).join("\n"), /→ Child/);
+	assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Child/);
 	publish({
 		live: [owner, child], dormant: [],
 		humanAttention: [{ requestId: "request", agentId: "child", agentLabel: "Child", question: "Proceed?" }],
 	});
-	assert.match(harness.component!.render(80).join("\n"), /→ Child/);
+	assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Child/);
 	harness.component!.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child" });
 });
@@ -816,9 +815,9 @@ test("a disappeared selection's fallback stays focused on subsequent refreshes",
 		addChangeHandler(handler) { publish = handler; return () => {}; },
 	});
 	publish({ live: [owner, sibling], dormant: [] });
-	assert.match(harness.component!.render(80).join("\n"), /→ Sibling/);
+	assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Sibling/);
 	publish({ live: [owner, child, sibling], dormant: [] });
-	assert.match(harness.component!.render(80).join("\n"), /→ Sibling/);
+	assert.match(renderPanel(harness.component!, 80).join("\n"), /→ Sibling/);
 	harness.component!.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "sibling" });
 });
@@ -830,12 +829,12 @@ test("Owner is a pinned button in a linear keyboard focus order", async () => {
 		dormant: [], selectedAgentId: "owner",
 	});
 	const component = harness.component!;
-	assert.match(component.render(80).join("\n"), /→ Child/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("j");
-	assert.match(component.render(80).join("\n"), /→ Child/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("k");
-	assert.match(component.render(80).join("\n"), /\[\[Owner\]\]\[›\]/);
-	assert.doesNotMatch(component.render(80).join("\n"), /→ /);
+	assert.match(renderPanel(component, 80).join("\n"), /\[\[Owner\]\]\[›\]/);
+	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
 	component.handleInput?.("\x1b[A");
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
@@ -855,12 +854,12 @@ test("Owner child action returns to root and preserves the top-level ancestor", 
 	const component = harness.component!;
 	component.handleInput?.("k");
 	component.handleInput?.("l");
-	assert.match(component.render(80).join("\n"), /→ Branch/);
-	assert.doesNotMatch(component.render(80).join("\n"), /\[›\] Nested/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Branch/);
+	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /\[›\] Nested/);
 	component.handleInput?.("k");
 	component.handleInput?.("k");
 	component.handleInput?.("\x1b[C");
-	assert.match(component.render(80).join("\n"), /→ First/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ First/);
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "first" });
 });
@@ -875,18 +874,18 @@ test("Attention, Owner and Agents form one non-circular order", async () => {
 	const component = harness.component!;
 	for (const key of ["k", "\x1b[A"]) {
 		component.handleInput?.(key);
-		assert.match(component.render(80).join("\n"), /→ DECIDE/);
+		assert.match(renderPanel(component, 80).join("\n"), /→ DECIDE/);
 	}
 	component.handleInput?.("j");
-	assert.match(component.render(80).join("\n"), /\[\[Owner\]\]\[›\]/);
-	assert.doesNotMatch(component.render(80).join("\n"), /→ /);
+	assert.match(renderPanel(component, 80).join("\n"), /\[\[Owner\]\]\[›\]/);
+	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
 	component.handleInput?.("\x1b[B");
-	assert.match(component.render(80).join("\n"), /→ Child/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("\x1b[B");
-	assert.match(component.render(80).join("\n"), /→ Child/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("k");
 	component.handleInput?.("l");
-	assert.match(component.render(80).join("\n"), /→ Child/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -898,13 +897,13 @@ test("Dormant pins Owner without a chevron or heading and Enter selects Owner", 
 		dormant: [dormantAgentStatus("child", "Child", "owner")], selectedAgentId: "child",
 	});
 	const component = harness.component!;
-	assert.match(component.render(80).join("\n"), /→ Child/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("j");
-	assert.match(component.render(80).join("\n"), /→ Child/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("k");
 	component.handleInput?.("k");
 	component.handleInput?.("l");
-	const rendered = component.render(80).join("\n");
+	const rendered = renderPanel(component, 80).join("\n");
 	assert.match(rendered, /\[\[Owner\]\]/);
 	assert.doesNotMatch(rendered, /Dormant Agents|\[›\]|→ /);
 	component.handleInput?.("\r");
@@ -922,17 +921,17 @@ test("nested Owner path stays visible while scrolling and children remain a trai
 		], dormant: [], selectedAgentId: "child-10",
 	});
 	const component = harness.component!;
-	let rendered = component.render(80);
+	let rendered = renderPanel(component, 80);
 	assert.match(rendered.join("\n"), /\[Owner\]\[›\] Branch/);
 	assert.match(rendered.join("\n"), /→ Child 10.*\[1 child ›\]\s+│/);
 	component.handleInput?.("j");
-	rendered = component.render(80);
+	rendered = renderPanel(component, 80);
 	assert.match(rendered.join("\n"), /\[Owner\]\[›\] Branch/);
 	assert.match(rendered.join("\n"), /→ Child 11/);
 	assert.ok(rendered.length <= 13);
 	component.handleInput?.("k");
 	component.handleInput?.("\x1b[C");
-	assert.match(component.render(80).join("\n"), /→ Grandchild/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Grandchild/);
 	component.handleInput?.("h");
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child-10" });
@@ -952,7 +951,7 @@ test("Owner root browsing falls back to a root Agent when its ancestor is Dorman
 	const component = harness.component!;
 	component.handleInput?.("j");
 	component.handleInput?.("l");
-	assert.match(component.render(80).join("\n"), /→ Root/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Root/);
 	component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -969,7 +968,7 @@ test("focused Owner keeps preparation feedback and input ownership until selecti
 	const component = harness.component!;
 	component.handleInput?.("\r");
 	try {
-		assert.match(component.render(80).join("\n"), /\[\[Owner\]\].*loading/);
+		assert.match(renderPanel(component, 80).join("\n"), /\[\[Owner\]\].*loading/);
 		component.handleInput?.("\x1b");
 		assert.equal(harness.resolved, false);
 	} finally {
@@ -985,10 +984,53 @@ test("short Attention view retains its focused summary and pinned Owner boundary
 		dormant: [], selectedAgentId: "owner",
 		humanAttention: [{ requestId: "request", agentId: "child", agentLabel: "Child", question: "Proceed?" }],
 	});
-	const rendered = harness.component!.render(80);
+	const rendered = renderPanel(harness.component!, 80);
 	assert.ok(rendered.length <= 8);
 	assert.match(rendered.join("\n"), /→ DECIDE/);
 	assert.match(rendered.join("\n"), /\[Owner\]\[›\]/);
 	harness.component!.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
+
+test("primary pointer controls separate browsing, opening, and informational details", async () => {
+	const harness = surfaceHarness(30);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [
+			agentStatus("owner", "Owner", null),
+			{ ...agentStatus("branch", "Branch", "owner"), description: "Informational detail" },
+			agentStatus("leaf", "Leaf", "branch"),
+		], dormant: [dormantAgentStatus("sleeping", "Sleeping", "owner")],
+		selectedAgentId: "owner",
+	});
+	const component = harness.component!;
+	const click = (text: string, offset = 0) => {
+		const lines = component.render(80);
+		const y = lines.findIndex((line) => line.includes(text));
+		assert.ok(y >= 0, text);
+		const x = lines[y]!.indexOf(text) + offset;
+		component.handleMouse?.({
+			type: "click", button: "left", x, y, screenX: x, screenY: y,
+			width: 80, height: 30, shift: false, alt: false, ctrl: false,
+		});
+	};
+	click("Dormant");
+	assert.match(component.render(80).join("\n"), /→ Sleeping/);
+	click("Live");
+	click("Informational detail");
+	assert.equal(harness.resolved, false);
+	click("[1 child ›]", 5);
+	assert.match(component.render(80).join("\n"), /→ Leaf/);
+	assert.equal(harness.resolved, false);
+	click("[›]");
+	assert.match(component.render(80).join("\n"), /→ Branch/);
+	click("Branch");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "branch" });
+});
+
+function renderPanel(component: Component | undefined, width: number): string[] {
+	const lines = component?.render(width) ?? [];
+	const top = lines.findIndex((line) => line.includes("┌"));
+	const bottom = lines.findIndex((line) => line.includes("└"));
+	const left = lines[top]?.indexOf("┌") ?? 0;
+	return lines.slice(top, bottom + 1).map((line) => line.slice(left).trimEnd());
+}

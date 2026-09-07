@@ -6,12 +6,15 @@ import {
 	Key,
 	SelectList,
 	matchesKey,
+	sliceByColumn,
 	truncateToWidth,
 	visibleWidth,
 	type Component,
 	type SelectItem,
 	type SelectListTheme,
 	type TUI,
+	type TuiMouseEvent,
+	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
 import type { AgentRosterStatus } from "../coordination/workflow-coordinator.ts";
@@ -102,14 +105,24 @@ export function openAgentSelectorSurface(
 		{
 			overlay: true,
 			overlayOptions: {
-			width: AGENT_SELECTOR_OVERLAY_WIDTH,
-			maxHeight: `${AGENT_SELECTOR_OVERLAY_MAX_HEIGHT_PERCENT}%`,
-				anchor: "center",
-				margin: AGENT_SELECTOR_OVERLAY_MARGIN,
+				// Pi only blocks pointer fallthrough inside the rendered overlay rectangle.
+				width: "100%",
+				maxHeight: "100%",
+				anchor: "top-left",
 			},
 		},
 	);
 }
+
+type PointerAction =
+	| { kind: "tab"; tab: "live" | "dormant" }
+	| { kind: "open"; value: string }
+	| { kind: "children"; value: string }
+	| { kind: "ancestor"; agentId: string; childId: string };
+
+type LineRegion = Readonly<{ start: number; end: number; action: PointerAction }>;
+type SelectorLine = Readonly<{ text: string; regions?: readonly LineRegion[]; roster?: boolean }>;
+type HitRegion = LineRegion & Readonly<{ row: number }>;
 
 class AgentSelectorSurface implements Component {
 	readonly #tui: TUI;
@@ -125,6 +138,12 @@ class AgentSelectorSurface implements Component {
 	#visibleRows = 1;
 	#list: SelectList;
 	#selectionPending = false;
+	#hitRegions: HitRegion[] = [];
+	#rosterRows = new Set<number>();
+	#contentLeft = 0;
+	#contentWidth = 0;
+	#hoveredAction: PointerAction | undefined;
+	#pressedAction: PointerAction | undefined;
 	#selectionSpinnerFrame = 0;
 	#selectionSpinnerItem: AgentSelectorItem | undefined;
 	#selectionSpinnerDescription: string | undefined;
@@ -161,17 +180,13 @@ class AgentSelectorSurface implements Component {
 		this.#removeChangeHandler = options.addChangeHandler?.((snapshot) => {
 			this.#options = { ...this.#options, ...snapshot };
 			this.#list = this.#createList();
-			if (this.#selectionSpinnerTimer) {
-				this.#selectionSpinnerItem = this.#items[this.#selectedIndex];
-				this.#selectionSpinnerDescription = this.#selectionSpinnerItem?.description;
-				this.#updateSelectionSpinner();
-			}
 			this.#tui.requestRender();
 		});
 	}
 
 	handleInput(data: string): void {
 		if (this.#selectionPending) return;
+		this.#hoveredAction = undefined;
 		if (matchesKey(data, Key.escape)) {
 			this.#done(undefined);
 			return;
@@ -213,6 +228,66 @@ class AgentSelectorSurface implements Component {
 		this.#tui.requestRender();
 	}
 
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		// Leave non-primary buttons to Pi/terminal behavior, never selector actions.
+		if (event.button === "middle" || event.button === "right") return undefined;
+		if (this.#selectionPending) return { handled: true };
+		const region = this.#hitRegions.find(({ start, end, row }) =>
+			event.y === row && event.x >= start && event.x < end &&
+			event.x < event.width && event.y < event.height
+		);
+		if (event.type === "move") {
+			const action = region?.action;
+			const changed = !samePointerAction(this.#hoveredAction, action);
+			this.#hoveredAction = action;
+			return { handled: true, render: changed };
+		}
+		if (event.type === "wheel") {
+			if (this.#rosterRows.has(event.y) &&
+				event.x >= this.#contentLeft && event.x < this.#contentLeft + this.#contentWidth &&
+				event.wheelDelta) {
+				// SelectList's public wheel behavior scrolls by moving selection one row.
+				this.#list.handleMouse(event);
+				this.#hoveredAction = undefined;
+			}
+			return { handled: true };
+		}
+		if (event.button !== "left") return { handled: true };
+		if (event.type === "press") {
+			this.#pressedAction = region?.action;
+			return { handled: true, capture: true };
+		}
+		if (event.type === "click") {
+			const action = region?.action;
+			if (action && (!this.#pressedAction || samePointerAction(this.#pressedAction, action))) {
+				this.#activatePointerAction(action);
+			}
+			this.#pressedAction = undefined;
+		}
+		return { handled: true };
+	}
+
+	#activatePointerAction(action: PointerAction): void {
+		this.#hoveredAction = undefined;
+		if (action.kind === "tab") {
+			this.#activeTab = action.tab;
+			this.#list = this.#createList();
+		} else if (action.kind === "ancestor") {
+			this.#scopeAgentId = action.agentId;
+			this.#selectedValueByTab.live = action.childId;
+			this.#list = this.#createList();
+		} else {
+			const index = this.#items.findIndex(({ value }) => value === action.value);
+			if (index < 0) return;
+			this.#selectedIndex = index;
+			this.#selectedValueByTab[this.#activeTab] = action.value;
+			this.#list.setSelectedIndex(index);
+			if (action.kind === "children") this.#zoomIn();
+			else this.#list.handleInput("\r");
+		}
+		this.#tui.requestRender();
+	}
+
 	invalidate(): void {
 		this.#list.invalidate();
 	}
@@ -224,51 +299,83 @@ class AgentSelectorSurface implements Component {
 	}
 
 	render(width: number): string[] {
+		const terminalRows = this.#tui.terminal.rows;
 		const frameWidth = Math.min(width, AGENT_SELECTOR_OVERLAY_WIDTH);
-		const innerWidth = Math.max(1, frameWidth - 2);
-		const contentWidth = Math.max(1, innerWidth - 2);
+		const innerWidth = Math.max(0, frameWidth - 2);
+		const contentWidth = Math.max(0, innerWidth - 2);
 		const border = (text: string) => this.#theme.fg("border", text);
-		const contentLines = [
+		// Resize changes the list's visible window as well as its hit regions.
+		const visibleRows = this.#maximumVisibleRows();
+		if (visibleRows !== this.#visibleRows) this.#list = this.#createList();
+		const contentLines: SelectorLine[] = [
 			this.#renderTabs(),
-			"",
+			{ text: "" },
 			...this.#renderPinnedList(contentWidth),
-			"",
-			this.#theme.fg(
+			{ text: "" },
+			{ text: this.#theme.fg(
 				"dim",
 				"o Owner · Tab views · ↑/k ↓/j · →/l children · ←/h parent · Enter · Esc",
-			),
+			) },
 		];
 		const visibleContentLines = fitOverlayContent(
 			contentLines,
 			Math.max(0, this.#maximumOverlayRows() - FRAME_ROWS),
 		);
-		// Fixed inner padding keeps roster content and focus changes from shifting
-		// every row horizontally.
-		const blockWidth = contentWidth;
-		const leftMargin = Math.floor((innerWidth - blockWidth) / 2);
-		const rightMargin = innerWidth - blockWidth - leftMargin;
-		return [
+		const left = Math.floor((width - frameWidth) / 2);
+		const top = Math.max(0, Math.floor((terminalRows - visibleContentLines.length - FRAME_ROWS) / 2));
+		const leftMargin = Math.min(1, innerWidth);
+		const rightMargin = Math.max(0, innerWidth - contentWidth - leftMargin);
+		this.#contentLeft = left + 1 + leftMargin;
+		this.#contentWidth = contentWidth;
+		this.#hitRegions = [];
+		this.#rosterRows.clear();
+		const panel = [
 			border(`┌${"─".repeat(innerWidth)}┐`),
-			...visibleContentLines.map((line) =>
-				frameLine(line, blockWidth, leftMargin, rightMargin, border)
-			),
+			...visibleContentLines.map((line, index) => {
+				const row = top + index + 1;
+				if (line.roster) this.#rosterRows.add(row);
+				for (const region of line.regions ?? []) {
+					// A partially clipped control is informational, not a different action.
+					if (region.end > contentWidth || region.start >= region.end || row >= terminalRows) continue;
+					this.#hitRegions.push({
+						...region, row,
+						start: this.#contentLeft + region.start,
+						end: this.#contentLeft + region.end,
+					});
+				}
+				let text = line.text;
+				const hovered = line.regions?.find((region) =>
+					region.end <= contentWidth && samePointerAction(region.action, this.#hoveredAction)
+				);
+				if (hovered) {
+					text = sliceByColumn(text, 0, hovered.start) +
+						this.#theme.bg("selectedBg", sliceByColumn(text, hovered.start, hovered.end - hovered.start)) +
+						sliceByColumn(text, hovered.end, contentWidth);
+				}
+				return frameLine(text, contentWidth, leftMargin, rightMargin, border);
+			}),
 			border(`└${"─".repeat(innerWidth)}┘`),
 		];
+		// Blank rows and padding intentionally own the entire terminal while modal.
+		return Array.from({ length: terminalRows }, (_, row) =>
+			truncateToWidth(" ".repeat(left) + (panel[row - top] ?? ""), width, "", true)
+		);
+	}
+
+	#maximumVisibleRows(): number {
+		return Math.max(1, Math.min(
+			this.#items.length, MAX_VISIBLE_ROSTER_ROWS,
+			this.#maximumOverlayRows() - FIXED_OVERLAY_ROWS - SCROLL_INDICATOR_ROWS,
+		));
 	}
 
 	#createList(): SelectList {
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
 			: [this.#ownerItem(), ...this.#options.dormant.map((status) => this.#agentItem(status))];
-		this.#visibleRows = Math.max(
-			1,
-			Math.min(
-				this.#items.length,
-				MAX_VISIBLE_ROSTER_ROWS,
-				this.#maximumOverlayRows() -
-					FIXED_OVERLAY_ROWS - SCROLL_INDICATOR_ROWS,
-			),
-		);
+		this.#hitRegions = [];
+		this.#rosterRows.clear();
+		this.#visibleRows = this.#maximumVisibleRows();
 		const list = new SelectList(
 			this.#items,
 			this.#visibleRows,
@@ -299,6 +406,12 @@ class AgentSelectorSurface implements Component {
 			void this.#completeSelection(action);
 		};
 		list.onCancel = () => this.#done(undefined);
+		// Both live refresh and resize rebuild items while preparation can be pending.
+		if (this.#selectionSpinnerTimer) {
+			this.#selectionSpinnerItem = this.#items[this.#selectedIndex];
+			this.#selectionSpinnerDescription = this.#selectionSpinnerItem?.description;
+			this.#updateSelectionSpinner();
+		}
 		return list;
 	}
 
@@ -477,7 +590,7 @@ class AgentSelectorSurface implements Component {
 		};
 	}
 
-	#renderPinnedList(width: number): string[] {
+	#renderPinnedList(width: number): SelectorLine[] {
 		const startIndex = Math.max(0, Math.min(
 			this.#selectedIndex - Math.floor(this.#visibleRows / 2),
 			this.#items.length - this.#visibleRows,
@@ -494,45 +607,71 @@ class AgentSelectorSurface implements Component {
 			(visibleAttention ? 1 : 0) - visibleBodyRows - (!hasAgents ? 1 : 0) -
 			(listLines.length > visibleItems.length ? SCROLL_INDICATOR_ROWS : 0),
 		));
-		const attention: string[] = [];
-		const agents: string[] = [];
+		const attention: SelectorLine[] = [];
+		const agents: SelectorLine[] = [];
 		for (const [offset, item] of visibleItems.entries()) {
 			if (item.kind === "owner") continue;
 			const lines = item.kind === "agent" ? agents : attention;
 			let line = listLines[offset] ?? "";
+			const regions: LineRegion[] = [];
+			let bodyEnd = width;
 			if (item.childControl) {
 				// Reserve the hierarchy action before truncating the participant body.
 				const bodyWidth = Math.max(0, width - visibleWidth(item.childControl) - 1);
 				line = truncateToWidth(line, bodyWidth, "");
 				line += " ".repeat(Math.max(1, width - visibleWidth(line) - visibleWidth(item.childControl)));
+				bodyEnd = visibleWidth(line);
+				if (visibleWidth(item.childControl) <= width) {
+					regions.push({ start: bodyEnd, end: bodyEnd + visibleWidth(item.childControl),
+						action: { kind: "children", value: item.value } });
+				} else {
+					// Never turn the clipped child-control fragment into an open action.
+					bodyEnd = 0;
+				}
 				line += this.#theme.fg("dim", item.childControl);
 			}
-			lines.push(line);
+			if (item.action || item.status) {
+				regions.push({ start: 0, end: bodyEnd, action: { kind: "open", value: item.value } });
+			}
+			lines.push({ text: line, regions, roster: true });
 			if (startIndex + offset === this.#selectedIndex) {
-				lines.push(...this.#focusedDetailLines(item, width).slice(0, detailRows));
+				// Details are informational: no click or wheel region.
+				lines.push(...this.#focusedDetailLines(item, width)
+					.slice(0, detailRows).map((text) => ({ text })));
 			}
 		}
 		const ownerFocused = this.#items[this.#selectedIndex]?.kind === "owner";
 		const owner = ownerFocused
 			? this.#theme.bg("selectedBg", this.#theme.fg("text", "[Owner]"))
 			: this.#theme.fg("toolTitle", "[Owner]");
-		const ownerLine = this.#activeTab === "live"
-			? owner + this.#theme.fg("toolTitle", this.#scopeTitle(Math.max(0, width - visibleWidth("[Owner]"))))
-			: owner;
-		const rendered = [
-			...(attention.length ? [this.#theme.fg("toolTitle", this.#theme.bold("Attention Inbox")), ...attention] : []),
-			ownerLine + (ownerFocused && this.#selectionSpinnerItem?.description
-				? this.#theme.fg("dim", ` ${this.#selectionSpinnerItem.description}`) : ""),
+		const ownerWidth = visibleWidth(owner);
+		const path = this.#activeTab === "live"
+			? this.#scopeTitle(Math.max(0, width - ownerWidth))
+			: { text: "", regions: [] };
+		const ownerLine: SelectorLine = {
+			text: owner + this.#theme.fg("toolTitle", path.text) +
+				(ownerFocused && this.#selectionSpinnerItem?.description
+					? this.#theme.fg("dim", ` ${this.#selectionSpinnerItem.description}`) : ""),
+			regions: [
+				{ start: 0, end: ownerWidth, action: { kind: "open", value: this.#ownerStatus().agentId } },
+				...(path.regions ?? []).map((region) => ({
+					...region, start: region.start + ownerWidth, end: region.end + ownerWidth,
+				})),
+			],
+		};
+		const rendered: SelectorLine[] = [
+			...(attention.length ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold("Attention Inbox")) }, ...attention] : []),
+			ownerLine,
 			...agents,
-			...(!hasAgents ? [this.#theme.fg("dim", this.#activeTab === "live" ? "  No live Agents" : "  No dormant Agents")] : []),
+			...(!hasAgents ? [{ text: this.#theme.fg("dim", this.#activeTab === "live" ? "  No live Agents" : "  No dormant Agents") }] : []),
 		];
 		// Pinned Owner replaces its list row. Reserve missing window/header slots so
 		// moving across the boundary does not resize the established detail layout.
 		const targetRows = this.#visibleRows + FOCUSED_DETAIL_ROWS +
 			(this.#activeTab === "live" ? MAX_LIVE_SECTION_HEADER_ROWS : 1) +
 			(!hasAgents ? 1 : 0);
-		while (rendered.length < targetRows) rendered.push("");
-		return [...rendered, ...listLines.slice(visibleItems.length)];
+		while (rendered.length < targetRows) rendered.push({ text: "", roster: true });
+		return [...rendered, ...listLines.slice(visibleItems.length).map((text) => ({ text, roster: true }))];
 	}
 
 	#focusedDetailLines(item: AgentSelectorItem, width: number): string[] {
@@ -604,44 +743,62 @@ class AgentSelectorSurface implements Component {
 		this.#list = this.#createList();
 	}
 
-	#scopeTitle(width: number): string {
+	#scopeTitle(width: number): SelectorLine {
 		const allStatuses = [...this.#options.live, ...this.#options.dormant];
 		const owner = this.#ownerStatus();
-		const labels: string[] = [];
+		const ancestors: AgentRosterStatus[] = [];
 		let current = allStatuses.find(({ agentId }) => agentId === this.#scopeAgentId);
 		while (current && current.agentId !== owner.agentId) {
-			labels.unshift(current.label);
+			ancestors.unshift(current);
 			current = allStatuses.find(
 				({ agentId }) => agentId === current?.directSpawnerAgentId,
 			);
 		}
-		if (labels.length === 0) return "[›]";
-		const visibleLabels = labels.slice(-MAX_BREADCRUMB_AGENT_SEGMENTS);
-		const title = () =>
-			`[›] ${labels.length > visibleLabels.length ? "… / " : ""}${visibleLabels.join(" / ")}`;
-		while (visibleLabels.length > 1 && visibleWidth(title()) > width) {
-			visibleLabels.shift();
+		const regions: LineRegion[] = [{
+			start: 0, end: visibleWidth("[›]"),
+			action: { kind: "children", value: owner.agentId },
+		}];
+		if (ancestors.length === 0) return { text: "[›]", regions };
+		const visibleAncestors = ancestors.slice(-MAX_BREADCRUMB_AGENT_SEGMENTS);
+		const prefix = () => `[›] ${ancestors.length > visibleAncestors.length ? "… / " : ""}`;
+		const title = () => prefix() + visibleAncestors.map(({ label }) => label).join(" / ");
+		while (visibleAncestors.length > 1 && visibleWidth(title()) > width) {
+			visibleAncestors.shift();
 		}
-		if (visibleWidth(title()) <= width) return title();
-		// Older-path omission is informational; spend the remaining width on the
-		// current scope before truncating its label.
-		const prefix = "[›] ";
-		return `${prefix}${truncateToWidth(
-			visibleLabels.at(-1) ?? "",
-			Math.max(1, width - visibleWidth(prefix)),
-			"…",
-		)}`;
+		if (visibleWidth(title()) <= width) {
+			let column = visibleWidth(prefix());
+			for (const [index, ancestor] of visibleAncestors.entries()) {
+				const child = visibleAncestors[index + 1];
+				if (child) regions.push({
+					start: column, end: column + visibleWidth(ancestor.label),
+					action: { kind: "ancestor", agentId: ancestor.agentId, childId: child.agentId },
+				});
+				column += visibleWidth(ancestor.label) + visibleWidth(" / ");
+			}
+			return { text: title(), regions };
+		}
+		// Older-path omission and the current (possibly truncated) label are informational.
+		return { text: "[›] " + truncateToWidth(
+			visibleAncestors.at(-1)?.label ?? "",
+			Math.max(0, width - visibleWidth("[›] ")), "…",
+		), regions };
 	}
 
-	#renderTabs(): string {
+	#renderTabs(): SelectorLine {
 		const tab = (name: "Live" | "Dormant", active: boolean) =>
 			active
 				? this.#theme.bg("selectedBg", this.#theme.fg("text", ` ${name} `))
 				: this.#theme.fg("muted", ` ${name} `);
-		return `${tab("Live", this.#activeTab === "live")} ${tab(
-			"Dormant",
-			this.#activeTab === "dormant",
-		)}`;
+		const live = tab("Live", this.#activeTab === "live");
+		const dormant = tab("Dormant", this.#activeTab === "dormant");
+		const dormantStart = visibleWidth(live) + 1;
+		return {
+			text: `${live} ${dormant}`,
+			regions: [
+				{ start: 0, end: visibleWidth(live), action: { kind: "tab", tab: "live" } },
+				{ start: dormantStart, end: dormantStart + visibleWidth(dormant), action: { kind: "tab", tab: "dormant" } },
+			],
+		};
 	}
 
 	#selectListTheme(): SelectListTheme {
@@ -655,15 +812,26 @@ class AgentSelectorSurface implements Component {
 	}
 }
 
-function fitOverlayContent(lines: string[], maximumRows: number): string[] {
+function fitOverlayContent(lines: SelectorLine[], maximumRows: number): SelectorLine[] {
 	const content = [...lines];
 	while (content.length > maximumRows) {
-		const emptyLine = content.findLastIndex((line) => visibleWidth(line) === 0);
+		const emptyLine = content.findLastIndex((line) => visibleWidth(line.text) === 0);
 		if (emptyLine < 0) break;
 		content.splice(emptyLine, 1);
 	}
 	if (content.length > maximumRows) content.pop();
 	return content.slice(0, maximumRows);
+}
+
+function samePointerAction(left: PointerAction | undefined, right: PointerAction | undefined): boolean {
+	if (!left || !right) return left === right;
+	switch (left.kind) {
+		case "tab": return right.kind === "tab" && left.tab === right.tab;
+		case "open":
+		case "children": return right.kind === left.kind && left.value === right.value;
+		case "ancestor": return right.kind === "ancestor" &&
+			left.agentId === right.agentId && left.childId === right.childId;
+	}
 }
 
 function frameLine(
