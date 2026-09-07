@@ -1148,3 +1148,59 @@ test("roster refresh retains a newly Dormant parent until its last live descenda
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child" });
 });
+
+test("pending reports open from Attention as distinct actions; read reports remain in history", async () => {
+	const harness = surfaceHarness(24);
+	const report = {
+		reportId: "report-1", createdAt: "2026-01-01T00:00:00Z",
+		reporter: { agentId: "moderator", label: "Moderator" },
+		source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/tmp/report.jsonl" },
+		symptom: "Delivery stalled", suspectedDefect: "Dispatch race", uncertainty: "Not reproduced",
+		recoveryActions: "Retried", recoveryOutcome: "Recovered", evidence: ["receipt-1"],
+	};
+	let prepared = false;
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
+		reports: [{ report }], prepareSelection() { prepared = true; },
+	});
+	assert.match(harness.component!.render(80).join("\n"), /Attention Inbox/);
+	assert.match(harness.component!.render(80).join("\n"), /REPORT.*Moderator/);
+	harness.component!.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "open_report", reportId: report.reportId });
+	assert.equal(prepared, true);
+
+	const history = surfaceHarness(24);
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const historySelection = openAgentSelectorSurface(history.ui, {
+		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
+		reports: [{ report }],
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	publish({ live: [agentStatus("owner", "Owner", null)], dormant: [], reports: [{ report, readAt: "2026-01-02T00:00:00Z" }] });
+	assert.doesNotMatch(history.component!.render(80).join("\n"), /REPORT.*Moderator/);
+	history.component!.handleInput?.("\t");
+	history.component!.handleInput?.("\t");
+	assert.match(history.component!.render(80).join("\n"), /Report History/);
+	assert.match(history.component!.render(80).join("\n"), /Read/);
+	history.component!.handleInput?.("\r");
+	assert.deepEqual(await historySelection, { kind: "open_report", reportId: report.reportId });
+});
+
+test("Shift Tab reaches report history and safely displays report summaries", async () => {
+	const harness = surfaceHarness(24);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
+		reports: [{ report: {
+			reportId: "report", createdAt: "now", reporter: { agentId: "moderator", label: "Mod\x1b]52;c;attack\x07" },
+			source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/tmp/report.jsonl" },
+			symptom: "Safe\x1b[2J symptom", suspectedDefect: "Defect", uncertainty: "Unknown",
+			recoveryActions: "None", recoveryOutcome: "Pending", evidence: ["ref"],
+		} }],
+	});
+	harness.component!.handleInput?.("\x1b[Z");
+	const rendered = harness.component!.render(80).join("\n");
+	assert.match(rendered, /Report History/);
+	assert.doesNotMatch(rendered, /\x1b|attack/);
+	harness.component!.handleInput?.("\x1b");
+	await selection;
+});

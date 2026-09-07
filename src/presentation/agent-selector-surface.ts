@@ -17,6 +17,8 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
+import type { ReportHistoryItem } from "../protocol/moderator-report.ts";
+import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 import type { AgentRosterStatus } from "../coordination/workflow-coordinator.ts";
 import type { HumanAttentionItem } from "../coordination/human-requests.ts";
 import type { OperationalIncidentAttention } from "../coordination/operational-incidents.ts";
@@ -63,6 +65,7 @@ const SELECTION_SPINNER_FRAMES = [
 const SELECTION_SPINNER_INTERVAL_MILLISECONDS = 80;
 
 export type AgentSelectorAction =
+	| Readonly<{ kind: "open_report"; reportId: string }>
 	| Readonly<{
 		kind: "select_agent";
 		agentId: string;
@@ -77,7 +80,8 @@ export type AgentSelectorOptions = Readonly<{
 	live: readonly AgentRosterStatus[];
 	dormant: readonly AgentRosterStatus[];
 	selectedAgentId: string;
-	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "humanAttention" | "operationalAttention">) => void): () => void;
+	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "humanAttention" | "operationalAttention" | "reports">) => void): () => void;
+	reports?: readonly ReportHistoryItem[];
 	humanAttention?: readonly HumanAttentionItem[];
 	operationalAttention?: readonly OperationalIncidentAttention[];
 	prepareSelection?(
@@ -115,7 +119,7 @@ export function openAgentSelectorSurface(
 }
 
 type PointerAction =
-	| { kind: "tab"; tab: "live" | "dormant" }
+	| { kind: "tab"; tab: "live" | "dormant" | "reports" }
 	| { kind: "open"; value: string }
 	| { kind: "children"; value: string }
 	| { kind: "ancestor"; agentId: string; childId: string };
@@ -132,9 +136,9 @@ class AgentSelectorSurface implements Component {
 	#liveTree: readonly AgentRosterStatus[] = [];
 	#dormantRoster: readonly AgentRosterStatus[] = [];
 	#removeChangeHandler: (() => void) | undefined;
-	#activeTab: "live" | "dormant" = "live";
+	#activeTab: "live" | "dormant" | "reports" = "live";
 	#scopeAgentId: string;
-	#selectedValueByTab: { live?: string; dormant?: string };
+	#selectedValueByTab: { live?: string; dormant?: string; reports?: string };
 	#items: AgentSelectorItem[] = [];
 	#selectedIndex = 0;
 	#visibleRows = 1;
@@ -204,7 +208,9 @@ class AgentSelectorSurface implements Component {
 			return;
 		}
 		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
-			this.#activeTab = this.#activeTab === "live" ? "dormant" : "live";
+			const tabs = ["live", "dormant", "reports"] as const;
+			const direction = matchesKey(data, Key.shift("tab")) ? -1 : 1;
+			this.#activeTab = tabs[(tabs.indexOf(this.#activeTab) + direction + tabs.length) % tabs.length]!;
 			this.#list = this.#createList();
 			this.#tui.requestRender();
 			return;
@@ -404,7 +410,9 @@ class AgentSelectorSurface implements Component {
 	#createList(preserveScroll = false, ensureSelection = false): SelectList {
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
-			: [this.#ownerItem(), ...this.#dormantRoster.map((status) => this.#agentItem(status))];
+			: this.#activeTab === "reports"
+				? [this.#ownerItem(), ...(this.#options.reports ?? []).map((item) => this.#reportItem(item))]
+				: [this.#ownerItem(), ...this.#dormantRoster.map((status) => this.#agentItem(status))];
 		this.#hitRegions = [];
 		this.#rosterRows.clear();
 		this.#visibleRows = this.#maximumVisibleRows();
@@ -608,7 +616,26 @@ class AgentSelectorSurface implements Component {
 				};
 			},
 		);
-		return [...human, ...operational];
+		return [...human, ...operational, ...(this.#options.reports ?? [])
+			.filter(({ readAt }) => readAt === undefined)
+			.map((item) => this.#reportItem(item))];
+	}
+
+	#reportItem({ report, readAt }: ReportHistoryItem): AgentSelectorItem {
+		const safeLine = (text: string) => sanitizeReportTerminalText(text).replace(/\s+/g, " ").trim();
+		return {
+			value: `report:${report.reportId}`,
+			label: `REPORT · ${safeLine(report.reporter.label)}`,
+			description: `${readAt === undefined ? "Unread" : "Read"} · ${boundedToolPreview(safeLine(report.symptom))}`,
+			kind: "attention",
+			action: { kind: "open_report", reportId: report.reportId },
+			detailLines: [
+				safeLine(report.symptom),
+				`Report ${safeLine(report.reportId)}`,
+				`Created ${safeLine(report.createdAt)}`,
+				readAt === undefined ? "Unread · Enter opens report" : `Read ${safeLine(readAt)} · Enter opens report`,
+			],
+		};
 	}
 
 	#agentItem(status: AgentRosterStatus): AgentSelectorItem {
@@ -691,13 +718,17 @@ class AgentSelectorSurface implements Component {
 		const visibleItems = this.#items.slice(startIndex, startIndex + this.#visibleRows);
 		const listLines = this.#renderRosterViewport(width, startIndex, visibleItems);
 		const hasAgents = this.#items.some(({ kind }) => kind === "agent");
+		const reportHistory = this.#activeTab === "reports";
+		const showEmptyMessage = reportHistory
+			? this.#items.every(({ kind }) => kind === "owner")
+			: !hasAgents;
 		const visibleAttention = visibleItems.some(({ kind }) => kind === "decide" || kind === "attention");
 		const visibleBodyRows = visibleItems.filter(({ kind }) => kind !== "owner").length;
 		// On very short terminals, trim detail only as needed to keep the pinned
 		// Owner boundary alongside the focused summary and the existing frame.
 		const detailRows = Math.max(0, Math.min(FOCUSED_DETAIL_ROWS,
 			this.#maximumOverlayRows() - FRAME_ROWS - TAB_ROWS - 1 -
-			(visibleAttention ? 1 : 0) - visibleBodyRows - (!hasAgents ? 1 : 0) -
+			(visibleAttention ? 1 : 0) - visibleBodyRows - (showEmptyMessage ? 1 : 0) -
 			(listLines.length > visibleItems.length ? SCROLL_INDICATOR_ROWS : 0),
 		));
 		const attention: SelectorLine[] = [];
@@ -761,16 +792,17 @@ class AgentSelectorSurface implements Component {
 			],
 		};
 		const rendered: SelectorLine[] = [
-			...(attention.length ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold("Attention Inbox")) }, ...attention] : []),
+			...(attention.length ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "Report History" : "Attention Inbox")) }, ...attention] : []),
 			ownerLine,
 			...agents,
-			...(!hasAgents ? [{ text: this.#theme.fg("dim", this.#activeTab === "live" ? "  No live Agents" : "  No dormant Agents") }] : []),
+			...(showEmptyMessage ? [{ text: this.#theme.fg("dim", reportHistory
+				? "  No reports" : this.#activeTab === "live" ? "  No live Agents" : "  No dormant Agents") }] : []),
 		];
 		// Pinned Owner replaces its list row. Reserve missing window/header slots so
 		// moving across the boundary does not resize the established detail layout.
 		const targetRows = this.#visibleRows + FOCUSED_DETAIL_ROWS +
 			(this.#activeTab === "live" ? MAX_LIVE_SECTION_HEADER_ROWS : 1) +
-			(!hasAgents ? 1 : 0);
+			(showEmptyMessage ? 1 : 0);
 		while (rendered.length < targetRows) rendered.push({ text: "", roster: true });
 		return [...rendered, ...listLines.slice(visibleItems.length).map((text) => ({ text, roster: true }))];
 	}
@@ -900,18 +932,21 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#renderTabs(): SelectorLine {
-		const tab = (name: "Live" | "Dormant", active: boolean) =>
+		const tab = (name: "Live" | "Dormant" | "Reports", active: boolean) =>
 			active
 				? this.#theme.bg("selectedBg", this.#theme.fg("text", ` ${name} `))
 				: this.#theme.fg("muted", ` ${name} `);
 		const live = tab("Live", this.#activeTab === "live");
 		const dormant = tab("Dormant", this.#activeTab === "dormant");
 		const dormantStart = visibleWidth(live) + 1;
+		const reports = tab("Reports", this.#activeTab === "reports");
+		const reportsStart = dormantStart + visibleWidth(dormant) + 1;
 		return {
-			text: `${live} ${dormant}`,
+			text: `${live} ${dormant} ${reports}`,
 			regions: [
 				{ start: 0, end: visibleWidth(live), text: live, action: { kind: "tab", tab: "live" } },
 				{ start: dormantStart, end: dormantStart + visibleWidth(dormant), text: dormant, action: { kind: "tab", tab: "dormant" } },
+				{ start: reportsStart, end: reportsStart + visibleWidth(reports), text: reports, action: { kind: "tab", tab: "reports" } },
 			],
 		};
 	}
