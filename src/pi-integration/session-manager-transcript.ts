@@ -351,16 +351,15 @@ export async function materializeForkedAgentTranscript(options: {
 		...header,
 		parentSession: parentTranscript.transcriptPath,
 	};
-	// Stage outside discovery so the inherited prefix, child Identity, and handoff
-	// become visible together at one atomic rename.
+	// Assemble in memory to avoid a write/reopen round trip. Stage outside discovery
+	// so the complete prefix, child Identity, and handoff publish at one atomic rename.
 	const stagingFile = `${sessionFile}.staging-${randomUUID()}`;
 	try {
-		await writeFile(
-			stagingFile,
-			`${[forkHeader, ...inheritedEntries].map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-			{ encoding: "utf8", flag: "wx", mode: 0o600 },
+		const stagedSession = SessionManager.inMemory(
+			sessionManager.getCwd(),
+			undefined,
+			[forkHeader, ...inheritedEntries],
 		);
-		const stagedSession = SessionManager.open(stagingFile, sessionManager.getSessionDir());
 		commitChildAgentIdentity(stagedSession, identity, { inheritedConversation: true });
 		const handoff = createConversationForkHandoff({
 			agentId: identity.agentId,
@@ -377,7 +376,7 @@ export async function materializeForkedAgentTranscript(options: {
 			`${[forkHeader, ...stagedSession.getEntries()]
 				.map((entry) => JSON.stringify(entry))
 				.join("\n")}\n`,
-			{ encoding: "utf8", mode: 0o600 },
+			{ encoding: "utf8", flag: "wx", mode: 0o600 },
 		);
 		const stagedInspection = transcriptFromSessionFile(stagingFile).inspect();
 		validateCommittedChildIdentity(stagedInspection, identity, { inheritedConversation: true });
