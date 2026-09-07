@@ -167,8 +167,10 @@ export function participantLifecycleHandlers(
 	resolveView: () => OrdinaryAgentCoordinatorView | ModeratorAgentCoordinatorView,
 ): ParticipantLifecycleHandlers {
 	return {
-		executionStarted: (submissionSequence) =>
-			resolveView().beginExecution(submissionSequence),
+		executionStarted: async (submissionSequence) => {
+			await resolveView().beginExecution(submissionSequence);
+			return resolveView().obligationFrames();
+		},
 		humanInputSubmitted: (input) =>
 			resolveView().resumeFromHuman(
 				input.text,

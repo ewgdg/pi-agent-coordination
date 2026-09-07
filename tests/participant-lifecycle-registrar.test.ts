@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -46,6 +48,7 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 	const handlers = lifecycleHandlers({
 		async executionStarted() {
 			calls.push("execution-started");
+			return [];
 		},
 		async humanInputSubmitted(input) {
 			calls.push(["human-input", input]);
@@ -386,7 +389,7 @@ function lifecycleHandlers(
 	overrides: Partial<ParticipantLifecycleHandlers> = {},
 ): ParticipantLifecycleHandlers {
 	return {
-		async executionStarted() {},
+		async executionStarted() { return []; },
 		async humanInputSubmitted() {
 			return "continue";
 		},
@@ -411,6 +414,8 @@ function localLifecycleView(calls: unknown[]) {
 		agentActivity() {
 			return { answerMode: false };
 		},
+		obligationFrames() { return []; },
+		async refreshTranscriptFacts() {},
 		async beginExecution() {
 			calls.push("begin-execution");
 		},
@@ -470,6 +475,8 @@ function createExtensionContext(initialEditorText = "") {
 		message: string;
 		type?: "info" | "warning" | "error";
 	}> = [];
+	const sessionManager = SessionManager.inMemory();
+	sessionManager.appendCustomEntry("agent-coordination.identity", { agentId: sessionManager.getSessionId() });
 	const ui = {
 		setEditorText(text: string) {
 			editorText = text;
@@ -482,7 +489,7 @@ function createExtensionContext(initialEditorText = "") {
 		},
 	};
 	return Object.assign(
-		{ ui },
+		{ ui, sessionManager },
 		{ notifications },
 	) as unknown as ExtensionContext & { notifications: typeof notifications };
 }

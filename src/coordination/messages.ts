@@ -149,6 +149,14 @@ export class MessageCoordinator {
 
 	blockedDeliveries() { return this.#deliveryScheduler.blockedDeliveries(); }
 
+	hasDeliveryProgress(record: AgentRecord): boolean { return this.#deliveryScheduler.hasProgress(record); }
+
+	obligationFrames(agentId: string) { return this.#requestEvidence.obligationFrames(this.#requireAgent(agentId)); }
+
+	foregroundRequestId(record: AgentRecord): string | undefined {
+		return this.#requestEvidence.obligationFrames(record).at(-1)?.requestId;
+	}
+
 	shutdownDeliveryProgress(): void { this.#deliveryScheduler.shutdownProgress(); }
 
 	integrate(record: AgentRecord): void {
@@ -321,8 +329,7 @@ export class MessageCoordinator {
 	}
 
 	outstandingRequestIdsFor(requester: AgentRecord): readonly string[] {
-		return this.#requestEvidence.residualRelationshipsFor(requester)
-			.awaitingAnswerRequestIds;
+		return this.#requestEvidence.foregroundOutstandingRequestIds(requester);
 	}
 
 	hasUnsettledAnswerObligation(
@@ -361,11 +368,11 @@ export class MessageCoordinator {
 			throw new Error("wrong_workflow: Message recipient is outside the sender Workflow");
 		}
 		if (message.kind === "message") {
-			const activeRequestId = await sender.host.lane.run(
-				() => this.answerObligationRequestIds(sender)[0],
+			const requestIds = await sender.host.lane.run(
+				() => this.#requestEvidence.obligationFrames(sender).map(frame => frame.requestId),
 			);
-			if (activeRequestId !== undefined) {
-				const activeRequest = this.#requestEvidence.requireRequest(activeRequestId);
+			for (const requestId of requestIds) {
+				const activeRequest = this.#requestEvidence.requireRequest(requestId);
 				if (activeRequest.fromAgentId === message.targetAgentId) {
 					return {
 						disposition: "rejected",
@@ -456,8 +463,8 @@ export class MessageCoordinator {
 				}).deliveryEvidence,
 			isSuppressed: () => this.#isCancellationDelivered(requestId, recipient),
 			isIncomingRequest: true,
-			isIncomingRequestActive: () =>
-				this.#requestEvidence.hasActiveRequest(recipient),
+			isIncomingRequestBlocked: () =>
+				this.#requestEvidence.isRequestBlocked(recipient, requestId),
 			afterCommit: () => {
 				const request = this.#requestEvidence.requireRequest(requestId);
 				if (
@@ -587,7 +594,10 @@ export class MessageCoordinator {
 			);
 			const request = repeatedAnswer
 				? this.#requestEvidence.requireRequest(repeatedAnswer.requestId)
-				: this.#requestEvidence.activeRequestFor(caller);
+				: this.#requestEvidence.requireRequest(input.requestId);
+			if (!repeatedAnswer && this.#requestEvidence.activeRequestFor(caller).messageId !== request.messageId) {
+				throw new Error("invalid_state: Answer must name the current foreground Request");
+			}
 			const requester = this.#requireAgent(request.fromAgentId);
 			const delivery = inspectMessageDelivery({
 				recipientAgentId: caller.identity.agentId,
@@ -1108,11 +1118,12 @@ export class MessageCoordinator {
 			isSuppressed: message.kind === "request"
 				? () => this.#isCancellationDelivered(message.messageId, recipient)
 				: undefined,
+			preemptsAgentWait: message.kind === "request_cancellation",
 			isIncomingRequest: message.kind === "request"
 				? true
 				: undefined,
-			isIncomingRequestActive: message.kind === "request"
-				? () => this.#requestEvidence.hasActiveRequest(recipient)
+			isIncomingRequestBlocked: message.kind === "request"
+				? () => this.#requestEvidence.isRequestBlocked(recipient, message.messageId)
 				: undefined,
 			suppressesAfterCommitMessageId: message.kind === "request_cancellation"
 				? message.requestId

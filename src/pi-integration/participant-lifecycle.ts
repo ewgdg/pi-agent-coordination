@@ -1,3 +1,6 @@
+import { OBLIGATION_RESUMED_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
+import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
+import { transcriptFromSessionManager } from "./session-manager-transcript.ts";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
@@ -30,7 +33,7 @@ export type GuardedParticipantToolResult = Readonly<{
 }>;
 
 export type ParticipantLifecycleHandlers = Readonly<{
-	executionStarted(submissionSequence?: number): Promise<void>;
+	executionStarted(submissionSequence?: number): Promise<readonly ObligationFrame[]>;
 	humanInputSubmitted(input: ParticipantHumanInput): Promise<ParticipantHumanInputDisposition>;
 	primaryInputQueued(): Promise<void>;
 	humanInputMode(): Promise<"agent" | "answer">;
@@ -53,7 +56,17 @@ export function registerParticipantLifecycle(
 ): void {
 	// agent_start is the one awaited Pi boundary shared by native prompts,
 	// custom Delivery turns, queued continuations, and automatic retries.
-	pi.on("agent_start", () => handlers.executionStarted());
+	pi.on("agent_start", async (_event, ctx) => {
+		const frames = await handlers.executionStarted();
+		const local = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId());
+		if (JSON.stringify(local) !== JSON.stringify(frames)) {
+			// A requester may prove an Answer before its responder's result appended.
+			// Record that recovery boundary locally before any new model authorship.
+			pi.appendEntry(OBLIGATION_FOCUS_CUSTOM_TYPE, { frames });
+		}
+		const frame = frames.at(-1);
+		if (frame) presentObligation(pi, frame);
+	});
 	if (options.registerInput !== false) {
 		registerParticipantInputLifecycle(pi, handlers, {
 			deferPrimaryInputQueued: options.deferPrimaryInputQueued,
@@ -93,8 +106,33 @@ export function registerParticipantLifecycle(
 	);
 	// Pi awaits turn_end only after the complete issued tool batch and before it
 	// constructs the next model context, making this the Steer freeze boundary.
-	pi.on("turn_end", () => handlers.safeBoundaryReached());
-	pi.on("agent_end", () => handlers.executionEnded());
+	let answeredThisExecution = false;
+	pi.on("turn_end", async (event) => {
+		answeredThisExecution ||= event.toolResults.some(result => {
+			const details = result.details as Record<string, unknown> | undefined;
+			return result.toolName === "agent_message" && !result.isError &&
+				typeof details?.requestMessageId === "string" && typeof details?.messageId === "string" &&
+				typeof details?.messageStatus === "string";
+		});
+		await handlers.safeBoundaryReached();
+	});
+	pi.on("agent_end", async (_event, ctx) => {
+		if (answeredThisExecution) {
+			answeredThisExecution = false;
+			const frame = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId()).at(-1);
+			if (frame) presentObligation(pi, frame, true);
+		}
+		await handlers.executionEnded();
+	});
+}
+
+function presentObligation(pi: ExtensionAPI, frame: ObligationFrame, triggerTurn = false): void {
+	pi.sendMessage({
+		customType: OBLIGATION_RESUMED_CUSTOM_TYPE,
+		display: true,
+		content: `Current Request: ${frame.requestId}\nRequester: ${frame.requesterAgentId}\n${frame.question}`,
+		details: frame,
+	}, { deliverAs: "steer", triggerTurn });
 }
 
 export function registerParticipantInputLifecycle(

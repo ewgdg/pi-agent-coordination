@@ -1,3 +1,4 @@
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -74,7 +75,7 @@ test("another Agent spawns and delivers a Creation Request before an invalid Mes
 		);
 		return (receivedRequest || receivedParentRequest) && !answered
 			? fauxAssistantMessage(fauxToolCall("agent_message", {
-				operation: "answer", answer: "The initial Request arrived.",
+				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The initial Request arrived.",
 			}, { id: answerCallId }), { stopReason: "toolUse" })
 			: fauxAssistantMessage("Finished.");
 	};
@@ -149,11 +150,11 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("The child has been created."),
-		fauxAssistantMessage(
+		(context) => fauxAssistantMessage(
 			fauxToolCall(
 				"agent_message",
 				{
-					operation: "answer",
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 					answer: "The isolated coordination boundary was observed.",
 				},
 				{ id: "answer-default-creation-request" },
@@ -537,7 +538,7 @@ test("copied coordination evidence grants no authority or obligations to a conve
 	);
 
 	const answerInput = {
-		operation: "answer" as const,
+		operation: "answer" as const, requestId: "copied-request",
 		answer: "Copied Delivery evidence cannot create an Answer obligation.",
 	};
 	childTranscript.appendMessage(
@@ -573,7 +574,7 @@ test("a conversation fork keeps the parent provider prefix cache-affine", async 
 			childRequest ??= structuredClone(context);
 			return fauxAssistantMessage(
 				fauxToolCall("agent_message", {
-					operation: "answer",
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 					answer: "The cache-affine conversation fork was observed.",
 				}, { id: "answer-cache-affine-fork" }),
 				{ stopReason: "toolUse" },
@@ -1133,8 +1134,8 @@ test("a pre-dispatch invariant failure releases the child and its Creation Reque
 
 	failDispatch = false;
 	harness.host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_message", {
-			operation: "answer", answer: "The retried Creation Request arrived.",
+		(context) => fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The retried Creation Request arrived.",
 		}, { id: "answer-retried-creation" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Finished."),
 	]);
@@ -1165,8 +1166,8 @@ test("retry advances an undispatched Creation Request without duplicating a late
 		},
 	});
 	harness.host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("agent_message", {
-			operation: "answer", answer: "The pending Creation Request arrived once.",
+		(context) => fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The pending Creation Request arrived once.",
 		}, { id: "answer-pending-creation" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Finished."),
 	]);

@@ -26,7 +26,7 @@ test("closed dependency cycles normalize independently of input order", () => {
 	]);
 });
 
-test("an otherwise cyclic component is not closed across an external Request edge", () => {
+test("only outgoing external dependencies open a waiting cycle", () => {
 	assert.deepEqual(
 		detectDependencyDeadlocks({
 			eligibleAgentIds: ["alpha", "bravo"],
@@ -36,7 +36,7 @@ test("an otherwise cyclic component is not closed across an external Request edg
 				{ requestId: "external-alpha", fromAgentId: "external", targetAgentId: "alpha" },
 			],
 		}),
-		[],
+		[{ agentIds: ["alpha", "bravo"], requestIds: ["alpha-bravo", "bravo-alpha"] }],
 	);
 	assert.deepEqual(
 		detectDependencyDeadlocks({
@@ -49,4 +49,12 @@ test("an otherwise cyclic component is not closed across an external Request edg
 		}),
 		[],
 	);
+});
+
+test("an upstream dependant cannot provide progress to a closed waiting cycle", () => {
+	assert.deepEqual(detectDependencyDeadlocks({ eligibleAgentIds: ["child", "grandchild"], requests: [
+		{ requestId: "root", fromAgentId: "owner", targetAgentId: "child" },
+		{ requestId: "work", fromAgentId: "child", targetAgentId: "grandchild" },
+		{ requestId: "reverse", fromAgentId: "grandchild", targetAgentId: "child" },
+	]}), [{ agentIds: ["child", "grandchild"], requestIds: ["reverse", "work"] }]);
 });

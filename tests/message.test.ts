@@ -1,3 +1,4 @@
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -50,10 +51,10 @@ test("an authenticated Agent authors and polls one immutable Deferred Message th
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("The recipient is ready."),
-		fauxAssistantMessage(
+		(context) => fauxAssistantMessage(
 			fauxToolCall(
 				"agent_message",
-				{ operation: "answer", answer: "The recipient is ready." },
+				{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The recipient is ready." },
 				{ id: "answer-message-recipient-creation" },
 			),
 			{ stopReason: "toolUse" },
@@ -211,10 +212,10 @@ test("poll reports an all-branch watermark for canonical absence and indetermina
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("The polling recipient exists."),
-		fauxAssistantMessage(
+		(context) => fauxAssistantMessage(
 			fauxToolCall(
 				"agent_message",
-				{ operation: "answer", answer: "The polling recipient is ready." },
+				{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The polling recipient is ready." },
 				{ id: "answer-poll-recipient-creation" },
 			),
 			{ stopReason: "toolUse" },
@@ -378,7 +379,7 @@ test("racing same-identity retries coalesce while the recipient is busy and comm
 			return fauxAssistantMessage(
 				fauxToolCall(
 					"agent_message",
-					{ operation: "answer", answer: "The retry race was admitted." },
+					{ operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "The retry race was admitted." },
 					{ id: "answer-busy-recipient-creation" },
 				),
 				{ stopReason: "toolUse" },

@@ -178,13 +178,14 @@ export function resolveCommittedAnswer(options: {
 		toolCallId,
 		toolName: "agent_message",
 	});
-	const committedInput = validateAgentMessageInput(input);
+	const committedInput = resolveAgentMessageReferences(transcript, source, validateAgentMessageInput(input));
 	if (committedInput.operation !== "answer") {
 		throw new Error("invalid_input: Agent Message operation does not author an Answer");
 	}
 	if (!sameAgentMessageInput(committedInput, providedInput)) {
 		throw new Error("invariant_violation: executed Agent Answer input differs from its source");
 	}
+	if (committedInput.requestId !== request.messageId) throw new Error("invalid_input: Answer names a different Request");
 	return {
 		kind: "answer",
 		messageId: deriveMessageIdentity(source),

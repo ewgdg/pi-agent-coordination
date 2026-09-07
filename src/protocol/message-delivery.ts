@@ -1,4 +1,4 @@
-import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "./custom-entry-types.ts";
+import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, OBLIGATION_RESUMED_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
@@ -158,6 +158,7 @@ function readMessageDeliveries(options: {
 	deliveries: readonly DeliveredMessageEvidence[];
 	bySource: ReadonlyMap<string, readonly DeliveredMessageEvidence[]>;
 	byRequest: ReadonlyMap<string, readonly DeliveredMessageEvidence[]>;
+	byEntry: ReadonlyMap<string, readonly DeliveredMessageEvidence[]>;
 	duplicate?: DeliveredMessageEvidence;
 	inspectedThrough: EntryPointer;
 }> {
@@ -175,6 +176,7 @@ function readMessageDeliveries(options: {
 			deliveries: [] as DeliveredMessageEvidence[],
 			bySource: new Map<string, DeliveredMessageEvidence[]>(),
 			byRequest: new Map<string, DeliveredMessageEvidence[]>(),
+			byEntry: new Map<string, DeliveredMessageEvidence[]>(),
 			duplicate: undefined as DeliveredMessageEvidence | undefined,
 		}),
 		(facts, committedEntry) => {
@@ -188,6 +190,8 @@ function readMessageDeliveries(options: {
 					entry.customType === MODERATOR_ROUTINE_START_CUSTOM_TYPE ||
 					entry.customType === OBLIGATION_REMINDER_CUSTOM_TYPE ||
 					entry.customType === OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE ||
+					entry.customType === OBLIGATION_RESUMED_CUSTOM_TYPE ||
+					entry.customType === OBLIGATION_FOCUS_CUSTOM_TYPE ||
 					entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE
 				)
 					continue;
@@ -225,6 +229,7 @@ function readMessageDeliveries(options: {
 				}
 			}
 			facts.deliveries.push(...deliveries);
+			facts.byEntry.set(committedEntry.id, deliveries);
 			return facts;
 		},
 	);
@@ -232,6 +237,10 @@ function readMessageDeliveries(options: {
 		...facts,
 		inspectedThrough: { agentId: recipientAgentId, entryId: tail.id },
 	};
+}
+
+export function deliveriesAtEntry(transcript: TranscriptInspection, agentId: string, entryId: string): readonly DeliveredMessageEvidence[] {
+	return readMessageDeliveries({ recipientAgentId: agentId, transcript }).byEntry.get(entryId) ?? [];
 }
 
 function parseMessageDelivery(

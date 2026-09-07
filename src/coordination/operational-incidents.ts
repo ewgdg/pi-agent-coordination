@@ -571,8 +571,8 @@ export class OperationalIncidentCoordinator {
 	#scheduleObligationReminder(
 		snapshot: ObligationStallSnapshot,
 	): boolean {
-		const requestId = snapshot.requestIds[0];
-		if (!requestId || snapshot.requestIds.length !== 1) {
+		const requestId = this.#messages.foregroundRequestId(this.#requireAgent(snapshot.agentId));
+		if (!requestId) {
 			throw new Error(
 				`invariant_violation: Agent ${snapshot.agentId} has an invalid Answer obligation set`,
 			);
@@ -795,7 +795,7 @@ export class OperationalIncidentCoordinator {
 			run.work !== "settled" ||
 			record.host.currentRunFailed() ||
 			run.attention !== "none" ||
-			record.host.hasRetentionReason("pending_delivery") ||
+			this.#messages.hasDeliveryProgress(record) ||
 			record.host.hasRetentionReason("interactive_selection") ||
 			record.host.hasRetentionReason("interruption_hold")
 		) {
@@ -926,10 +926,9 @@ export class OperationalIncidentCoordinator {
 		const eligibleAgentIds = ordinaryAgents.flatMap((record) =>
 			this.#isDeadlockEligible(record) ? [record.identity.agentId] : []
 		);
-		const requestIds = [...new Set(ordinaryAgents.flatMap((record) => [
-			...record.host.requestRelationshipIds("awaiting_answer"),
-			...record.host.requestRelationshipIds("answer_owed"),
-		]))].sort();
+		const requestIds = [...new Set(ordinaryAgents.flatMap(record =>
+			this.#messages.outstandingRequestIdsFor(record)
+		))].sort();
 		return detectDependencyDeadlocks({
 			eligibleAgentIds,
 			requests: this.#messages.requestRelationships(requestIds),
@@ -960,7 +959,8 @@ export class OperationalIncidentCoordinator {
 			) &&
 			run.retentionReasons.length > 0 &&
 			run.retentionReasons.every(
-				({ reason }) => reason === "awaiting_answer" || reason === "answer_owed",
+				({ reason }) => reason === "awaiting_answer" || reason === "answer_owed" ||
+					(reason === "pending_delivery" && !this.#messages.hasDeliveryProgress(record)),
 			);
 	}
 
@@ -969,7 +969,7 @@ export class OperationalIncidentCoordinator {
 		if (path.has(agentId)) return false;
 		path.add(agentId);
 		try {
-			const requestIds = record.host.requestRelationshipIds("awaiting_answer");
+			const requestIds = this.#messages.outstandingRequestIdsFor(record);
 			for (const targetAgentId of this.#messages.requestTargetAgentIds(requestIds)) {
 				const target = this.#agents.get(targetAgentId);
 				if (!target || this.#isModerator(target)) continue;
@@ -980,7 +980,7 @@ export class OperationalIncidentCoordinator {
 					(
 						run.work === "active" ||
 						run.attention === "input_required" ||
-						target.host.hasRetentionReason("pending_delivery") ||
+						this.#messages.hasDeliveryProgress(target) ||
 						target.host.hasRetentionReason("interactive_selection")
 					)
 				) return true;

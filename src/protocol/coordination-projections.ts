@@ -1,3 +1,4 @@
+import { obligationStack } from "./obligation-focus.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { inspectMessageDeliveries } from "./message-delivery.ts";
 import { inspectAnswerRetrievals } from "./message.ts";
@@ -10,6 +11,7 @@ export function initializeCoordinationProjections(
 ): void {
 	findAuthoredAgentMessageSources({ authorAgentId: agentId, transcript });
 	inspectMessageDeliveries({ recipientAgentId: agentId, transcript });
+	obligationStack(transcript, agentId);
 	inspectAnswerRetrievals({ requesterAgentId: agentId, transcript });
 	answerResultSources({ authorAgentId: agentId, transcript });
 }

@@ -125,7 +125,7 @@ test("participant registrar exposes the exact closed sequential role tool sets",
 	}
 });
 
-test("Agent Message schema correlates Answer implicitly and Cancellation explicitly", () => {
+test("Agent Message schema requires explicit Answer and Cancellation targets", () => {
 	const variants = (participantCoordinationToolSchemas.agent_message as {
 		anyOf: Array<{ properties: Record<string, { const?: string }> }>;
 	}).anyOf;
@@ -133,7 +133,7 @@ test("Agent Message schema correlates Answer implicitly and Cancellation explici
 		properties.operation?.const === "answer"
 	);
 	assert.ok(answer);
-	assert.deepEqual(Object.keys(answer.properties).sort(), ["answer", "operation"]);
+	assert.deepEqual(Object.keys(answer.properties).sort(), ["answer", "operation", "requestId"]);
 
 	const cancellation = variants.find(({ properties }) =>
 		properties.operation?.const === "cancel"

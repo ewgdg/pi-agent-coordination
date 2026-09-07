@@ -29,7 +29,8 @@ type ScheduledDeliveryBase = Readonly<{
 	isSuppressed?(): boolean;
 	afterCommit?(): void;
 	isIncomingRequest?: boolean;
-	isIncomingRequestActive?(): boolean;
+	preemptsAgentWait?: boolean;
+	isIncomingRequestBlocked?(): boolean;
 	suppressesAfterCommitMessageId?: string;
 }>;
 
@@ -198,7 +199,7 @@ export class MessageDeliveryScheduler {
 		// Dispatched work belongs to delivery machinery until proof commits; its
 		// prompt Promise must not turn subsequent model duration into a deadline.
 		if (item.dispatched) return false;
-		if (delivery.isIncomingRequest && delivery.isIncomingRequestActive?.()) return true;
+		if (delivery.isIncomingRequest && delivery.isIncomingRequestBlocked?.()) return true;
 		const atDeliveryBoundary = this.#isDeliveryBoundary(record);
 		if (run.phase === "live" && run.work === "active" &&
 			run.attention === "none" && !atDeliveryBoundary) return true;
@@ -206,7 +207,7 @@ export class MessageDeliveryScheduler {
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending || !this.#eligibleDeliveries(pending).includes(delivery)) return true;
 		const canPreemptWait = run.phase === "live" && run.attention === "agent_wait" &&
-			delivery.isIncomingRequest;
+			(delivery.isIncomingRequest || delivery.preemptsAgentWait);
 		return !atDeliveryBoundary && !canPreemptWait;
 	}
 
@@ -617,7 +618,7 @@ export class MessageDeliveryScheduler {
 		if (!pending || pending.size === 0) return;
 		const eligible = this.#eligibleDeliveries(pending);
 		const incomingRequest = eligible.find(
-			(delivery) => delivery.isIncomingRequest,
+			(delivery) => delivery.isIncomingRequest || delivery.preemptsAgentWait,
 		);
 		const run = record.host.observe();
 		if ("attention" in run && run.attention === "agent_wait") {
@@ -626,7 +627,7 @@ export class MessageDeliveryScheduler {
 					this.#reservePreemptingRequestInLane(record, incomingRequest)
 				);
 			}
-			// Only an eligible inbound Request may acquire a parked Wait. Ordinary
+			// Requests and Cancellation can acquire a parked Wait. Ordinary
 			// Deferred and Steer Messages remain queued regardless of host work-state
 			// projection; Steer Message preemption is a separate protocol decision.
 			return;
@@ -872,7 +873,12 @@ export class MessageDeliveryScheduler {
 			if (!proof && !suppressed) continue;
 			pending.delete(messageId);
 			if (activeDelivery) active.deliveryCommitted = true;
-			if (preemptingDelivery) preemption.deliveryCommitted = true;
+			if (preemptingDelivery) {
+				preemption.deliveryCommitted = true;
+				// The resumed parent may park before the original prompt Promise settles.
+				// Delivery proof releases this reservation so another eligible frame can preempt.
+				this.#activeWaitPreemptionByAgent.delete(record.identity.agentId);
+			}
 			if (proof) delivery.afterCommit?.();
 		}
 		if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);
@@ -888,15 +894,14 @@ export class MessageDeliveryScheduler {
 		pending: ReadonlyMap<string, ScheduledDelivery>,
 	): ScheduledDelivery[] {
 		const deliveries = [...pending.values()];
-		// Only the oldest waiting Request may compete for Delivery. Other Message
-		// kinds remain eligible so one unresolved Request cannot block coordination.
+		// Preserve admission order among eligible Requests; descendants can bypass
+		// unrelated queued work while the current obligation is cooperatively waiting.
 		const frontRequest = deliveries.find(
-			({ isIncomingRequest }) => isIncomingRequest,
+			delivery => delivery.isIncomingRequest && !delivery.isIncomingRequestBlocked?.(),
 		);
-		const requestIsActive = frontRequest?.isIncomingRequestActive?.() ?? false;
 		return deliveries.filter((delivery) =>
 			!delivery.isIncomingRequest ||
-			(!requestIsActive && delivery === frontRequest)
+			delivery === frontRequest
 		);
 	}
 
@@ -928,6 +933,21 @@ export class MessageDeliveryScheduler {
 		if (!frozen) return false;
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		return frozen.deliveries.some(({ messageId }) => pending?.has(messageId));
+	}
+
+	hasProgress(record: AgentRecord): boolean {
+		if (this.#activeDeferredByAgent.has(record.identity.agentId) ||
+			this.#activeWaitPreemptionByAgent.has(record.identity.agentId) ||
+			this.#reservedResumeByAgent.has(record.identity.agentId) ||
+			this.#activeResumeByAgent.has(record.identity.agentId) ||
+			this.#hasUnprovenFrozenBatch(record)) return true;
+		const pending = this.#pendingByAgent.get(record.identity.agentId);
+		if (!pending) return false;
+		const run = record.host.observe();
+		return this.#eligibleDeliveries(pending).some(delivery =>
+			this.#isDeliveryBoundary(record) ||
+			(run.phase === "live" && run.attention === "agent_wait" && (delivery.isIncomingRequest || delivery.preemptsAgentWait))
+		);
 	}
 
 	#hasPendingScheduling(record: AgentRecord): boolean {

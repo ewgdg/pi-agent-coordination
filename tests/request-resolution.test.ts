@@ -50,7 +50,7 @@ test("an Answer call resolves its target from the correlated delivered Request",
 	responder.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
-				operation: "answer",
+				operation: "answer", requestId: deriveMessageIdentity(requestSource),
 				answer: "The rendered Answer.",
 			}, { id: answerToolCallId }),
 			{ stopReason: "toolUse" },
@@ -74,7 +74,7 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 	const answerEntryId = responder.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
-				operation: "answer",
+				operation: "answer", requestId: "a".repeat(43),
 				answer: "One immutable Answer.",
 			}, { id: answerToolCallId }),
 			{ stopReason: "toolUse" },
@@ -93,7 +93,7 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 		content: [{ type: "text", text: "Answer admitted." }],
 		details: {
 			messageId: answerId,
-			requestMessageId: "request-a",
+			requestMessageId: "a".repeat(43),
 			messageStatus: "sent",
 		},
 		isError: false,
@@ -103,7 +103,7 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 	assert.equal(answerSourceResultRequestId({
 		transcript: responderTranscript,
 		source: answerSource,
-	}), "request-a");
+	}), "a".repeat(43));
 
 	const requesterAgentId = "answer-correlation-requester";
 	const requester = SessionManager.inMemory(process.cwd(), { id: requesterAgentId });
@@ -116,7 +116,7 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 			messages: [{
 				kind: "answer",
 				answerId,
-				requestMessageId: "request-b",
+				requestMessageId: "b".repeat(43),
 				fromAgentId: responderAgentId,
 				answer: "One immutable Answer.",
 			}],
@@ -127,7 +127,7 @@ test("Answer result and Delivery cannot correlate one source to different Reques
 	const request: Extract<Message, { kind: "request" }> = {
 		kind: "request",
 		origin: "agent_message",
-		messageId: "request-b",
+		messageId: "b".repeat(43),
 		workflowId: "answer-correlation-workflow",
 		fromAgentId: requesterAgentId,
 		targetAgentId: responderAgentId,
@@ -159,7 +159,7 @@ test("Delivery-only Answer correlation skips another Request from the same reque
 	const answerEntryId = responder.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_message", {
-				operation: "answer",
+				operation: "answer", requestId: "b".repeat(43),
 				answer: "Delivery alone ratifies this Answer.",
 			}, { id: answerToolCallId }),
 			{ stopReason: "toolUse" },
@@ -182,7 +182,7 @@ test("Delivery-only Answer correlation skips another Request from the same reque
 			messages: [{
 				kind: "answer",
 				answerId,
-				requestMessageId: "request-b",
+				requestMessageId: "b".repeat(43),
 				fromAgentId: responderAgentId,
 				answer: "Delivery alone ratifies this Answer.",
 			}],
@@ -208,15 +208,15 @@ test("Delivery-only Answer correlation skips another Request from the same reque
 	const requesterTranscript = transcriptFromSessionManager(requester).inspect();
 	const responderTranscript = transcriptFromSessionManager(responder).inspect();
 	assert.deepEqual(inspectCanonicalRequestResolution({
-		request: request("request-a"),
+		request: request("a".repeat(43)),
 		requesterTranscript,
 		responderTranscript,
 	}), {});
 	assert.equal(inspectCanonicalRequestResolution({
-		request: request("request-b"),
+		request: request("b".repeat(43)),
 		requesterTranscript,
 		responderTranscript,
-	}).answer?.requestId, "request-b");
+	}).answer?.requestId, "b".repeat(43));
 
 	responder.appendMessage({
 		role: "toolResult",
@@ -229,7 +229,7 @@ test("Delivery-only Answer correlation skips another Request from the same reque
 	});
 	assert.throws(
 		() => inspectCanonicalRequestResolution({
-			request: request("request-b"),
+			request: request("b".repeat(43)),
 			requesterTranscript,
 			responderTranscript: transcriptFromSessionManager(responder).inspect(),
 		}),

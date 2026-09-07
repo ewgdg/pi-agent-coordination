@@ -1,3 +1,6 @@
+import { obligationStack, resolveIncomingRequestReference } from "../protocol/obligation-focus.ts";
+import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
+import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import type {
 	AgentToolResult,
 	ExtensionAPI,
@@ -51,11 +54,11 @@ For send and request, targetAgent accepts an exact Agent label, full Agent ID, o
 
 When agent_message returns messageStatus "sent", the Message was admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
 
-A delivered Agent Request, including a Creation Request, creates one Answer obligation for the recipient.
+A delivered Agent Request, including a Creation Request, pushes one foreground Answer obligation for the recipient. Descendant Requests may suspend a waiting foreground; unrelated and sibling Requests remain queued.
 
-While an Answer Obligation is active, agent_message operation "send" to that Request's requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
+While any foreground or suspended Answer obligation remains, agent_message operation "send" to its requester is rejected. Keep provisional findings local. Use "answer" for the curated result, or issue a reverse "request" when requester input or a decision is needed. Ordinary "send" to other Agents remains available.
 
-agent_message operation "answer" supplies Answer text only. The coordinator binds it to the Agent's sole active delivered incoming Request. After the operation returns, the Answer is the terminal response to that Request. Do not add an assistant-message recap or summary. Unless another obligation or independent task remains, end the turn immediately. Leave passive waiting and later continuation to the runtime.
+agent_message operation "answer" requires requestId (the foreground Request ID or a unique suffix) and answer text. Use it as the only tool call in its turn. It resolves exactly the foreground obligation and ends execution; the runtime presents any resumed obligation on a subsequent continuation. Do not add an assistant-message recap or summary.
 
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
 For poll/retry messageId and cancel requestMessageId, use the full ID or a unique case-sensitive suffix from your own earlier authored Messages (including Creation Requests). Ambiguous suffixes fail; use a longer suffix or the full ID. Receipts retain full canonical IDs.
@@ -70,9 +73,9 @@ After either tool returns requestMessageId with messageStatus "sent", the respon
 </agent_delegation>`;
 
 const AGENT_WAIT_PROMPT_GUIDE = `<agent_wait>
-Use agent_wait only when one next decision requires every outstanding Answer together and avoiding one model turn per Answer matters. Do not use agent_wait to monitor ordinary progress. If strict fan-in is unnecessary, let ordinary Answer Delivery reactivate the Agent. Ordinary Messages do not satisfy Agent Requests. Do not poll merely to wait.
+Use agent_wait only when one next decision requires every outstanding Answer owned by the foreground obligation together and avoiding one model turn per Answer matters. Do not use agent_wait to monitor ordinary progress. If strict fan-in is unnecessary, let ordinary Answer Delivery reactivate the Agent. Ordinary Messages do not satisfy Agent Requests. Do not poll merely to wait.
 
-Primary interactive human input or an eligible inbound Agent Request may preempt agent_wait. If it returns disposition "preempted", follow the new human direction or handle the delivered inbound Request first. If one decision still requires every outstanding Answer, call agent_wait again afterward; preemption does not consume Answers or create Answer Delivery proof.
+Primary interactive human input, a Request Cancellation, or an eligible descendant Request may preempt agent_wait. Without a foreground obligation, any incoming Request may qualify. If it returns disposition "preempted", follow the new human direction or handle the delivered inbound Request first. If one decision still requires every outstanding Answer, call agent_wait again afterward; preemption does not consume Answers or create Answer Delivery proof.
 </agent_wait>`;
 
 const AGENT_SPAWN_PROMPT_GUIDE = `<agent_spawn>
@@ -226,6 +229,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("answer"),
+			requestId: Type.String({ minLength: 1 }),
 			answer: Type.String({ minLength: 1 }),
 		},
 		{ additionalProperties: false },
@@ -538,8 +542,27 @@ export function registerParticipantCoordinationTools<
 					: undefined,
 			),
 		renderResult: renderAgentMessageResult,
-		async execute(toolCallId, parameters) {
-			return toolResult(await availableHandlers.message(toolCallId, parameters));
+		async execute(toolCallId, parameters, _signal, _onUpdate, ctx) {
+			if (parameters.operation !== "answer") return toolResult(await availableHandlers.message(toolCallId, parameters));
+			const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();
+			const agentId = ctx.sessionManager.getSessionId();
+			const { source } = resolveCommittedToolCall({ agentId, transcript, toolCallId, toolName: "agent_message" });
+			const entry = transcript.entries.find(entry => entry.id === source.entryId);
+			// Pi's terminate hint ends a batch only when every result requests it.
+			// A standalone Answer gives this protocol transition an exact turn boundary.
+			if (entry?.type === "message" && entry.message.role === "assistant" &&
+				entry.message.content.filter(part => part.type === "toolCall").length !== 1) {
+				throw new Error("invalid_input: Answer must be the only tool call in its turn");
+			}
+			const frames = obligationStack(transcript, agentId, source);
+			const requestId = resolveIncomingRequestReference(transcript, source, parameters.requestId);
+			const receipt = await availableHandlers.message(toolCallId, parameters);
+			if (!("messageStatus" in receipt) || !("requestMessageId" in receipt)) return toolResult(receipt);
+			const answered = frames.find(frame => frame.requestId === requestId)!;
+			const resumed = frames.filter(frame => frame.requestId !== requestId).at(-1);
+			const describe = (frame: typeof answered) => `${resolveAgentLabel(frame.requesterAgentId) ?? frame.requesterAgentId} — ${frame.question.replace(/\s+/g, " ").trim()}`;
+			return { details: receipt, terminate: true, content: [{ type: "text", text:
+				`Answered: ${describe(answered)}\nResumed: ${resumed ? describe(resumed) : "none"}` }] };
 		},
 	});
 	pi.registerTool<typeof agentWaitParameters, AgentWaitResult | AgentWaitProgress>({

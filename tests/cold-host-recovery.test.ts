@@ -1,3 +1,4 @@
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -202,9 +203,9 @@ test("a fresh Owner host rediscovers a conversation-fork child without copied ob
 		historicalDelivery.details,
 	);
 	host.model.setResponses([
-		fauxAssistantMessage(
+		(context) => fauxAssistantMessage(
 			fauxToolCall("agent_message", {
-				operation: "answer",
+				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 				answer: "The conversation-fork child completed its own Creation Request.",
 			}, { id: "answer-fork-before-host-loss" }),
 			{ stopReason: "toolUse" },
@@ -519,7 +520,7 @@ test("duplicate spawn claims quarantine only their dependent authority subtree",
 	);
 	await assert.rejects(
 		() => executeTool(reopened, "agent_message", "answer-quarantined-request", {
-			operation: "answer",
+			operation: "answer", requestId: inboundRequestId,
 			answer: "Unavailable requester proof must stay explicit.",
 		}),
 		/evidence_unavailable/,
@@ -807,7 +808,7 @@ test("reopen derives ordinary Request evidence from abandoned branches across co
 		fauxAssistantMessage("The self Answer Delivery resolves the remaining requester wait."),
 	]);
 	await executeTool(reopened, "agent_message", "answer-branch-residual", {
-		operation: "answer",
+		operation: "answer", requestId: request.requestMessageId,
 		answer: "Resolved after recovery.",
 	});
 	await reopened.session.waitForIdle();

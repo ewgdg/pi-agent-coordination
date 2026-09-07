@@ -193,50 +193,12 @@ export function answerCallTargetAgentId(options: {
 	toolCallId: string;
 }): string | undefined {
 	const { responderAgentId, transcript, toolCallId } = options;
-	const answerSources = findAuthoredAgentMessageSources({
-		authorAgentId: responderAgentId,
-		transcript,
-	}).filter(({ input }) => input.operation === "answer");
-	const source = answerSources.find((candidate) =>
-		candidate.source.toolCallId === toolCallId
-	)?.source;
-	const entryIndexes = indexedState(transcript).positions;
-	const sourceIndex = source === undefined
-		? Number.POSITIVE_INFINITY
-		: entryIndexes.get(source.entryId);
-	if (sourceIndex === undefined) return undefined;
-
-	const resolvedRequestIds = new Set<string>();
-	for (const candidate of answerSources) {
-		if (candidate.source.toolCallId === toolCallId) continue;
-		const candidateIndex = entryIndexes.get(candidate.source.entryId);
-		if (candidateIndex === undefined || candidateIndex >= sourceIndex) continue;
-		const requestId = answerSourceResultRequestId({
-			transcript,
-			source: candidate.source,
-		});
-		if (requestId !== undefined) resolvedRequestIds.add(requestId);
-	}
-
-	const requests: DeliveredMessageEvidence[] = [];
-	for (const delivery of inspectMessageDeliveries({
-		recipientAgentId: responderAgentId,
-		transcript,
-	})) {
-		validateDeliveredMessageEvidence(delivery);
-		const deliveryIndex = entryIndexes.get(delivery.deliveryEvidence.entryId);
-		if (deliveryIndex === undefined || deliveryIndex >= sourceIndex) continue;
-		if (delivery.projection.kind === "request_cancellation") {
-			resolvedRequestIds.add(delivery.projection.requestMessageId);
-		} else if (delivery.projection.kind === "request") {
-			requests.push(delivery);
-		}
-	}
-	const request = requests.findLast(({ projection }) =>
-		projection.kind === "request" &&
-		!resolvedRequestIds.has(projection.requestMessageId)
-	);
-	return request?.projection.fromAgentId;
+	const candidate = findAuthoredAgentMessageSources({ authorAgentId: responderAgentId, transcript })
+		.find(candidate => candidate.source.toolCallId === toolCallId && candidate.input.operation === "answer");
+	if (!candidate || candidate.input.operation !== "answer") return undefined;
+	const requestId = candidate.input.requestId;
+	return inspectMessageDeliveries({ recipientAgentId: responderAgentId, transcript })
+		.find(({ projection }) => projection.kind === "request" && projection.requestMessageId === requestId)?.projection.fromAgentId;
 }
 
 export function answerSourceResultRequestId(options: {

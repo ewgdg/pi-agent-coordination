@@ -522,7 +522,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 			async select() { return { kind: "selected" }; },
 		},
 		lifecycle: {
-			async executionStarted() {},
+			async executionStarted() { return []; },
 			async humanInputSubmitted() { return "continue"; },
 			async primaryInputQueued() {},
 			async humanInputMode() { return "agent"; },

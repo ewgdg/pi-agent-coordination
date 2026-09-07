@@ -238,7 +238,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 			},
 		},
 		lifecycle: {
-			async executionStarted() { calls.push(["begin"]); },
+			async executionStarted() { calls.push(["begin"]); return []; },
 			async humanInputSubmitted(input) { calls.push(["input", input]); return "submitted"; },
 			async primaryInputQueued() { calls.push(["input-queued"]); },
 			async humanInputMode() { calls.push(["mode"]); return "agent"; },

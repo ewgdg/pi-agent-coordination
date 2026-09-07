@@ -1,3 +1,4 @@
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -354,11 +355,11 @@ test("native Owner fork preserves branch editing and source Workflow continuatio
 	let resumedSource: TestOwnerHost | undefined;
 	try {
 		host.model.setResponses([
-			fauxAssistantMessage(
+			(context) => fauxAssistantMessage(
 				fauxToolCall(
 					"agent_message",
 					{
-						operation: "answer",
+						operation: "answer", requestId: latestRequestFromContext(context).requestMessageId,
 						answer: "The source child is durable across branch selection.",
 					},
 					{ id: "answer-source-branch-creation" },

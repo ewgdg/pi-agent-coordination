@@ -646,7 +646,13 @@ export const agentControlMethods = {
 		request: closed({
 			submissionSequence: Type.Optional(Type.Integer({ minimum: 1 })),
 		}),
-		response: EmptyResponseSchema,
+		response: closed({
+			frames: Type.Array(closed({
+				requestId: NonEmptyStringSchema,
+				requesterAgentId: NonEmptyStringSchema,
+				question: NonEmptyStringSchema,
+			})),
+		}),
 	},
 	"runtime.humanInput": {
 		request: closed({
