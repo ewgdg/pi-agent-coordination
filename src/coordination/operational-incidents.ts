@@ -926,12 +926,17 @@ export class OperationalIncidentCoordinator {
 		const eligibleAgentIds = ordinaryAgents.flatMap((record) =>
 			this.#isDeadlockEligible(record) ? [record.identity.agentId] : []
 		);
-		const requestIds = [...new Set(ordinaryAgents.flatMap(record =>
-			this.#messages.outstandingRequestIdsFor(record)
-		))].sort();
+		// Answer Delivery may still be outstanding for Wait, but a committed
+		// Answer no longer depends on progress from its responder.
+		const requests = ordinaryAgents.flatMap(record =>
+			this.#messages.unansweredRequestRelationships(
+				record.identity.agentId,
+				this.#messages.outstandingRequestIdsFor(record),
+			)
+		);
 		return detectDependencyDeadlocks({
 			eligibleAgentIds,
-			requests: this.#messages.requestRelationships(requestIds),
+			requests,
 		}).map((component) => ({
 			kind: "dependency_deadlock",
 			key: JSON.stringify([
