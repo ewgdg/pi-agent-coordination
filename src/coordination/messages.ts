@@ -323,6 +323,59 @@ export class MessageCoordinator {
 		);
 	}
 
+	/**
+	 * Explicit Wait renews delivery intent once; later passes are confined to
+	 * those exact recipient Runs. Cold recovery never creates this reconciler.
+	 */
+	createRequestDeliveryReconciler(
+		callerAgentId: string,
+		requestIds: readonly string[],
+		isWaiting: () => boolean,
+	): () => Promise<void> {
+		const requester = this.#requireAgent(callerAgentId);
+		const recipients = new Map<AgentRecord, {
+			handle: AgentRunHandle | undefined;
+			sequence: number;
+			initialized: boolean;
+		}>(requestIds.map(requestId => {
+			const request = this.#requestEvidence.requireCallerAuthoredMessage(requester, requestId);
+			if (request.kind !== "request") throw new Error(`invariant_violation: ${requestId} is not a Request`);
+			const responder = this.#requireAgent(request.targetAgentId);
+			return [responder, {
+				handle: responder.host.currentHandle(),
+				sequence: responder.host.latestStartedRunSequence(),
+				initialized: false,
+			}];
+		}));
+		return async () => {
+			await Promise.all(requestIds.map(async requestId => {
+				const request = this.#requestEvidence.requireRequest(requestId);
+				const responder = this.#requireAgent(request.targetAgentId);
+				const intent = recipients.get(responder)!;
+				await responder.host.lane.run(async () => {
+					if (!isWaiting() || this.#isShuttingDown() || responder.host.currentRunFailed() ||
+						responder.host.observe().phase === "ending") return;
+					if (this.#requestEvidence.findAnswer(request) || this.#requestEvidence.findCancellation(request)) return;
+					// A fresh Wait may start a Dormant recipient. A later termination,
+					// failure or successor Run ends this Wait's readmission authority.
+					if (intent.handle
+						? !responder.host.isCurrent(intent.handle)
+						: intent.initialized ||
+							responder.host.latestStartedRunSequence() !== intent.sequence ||
+							responder.host.currentHandle() !== undefined
+					) return;
+					const receipt = await this.#retryRequestInLane(requester, responder, request);
+					intent.handle = responder.host.currentHandle();
+					intent.initialized = true;
+					if ("messageStatus" in receipt && receipt.messageStatus !== "sent" &&
+						receipt.reason !== "policy_rejected") {
+						throw new Error(`Agent Wait cannot ensure Request ${requestId} Delivery: ${receipt.reason}`);
+					}
+				});
+			}));
+		};
+	}
+
 	answerObligationRequestIds(responder: AgentRecord): readonly string[] {
 		return this.#requestEvidence.residualRelationshipsFor(responder)
 			.answerOwedRequestIds;
@@ -900,6 +953,14 @@ export class MessageCoordinator {
 		request: Extract<Message, { kind: "request" }>,
 	): Promise<AgentRequestRetryReceipt> {
 		const responder = this.#requireAgent(request.targetAgentId);
+		return responder.host.lane.run(() => this.#retryRequestInLane(requester, responder, request));
+	}
+
+	async #retryRequestInLane(
+		requester: AgentRecord,
+		responder: AgentRecord,
+		request: Extract<Message, { kind: "request" }>,
+	): Promise<AgentRequestRetryReceipt> {
 		const retryIdentity = {
 			requestMessageId: request.messageId,
 			targetAgentId: request.targetAgentId,
@@ -911,128 +972,126 @@ export class MessageCoordinator {
 				reason: "policy_rejected",
 			};
 		}
-		return responder.host.lane.run(async () => {
-			if (
-				this.#boundaryHooks.beforeRecipientInspection?.({
-					recipientAgentId: responder.identity.agentId,
-					messageId: request.messageId,
-					operation: "retry",
-				}) === "inspection_incomplete"
-			) {
-				return {
-					...retryIdentity,
-					messageStatus: "not_sent",
-					reason: "evidence_unavailable",
-				};
-			}
-			const requestDelivery = inspectMessageDelivery({
+		if (
+			this.#boundaryHooks.beforeRecipientInspection?.({
 				recipientAgentId: responder.identity.agentId,
-				transcript: responder.transcript.inspect(),
-				message: request,
+				messageId: request.messageId,
+				operation: "retry",
+			}) === "inspection_incomplete"
+		) {
+			return {
+				...retryIdentity,
+				messageStatus: "not_sent",
+				reason: "evidence_unavailable",
+			};
+		}
+		const requestDelivery = inspectMessageDelivery({
+			recipientAgentId: responder.identity.agentId,
+			transcript: responder.transcript.inspect(),
+			message: request,
+		});
+		const canonicalRequest = inspectCanonicalMessage({
+			message: request,
+			authorTranscript: requester.transcript.inspect(),
+			deliveryEvidence: requestDelivery.deliveryEvidence,
+		});
+		if (canonicalRequest.state === "not_created") {
+			throw new Error(`unknown_identity: Request ${request.messageId} was not created`);
+		}
+		if (canonicalRequest.state === "indeterminate") {
+			return {
+				...retryIdentity,
+				messageStatus: "unknown",
+				reason: "inspection_incomplete",
+			};
+		}
+		const answer = this.#requestEvidence.findAnswer(request);
+		if (answer) {
+			const answerDelivery = inspectAnswerDelivery({
+				requesterAgentId: requester.identity.agentId,
+				transcript: requester.transcript.inspect(),
+				answer,
 			});
-			const canonicalRequest = inspectCanonicalMessage({
-				message: request,
-				authorTranscript: requester.transcript.inspect(),
-				deliveryEvidence: requestDelivery.deliveryEvidence,
+			const canonicalAnswer = inspectCanonicalMessage({
+				message: answer,
+				authorTranscript: responder.transcript.inspect(),
+				deliveryEvidence: answerDelivery.deliveryEvidence,
 			});
-			if (canonicalRequest.state === "not_created") {
-				throw new Error(`unknown_identity: Request ${request.messageId} was not created`);
-			}
-			if (canonicalRequest.state === "indeterminate") {
+			if (canonicalAnswer.state !== "canonical") {
 				return {
 					...retryIdentity,
 					messageStatus: "unknown",
 					reason: "inspection_incomplete",
 				};
 			}
-			const answer = this.#requestEvidence.findAnswer(request);
-			if (answer) {
-				const answerDelivery = inspectAnswerDelivery({
-					requesterAgentId: requester.identity.agentId,
-					transcript: requester.transcript.inspect(),
-					answer,
-				});
-				const canonicalAnswer = inspectCanonicalMessage({
-					message: answer,
-					authorTranscript: responder.transcript.inspect(),
-					deliveryEvidence: answerDelivery.deliveryEvidence,
-				});
-				if (canonicalAnswer.state !== "canonical") {
-					return {
-						...retryIdentity,
-						messageStatus: "unknown",
-						reason: "inspection_incomplete",
-					};
-				}
-				if (
-					!answerDelivery.deliveryEvidence &&
-					this.#deliveryScheduler.hasDispatchReservation(
-						requester.identity.agentId,
-						answer.messageId,
-					)
-				) {
-					return {
-						...retryIdentity,
-						messageStatus: "unknown",
-						reason: "inspection_incomplete",
-					};
-				}
-				return answerDelivery.deliveryEvidence
-					? {
-						disposition: "answer_already_delivered",
-						requestMessageId: request.messageId,
-						answerId: answer.messageId,
-						deliveryEvidence: answerDelivery.deliveryEvidence,
-					}
-					: {
-						disposition: "answer_delivered",
-						requestMessageId: request.messageId,
-						answerId: answer.messageId,
-						fromAgentId: answer.fromAgentId,
-						answer: answer.answer,
-						answerSource: answer.source,
-					};
-			}
-			if (requestDelivery.deliveryEvidence) {
-				return {
-					disposition: "request_delivered",
-					requestMessageId: request.messageId,
-					deliveryEvidence: requestDelivery.deliveryEvidence,
-				};
-			}
-			if (this.#isShuttingDown()) {
+			if (
+				!answerDelivery.deliveryEvidence &&
+				this.#deliveryScheduler.hasDispatchReservation(
+					requester.identity.agentId,
+					answer.messageId,
+				)
+			) {
 				return {
 					...retryIdentity,
-					messageStatus: "not_sent",
-					reason: "host_shutting_down",
+					messageStatus: "unknown",
+					reason: "inspection_incomplete",
 				};
 			}
-			const admission = await this.#deliveryScheduler.admitInLane(
-				responder,
-				this.#scheduleGeneralMessage(responder, request),
-			);
-			if (admission === "pending") {
-				return this.#boundaryHooks.afterDeliveryAdmission?.({
-					recipientAgentId: responder.identity.agentId,
-					messageId: request.messageId,
-					operation: "retry",
-				}) === "confirmation_lost"
-					? {
-						...retryIdentity,
-						messageStatus: "unknown",
-						reason: "confirmation_lost",
-					}
-					: {
-						...retryIdentity,
-						messageStatus: "sent",
-					};
-			}
+			return answerDelivery.deliveryEvidence
+				? {
+					disposition: "answer_already_delivered",
+					requestMessageId: request.messageId,
+					answerId: answer.messageId,
+					deliveryEvidence: answerDelivery.deliveryEvidence,
+				}
+				: {
+					disposition: "answer_delivered",
+					requestMessageId: request.messageId,
+					answerId: answer.messageId,
+					fromAgentId: answer.fromAgentId,
+					answer: answer.answer,
+					answerSource: answer.source,
+				};
+		}
+		if (requestDelivery.deliveryEvidence) {
+			return {
+				disposition: "request_delivered",
+				requestMessageId: request.messageId,
+				deliveryEvidence: requestDelivery.deliveryEvidence,
+			};
+		}
+		if (this.#isShuttingDown()) {
 			return {
 				...retryIdentity,
 				messageStatus: "not_sent",
-				reason: admission,
+				reason: "host_shutting_down",
 			};
-		});
+		}
+		const admission = await this.#deliveryScheduler.admitInLane(
+			responder,
+			this.#scheduleGeneralMessage(responder, request),
+		);
+		if (admission === "pending") {
+			return this.#boundaryHooks.afterDeliveryAdmission?.({
+				recipientAgentId: responder.identity.agentId,
+				messageId: request.messageId,
+				operation: "retry",
+			}) === "confirmation_lost"
+				? {
+					...retryIdentity,
+					messageStatus: "unknown",
+					reason: "confirmation_lost",
+				}
+				: {
+					...retryIdentity,
+					messageStatus: "sent",
+				};
+		}
+		return {
+			...retryIdentity,
+			messageStatus: "not_sent",
+			reason: admission,
+		};
 	}
 
 	async #poll(

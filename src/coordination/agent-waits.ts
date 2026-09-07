@@ -59,6 +59,8 @@ type PendingAgentWait = {
 	reject(error: Error): void;
 	removeAbortListener(): void;
 	removeEndedHandler(): void;
+	reconcileRequestDeliveries(): Promise<void>;
+	reconciling?: Promise<void>;
 };
 
 export class AgentWaitCoordinator {
@@ -114,21 +116,6 @@ export class AgentWaitCoordinator {
 			call.source,
 		);
 		const requestRelationships = this.#messages.requestRelationships(requestMessageIds);
-		const dormantRelationships = this.#messages
-			.unansweredRequestRelationships(callerAgentId, requestMessageIds)
-			.filter(({ targetAgentId }) =>
-				this.#agents.get(targetAgentId)?.host.observe().phase === "dormant"
-			);
-		if (dormantRelationships.length > 0) {
-			const blockers = dormantRelationships
-				.map(({ requestId, targetAgentId }) => `${requestId} -> ${targetAgentId}`)
-				.join(", ");
-			throw new Error(
-				"invalid_state: Agent Wait cannot await unanswered Requests targeting " +
-				`Dormant Agents: ${blockers}. Reactivate each responder or cancel its ` +
-				"Request before calling agent_wait.",
-			);
-		}
 		onProgress?.({
 			waitingFor: requestRelationships.map(({ requestId, targetAgentId }) => ({
 				requestMessageId: requestId,
@@ -167,6 +154,10 @@ export class AgentWaitCoordinator {
 			reject: rejectWait,
 			removeAbortListener: () => signal.removeEventListener("abort", onAbort),
 			removeEndedHandler: () => undefined,
+			reconcileRequestDeliveries: this.#messages.createRequestDeliveryReconciler(
+				callerAgentId, requestMessageIds,
+				() => pending.phase === "waiting" && !signal.aborted && caller.host.isCurrent(handle),
+			),
 		};
 		pending.removeEndedHandler = caller.host.addEndedHandler((endedHandle) => {
 			if (endedHandle !== handle) return;
@@ -356,7 +347,21 @@ export class AgentWaitCoordinator {
 				pending.callerAgentId,
 				pending.requestMessageIds,
 			);
+			if (!completed) {
+				// Share delivery maintenance without putting Answer notification
+				// behind a busy recipient lane: proof always gets checked first.
+				await (pending.reconciling ??= pending.reconcileRequestDeliveries().finally(() => {
+					pending.reconciling = undefined;
+				}));
+				if (pending.phase !== "waiting") return;
+				completed = this.#messages.waitAnswers(
+					pending.callerAgentId,
+					pending.requestMessageIds,
+				);
+			}
 		} catch (error) {
+			// Delivery maintenance may finish after Answer completion or preemption.
+			if (pending.phase !== "waiting") return;
 			this.#fence(
 				pending.callerAgentId,
 				pending.toolCallId,

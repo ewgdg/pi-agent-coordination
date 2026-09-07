@@ -20,7 +20,7 @@ A Run Failure exists after one exact non-Moderator Run, including a Workflow Own
 
 An incoming upstream dependant cannot itself supply progress, and an ineligible queued Delivery is not progress. Dependencies belonging to suspended frames do not block their foreground clarification.
 
-A Dependency Deadlock is a normalized closed component of current ordinary Runs. Every member must be live, settled, retained solely by unresolved Request relationships internal to the component, free of required attention and Holds, and have no other progress source. Self-cycles are valid components. Any outgoing foreground dependency outside the component, active or starting Run, admitted input, selection, Human attention, Hold, failed Run, or non-Request retention prevents declaration.
+A Dependency Deadlock is a normalized closed component of current ordinary Runs. Every member must be live, settled, retained solely by unresolved Request relationships internal to the component, free of required attention and Holds, and have no other progress source. Self-cycles are valid components. Only unanswered Requests contribute dependency edges: a committed Answer no longer requires responder progress even while its requester-side Delivery remains outstanding for Wait. Any outgoing unanswered foreground dependency outside the component, active or starting Run, admitted input, selection, Human attention, Hold, failed Run, or non-Request retention prevents declaration.
 
 Deadlock detection is observational. It does not cancel a Request, interrupt or terminate a Run, control descendants, or grant authority.
 

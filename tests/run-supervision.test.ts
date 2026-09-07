@@ -724,7 +724,7 @@ test("termination discards exact-Run backlog, reports residual Requests, and per
 	await harness.shutdown();
 });
 
-test("Agent Wait rejects when any unanswered work is owned by a Dormant responder", async (t) => {
+test("Agent Wait awaits delivered work without reviving a terminated responder", async (t) => {
 	const harness = await createRunSupervisionHarness(t);
 	const spawnToolCallId = "spawn-before-dormant-wait";
 	const child = await harness.spawnChild(spawnToolCallId);
@@ -752,34 +752,29 @@ test("Agent Wait rejects when any unanswered work is owned by a Dormant responde
 	const replacement = await harness.spawnChild("spawn-live-replacement-before-wait");
 	assert.notEqual(harness.ownerView.status(replacement.agentId).run.phase, "dormant");
 
-	const waitToolCallId = "reject-wait-for-dormant-responder";
+	const waitToolCallId = "await-delivered-work-of-dormant-responder";
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
 			fauxToolCall("agent_wait", {}, { id: waitToolCallId }),
 			{ stopReason: "toolUse" },
 		),
 	);
-	let progressObserved = false;
-	await assert.rejects(
-		() => harness.ownerView.wait(
-			waitToolCallId,
-			{},
-			AbortSignal.timeout(500),
-			() => {
-				progressObserved = true;
-			},
-		),
-		(error: unknown) => {
-			assert.ok(error instanceof Error);
-			assert.match(error.message, /invalid_state: Agent Wait cannot await unanswered Requests targeting Dormant Agents/);
-			assert.match(error.message, new RegExp(creationRequestId));
-			assert.match(error.message, new RegExp(child.agentId));
-			assert.doesNotMatch(error.message, new RegExp(replacement.agentId));
-			assert.match(error.message, /Reactivate each responder or cancel its Request before calling agent_wait/);
-			return true;
-		},
-	);
-	assert.equal(progressObserved, false);
+	const abort = new AbortController();
+	t.after(() => abort.abort());
+	let waitingFor: readonly { requestMessageId: string; responderAgentId: string }[] = [];
+	const waiting = assert.rejects(harness.ownerView.wait(
+		waitToolCallId, {}, abort.signal,
+		progress => { waitingFor = progress.waitingFor; },
+	), /Agent Wait interrupted/);
+	await waitForCondition(() => {
+		const run = harness.ownerView.status().run;
+		return "attention" in run && run.attention === "agent_wait";
+	});
+	assert.ok(waitingFor.some(item => item.requestMessageId === creationRequestId && item.responderAgentId === child.agentId));
+	assert.ok(waitingFor.some(item => item.responderAgentId === replacement.agentId));
+	assert.equal(harness.ownerView.status(child.agentId).run.phase, "dormant");
+	abort.abort();
+	await waiting;
 
 	await harness.shutdown();
 });
