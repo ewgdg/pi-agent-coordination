@@ -1,10 +1,24 @@
 # Agent selector and view
 
-`/agents` first opens a centered roster overlay. The framed selector is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` supplies roster rows and scrolling; the selector keeps keyboard focus linear and renders Owner/path outside the scrolling rows. `/agents owner` trims its argument and returns directly to the exact mounted Workflow Owner presentation without opening the selector; it is a harmless no-op when Owner is already mounted. Other arguments fail with `Usage: /agents [owner]`.
+`/agents` first opens a centered roster panel inside a full-terminal modal overlay. The framed selector is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` supplies roster rows and scrolling; the selector keeps keyboard focus linear and renders Owner/path outside the scrolling rows. `/agents owner` trims its argument and returns directly to the exact mounted Workflow Owner presentation without opening the selector; it is a harmless no-op when Owner is already mounted. Other arguments fail with `Usage: /agents [owner]`.
 
 Enter on an Agent body opens that durable Agent's full-window interactive view. Selecting the already-mounted participant simply closes the selector without reopening or replacing its view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. The pinned `[Owner]` button is focusable from either tab and every Live scope. Enter on it (or the global `o` shortcut) returns to that exact existing Owner presentation; Owner is a global destination rather than a roster entry.
 
-Agent selection prepares the target mode before dismissing the roster. The focused row shows an animated loading indicator throughout preparation. When switching between children, the current selector keeps rendering until the replacement frame takes over; the previous Runtime remains retained through the handoff. The selector retains input focus during asynchronous preparation, so typing, paste, Enter, or Escape cannot fall through to the Owner editor between selection and child attachment.
+Agent selection prepares the target mode before dismissing the roster. The focused row shows an animated loading indicator throughout preparation. When switching between children, the current selector keeps rendering until the replacement frame takes over; the previous Runtime remains retained through the handoff. The selector retains input focus during asynchronous preparation, so typing, paste, Enter, or Escape cannot fall through to the Owner editor between selection and child attachment. In fullscreen mode the overlay owns every terminal cell, including the blank area outside the panel, so pointer input cannot reach the mounted editor while choosing or preparing a view.
+
+## Pointer controls (fullscreen)
+
+Pi's public fullscreen mouse routing supplies parsed events and component-local cell coordinates. The selector uses that API (verified with Pi 0.85.1), not terminal escape decoding or private overlay geometry. Regular terminal mode remains keyboard-only.
+
+- Primary-click **Live** or **Dormant** to switch tabs.
+- Click **[Owner]** to return to Owner and close; click its separate **[›]** to browse the root scope without opening Owner.
+- Click anywhere in an Agent summary's content area outside the trailing child control to open the Agent. The complete **[N children ›]** control browses children instead.
+- Click a visible ancestor breadcrumb to browse that scope, preserving focus on the child along the previous path. The current segment, omitted **…**, and partially clipped controls are informational.
+- Attention summaries use their existing selection actions. Agent detail lines remain informational.
+- Hover highlights only the pointed control and never moves keyboard focus. Middle and secondary buttons have no selector action.
+- Wheel input over roster summaries, roster spacing, or the scroll indicator uses Pi's native list scrolling: one selection step per event, without wrapping. Tabs, Owner/path, details, borders, help, and the surrounding modal area do not scroll the roster or the mounted editor.
+
+These controls apply only to `/agents`. The above-editor activity dock remains informational. Resize rebuilds the visible hit regions together with the panel; clipped and offscreen controls are not actionable.
 
 ## Live roster
 
