@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import xterm from "@xterm/headless";
 import type { ExtensionUIContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { Editor, TuiAltScreen, type Component, type OverlayHandle, type OverlayOptions, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Editor, TuiAltScreen, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { AgentRosterStatus } from "../src/coordination/workflow-coordinator.ts";
 import { openAgentSelectorSurface, type AgentSelectorAction, type AgentSelectorOptions } from "../src/presentation/agent-selector-surface.ts";
 
@@ -104,7 +104,7 @@ async function harness(t: TestContext, options: Partial<AgentSelectorOptions> = 
 		const lines = await frame();
 		const y = lines.findIndex((line) => line.includes(text));
 		assert.ok(y >= 0, "Missing visible target " + text + "\n" + lines.join("\n"));
-		return { x: lines[y]!.indexOf(text) + offset, y };
+		return { x: visibleWidth(lines[y]!.slice(0, lines[y]!.indexOf(text))) + offset, y };
 	}
 	async function click(text: string, offset = 0, button = 0) {
 		const { x, y } = await point(text, offset);
@@ -212,6 +212,11 @@ test("async preparation captures the whole screen, including editor outside the 
 	const actions: AgentSelectorAction[] = [];
 	const h = await harness(t, { prepareSelection(action) { actions.push(action); return pending; } });
 	try {
+		h.terminal.mouse(0, 2, 1);
+		h.terminal.mouse(0, 2, 1, true);
+		h.terminal.mouse(65, 2, 1);
+		await h.frame();
+		assert.deepEqual(h.editor.mouseInputs, [], "selection itself shields the mounted editor");
 		await h.click("Branch");
 		assert.equal(actions.length, 1);
 		assert.equal(h.resolved, false);
@@ -239,4 +244,56 @@ test("async preparation captures the whole screen, including editor outside the 
 	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "branch" });
 	await h.input("z");
 	assert.deepEqual(h.editor.keyInputs, ["z"], "closing restores the mounted Editor focus");
+});
+
+test("preparation feedback survives resizing the roster viewport", { timeout: 5_000 }, async (t) => {
+	let release!: () => void;
+	const pending = new Promise<void>((resolve) => { release = resolve; });
+	const live = [status("owner", "Owner", null), ...Array.from({ length: 20 }, (_, i) => status("agent-" + i, "Agent " + i))];
+	const h = await harness(t, { live, selectedAgentId: "agent-0", prepareSelection: () => pending });
+	try {
+		await h.click("Agent 1");
+		h.terminal.resize(80, 15);
+		assert.match((await h.frame()).join("\n"), /→ Agent 1\s+⠋ loading/);
+		assert.deepEqual(h.overlay?.getBounds(), { row: 0, col: 0, width: 80, height: 15 });
+	} finally { release(); }
+	await h.result;
+});
+
+test("visible breadcrumb cells navigate; omitted/current segments and clipped controls are informational", { timeout: 5_000 }, async (t) => {
+	const live = [
+		status("owner", "Owner", null), status("alpha", "Alpha"),
+		status("beta", "研究", "alpha"), status("gamma", "Gamma", "beta"),
+		status("delta", "Delta", "gamma"), status("leaf", "Leaf", "delta"),
+	];
+	const h = await harness(t, { live, selectedAgentId: "leaf" });
+	await h.click("…");
+	await h.click("Delta");
+	assert.match((await h.frame()).join("\n"), /→ Leaf/);
+	await h.click("研究", 2);
+	assert.match((await h.frame()).join("\n"), /→ Gamma/);
+	assert.equal(h.resolved, false);
+	// At this width only the current scope fits; the discarded ancestor cannot
+	// leave a hit target behind after the resize.
+	h.terminal.resize(19, 15);
+	await h.frame();
+	await h.click("研究");
+	assert.match((await h.frame()).join("\n"), /→ /);
+	assert.equal(h.resolved, false);
+	await h.input("\x1b");
+
+	const clipped = await harness(t);
+	clipped.terminal.resize(14, 15);
+	await clipped.frame();
+	await clipped.click("[1 child");
+	assert.equal(clipped.resolved, false);
+	clipped.terminal.resize(80, 30);
+	assert.match((await clipped.frame()).join("\n"), /→ Branch/);
+	// Even the blank cell immediately before the complete child control belongs
+	// to the participant body; the closing bracket belongs to browsing.
+	const child = await clipped.point("[1 child ›]");
+	clipped.terminal.mouse(0, child.x - 1, child.y);
+	clipped.terminal.mouse(0, child.x - 1, child.y, true);
+	await clipped.frame();
+	assert.deepEqual(await clipped.result, { kind: "select_agent", agentId: "branch" });
 });
