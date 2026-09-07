@@ -283,7 +283,7 @@ class AgentSelectorSurface implements Component {
 			this.#selectedValueByTab[this.#activeTab] = action.value;
 			this.#list.setSelectedIndex(index);
 			if (action.kind === "children") this.#zoomIn();
-			else this.#list.handleInput("\r");
+			else this.#selectItem(action.value);
 		}
 		this.#tui.requestRender();
 	}
@@ -395,16 +395,7 @@ class AgentSelectorSurface implements Component {
 			this.#selectedIndex = index;
 			this.#selectedValueByTab[this.#activeTab] = selected.value;
 		};
-		list.onSelect = ({ value }) => {
-			const selected = this.#items.find((item) => item.value === value);
-			if (!selected) return;
-			const action = selected.action ?? (selected.status
-				? { kind: "select_agent" as const, agentId: value }
-				: undefined);
-			// Informational rows remain focusable, but Enter must not close the overlay.
-			if (!action) return;
-			void this.#completeSelection(action);
-		};
+		list.onSelect = ({ value }) => this.#selectItem(value);
 		list.onCancel = () => this.#done(undefined);
 		// Both live refresh and resize rebuild items while preparation can be pending.
 		if (this.#selectionSpinnerTimer) {
@@ -413,6 +404,17 @@ class AgentSelectorSurface implements Component {
 			this.#updateSelectionSpinner();
 		}
 		return list;
+	}
+
+	#selectItem(value: string): void {
+		const selected = this.#items.find((item) => item.value === value);
+		if (!selected) return;
+		const action = selected.action ?? (selected.status
+			? { kind: "select_agent" as const, agentId: value }
+			: undefined);
+		// Keyboard confirmation and pointer activation share actions, not keybindings.
+		// Informational rows remain focusable without dismissing the selector.
+		if (action) void this.#completeSelection(action);
 	}
 
 	async #completeSelection(
