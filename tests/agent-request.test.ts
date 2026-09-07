@@ -2822,8 +2822,11 @@ test("Agent Wait parks the Owner Run until the pending Answer commits", async (t
 test("primary input in a selected child preempts Agent Wait before its next model turn", async (t) => {
 	let ownerAgentId: string | undefined;
 	const harness = await createDormantChildHarness(t, {
-		beforeDeliveryAdmission: ({ recipientAgentId }) =>
-			recipientAgentId === ownerAgentId ? "confirmed_failure" : undefined,
+		// Keep the Owner-bound Request scheduled but undelivered so this test
+		// exercises human preemption, not Wait's lost-delivery recovery.
+		scheduleDeliveryDispatch: ({ recipientAgentId }, dispatch) => {
+			if (recipientAgentId !== ownerAgentId) dispatch();
+		},
 	});
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-child-human-preemption");
 	ownerAgentId = harness.host.session.sessionId;

@@ -75,6 +75,8 @@ After either tool returns requestMessageId with messageStatus "sent", the respon
 const AGENT_WAIT_PROMPT_GUIDE = `<agent_wait>
 Use agent_wait only when one next decision requires every outstanding Answer owned by the foreground obligation together and avoiding one model turn per Answer matters. Do not use agent_wait to monitor ordinary progress. If strict fan-in is unnecessary, let ordinary Answer Delivery reactivate the Agent. Ordinary Messages do not satisfy Agent Requests. Do not poll merely to wait.
 
+A fresh Wait ensures original delivery scheduling for its captured unanswered, undelivered Requests and may start a Dormant recipient. Already delivered Requests are awaited without replay. A parked Wait respects Holds and later Run termination; reactivate a stopped responder with an ordinary Message if its work remains needed.
+
 Primary interactive human input, a Request Cancellation, or an eligible descendant Request may preempt agent_wait. Without a foreground obligation, any incoming Request may qualify. If it returns disposition "preempted", follow the new human direction or handle the delivered inbound Request first. If one decision still requires every outstanding Answer, call agent_wait again afterward; preemption does not consume Answers or create Answer Delivery proof.
 </agent_wait>`;
 
