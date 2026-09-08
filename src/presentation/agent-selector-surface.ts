@@ -320,7 +320,11 @@ class AgentSelectorSurface implements Component {
 		const border = (text: string) => this.#theme.fg("border", text);
 		// Resize changes the list's visible window as well as its hit regions.
 		const visibleRows = this.#maximumVisibleRows();
-		if (visibleRows !== this.#visibleRows) this.#list = this.#createList(true);
+		if (visibleRows !== this.#visibleRows) {
+			const selectedVisible = this.#selectedIndex >= this.#rosterScrollOffset &&
+				this.#selectedIndex < this.#rosterScrollOffset + this.#visibleRows;
+			this.#list = this.#createList(true, selectedVisible);
+		}
 		const contentLines: SelectorLine[] = [
 			this.#renderTabs(),
 			{ text: "" },
@@ -393,7 +397,7 @@ class AgentSelectorSurface implements Component {
 		));
 	}
 
-	#createList(preserveScroll = false): SelectList {
+	#createList(preserveScroll = false, ensureSelection = false): SelectList {
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
 			: [this.#ownerItem(), ...this.#options.dormant.map((status) => this.#agentItem(status))];
@@ -429,7 +433,7 @@ class AgentSelectorSurface implements Component {
 			this.#selectedIndex = index;
 			this.#selectedValueByTab[this.#activeTab] = selected.value;
 		};
-		this.#ensureSelectedVisible();
+		if (!preserveScroll || ensureSelection) this.#ensureSelectedVisible();
 		list.onSelect = ({ value }) => this.#selectItem(value);
 		list.onCancel = () => this.#done(undefined);
 		// Both live refresh and resize rebuild items while preparation can be pending.

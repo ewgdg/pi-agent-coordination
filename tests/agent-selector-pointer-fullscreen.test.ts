@@ -198,6 +198,31 @@ test("wheel scrolls the roster viewport without changing selection", { timeout: 
 	assert.doesNotMatch(refreshed, /Agent 00/, "live refresh preserves the wheel viewport");
 	assert.match(refreshed, /agent-05/, "live refresh preserves selected Agent details");
 
+	// Refresh and resize must preserve an offscreen selected Agent rather than
+	// recentering it into view. Enter still resolves that unchanged selection.
+	let publishOffscreen!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const offscreen = await harness(t, {
+		live, selectedAgentId: "agent-05",
+		addChangeHandler(handler) { publishOffscreen = handler; return () => {}; },
+	});
+	const offscreenTarget = await offscreen.point("Agent 05");
+	for (let step = 0; step < 8; step++) offscreen.terminal.mouse(65, offscreenTarget.x, offscreenTarget.y);
+	const beforeRefresh = (await offscreen.frame()).join("\n");
+	assert.doesNotMatch(beforeRefresh, /→ Agent 05/);
+	offscreen.terminal.resize(46, 15);
+	const beforePublish = (await offscreen.frame()).join("\n");
+	assert.doesNotMatch(beforePublish, /→ Agent 05/);
+	publishOffscreen({
+		live: live.map((agent) => agent.agentId === "agent-05"
+			? { ...agent, description: "offscreen refresh" }
+			: agent),
+		dormant: [],
+	});
+	const afterPublish = (await offscreen.frame()).join("\n");
+	assert.equal(afterPublish, beforePublish, "offscreen refresh preserves the visible roster range");
+	await offscreen.input("\r");
+	assert.deepEqual(await offscreen.result, { kind: "select_agent", agentId: "agent-05" });
+
 	// Wheel bounds do not move selection back to the top or bottom.
 	const target = await h.point("Agent 05");
 	for (let step = 0; step < 30; step++) h.terminal.mouse(65, target.x, target.y);
