@@ -118,13 +118,13 @@ export function registerAgentsCommand(
 					const outcome = await openModeratorReportSurface(ctx.ui, item, {
 						markRead: () => view.markReportRead(reportId),
 						copyReport: copyToClipboard,
+						prepareReporter: () => prepareSelection({ kind: "select_agent", agentId: item.report.reporter.agentId }, selectorTui!),
 					});
 					if (outcome !== "view_reporter") {
 						reopenSelector = true;
 						continue;
 					}
 					action = { kind: "select_agent", agentId: item.report.reporter.agentId };
-					await prepareSelection(action, selectorTui!);
 				}
 				if (action?.kind === "decide") {
 					try {

@@ -233,10 +233,11 @@ export function registerRemoteAgentsCommand(
 						const outcome = await openModeratorReportSurface(ctx.ui, item, {
 							markRead: () => presentation.markReportRead(item.report.reportId),
 							copyReport: copyToClipboard,
+							prepareReporter: async () => {
+								postMortemResult = await presentation.select({ kind: "select_agent", agentId: item.report.reporter.agentId });
+							},
 						});
-						if (outcome === "view_reporter") {
-							postMortemResult = await presentation.select({ kind: "select_agent", agentId: item.report.reporter.agentId });
-						} else {
+						if (outcome !== "view_reporter") {
 							reopenSelector = true;
 						}
 					}
