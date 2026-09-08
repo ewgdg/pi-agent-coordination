@@ -59,9 +59,10 @@ test("a long Live roster stays bounded and scrolls from the selected Agent", asy
 	assert.deepEqual(overlayOptions, {
 		overlay: true,
 		overlayOptions: {
-			width: "100%",
-			maxHeight: "100%",
-			anchor: "top-left",
+			width: 80,
+			maxHeight: "90%",
+			anchor: "center",
+			margin: { top: 1, bottom: 1 },
 		},
 	});
 	assert.ok(component);

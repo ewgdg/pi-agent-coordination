@@ -5,8 +5,10 @@ import type {
 import {
 	Key,
 	SelectList,
+	compositeTuiLine,
 	matchesKey,
 	sliceByColumn,
+	stripTerminalSequences,
 	truncateToWidth,
 	visibleWidth,
 	type Component,
@@ -105,10 +107,10 @@ export function openAgentSelectorSurface(
 		{
 			overlay: true,
 			overlayOptions: {
-				// Pi only blocks pointer fallthrough inside the rendered overlay rectangle.
-				width: "100%",
-				maxHeight: "100%",
-				anchor: "top-left",
+				width: AGENT_SELECTOR_OVERLAY_WIDTH,
+				maxHeight: `${AGENT_SELECTOR_OVERLAY_MAX_HEIGHT_PERCENT}%`,
+				anchor: "center",
+				margin: { top: AGENT_SELECTOR_OVERLAY_MARGIN, bottom: AGENT_SELECTOR_OVERLAY_MARGIN },
 			},
 		},
 	);
@@ -321,18 +323,16 @@ class AgentSelectorSurface implements Component {
 			contentLines,
 			Math.max(0, this.#maximumOverlayRows() - FRAME_ROWS),
 		);
-		const left = Math.floor((width - frameWidth) / 2);
-		const top = Math.max(0, Math.floor((terminalRows - visibleContentLines.length - FRAME_ROWS) / 2));
 		const leftMargin = Math.min(1, innerWidth);
 		const rightMargin = Math.max(0, innerWidth - contentWidth - leftMargin);
-		this.#contentLeft = left + 1 + leftMargin;
+		this.#contentLeft = 1 + leftMargin;
 		this.#contentWidth = contentWidth;
 		this.#hitRegions = [];
 		this.#rosterRows.clear();
 		const panel = [
 			border(`┌${"─".repeat(innerWidth)}┐`),
 			...visibleContentLines.map((line, index) => {
-				const row = top + index + 1;
+				const row = index + 1;
 				if (line.roster) this.#rosterRows.add(row);
 				for (const region of line.regions ?? []) {
 					// A partially clipped control is informational, not a different action.
@@ -348,18 +348,22 @@ class AgentSelectorSurface implements Component {
 					region.end <= contentWidth && samePointerAction(region.action, this.#hoveredAction)
 				);
 				if (hovered) {
-					text = sliceByColumn(text, 0, hovered.start) +
-						this.#theme.bg("selectedBg", sliceByColumn(text, hovered.start, hovered.end - hovered.start)) +
-						sliceByColumn(text, hovered.end, contentWidth);
+					const hoverWidth = hovered.end - hovered.start;
+					// Slices can retain/replay open ANSI styles. Repaint the target with
+					// one readable style and let Pi isolate the adjacent styled segments.
+					const label = truncateToWidth(stripTerminalSequences(
+						sliceByColumn(text, hovered.start, hoverWidth),
+					), hoverWidth, "", true);
+					text = compositeTuiLine(text,
+						this.#theme.bg("selectedBg", this.#theme.fg("text", label)),
+						hovered.start, hoverWidth, contentWidth);
 				}
 				return frameLine(text, contentWidth, leftMargin, rightMargin, border);
 			}),
 			border(`└${"─".repeat(innerWidth)}┘`),
 		];
-		// Blank rows and padding intentionally own the entire terminal while modal.
-		return Array.from({ length: terminalRows }, (_, row) =>
-			truncateToWidth(" ".repeat(left) + (panel[row - top] ?? ""), width, "", true)
-		);
+		// Paint only the panel: a full-terminal blank overlay erases the chat below.
+		return panel;
 	}
 
 	#maximumVisibleRows(): number {

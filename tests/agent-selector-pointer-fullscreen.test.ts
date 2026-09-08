@@ -2,13 +2,13 @@ import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import xterm from "@xterm/headless";
 import type { ExtensionUIContext, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
-import { Editor, TuiAltScreen, getKeybindings, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type Terminal, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Editor, TuiAltScreen, TuiMainScreen, getKeybindings, visibleWidth, type Component, type OverlayHandle, type OverlayOptions, type Terminal, type TuiMouseEvent, type TUI } from "@earendil-works/pi-tui";
 import type { AgentRosterStatus } from "../src/coordination/workflow-coordinator.ts";
 import { openAgentSelectorSurface, type AgentSelectorAction, type AgentSelectorOptions } from "../src/presentation/agent-selector-surface.ts";
 
 const identity = (text: string) => text;
 const theme = {
-	fg: (_color: string, text: string) => text,
+	fg: (color: string, text: string) => `\x1b[${color === "text" ? 37 : color === "accent" ? 36 : 90}m${text}\x1b[39m`,
 	bg: (_color: string, text: string) => "\x1b[44m" + text + "\x1b[49m",
 	bold: identity,
 } as Theme;
@@ -72,9 +72,9 @@ const roster = [
 ];
 const sleeping: AgentRosterStatus = { ...status("sleeping", "Sleeping"), run: { phase: "dormant" as const, retentionReasons: [] } };
 
-async function harness(t: TestContext, options: Partial<AgentSelectorOptions> = {}) {
+async function harness(t: TestContext, options: Partial<AgentSelectorOptions> = {}, mode: "fullscreen" | "regular" = "fullscreen") {
 	const terminal = new ScreenTerminal();
-	const tui = new TuiAltScreen(terminal);
+	const tui = mode === "fullscreen" ? new TuiAltScreen(terminal) : new TuiMainScreen(terminal);
 	const editor = new EditorSpy(tui, {
 		borderColor: identity,
 		selectList: { selectedPrefix: identity, selectedText: identity, description: identity, scrollInfo: identity, noMatch: identity },
@@ -87,7 +87,7 @@ async function harness(t: TestContext, options: Partial<AgentSelectorOptions> = 
 	let overlay: OverlayHandle | undefined;
 	let resolved = false;
 	const ui = {
-		custom<T>(factory: (tui: TuiAltScreen, theme: Theme, keys: KeybindingsManager, done: (value: T) => void) => Component,
+		custom<T>(factory: (tui: TUI, theme: Theme, keys: KeybindingsManager, done: (value: T) => void) => Component,
 			config: { overlayOptions?: OverlayOptions }) {
 			return new Promise<T>((resolve) => {
 				component = factory(tui, theme, {} as KeybindingsManager, (value) => {
@@ -206,24 +206,20 @@ test("wheel is roster-scoped and keeps scrolling hit targets correct after resiz
 	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "agent-" + Number(selected) });
 });
 
-test("async preparation captures the whole screen, including editor outside the centered panel", { timeout: 5_000 }, async (t) => {
+test("async preparation retains keyboard focus and blocks pointer actions inside the panel", { timeout: 5_000 }, async (t) => {
 	let release!: () => void;
 	const pending = new Promise<void>((resolve) => { release = resolve; });
 	const actions: AgentSelectorAction[] = [];
 	const h = await harness(t, { prepareSelection(action) { actions.push(action); return pending; } });
 	try {
-		h.terminal.mouse(0, 2, 1);
-		h.terminal.mouse(0, 2, 1, true);
-		h.terminal.mouse(65, 2, 1);
-		await h.frame();
-		assert.deepEqual(h.editor.mouseInputs, [], "selection itself shields the mounted editor");
 		await h.click("Branch");
 		assert.equal(actions.length, 1);
 		assert.equal(h.resolved, false);
-		assert.deepEqual(h.overlay?.getBounds(), { row: 0, col: 0, width: 120, height: 30 });
-		// The mounted Editor occupies the top rows, outside the panel, and would
-		// receive this press and keyboard focus without the full-screen shield.
-		for (const [x, y] of [[2, 1], [119, 29], [0, 0]]) {
+		const bounds = h.overlay!.getBounds()!;
+		assert.equal(bounds.width, 80);
+		assert.ok(bounds.row > 0 && bounds.height < h.terminal.rows);
+		assert.match((await h.frame()).join("\n"), /ROOT EDITOR/);
+		for (const [x, y] of [[bounds.col, bounds.row], [bounds.col + bounds.width - 1, bounds.row + bounds.height - 1]]) {
 			for (const button of [0, 1, 2]) {
 				h.terminal.mouse(button, x!, y!);
 				h.terminal.mouse(button, x!, y!, true);
@@ -255,7 +251,8 @@ test("preparation feedback survives resizing the roster viewport", { timeout: 5_
 		await h.click("Agent 1");
 		h.terminal.resize(80, 15);
 		assert.match((await h.frame()).join("\n"), /→ Agent 1\s+⠋ loading/);
-		assert.deepEqual(h.overlay?.getBounds(), { row: 0, col: 0, width: 80, height: 15 });
+		assert.equal(h.overlay?.getBounds()?.width, 80);
+		assert.ok(h.overlay!.getBounds()!.height < 15);
 	} finally { release(); }
 	await h.result;
 });
@@ -331,4 +328,51 @@ test("pointer opening is independent of confirmation bindings while keyboard use
 	assert.match((await keyboard.frame()).join("\n"), /→ Other/);
 	await keyboard.input(" ");
 	assert.deepEqual(await keyboard.result, { kind: "select_agent", agentId: "other" });
+});
+
+for (const mode of ["fullscreen", "regular"] as const) {
+	test(mode + " selector preserves the mounted chat outside its frame", { timeout: 5_000 }, async (t) => {
+		const h = await harness(t, {}, mode);
+		assert.match((await h.frame()).join("\n"), /ROOT EDITOR/);
+		h.editor.setText("CHAT UPDATED UNDER SELECTOR");
+		assert.match((await h.frame()).join("\n"), /CHAT UPDATED UNDER SELECTOR/);
+	});
+}
+
+test("hover uses one foreground and background for exactly the pointed cells", { timeout: 5_000 }, async (t) => {
+	const h = await harness(t);
+	for (const target of ["[Owner]", "Other", "Branch", "[1 child ›]", "Dormant"]) {
+		const p = await h.point(target);
+		h.terminal.mouse(35, p.x, p.y);
+		await h.frame();
+		const row = h.terminal.screen.buffer.active.getLine(p.y)!;
+		const hovered = row.getCell(p.x)!;
+		assert.equal(hovered.getBgColor(), 4, target + " uses selected background");
+		const right = row.translateToString(true).lastIndexOf("│");
+		for (let x = right - 1; x < h.terminal.columns; x++) {
+			assert.equal(row.getCell(x)!.isBgDefault(), true, target + " background ends before frame padding at " + x);
+		}
+		const end = target === "Other" ? right - 1
+			: target === "Branch" ? row.translateToString(true).indexOf("[1 child")
+			: p.x + visibleWidth(target);
+		for (let x = p.x; x < end; x++) {
+			assert.equal(row.getCell(x)!.getFgColor(), 7, target + " uses the readable text foreground at " + x);
+			assert.equal(row.getCell(x)!.getBgColor(), 4, target + " fills the pointed control at " + x);
+		}
+		if (target === "[Owner]") {
+			assert.equal(row.getCell(p.x + target.length)!.isBgDefault(), true, "Owner hover must not bleed onto chevron");
+		}
+	}
+});
+
+test("hovering a keyboard-focused Owner does not paint the rest of its row", { timeout: 5_000 }, async (t) => {
+	const h = await harness(t);
+	await h.input("\x1b[A");
+	const p = await h.point("[Owner]");
+	h.terminal.mouse(35, p.x, p.y);
+	await h.frame();
+	const row = h.terminal.screen.buffer.active.getLine(p.y)!;
+	for (let x = p.x + "[Owner]".length; x < h.terminal.columns; x++) {
+		assert.equal(row.getCell(x)!.isBgDefault(), true, "Owner background leaked to column " + x);
+	}
 });
