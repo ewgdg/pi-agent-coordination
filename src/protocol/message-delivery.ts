@@ -1,6 +1,5 @@
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, OBLIGATION_RESUMED_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
-import { isDeepStrictEqual } from "node:util";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
@@ -92,18 +91,23 @@ export function createMessageDelivery(
 	};
 }
 
+export type DeliveryIdentity =
+	| Readonly<{ kind: "message" | "request"; messageId: string; fromAgentId: string }>
+	| Readonly<{ kind: "answer"; messageId: string; fromAgentId: string; requestId: string }>
+	| Readonly<{ kind: "request_cancellation"; messageId: string; fromAgentId: string; requestId: string }>;
+
 export function inspectStandaloneMessageDelivery(options: {
 	recipientAgentId: string;
 	transcript: TranscriptInspection;
 	source: ToolCallPointer;
-	expectedProjection: ModelVisibleMessage;
+	identity: DeliveryIdentity;
 	subject: string;
 }): DeliveryInspection {
 	const {
 		recipientAgentId,
 		transcript,
 		source: expectedSource,
-		expectedProjection,
+		identity,
 		subject,
 	} = options;
 	const { bySource, inspectedThrough } = readMessageDeliveries({
@@ -112,7 +116,15 @@ export function inspectStandaloneMessageDelivery(options: {
 	});
 	const matches: string[] = [];
 	for (const delivery of bySource.get(toolCallPointerKey(expectedSource)) ?? []) {
-		if (!isDeepStrictEqual(delivery.projection, expectedProjection)) {
+		// The committed text is authoritative; only association determines receipt ownership.
+		const projection = delivery.projection;
+		if (
+			projection.kind !== identity.kind ||
+			projectionIdentity(projection) !== identity.messageId ||
+			projection.fromAgentId !== identity.fromAgentId ||
+			((identity.kind === "answer" || identity.kind === "request_cancellation") &&
+				(!("requestMessageId" in projection) || projection.requestMessageId !== identity.requestId))
+		) {
 			throw new ProtocolInvariantError(`${subject} Delivery differs from its source`);
 		}
 		matches.push(delivery.deliveryEvidence.entryId);

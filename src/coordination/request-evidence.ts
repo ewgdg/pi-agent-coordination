@@ -723,7 +723,6 @@ export class RequestEvidence {
 				transcript: recipient.transcript.inspect(),
 				requestId: request.messageId,
 				fromAgentId: request.fromAgentId,
-				question: request.question,
 				source: request.source,
 			})
 			: inspectMessageDelivery({

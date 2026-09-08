@@ -54,7 +54,6 @@ export function inspectCreationRequestDelivery(options: {
 	transcript: TranscriptInspection;
 	requestId: string;
 	fromAgentId: string;
-	question: string;
 	source: ToolCallPointer;
 }): DeliveryInspection {
 	const {
@@ -62,18 +61,16 @@ export function inspectCreationRequestDelivery(options: {
 		transcript,
 		requestId,
 		fromAgentId,
-		question,
 		source,
 	} = options;
 	return inspectStandaloneMessageDelivery({
 		recipientAgentId,
 		transcript,
 		source,
-		expectedProjection: {
+		identity: {
 			kind: "request",
-			requestMessageId: requestId,
+			messageId: requestId,
 			fromAgentId,
-			question,
 		},
 		subject: `Creation Request ${requestId}`,
 	});

@@ -92,6 +92,12 @@ The initial receipt reports live sending only:
 
 An ordinary Message receipt returns its source-derived `messageId`. An Agent Request receipt instead returns `requestMessageId`, the Request Message's source-derived identity. Initial author receipts and later retry scheduling receipts also return the resolved full `targetAgentId`.
 
+## Committed delivery receipts
+
+Delivery inspection trusts a structurally readable, committed model-visible record in the intended recipient's current Workflow scope. It matches the source pointer, Message identity, sender, kind, and related Request (for Answers and Cancellations), not question, answer, reason, or content equality against the sender's original text. This applies to Creation Requests, ordinary Messages and Requests, Answers, Cancellations, and committed Answer retrieval results (including Wait).
+
+Writers still deliver the requested content; receipt inspection does not re-prove that writer contract. Queued admission and incomplete transcript entries are not delivery. Delivery means available in the recipient's transcript/context, not necessarily processed by the model. Exact schemas, duplicate rejection, cursor advancement, and retry/Wait/Cancellation ordering are unchanged. Receipts use existing transcript facts, not a separate durable store.
+
 ## Delivery presentation
 
 The recipient transcript renders each delivered item as a readable message block. Its collapsed view shows the Message type, sender label with the final eight characters of the Agent identity, and the first ten terminal-width-aware rows of the body. A standalone dim ellipsis on the following line marks a truncated preview. Outgoing Message and Request tool calls use the same body preview, label, and compact identity format for the receiver. Expanding the block shows the sender label with the full Agent identity and the complete Message, Request question, Answer, or Cancellation reason with Markdown formatting. Batched Deliveries keep each item's sender and type visible instead of presenting the protocol JSON.
