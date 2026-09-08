@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Check } from "typebox/value";
+
+import { participantCoordinationToolSchemas } from "../src/tools/participant-coordination-tools.ts";
 
 import { validateAgentSpawnInput } from "../src/protocol/agent-spawn-input.ts";
 
@@ -90,7 +93,7 @@ test("Agent Spawn validates independent system-prompt and context-file controls"
 	);
 });
 
-test("Agent Spawn validates paired model overrides with explicit inheritance", () => {
+test("Agent Spawn validates model overrides with explicit inheritance", () => {
 	assert.deepEqual(validateAgentSpawnInput({
 		request: "Use an explicit model with inherited thinking.",
 		config: {
@@ -111,14 +114,6 @@ test("Agent Spawn validates paired model overrides with explicit inheritance", (
 			model: { id: "inherit", thinking: "max" },
 		},
 	}).config?.model, { id: "inherit", thinking: "max" });
-	for (const model of [
-		{ id: "provider/model" },
-	]) {
-		assert.throws(
-			() => validateAgentSpawnInput({ request: "Invalid pair.", config: { model } }),
-			/invalid shape/,
-		);
-	}
 	assert.deepEqual(validateAgentSpawnInput({
 		request: "Explicitly inherit both values.",
 		config: { model: { id: "inherit", thinking: "inherit" } },
@@ -130,4 +125,17 @@ test("Agent Spawn validates paired model overrides with explicit inheritance", (
 		}),
 		/invalid shape/,
 	);
+});
+
+test("Agent Spawn schema and validation accept independently omitted model fields", () => {
+	for (const model of [{}, { id: "provider/model" }, { thinking: "high" }, { id: "inherit" }, { thinking: "inherit" }]) {
+		const input = { request: "Use selected defaults.", config: { model } };
+		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), true);
+		assert.deepEqual(validateAgentSpawnInput(input), input);
+	}
+	for (const model of [{ id: "invalid" }, { thinking: "invalid" }, { extra: true }, { id: null }, { thinking: null }]) {
+		const input = { request: "Reject invalid configuration.", config: { model } };
+		assert.equal(Check(participantCoordinationToolSchemas.agent_spawn, input), false);
+		assert.throws(() => validateAgentSpawnInput(input), /invalid/);
+	}
 });

@@ -10,7 +10,7 @@ import {
 	createAgentTemplateCatalogue,
 	selectAgentTemplateForCreation,
 } from "../src/templates/agent-templates.ts";
-import { resolveAgentRunConfiguration } from "../src/templates/agent-configuration.ts";
+import { type AgentSpawnConfigurationInput, resolveAgentRunConfiguration } from "../src/templates/agent-configuration.ts";
 import {
 	resolveModeratorAgentMetadata,
 	resolveOrdinaryAgentMetadata,
@@ -324,7 +324,7 @@ test("fails when no configured Template model is available", () => {
 	);
 });
 
-test("available paired spawn model override bypasses unavailable Template candidates", () => {
+test("fully specified spawn model override bypasses unavailable Template candidates", () => {
 	const inherited = {
 		cwd: "/project",
 		model: { provider: "parent", modelId: "model" },
@@ -521,4 +521,74 @@ test("permits only the missing reserved Moderator Template", () => {
 		() => selectAgentTemplateForCreation(discovery, "missing-agent"),
 		/Selected Agent Template missing-agent is missing/,
 	);
+});
+
+test("model fields independently use Template defaults or explicit parent inheritance", () => {
+	const inherited = {
+		cwd: "/project",
+		model: { provider: "parent", modelId: "model" },
+		thinking: "low" as const,
+		allowedTools: [], skills: [], extensions: [],
+	};
+	const template = {
+		models: [
+			{ model: { provider: "missing", modelId: "model" }, thinking: "off" as const },
+			{ model: { provider: "template", modelId: "model" }, thinking: "high" as const },
+		],
+		systemPromptMode: "append" as const, loadContextFiles: true, systemPrompt: "",
+	};
+	const cases: Array<[AgentSpawnConfigurationInput["model"], string, string, string]> = [
+		[undefined, "template", "high", "low"],
+		[{}, "template", "high", "low"],
+		[{ thinking: "max" }, "template", "max", "max"],
+		[{ id: "explicit/model" }, "explicit", "high", "low"],
+		[{ id: "inherit" }, "parent", "high", "low"],
+		[{ thinking: "inherit" }, "template", "low", "low"],
+		[{ id: "inherit", thinking: "inherit" }, "parent", "low", "low"],
+	];
+	for (const [model, provider, thinking, parentThinking] of cases) {
+		for (const selectedTemplate of [template, undefined]) {
+			const actual = resolveAgentRunConfiguration({
+				inherited, template: selectedTemplate, overrides: { model },
+				fixedAllowedTools: [],
+				isModelAvailable: ({ provider }) => provider !== "missing",
+			});
+			assert.deepEqual(actual.model, {
+				provider: selectedTemplate || provider === "explicit" ? provider : "parent",
+				modelId: "model",
+			});
+			assert.equal(actual.thinking, selectedTemplate ? thinking : parentThinking);
+		}
+	}
+});
+
+test("Template candidates are resolved only when a model field needs defaults", () => {
+	const base = {
+		inherited: {
+			cwd: "/project", model: { provider: "parent", modelId: "model" },
+			thinking: "low" as const, allowedTools: [], skills: [], extensions: [],
+		},
+		template: {
+			models: [{ model: { provider: "missing", modelId: "model" }, thinking: "high" as const }],
+			systemPromptMode: "append" as const, loadContextFiles: true, systemPrompt: "",
+		},
+		fixedAllowedTools: [],
+	};
+	for (const model of [
+		{ id: "explicit/model", thinking: "max" },
+		{ id: "inherit", thinking: "inherit" },
+	] as const) {
+		const checked: string[] = [];
+		const actual = resolveAgentRunConfiguration({
+			...base, overrides: { model },
+			isModelAvailable: ({ provider }) => { checked.push(provider); return provider === "explicit"; },
+		});
+		assert.equal(actual.thinking, model.thinking === "inherit" ? "low" : "max");
+		assert.deepEqual(checked, model.id === "inherit" ? [] : ["explicit"]);
+	}
+	for (const model of [{}, { id: "explicit/model" }, { thinking: "max" }] as const) {
+		assert.throws(() => resolveAgentRunConfiguration({
+			...base, overrides: { model }, isModelAvailable: ({ provider }) => provider === "explicit",
+		}), /No configured Agent Template model is available/);
+	}
 });

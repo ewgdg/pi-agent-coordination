@@ -13,8 +13,8 @@ import type {
 
 export type AgentSpawnConfigurationInput = Readonly<{
 	model?: Readonly<{
-		id: string | "inherit";
-		thinking: RuntimeThinkingLevel | "inherit";
+		id?: string | "inherit";
+		thinking?: RuntimeThinkingLevel | "inherit";
 	}>;
 	cwd?: string;
 	allowedTools?: readonly string[];
@@ -68,7 +68,7 @@ export function resolveAgentRunConfiguration(options: {
 	const loadContextFiles = overrides?.loadContextFiles
 		?? template?.loadContextFiles
 		?? true;
-	const explicitlySelectedModel = overrides?.model && overrides.model.id !== "inherit"
+	const explicitlySelectedModel = overrides?.model?.id !== undefined && overrides.model.id !== "inherit"
 		? parseModelId(overrides.model.id)
 		: undefined;
 	if (explicitlySelectedModel && !options.isModelAvailable(explicitlySelectedModel)) {
@@ -76,18 +76,18 @@ export function resolveAgentRunConfiguration(options: {
 			`Configured Agent model is unavailable: ${explicitlySelectedModel.provider}/${explicitlySelectedModel.modelId}`,
 		);
 	}
-	const modelConfiguration = overrides?.model
-		? {
-			model: explicitlySelectedModel ?? inherited.model,
-			thinking: overrides.model.thinking === "inherit"
-				? inherited.thinking
-				: overrides.model.thinking,
-		}
-		: resolveTemplateModelConfiguration(
-			inherited,
-			template?.models,
-			options.isModelAvailable,
-		);
+	// Do not require available Template candidates when both fields are explicitly selected.
+	const defaults = overrides?.model?.id === undefined || overrides.model.thinking === undefined
+		? resolveTemplateModelConfiguration(inherited, template?.models, options.isModelAvailable)
+		: inherited;
+	const modelConfiguration = {
+		model: overrides?.model?.id === "inherit"
+			? inherited.model
+			: explicitlySelectedModel ?? defaults.model,
+		thinking: overrides?.model?.thinking === "inherit"
+			? inherited.thinking
+			: overrides?.model?.thinking ?? defaults.thinking,
+	};
 
 	return {
 		cwd: resolve(inherited.cwd, overrides?.cwd ?? inherited.cwd),

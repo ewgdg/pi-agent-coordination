@@ -117,16 +117,19 @@ function validateModel(value: unknown): NonNullable<AgentSpawnConfigurationInput
 	if (!isRecord(value)) {
 		throw new Error("invalid_input: Agent Spawn config.model must be an object");
 	}
-	requireExactKeys(value, ["id", "thinking"]);
-	const id = value.id === "inherit"
-		? "inherit"
+	requireExactKeys(value, [
+		...(value.id === undefined ? [] : ["id"]),
+		...(value.thinking === undefined ? [] : ["thinking"]),
+	]);
+	const id = value.id === undefined || value.id === "inherit"
+		? value.id
 		: validateModelId(value.id);
-	const thinking = value.thinking === "inherit"
-		? "inherit"
+	const thinking = value.thinking === undefined || value.thinking === "inherit"
+		? value.thinking
 		: validateThinking(value.thinking);
 	return {
-		id,
-		thinking,
+		...(id === undefined ? {} : { id }),
+		...(thinking === undefined ? {} : { thinking }),
 	};
 }
 

@@ -271,11 +271,11 @@ const agentSpawnConfigurationParameters = Type.Object(
 		model: Type.Optional(
 			Type.Object(
 				{
-					id: Type.Union([
+					id: Type.Optional(Type.Union([
 						Type.String({ pattern: "^[^/]+/.+$" }),
 						Type.Literal("inherit"),
-					]),
-					thinking: Type.Union([
+					], { description: 'Omit to use the selected Template model, else the parent model. "inherit" always uses the parent model.' })),
+					thinking: Type.Optional(Type.Union([
 						Type.Literal("off"),
 						Type.Literal("minimal"),
 						Type.Literal("low"),
@@ -284,7 +284,7 @@ const agentSpawnConfigurationParameters = Type.Object(
 						Type.Literal("xhigh"),
 						Type.Literal("max"),
 						Type.Literal("inherit"),
-					]),
+					], { description: 'Omit to use the selected Template thinking level, else the parent thinking level. "inherit" always uses the parent thinking level.' })),
 				},
 				{ additionalProperties: false },
 			),
