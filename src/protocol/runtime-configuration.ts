@@ -1,3 +1,5 @@
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+
 export const RUNTIME_THINKING_LEVELS = [
 	"off",
 	"minimal",
@@ -6,9 +8,15 @@ export const RUNTIME_THINKING_LEVELS = [
 	"high",
 	"xhigh",
 	"max",
-] as const;
+] as const satisfies readonly ThinkingLevel[];
 
-export type RuntimeThinkingLevel = (typeof RUNTIME_THINKING_LEVELS)[number];
+// Pi owns the type; this runtime list must reject both invalid and missing levels.
+type AssertNever<T extends never> = T;
+type MissingRuntimeThinkingLevels = AssertNever<
+	Exclude<ThinkingLevel, (typeof RUNTIME_THINKING_LEVELS)[number]>
+>;
+
+export type RuntimeThinkingLevel = ThinkingLevel;
 
 export type ModelReference = Readonly<{ provider: string; modelId: string }>;
 

@@ -1,3 +1,4 @@
+import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 import { Text } from "@earendil-works/pi-tui";
 import type { ReportToUserInput } from "../protocol/moderator-report.ts";
@@ -276,13 +277,7 @@ const agentSpawnConfigurationParameters = Type.Object(
 						Type.Literal("inherit"),
 					], { description: 'Omit to use the selected Template model, else the parent model. "inherit" always uses the parent model.' })),
 					thinking: Type.Optional(Type.Union([
-						Type.Literal("off"),
-						Type.Literal("minimal"),
-						Type.Literal("low"),
-						Type.Literal("medium"),
-						Type.Literal("high"),
-						Type.Literal("xhigh"),
-						Type.Literal("max"),
+						RuntimeThinkingSchema,
 						Type.Literal("inherit"),
 					], { description: 'Omit to use the selected Template thinking level, else the parent thinking level. "inherit" always uses the parent thinking level.' })),
 				},

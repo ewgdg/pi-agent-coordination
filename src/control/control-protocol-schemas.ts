@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 
+import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
 export const AGENT_CONTROL_PROTOCOL_VERSION = 7 as const;
 
 const NonEmptyStringSchema = Type.String({ minLength: 1 });
@@ -33,15 +34,7 @@ export const AgentTemplateCatalogueEntrySchema = Type.Object({
 			provider: NonEmptyStringSchema,
 			modelId: NonEmptyStringSchema,
 		}, { additionalProperties: false }),
-		thinking: Type.Union([
-		Type.Literal("off"),
-		Type.Literal("minimal"),
-		Type.Literal("low"),
-		Type.Literal("medium"),
-		Type.Literal("high"),
-		Type.Literal("xhigh"),
-		Type.Literal("max"),
-		]),
+		thinking: RuntimeThinkingSchema,
 	}, { additionalProperties: false }), { minItems: 1, uniqueItems: true })),
 	allowedTools: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),
 	skills: Type.Optional(Type.Array(NonEmptyStringSchema, { uniqueItems: true })),

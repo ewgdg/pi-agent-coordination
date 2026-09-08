@@ -1,6 +1,7 @@
 import { Type, type Static, type TSchema } from "typebox";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 
+import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
 import type { AgentControlProtocol } from "./agent-control-channel.ts";
 import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
@@ -201,10 +202,6 @@ const AgentStatusProperties = {
 	run: AgentRunStateSchema,
 } as const;
 const AgentStatusSchema = closed(AgentStatusProperties);
-const RuntimeThinkingSchema = Type.Union([
-	Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"),
-	Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
-]);
 const AgentRosterStatusSchema = closed({
 	...AgentStatusProperties,
 	model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
@@ -222,10 +219,7 @@ const AgentObserveResultSchema = Type.Union([
 const EffectiveConfigurationSchema = closed({
 	cwd: NonEmptyStringSchema,
 	model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
-	thinking: Type.Union([
-		Type.Literal("off"), Type.Literal("minimal"), Type.Literal("low"),
-		Type.Literal("medium"), Type.Literal("high"), Type.Literal("xhigh"), Type.Literal("max"),
-	]),
+	thinking: RuntimeThinkingSchema,
 	allowedTools: StringListSchema,
 	skills: StringListSchema,
 	extensions: StringListSchema,
