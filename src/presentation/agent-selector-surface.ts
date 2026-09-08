@@ -129,6 +129,8 @@ class AgentSelectorSurface implements Component {
 	readonly #theme: Theme;
 	readonly #done: (result: AgentSelectorAction | undefined) => void;
 	#options: AgentSelectorOptions;
+	#liveTree: readonly AgentRosterStatus[] = [];
+	#dormantRoster: readonly AgentRosterStatus[] = [];
 	#removeChangeHandler: (() => void) | undefined;
 	#activeTab: "live" | "dormant" = "live";
 	#scopeAgentId: string;
@@ -160,11 +162,12 @@ class AgentSelectorSurface implements Component {
 		this.#theme = theme;
 		this.#done = done;
 		this.#options = options;
+		this.#partitionRoster();
 		const owner = this.#ownerStatus();
-		const selectedLive = options.live.find(
+		const selectedLive = this.#liveTree.find(
 			({ agentId }) => agentId === options.selectedAgentId,
 		);
-		const selectedDormant = options.dormant.find(
+		const selectedDormant = this.#dormantRoster.find(
 			({ agentId }) => agentId === options.selectedAgentId,
 		);
 		this.#activeTab = selectedDormant ? "dormant" : "live";
@@ -175,11 +178,12 @@ class AgentSelectorSurface implements Component {
 			live: this.#attentionItems()[0]?.value ?? (
 				selectedLive?.agentId !== owner.agentId ? selectedLive?.agentId : undefined
 			),
-			dormant: selectedDormant?.agentId ?? options.dormant[0]?.agentId,
+			dormant: selectedDormant?.agentId ?? this.#dormantRoster[0]?.agentId,
 		};
 		this.#list = this.#createList();
 		this.#removeChangeHandler = options.addChangeHandler?.((snapshot) => {
 			this.#options = { ...this.#options, ...snapshot };
+			this.#partitionRoster();
 			this.#list = this.#createList(true);
 			this.#tui.requestRender();
 		});
@@ -400,7 +404,7 @@ class AgentSelectorSurface implements Component {
 	#createList(preserveScroll = false, ensureSelection = false): SelectList {
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
-			: [this.#ownerItem(), ...this.#options.dormant.map((status) => this.#agentItem(status))];
+			: [this.#ownerItem(), ...this.#dormantRoster.map((status) => this.#agentItem(status))];
 		this.#hitRegions = [];
 		this.#rosterRows.clear();
 		this.#visibleRows = this.#maximumVisibleRows();
@@ -519,10 +523,27 @@ class AgentSelectorSurface implements Component {
 		return Math.max(2, Math.min(percentBound, marginBound));
 	}
 
+	#partitionRoster(): void {
+		const allStatuses = [...this.#options.live, ...this.#options.dormant];
+		const byId = new Map(allStatuses.map((status) => [status.agentId, status]));
+		const liveTreeIds = new Set<string>();
+		// Keep every ancestor as a browsing path; its Run status remains unchanged.
+		for (const status of this.#options.live) {
+			let current: AgentRosterStatus | undefined = status;
+			while (current && !liveTreeIds.has(current.agentId)) {
+				liveTreeIds.add(current.agentId);
+				current = current.directSpawnerAgentId === null
+					? undefined : byId.get(current.directSpawnerAgentId);
+			}
+		}
+		this.#liveTree = allStatuses.filter(({ agentId }) => liveTreeIds.has(agentId));
+		this.#dormantRoster = this.#options.dormant.filter(({ agentId }) => !liveTreeIds.has(agentId));
+	}
+
 	#liveChildren(agentId: string): AgentRosterStatus[] {
 		const ownerId = this.#ownerStatus().agentId;
 		// Root browsing also includes live Moderators without a direct Spawner.
-		return this.#options.live.filter((status) =>
+		return this.#liveTree.filter((status) =>
 			status.agentId !== ownerId &&
 			(status.directSpawnerAgentId === agentId ||
 				(agentId === ownerId && status.directSpawnerAgentId === null))

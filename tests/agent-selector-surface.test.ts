@@ -941,7 +941,7 @@ test("nested Owner path stays visible while scrolling and children remain a trai
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child-10" });
 });
 
-test("Owner root browsing falls back to a root Agent when its ancestor is Dormant", async () => {
+test("Owner root browsing preserves its Dormant ancestor", async () => {
 	const harness = surfaceHarness(24);
 	const selection = openAgentSelectorSurface(harness.ui, {
 		live: [
@@ -955,7 +955,7 @@ test("Owner root browsing falls back to a root Agent when its ancestor is Dorman
 	const component = harness.component!;
 	component.handleInput?.("j");
 	component.handleInput?.("l");
-	assert.match(renderPanel(component, 80).join("\n"), /→ Root/);
+	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping/);
 	component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -1038,3 +1038,92 @@ function renderPanel(component: Component | undefined, width: number): string[] 
 	const left = lines[top]?.indexOf("┌") ?? 0;
 	return lines.slice(top, bottom + 1).map((line) => line.slice(left).trimEnd());
 }
+
+test("Live browsing traverses Dormant ancestors without opening them and keeps fully Dormant branches separate", async () => {
+	const harness = surfaceHarness(30);
+	const prepared: unknown[] = [];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null), agentStatus("leaf", "Leaf", "middle")],
+		dormant: [
+			dormantAgentStatus("root", "Sleeping root", "owner"),
+			dormantAgentStatus("middle", "Sleeping middle", "root"),
+			dormantAgentStatus("quiet", "Quiet branch", "root"),
+			dormantAgentStatus("quiet-leaf", "Quiet leaf", "quiet"),
+		],
+		selectedAgentId: "owner",
+		prepareSelection: async (action) => { prepared.push(action); },
+	});
+	const component = harness.component!;
+	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping root.*1 child/);
+	assert.match(renderPanel(component, 80).join("\n"), /dormant/);
+	component.handleInput?.("l");
+	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping middle.*1 child/);
+	component.handleInput?.("l");
+	assert.match(renderPanel(component, 80).join("\n"), /→ Leaf/);
+	component.handleInput?.("h");
+	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping middle/);
+	component.handleInput?.("h");
+	assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping root/);
+	component.handleInput?.("\t");
+	const dormant = renderPanel(component, 80).join("\n");
+	assert.match(dormant, /Quiet branch/);
+	assert.match(dormant, /Quiet leaf/);
+	assert.doesNotMatch(dormant, /Sleeping root|Sleeping middle|Leaf/);
+	assert.deepEqual(prepared, []);
+	component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+for (const phase of ["starting", "live", "ending"] as const) {
+	test(`a selected Dormant ancestor opens in Live with a ${phase} descendant`, async () => {
+		const harness = surfaceHarness(24);
+		const parent = dormantAgentStatus("parent", "Sleeping parent", "owner");
+		const child = { ...agentStatus("child", "Child", "parent"),
+			run: { phase, attention: "none" as const, retentionReasons: [] } };
+		const selection = openAgentSelectorSurface(harness.ui, {
+			live: [agentStatus("owner", "Owner", null), child],
+			dormant: [parent], selectedAgentId: "parent",
+		});
+		const component = harness.component!;
+		assert.match(renderPanel(component, 80).join("\n"), /→ Sleeping parent.*1 child/);
+		component.handleInput?.("l");
+		assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
+		component.handleInput?.("h");
+		component.handleInput?.("\r");
+		assert.deepEqual(await selection, { kind: "select_agent", agentId: "parent" });
+		assert.equal(parent.run.phase, "dormant");
+	});
+}
+
+test("roster refresh retains a newly Dormant parent until its last live descendant becomes Dormant", async () => {
+	const harness = surfaceHarness(24);
+	const owner = agentStatus("owner", "Owner", null);
+	const parent = agentStatus("parent", "Parent", "owner");
+	const child = agentStatus("child", "Child", "parent");
+	const sleepingParent = dormantAgentStatus("parent", "Parent", "owner");
+	const sleepingChild = dormantAgentStatus("child", "Child", "parent");
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner, parent, child], dormant: [], selectedAgentId: "owner",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
+	const component = harness.component!;
+	publish({ live: [owner, child], dormant: [sleepingParent] });
+	assert.match(renderPanel(component, 80).join("\n"), /→ Parent.*dormant.*1 child/);
+	component.handleInput?.("l");
+	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
+	component.handleInput?.("h");
+	publish({ live: [owner], dormant: [sleepingParent, sleepingChild] });
+	assert.match(renderPanel(component, 80).join("\n"), /No live Agents/);
+	component.handleInput?.("\t");
+	assert.match(renderPanel(component, 80).join("\n"), /Parent/);
+	assert.match(renderPanel(component, 80).join("\n"), /Child/);
+	publish({ live: [owner, child], dormant: [sleepingParent] });
+	assert.match(renderPanel(component, 80).join("\n"), /No dormant Agents/);
+	component.handleInput?.("\t");
+	assert.match(renderPanel(component, 80).join("\n"), /Parent.*1 child/);
+	component.handleInput?.("l"); // Owner keeps focus after the empty roster; browse root first.
+	component.handleInput?.("l");
+	component.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "child" });
+});
