@@ -117,7 +117,7 @@ test("Live remains terminal-bounded across Attention and Agent sections", async 
 
 	const rendered = renderPanel(harness.component, 80);
 	assert.match(rendered.join("\n"), /Attention Inbox/);
-	assert.match(rendered.join("\n"), /\[Owner\]\[›\]/);
+	assert.match(rendered.join("\n"), /Owner ›/);
 	assert.doesNotMatch(rendered.join("\n"), /│\s+Owner\s+│/);
 	assert.match(rendered.join("\n"), /o Owner · Tab views/);
 	assert.ok(rendered.length <= 21, `rendered ${rendered.length} rows in a 24-row terminal`);
@@ -310,7 +310,7 @@ test("Live shows direct children and navigates Agent scopes", async () => {
 
 	harness.component.handleInput?.("l");
 	const researcherScope = renderPanel(harness.component, 80).join("\n");
-	assert.match(researcherScope, /\[Owner\]\[›\] Researcher/);
+	assert.match(researcherScope, /Owner › Researcher/);
 	assert.match(researcherScope, /Source Scout/);
 	assert.match(researcherScope, /Synthesizer/);
 	assert.doesNotMatch(researcherScope, /Builder|Reviewer/);
@@ -325,7 +325,7 @@ test("Live shows direct children and navigates Agent scopes", async () => {
 		/→ Researcher/,
 	);
 	harness.component.handleInput?.("\x1b[C");
-	assert.match(renderPanel(harness.component, 80).join("\n"), /\[Owner\]\[›\] Researcher/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), /Owner › Researcher/);
 	harness.component.handleInput?.("\x1b[D");
 	assert.match(
 		renderPanel(harness.component, 80).find((line) => line.includes("Researcher")) ?? "",
@@ -435,7 +435,7 @@ test("the selector uses fixed one-cell horizontal padding", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const owner = renderPanel(harness.component, 80).find((line) => line.includes("[Owner]"));
+	const owner = renderPanel(harness.component, 80).find((line) => line.includes("Owner"));
 	assert.ok(owner);
 	assert.equal(owner.slice(1).search(/\S/u), 1);
 	harness.component.handleInput?.("\x1b");
@@ -524,7 +524,7 @@ test("Live uses one attention-first list and dispatches the exact Human Request"
 	const lines = renderPanel(harness.component, 80);
 	const attentionHeader = lines.findIndex((line) => line.includes("Attention Inbox"));
 	const decideRow = lines.findIndex((line) => line.includes("DECIDE 1"));
-	const agentsHeader = lines.findIndex((line) => /\[Owner\]\[›\]/.test(line));
+	const agentsHeader = lines.findIndex((line) => /Owner ›/.test(line));
 	assert.ok(attentionHeader < decideRow);
 	assert.ok(decideRow < agentsHeader);
 	assert.doesNotMatch(lines.join("\n"), /→?\s*Owner\s+live/);
@@ -623,20 +623,20 @@ test("Live breadcrumbs pin Owner and keep the newest three Agent scopes", async 
 	assert.ok(harness.component);
 
 	const rendered = renderPanel(harness.component, 80).join("\n");
-	assert.match(rendered, /\[Owner\]\[›\] … \/ Beta \/ Gamma \/ Delta/);
-	assert.doesNotMatch(rendered, /\[›\] Owner|\[›\] Alpha/);
-	const narrow = renderPanel(harness.component, 30).join("\n");
-	assert.match(narrow, /\[Owner\]\[›\] … \/ Delta/);
+	assert.match(rendered, /Owner › … \/ Beta \/ Gamma \/ Delta/);
+	assert.doesNotMatch(rendered, /› Owner|› Alpha/);
+	const narrow = renderPanel(harness.component, 27).join("\n");
+	assert.match(narrow, /Owner › … \/ Delta/);
 	assert.doesNotMatch(narrow, /Beta/);
 	for (const width of [24, 20]) {
 		const veryNarrow = renderPanel(harness.component, width);
 		assert.match(veryNarrow.join("\n"), /Delta/);
 		assert.ok(veryNarrow.every((line) => visibleWidth(line) <= width));
 	}
-	const truncatedCurrentScope = renderPanel(harness.component, 19);
-	assert.match(truncatedCurrentScope.join("\n"), /\[Owner\]\[›\] Del/);
+	const truncatedCurrentScope = renderPanel(harness.component, 15);
+	assert.match(truncatedCurrentScope.join("\n"), /Owner › De…/);
 	assert.doesNotMatch(truncatedCurrentScope.join("\n"), /… \/ /);
-	assert.ok(truncatedCurrentScope.every((line) => visibleWidth(line) <= 19));
+	assert.ok(truncatedCurrentScope.every((line) => visibleWidth(line) <= 15));
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -837,7 +837,7 @@ test("Owner is a pinned button in a linear keyboard focus order", async () => {
 	component.handleInput?.("j");
 	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("k");
-	assert.match(renderPanel(component, 80).join("\n"), /\[Owner\]\[›\]/);
+	assert.match(renderPanel(component, 80).join("\n"), /Owner ›/);
 	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
 	component.handleInput?.("\x1b[A");
 	component.handleInput?.("\r");
@@ -881,7 +881,7 @@ test("Attention, Owner and Agents form one non-circular order", async () => {
 		assert.match(renderPanel(component, 80).join("\n"), /→ DECIDE/);
 	}
 	component.handleInput?.("j");
-	assert.match(renderPanel(component, 80).join("\n"), /\[Owner\]\[›\]/);
+	assert.match(renderPanel(component, 80).join("\n"), /Owner ›/);
 	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
 	component.handleInput?.("\x1b[B");
 	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
@@ -908,7 +908,7 @@ test("Dormant pins Owner without a chevron or heading and Enter selects Owner", 
 	component.handleInput?.("k");
 	component.handleInput?.("l");
 	const rendered = renderPanel(component, 80).join("\n");
-	assert.match(rendered, /\[Owner\]/);
+	assert.match(rendered, /Owner/);
 	assert.doesNotMatch(rendered, /Dormant Agents|\[›\]|→ /);
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
@@ -926,11 +926,11 @@ test("nested Owner path stays visible while scrolling and children remain a trai
 	});
 	const component = harness.component!;
 	let rendered = renderPanel(component, 80);
-	assert.match(rendered.join("\n"), /\[Owner\]\[›\] Branch/);
-	assert.match(rendered.join("\n"), /→ Child 10.*\[1 child ›\]\s+│/);
+	assert.match(rendered.join("\n"), /Owner › Branch/);
+	assert.match(rendered.join("\n"), /→ Child 10.*1 child ›\s+│/);
 	component.handleInput?.("j");
 	rendered = renderPanel(component, 80);
-	assert.match(rendered.join("\n"), /\[Owner\]\[›\] Branch/);
+	assert.match(rendered.join("\n"), /Owner › Branch/);
 	assert.match(rendered.join("\n"), /→ Child 11/);
 	assert.ok(rendered.length <= 13);
 	component.handleInput?.("k");
@@ -972,7 +972,7 @@ test("focused Owner keeps preparation feedback and input ownership until selecti
 	const component = harness.component!;
 	component.handleInput?.("\r");
 	try {
-		assert.match(renderPanel(component, 80).join("\n"), /\[Owner\].*loading/);
+		assert.match(renderPanel(component, 80).join("\n"), /Owner.*loading/);
 		component.handleInput?.("\x1b");
 		assert.equal(harness.resolved, false);
 	} finally {
@@ -991,7 +991,7 @@ test("short Attention view retains its focused summary and pinned Owner boundary
 	const rendered = renderPanel(harness.component!, 80);
 	assert.ok(rendered.length <= 8);
 	assert.match(rendered.join("\n"), /→ DECIDE/);
-	assert.match(rendered.join("\n"), /\[Owner\]\[›\]/);
+	assert.match(rendered.join("\n"), /Owner ›/);
 	harness.component!.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -1022,10 +1022,10 @@ test("primary pointer controls separate browsing, opening, and informational det
 	click("Live");
 	click("Informational detail");
 	assert.equal(harness.resolved, false);
-	click("[1 child ›]", 5);
+	click("1 child ›", 5);
 	assert.match(component.render(80).join("\n"), /→ Leaf/);
 	assert.equal(harness.resolved, false);
-	click("[›]");
+	click("›");
 	assert.match(component.render(80).join("\n"), /→ Branch/);
 	click("Branch");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "branch" });

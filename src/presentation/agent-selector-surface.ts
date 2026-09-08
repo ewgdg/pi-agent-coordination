@@ -565,7 +565,7 @@ class AgentSelectorSurface implements Component {
 		const childCount = this.#liveChildren(status.agentId).length;
 		const children = childCount === 0
 			? undefined
-			: `[${childCount} ${childCount === 1 ? "child" : "children"} ›]`;
+			: `${childCount} ${childCount === 1 ? "child" : "children"} ›`;
 		const moderator = status.agentId !== status.workflowId &&
 			status.directSpawnerAgentId === null;
 		return {
@@ -653,8 +653,8 @@ class AgentSelectorSurface implements Component {
 		}
 		const ownerFocused = this.#items[this.#selectedIndex]?.kind === "owner";
 		const owner = ownerFocused
-			? this.#theme.bg("selectedBg", this.#theme.fg("text", "[Owner]"))
-			: this.#theme.fg("toolTitle", "[Owner]");
+			? this.#theme.bg("selectedBg", this.#theme.fg("text", "Owner"))
+			: this.#theme.fg("toolTitle", "Owner");
 		const ownerWidth = visibleWidth(owner);
 		const path = this.#activeTab === "live"
 			? this.#scopeTitle(Math.max(0, width - ownerWidth))
@@ -764,14 +764,16 @@ class AgentSelectorSurface implements Component {
 				({ agentId }) => agentId === current?.directSpawnerAgentId,
 			);
 		}
-		const rootControl = this.#liveChildren(owner.agentId).length > 0 ? "[›]" : "";
+		const rootControl = this.#liveChildren(owner.agentId).length > 0 ? "›" : "";
 		const regions: LineRegion[] = rootControl ? [{
-			start: 0, end: visibleWidth(rootControl), text: this.#theme.fg("toolTitle", rootControl),
+			start: 1, end: 1 + visibleWidth(rootControl), text: this.#theme.fg("toolTitle", rootControl),
 			action: { kind: "children", value: owner.agentId },
 		}] : [];
-		if (ancestors.length === 0) return { text: rootControl, regions };
+		// The gap between Owner and root navigation is outside both hit regions.
+		const rootSuffix = rootControl ? ` ${rootControl}` : "";
+		if (ancestors.length === 0) return { text: rootSuffix, regions };
 		const visibleAncestors = ancestors.slice(-MAX_BREADCRUMB_AGENT_SEGMENTS);
-		const rootPrefix = `${rootControl || " /"} `;
+		const rootPrefix = `${rootSuffix || " /"} `;
 		const prefix = () => rootPrefix + (ancestors.length > visibleAncestors.length ? "… / " : "");
 		const title = () => prefix() + visibleAncestors.map(({ label }) => label).join(" / ");
 		while (visibleAncestors.length > 1 && visibleWidth(title()) > width) {

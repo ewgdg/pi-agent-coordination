@@ -129,22 +129,22 @@ test("fullscreen pointer tabs, Owner and summary actions use terminal mouse disp
 	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "other" });
 
 	const owner = await harness(t);
-	await owner.click("[Owner]", 2);
+	await owner.click("Owner", 2);
 	assert.equal(owner.resolved, true);
 	assert.deepEqual(await owner.result, { kind: "select_agent", agentId: "owner" });
 });
 
 test("the entire child control browses, ancestors and Owner chevron return to their scopes", { timeout: 5_000 }, async (t) => {
-	for (const offset of [0, 3, 9, 10]) {
+	for (const offset of [0, 3, 7, 8]) {
 		const h = await harness(t);
-		await h.click("[1 child ›]", offset);
+		await h.click("1 child ›", offset);
 		assert.equal(h.resolved, false);
 		assert.match((await h.frame()).join("\n"), /→ Nested/);
-		await h.click("[1 child ›]", 3);
+		await h.click("1 child ›", 3);
 		assert.match((await h.frame()).join("\n"), /→ Leaf/);
 		await h.click("Branch");
 		assert.match((await h.frame()).join("\n"), /→ Nested/);
-		await h.click("[›]", 1);
+		await h.click("›");
 		assert.match((await h.frame()).join("\n"), /→ Branch/);
 		await h.input("\x1b");
 	}
@@ -162,8 +162,8 @@ test("hover highlights without moving keyboard selection; details and other butt
 	for (const button of [1, 2]) {
 		await h.click("Other", 1, button);
 		await h.click("Dormant", 1, button);
-		await h.click("[Owner]", 1, button);
-		await h.click("[1 child ›]", 3, button);
+		await h.click("Owner", 1, button);
+		await h.click("1 child ›", 3, button);
 	}
 	await h.click("Branch informational details");
 	assert.equal(h.resolved, false);
@@ -174,7 +174,7 @@ test("hover highlights without moving keyboard selection; details and other butt
 test("wheel is roster-scoped and keeps scrolling hit targets correct after resizing", { timeout: 5_000 }, async (t) => {
 	const live = [status("owner", "Owner", null), ...Array.from({ length: 25 }, (_, i) => status("agent-" + i, "Agent " + String(i).padStart(2, "0")))];
 	const h = await harness(t, { live, selectedAgentId: "agent-0" });
-	for (const target of ["Live", "[Owner]", "informational details", "o Owner"]) {
+	for (const target of ["Live", "Owner", "informational details", "o Owner"]) {
 		const p = await h.point(target);
 		h.terminal.mouse(65, p.x, p.y);
 		await h.frame();
@@ -281,15 +281,15 @@ test("visible breadcrumb cells navigate; omitted/current segments and clipped co
 	await h.input("\x1b");
 
 	const clipped = await harness(t);
-	clipped.terminal.resize(14, 15);
+	clipped.terminal.resize(12, 15);
 	await clipped.frame();
-	await clipped.click("[1 child");
+	await clipped.click("1 child");
 	assert.equal(clipped.resolved, false);
 	clipped.terminal.resize(80, 30);
 	assert.match((await clipped.frame()).join("\n"), /→ Branch/);
 	// Even the blank cell immediately before the complete child control belongs
-	// to the participant body; the closing bracket belongs to browsing.
-	const child = await clipped.point("[1 child ›]");
+	// to the participant body; the final chevron belongs to browsing.
+	const child = await clipped.point("1 child ›");
 	clipped.terminal.mouse(0, child.x - 1, child.y);
 	clipped.terminal.mouse(0, child.x - 1, child.y, true);
 	await clipped.frame();
@@ -312,7 +312,7 @@ test("pointer opening is independent of confirmation bindings while keyboard use
 	assert.deepEqual(await agent.result, { kind: "select_agent", agentId: "other" });
 
 	const owner = await harness(t);
-	await owner.click("[Owner]");
+	await owner.click("Owner");
 	assert.equal(owner.resolved, true);
 	assert.deepEqual(await owner.result, { kind: "select_agent", agentId: "owner" });
 
@@ -342,7 +342,7 @@ for (const mode of ["fullscreen", "regular"] as const) {
 
 test("hover adds a faint background without changing foregrounds or selected backgrounds", { timeout: 5_000 }, async (t) => {
 	const h = await harness(t);
-	for (const target of ["[Owner]", "Other", "Branch", "[1 child ›]", "Dormant"]) {
+	for (const target of ["Owner", "Other", "Branch", "1 child ›", "Dormant"]) {
 		const p = await h.point(target);
 		const before = Array.from({ length: h.terminal.columns }, (_, x) => h.terminal.screen.buffer.active.getLine(p.y)!.getCell(x)!.getFgColor());
 		h.terminal.mouse(35, p.x, p.y);
@@ -356,13 +356,13 @@ test("hover adds a faint background without changing foregrounds or selected bac
 			assert.equal(row.getCell(x)!.isBgDefault(), true, target + " background ends before frame padding at " + x);
 		}
 		const end = target === "Other" ? right - 1
-			: target === "Branch" ? row.translateToString(true).indexOf("[1 child")
+			: target === "Branch" ? row.translateToString(true).indexOf("1 child")
 			: p.x + visibleWidth(target);
 		for (let x = p.x; x < end; x++) {
 			assert.equal(row.getCell(x)!.getFgColor(), before[x], target + " retains its foreground at " + x);
 			assert.equal(row.getCell(x)!.getBgColor(), background, target + " fills the pointed control at " + x);
 		}
-		if (target === "[Owner]") {
+		if (target === "Owner") {
 			assert.equal(row.getCell(p.x + target.length)!.isBgDefault(), true, "Owner hover must not bleed onto chevron");
 		}
 	}
@@ -371,11 +371,11 @@ test("hover adds a faint background without changing foregrounds or selected bac
 test("hovering a keyboard-focused Owner does not paint the rest of its row", { timeout: 5_000 }, async (t) => {
 	const h = await harness(t);
 	await h.input("\x1b[A");
-	const p = await h.point("[Owner]");
+	const p = await h.point("Owner");
 	h.terminal.mouse(35, p.x, p.y);
 	await h.frame();
 	const row = h.terminal.screen.buffer.active.getLine(p.y)!;
-	for (let x = p.x + "[Owner]".length; x < h.terminal.columns; x++) {
+	for (let x = p.x + "Owner".length; x < h.terminal.columns; x++) {
 		assert.equal(row.getCell(x)!.isBgDefault(), true, "Owner background leaked to column " + x);
 	}
 });
@@ -383,7 +383,7 @@ test("hovering a keyboard-focused Owner does not paint the rest of its row", { t
 test("row and child button expose separate bounded hover actions", { timeout: 5_000 }, async (t) => {
 	const h = await harness(t, { selectedAgentId: "other" });
 	const body = await h.point("Branch");
-	const child = await h.point("[1 child ›]");
+	const child = await h.point("1 child ›");
 	const selected = await h.point("Other");
 	const bg = (x: number, y: number) => h.terminal.screen.buffer.active.getLine(y)!.getCell(x)!.getBgColor();
 	assert.equal(bg(selected.x, selected.y), 4, "keyboard-selected row has the stronger background");
@@ -395,9 +395,9 @@ test("row and child button expose separate bounded hover actions", { timeout: 5_
 	h.terminal.mouse(35, child.x, child.y);
 	await h.frame();
 	assert.equal(h.terminal.screen.buffer.active.getLine(body.y)!.getCell(body.x)!.isBgDefault(), true);
-	for (let x = child.x; x < child.x + "[1 child ›]".length; x++) assert.equal(bg(x, child.y), 8);
+	for (let x = child.x; x < child.x + "1 child ›".length; x++) assert.equal(bg(x, child.y), 8);
 	assert.equal(bg(selected.x, selected.y), 4, "child hover does not replace selection");
-	await h.click("[1 child ›]", 10);
+	await h.click("1 child ›", 8);
 	assert.equal(h.resolved, false);
 	assert.match((await h.frame()).join("\n"), /→ Nested/);
 });
@@ -405,7 +405,7 @@ test("row and child button expose separate bounded hover actions", { timeout: 5_
 test("selected tabs and Owner retain selection color when hovered", { timeout: 5_000 }, async (t) => {
 	const h = await harness(t);
 	await h.input("\x1b[A");
-	for (const target of ["Live", "[Owner]"]) {
+	for (const target of ["Live", "Owner"]) {
 		const p = await h.point(target);
 		const before = h.terminal.screen.buffer.active.getLine(p.y)!.getCell(p.x)!;
 		const foreground = before.getFgColor();
@@ -428,7 +428,7 @@ test("truncated Agent summaries keep tint through their padding without swallowi
 	});
 	h.terminal.resize(46, 30);
 	const p = await h.point("Long ");
-	const child = await h.point("[1 child ›]");
+	const child = await h.point("1 child ›");
 	h.terminal.mouse(35, p.x, p.y);
 	await h.frame();
 	const row = h.terminal.screen.buffer.active.getLine(p.y)!;
@@ -438,13 +438,13 @@ test("truncated Agent summaries keep tint through their padding without swallowi
 
 test("dormant-only children expose no child-navigation control, including Owner", { timeout: 5_000 }, async (t) => {
 	const h = await harness(t, { live: [status("owner", "Owner", null)], dormant: [sleeping], selectedAgentId: "owner" });
-	assert.doesNotMatch((await h.frame()).join("\n"), /\[›\]|\[\d+ child/);
+	assert.doesNotMatch((await h.frame()).join("\n"), /›|\d+ child/);
 	await h.input("l");
-	assert.doesNotMatch((await h.frame()).join("\n"), /\[›\]|\[\d+ child/);
-	const owner = await h.point("[Owner]");
+	assert.doesNotMatch((await h.frame()).join("\n"), /›|\d+ child/);
+	const owner = await h.point("Owner");
 	// The cell formerly occupied by the root chevron is now informational.
-	h.terminal.mouse(0, owner.x + "[Owner]".length, owner.y);
-	h.terminal.mouse(0, owner.x + "[Owner]".length, owner.y, true);
+	h.terminal.mouse(0, owner.x + "Owner".length, owner.y);
+	h.terminal.mouse(0, owner.x + "Owner".length, owner.y, true);
 	await h.frame();
 	assert.equal(h.resolved, false);
 
@@ -453,7 +453,7 @@ test("dormant-only children expose no child-navigation control, including Owner"
 		dormant: [{ ...sleeping, directSpawnerAgentId: "branch" }],
 		selectedAgentId: "branch",
 	});
-	assert.doesNotMatch((await parent.frame()).join("\n"), /\[\d+ child/);
+	assert.doesNotMatch((await parent.frame()).join("\n"), /\d+ child/);
 	await parent.input("l");
 	assert.match((await parent.frame()).join("\n"), /→ Branch/);
 	// Without a child button, the trailing content remains part of the open action.
@@ -471,10 +471,30 @@ test("mixed children count and browse only the live roster, including idle child
 		dormant: [{ ...sleeping, directSpawnerAgentId: "branch" }],
 		selectedAgentId: "branch",
 	});
-	assert.match((await h.frame()).join("\n"), /\[1 child ›\]/);
-	await h.click("[1 child ›]");
+	assert.match((await h.frame()).join("\n"), /1 child ›/);
+	await h.click("1 child ›");
 	assert.match((await h.frame()).join("\n"), /→ Idle Child/);
 	assert.doesNotMatch((await h.frame()).join("\n"), /Sleeping/);
-	await h.click("[›]");
+	await h.click("›");
 	assert.match((await h.frame()).join("\n"), /→ Branch/);
+});
+
+test("text buttons are bracket-free and neighboring actions stay independent", { timeout: 5_000 }, async (t) => {
+	const h = await harness(t, { live: [...roster, status("custom", "[Custom]")] });
+	const lines = await h.frame();
+	assert.doesNotMatch(lines.join("\n"), /\[Owner\]|\[›\]|\[1 child ›\]/);
+	assert.match(lines.join("\n"), /Owner ›/);
+	assert.match(lines.join("\n"), /1 child ›/);
+	assert.match(lines.join("\n"), /\[Custom\]/, "user-provided label brackets are preserved");
+	const owner = await h.point("Owner");
+	h.terminal.mouse(0, owner.x + "Owner".length, owner.y);
+	h.terminal.mouse(0, owner.x + "Owner".length, owner.y, true);
+	await h.frame();
+	assert.equal(h.resolved, false, "separator is not an Owner action");
+	await h.click("1 child ›", "1 child ›".length - 1);
+	assert.match((await h.frame()).join("\n"), /→ Nested/);
+	await h.click("›");
+	assert.match((await h.frame()).join("\n"), /→ Branch/);
+	await h.click("Owner", "Owner".length - 1);
+	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "owner" });
 });
