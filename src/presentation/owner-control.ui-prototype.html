@@ -3,11 +3,13 @@
 <title>Owner control · throwaway comparison</title>
 <style>
 :root{color-scheme:dark;font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;color:#cbd2dc;background:#11151b;font-size:13px}*{box-sizing:border-box}body{margin:0;padding:24px 24px 110px}h1{font-size:20px;color:#edf1f6;margin:0 0 10px}p{line-height:1.6;max-width:110ch}.muted{color:#909baa}.controls{display:flex;gap:18px;flex-wrap:wrap;padding:16px 0}label{display:flex;gap:8px;align-items:center}button,select{font:inherit;background:#242c38;color:#edf1f6;border:1px solid #586575;border-radius:4px;padding:7px;cursor:pointer}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #f3c675;outline-offset:3px}#state{padding:12px;border:1px solid #3b4756;color:#f3c675;margin-bottom:20px}#designs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}#designs.single{grid-template-columns:minmax(0,1fr);max-width:1050px;margin:auto}article{min-width:0}h2{font-size:14px;margin:0 0 8px}.terminal{background:#15191f;padding:12px;border:1px solid #323d49;overflow-x:auto}.terminal-inner{min-width:0}.prompt{color:#808b98;height:42px;white-space:nowrap;overflow:hidden}.frame{border:1px solid #62758c;padding:10px;min-width:0;line-height:1.65}.row{white-space:pre;overflow:hidden;height:1.65em}.body{min-height:18.15em}.live .design-C .body{min-height:19.8em}.tab{padding:1px 6px}.selected{background:#41556c;color:#f5f7fa}.heading,.owner,.path{color:#a8c4e3}.owner.focus{background:#41556c;color:#fff}.plain.focus{background:#d3dfec;color:#131c27}.chosen{color:#9fceff}.detail{color:#929eac}.dim{color:#86909e}.agent-row{display:flex;white-space:pre;height:1.65em;overflow:hidden}.agent-body{overflow:hidden;flex:1}.child{color:#86909e;margin-left:1ch}.footer{color:#8e99a7;white-space:nowrap;overflow:hidden;margin-top:12px}.note{min-height:5em;color:#a9b3c1;font-size:12px}.single .terminal-inner{max-width:80ch;margin:auto}.narrow .terminal-inner{max-width:38ch;margin:auto}.narrow .frame{padding:7px}.home-row{display:flex;gap:2ch}.switcher{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;gap:10px;align-items:center;background:#e5edf7;color:#182332;padding:10px 14px;border-radius:10px;box-shadow:0 4px 25px #0008;max-width:95vw}.switcher button{background:#fff;color:#182332;border-color:#8997a9}.switcher small{display:block;font-size:10px;margin-top:4px}.contract{border-top:1px solid #384452;margin-top:22px;padding-top:12px}@media(max-width:1050px){#designs{grid-template-columns:1fr}.terminal-inner{max-width:80ch;margin:auto}} 
+.owner.badge{padding:1px 6px;background:#293746;color:#a8c4e3}.owner.badge.focus{background:#41556c;color:#f5f7fa}
+#designs:not(.single){grid-template-columns:repeat(2,minmax(0,1fr))}@media(max-width:1050px){#designs:not(.single){grid-template-columns:1fr}}
 </style>
 <body>
-<!-- Three Owner/path variants inside a realistic /agents terminal overlay; standalone because this TUI has no browser route. Throwaway, not production. -->
+<!-- Four Owner/path variants inside a realistic /agents terminal overlay; standalone because this TUI has no browser route. Throwaway, not production. -->
 <h1>Should Owner lose the brackets?</h1>
-<p class="muted">THROWAWAY VISUAL COMPARISON · Three treatments of the same /agents boundary. Sample data, approximate terminal colors. No live sessions or selector actions.</p>
+<p class="muted">THROWAWAY VISUAL COMPARISON · Four treatments of the same /agents boundary. Sample data, approximate terminal colors. No live sessions or selector actions.</p>
 <div class="controls">
 <label>Visual focus <select id="focus"><option value="owner">Owner</option><option value="agent" selected>Agent</option><option value="attention">Attention</option></select></label>
 <label>View <select id="view"><option value="live">Live</option><option value="dormant">Dormant</option></select></label>
@@ -20,14 +22,14 @@
 <p class="muted">Only the comparison controls work. Use Visual focus to compare focused and unfocused Owner; focus is not a selected session. Dormant is flat, with no Attention Inbox or hierarchy path; Owner remains a global home action, not a dormant Agent. Narrow previews clip roster/footer text like a terminal, rather than wrap it.</p>
 <nav class="switcher" aria-label="Design comparison controls"><button id="prev" aria-label="Previous design">←</button><div><strong id="variant-label"></strong><small>← / → switch designs, NOT Agents</small></div><button id="next" aria-label="Next design">→</button><button id="all">All</button></nav>
 <script>
-const keys=['A','B','C','all'];
-const titles={A:'Current brackets',B:'Plain inline Owner',C:'Separate home row',all:'All designs'};
-const notes={A:'Explicit action delimiters remain visible without focus. Adjacent [Owner][›] makes the action/path boundary look busy.',B:'Less punctuation; inverse focus makes Owner unmistakable when focused. Unfocused Owner is quieter and less obviously actionable.',C:'Home and hierarchy no longer compete on one line. Live costs one extra row; the path is informational, not a new focus stop.'};
+const keys=['A','B','C','D','all'];
+const titles={A:'Current brackets',B:'Plain inline Owner',C:'Separate home row',D:'Tab-style Owner badge',all:'All designs'};
+const notes={A:'Explicit action delimiters remain visible without focus. Adjacent [Owner][›] makes the action/path boundary look busy.',B:'Less punctuation; inverse focus makes Owner unmistakable when focused. Unfocused Owner is quieter and less obviously actionable.',C:'Home and hierarchy no longer compete on one line. Live costs one extra row; the path is informational, not a new focus stop.',D:'Tab-shaped background without brackets. Muted when unfocused; the tab highlight color appears only with Owner focus. Chevron and path stay outside. Owner remains an action, not a selected tab.'};
 let variant=new URLSearchParams(location.search).get('variant')||'all';
 if(!keys.includes(variant))variant='all';
 const get=id=>document.getElementById(id);
 function ownerMarkup(v,focused){
- return '<span class="owner '+(v==='B'?'plain ':'')+(focused?'focus':'')+'">'+(v==='A'?'[Owner]':'Owner')+'</span>';
+ return '<span class="owner '+(v==='B'?'plain ':v==='D'?'badge ':'')+(focused?'focus':'')+'">'+(v==='A'?'[Owner]':'Owner')+'</span>';
 }
 function renderDesign(v,focus,live,nested){
  const focused=focus==='owner';
@@ -36,7 +38,7 @@ function renderDesign(v,focus,live,nested){
  const owner=ownerMarkup(v,focused);
  let boundary;
  if(v==='A')boundary='<div class="row">'+owner+(live?'<span class="path">[›] '+shortPath+'</span>':'')+'</div>';
- if(v==='B')boundary='<div class="row">'+owner+(live?'<span class="path"> › '+shortPath+'</span>':'')+'</div>';
+ if(v==='B'||v==='D')boundary='<div class="row">'+owner+(live?'<span class="path"> › '+shortPath+'</span>':'')+'</div>';
  if(v==='C')boundary='<div class="row home-row">'+owner+'<span class="dim">o home</span></div>'+(live?'<div class="row path">› '+(shortPath||'Root')+'</div>':'');
  const agentName=live?(nested?'Sources':'Architecture'):'Validation';
  const agentDetail=focus==='agent'?'<div class="row detail">  '+(live?'Compare selector interaction patterns':'Verify request lifecycle contracts')+'</div><div class="row detail">  01a07df1-a7ea-757d-b130-681eb4e02ee0</div><div class="row dim">  '+(live?'Live · working':'Dormant')+'</div><div class="row dim">  openai/gpt-5.4 · thinking high · 0 queued</div>':'';
@@ -50,7 +52,7 @@ function render(){
  get('scope').disabled=!live;
  const focus=get('focus').value,nested=get('scope').value==='nested';
  get('designs').className=(live?'live ':'')+(variant==='all'?'':'single ')+(get('narrow').checked?'narrow':'');
- get('designs').innerHTML=(variant==='all'?['A','B','C']:[variant]).map(v=>renderDesign(v,focus,live,nested)).join('');
+ get('designs').innerHTML=(variant==='all'?keys.filter(key=>key!=='all'):[variant]).map(v=>renderDesign(v,focus,live,nested)).join('');
  get('state').textContent='Design: '+variant+' · Focus: '+focus+' (mock) · View: '+get('view').value+' · Scope: '+(live?(nested?'Architecture / Research':'root'):'flat / not applicable')+' · Width: '+(get('narrow').checked?'38ch':'available, max 80ch in single view');
  get('variant-label').textContent=variant+' · '+titles[variant];
 }
