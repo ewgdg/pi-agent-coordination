@@ -1,3 +1,5 @@
+import { copyToClipboard } from "@earendil-works/pi-coding-agent";
+import { openModeratorReportSurface } from "../presentation/moderator-report-surface.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type {
@@ -57,6 +59,7 @@ export function createAgentSelectorSnapshot(
 		selectedAgentId,
 		humanAttention: [...view.humanAttention()],
 		operationalAttention: [...view.operationalAttention()],
+		reports: [...view.reportHistory()],
 	};
 }
 
@@ -83,6 +86,7 @@ export function createAgentSelectionSession(
 	return {
 		async prepare(action, signal) {
 			throwIfCancelled(signal);
+			if (action.kind === "open_report") return;
 			if (action.kind === "decide" && !isPendingDecision(action)) {
 				throw new Error("stale_request: Human Request is no longer pending");
 			}
@@ -130,6 +134,7 @@ export function createOwnerAgentPresentationHandlers(
 	postMortemPresenter?: PostMortemAgentPresenter,
 ): OwnerParticipantPresentationHandlers {
 	return {
+		markReportRead: async (reportId) => resolveView().markReportRead(reportId),
 		snapshot: async () => {
 			const view = resolveView();
 			await view.refreshTranscriptFacts();
@@ -141,6 +146,7 @@ export function createOwnerAgentPresentationHandlers(
 			);
 		},
 		async select(action, signal) {
+			if (action.kind === "open_report") throw new Error("Report selection belongs to the read-only report surface");
 			const selection = createAgentSelectionSession(resolveView(), selectedAgentId);
 			await selection.prepare(action as AgentSelectorAction, signal);
 			await selection.complete(action as AgentSelectorAction, signal);
@@ -201,7 +207,7 @@ export function registerRemoteAgentsCommand(
 					const snapshot = await presentation.snapshot();
 					currentSnapshot ??= snapshot;
 					let postMortemResult: Awaited<ReturnType<typeof presentation.select>> | undefined;
-					await openAgentSelectorSurface(ctx.ui, {
+					const action = await openAgentSelectorSurface(ctx.ui, {
 						...currentSnapshot,
 						addChangeHandler(handler) {
 							publishSnapshot = handler;
@@ -209,6 +215,7 @@ export function registerRemoteAgentsCommand(
 							return () => { publishSnapshot = undefined; };
 						},
 						async prepareSelection(action) {
+							if (action.kind === "open_report") return;
 							postMortemResult = await presentation.select(
 								action as RemoteAgentSelectorAction,
 							);
@@ -220,6 +227,19 @@ export function registerRemoteAgentsCommand(
 							);
 						},
 					});
+					if (action?.kind === "open_report") {
+						const item = currentSnapshot.reports.find(({ report }) => report.reportId === action.reportId);
+						if (!item) throw new Error("Report is unavailable");
+						const outcome = await openModeratorReportSurface(ctx.ui, item, {
+							markRead: () => presentation.markReportRead(item.report.reportId),
+							copyReport: copyToClipboard,
+						});
+						if (outcome === "view_reporter") {
+							postMortemResult = await presentation.select({ kind: "select_agent", agentId: item.report.reporter.agentId });
+						} else {
+							reopenSelector = true;
+						}
+					}
 					if (postMortemResult?.kind === "post_mortem") {
 						reopenSelector = postMortemResult.outcome === "agents";
 					}

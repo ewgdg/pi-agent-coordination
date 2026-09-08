@@ -484,3 +484,24 @@ test("the roster refreshes compaction and restores current activity", () => {
   assert.equal(harness.renderRequests(), 2);
  } finally { harness.dock.dispose(); }
 });
+
+test("unread reports remain in the Owner Attention Inbox until explicitly marked read", () => {
+	const report = {
+		reportId: "report", createdAt: "2026-01-01T00:00:00.000Z",
+		reporter: { agentId: "moderator", label: "Moderator" },
+		source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/sessions/moderator.jsonl" },
+		symptom: "Delivery stalled", suspectedDefect: "Continuation absent", uncertainty: "Cause unknown",
+		recoveryActions: "Retried", recoveryOutcome: "Still blocked", evidence: ["entry"],
+	};
+	const snapshot: AgentActivitySnapshot = {
+		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
+		children: [], answerMode: false, humanAttention: [], operationalAttention: [],
+		reports: [{ report }],
+	};
+	const { dock } = createDock(snapshot);
+	assert.match(dock.render(120).join("\n"), /REPORT.*Moderator.*Delivery stalled/);
+	dock.dispose();
+	const { dock: readDock } = createDock({ ...snapshot, reports: [{ report, readAt: report.createdAt }] });
+	assert.doesNotMatch(readDock.render(120).join("\n"), /REPORT/);
+	readDock.dispose();
+});

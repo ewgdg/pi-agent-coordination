@@ -1,3 +1,8 @@
+import { isDeepStrictEqual } from "node:util";
+import { ModeratorReportStore } from "./moderator-reports.ts";
+import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryItem } from "../protocol/moderator-report.ts";
+import { resolveCommittedToolCall } from "../protocol/identities.ts";
+import type { ReportToUserReceipt } from "../tools/participant-coordination-tools.ts";
 import type { ObligationFrame } from "../protocol/obligation-focus.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { refreshAgentTranscripts } from "./agent-record.ts";
@@ -164,6 +169,8 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	focusHumanAnswer(agentId: string, requestId: string): Promise<void>;
 	humanAttention(): readonly HumanAttentionItem[];
 	operationalAttention(): readonly OperationalIncidentAttention[];
+	reportHistory(): readonly ReportHistoryItem[];
+	markReportRead(reportId: string): void;
 }>;
 
 export type AgentPresentationSelection =
@@ -218,6 +225,7 @@ export type OrdinaryAgentCoordinatorView = AgentCoordinatorView & Readonly<{
 }>;
 
 export type ModeratorAgentCoordinatorView = AgentCoordinatorView & Readonly<{
+	reportToUser(toolCallId: string, input: ReportToUserInput): Promise<ReportToUserReceipt>;
 	moderatorControl(
 		toolCallId: string,
 		input: ModeratorControlInput,
@@ -233,6 +241,7 @@ export class WorkflowCoordinator {
 	readonly #messages: MessageCoordinator;
 	readonly #agentWaits: AgentWaitCoordinator;
 	readonly #humanRequests: HumanRequestCoordinator;
+	readonly #reports: ModeratorReportStore;
 	readonly #runSupervisor: RunSupervisor;
 	readonly #operationalIncidents: OperationalIncidentCoordinator;
 	readonly #agentActivityChangeHandlers = new Set<() => void>();
@@ -293,6 +302,10 @@ export class WorkflowCoordinator {
 			host: AgentRuntimeSupervisor.bindOwner(runtime),
 			transcript: transcriptFromSessionManager(runtime.session.sessionManager),
 			children: [],
+		});
+		this.#reports = new ModeratorReportStore({
+			transcript: this.#requireAgent(identity.agentId).transcript,
+			appendCustomEntry: (customType, data) => runtime.session.sessionManager.appendCustomEntry(customType, data),
 		});
 		const sessionFactory = new ProcessChildSessionFactory({
 			ownerRuntime: runtime,
@@ -493,6 +506,22 @@ export class WorkflowCoordinator {
 		this.#requireModerator(agentId);
 		return Object.freeze({
 			...this.#agentView(agentId),
+			reportToUser: async (toolCallId, input) => {
+				this.#assertAdmissionOpen();
+				const record = this.#requireModerator(agentId);
+				const transcript = record.transcript.inspect();
+				const committed = resolveCommittedToolCall({ agentId, transcript, toolCallId, toolName: "report_to_user" });
+				const validated = validateReportToUserInput(input);
+				if (!isDeepStrictEqual(validated, validateReportToUserInput(committed.input))) {
+					throw new Error("invariant_violation: Report does not match committed tool call");
+				}
+				if (!transcript.transcriptPath) throw new Error("Report requires a durable source transcript");
+				const report = this.#reports.publish(validated,
+					{ agentId, label: record.identity.metadata.label },
+					{ ...committed.source, transcriptPath: transcript.transcriptPath });
+				this.#notifyAgentActivityChanged();
+				return { reportId: report.reportId, createdAt: report.createdAt };
+			},
 			moderatorControl: (toolCallId, input) => {
 				this.#assertAdmissionOpen();
 				return this.#operationalIncidents.executeModeratorControl(
@@ -569,6 +598,12 @@ export class WorkflowCoordinator {
 			// Runtime supplies the selected interactive mode.
 			humanAttention: () =>
 				this.#humanRequests.attentionItems(this.#ownerIdentity.agentId),
+			reportHistory: () => this.#reports.history(),
+			markReportRead: (reportId) => {
+				this.#assertAdmissionOpen();
+				this.#reports.markRead(reportId);
+				this.#notifyAgentActivityChanged();
+			},
 			operationalAttention: () =>
 				this.#operationalIncidents.attentionItems(this.#ownerIdentity.agentId),
 			reachSafeBoundary: async () => {
@@ -867,6 +902,7 @@ export class WorkflowCoordinator {
 				this.#agentActivityStatus(this.#requireAgent(childId))
 			),
 			answerMode: this.#humanRequests.hasPendingRequest(agentId),
+			reports: ownerScope ? this.#reports.history() : [],
 			humanAttention: ownerScope
 				? this.#humanRequests.attentionItems(this.#ownerIdentity.agentId)
 				: [],

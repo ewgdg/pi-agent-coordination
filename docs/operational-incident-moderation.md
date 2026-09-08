@@ -102,8 +102,31 @@ Task intent, priority, value, policy, risk, irreversible effects, and requested 
 
 `moderator_control` also records the handling summary and rationale. Resolution is blocked while the Moderator has an incoming or outgoing Request relationship or its mechanically checkable original condition remains. A Run Failure Moderator resolves immediately after its successor-start recovery notice and does not wait for the original Answer Obligation or adopt later Requests. Once clear, Resolution reports `resolved` when an original obligation still exists behind a credible progress source, or `already_cleared` when the original obligations ended.
 
+## Nonblocking runtime defect reports
+
+Investigate first: preserve exact evidence and attempt safe autonomous recovery. At the end of an investigation, use Moderator-only `report_to_user` for a suspected runtime defect, **not** `ask_user_question`. Report the symptom, why a defect is suspected, remaining uncertainty, recovery actions and observed outcome, and evidence references. A report is a suspicion supported by evidence, not a confirmed defect or a request for human judgment.
+
+The tool commits an immutable report to the Workflow Owner's durable transcript and immediately returns its report identity and creation timestamp. It does not wait for the user, create a Human Request or Agent Request, discharge an Answer Obligation, terminate the Moderator, or resolve handling. An unresolved incident still requires recovery; `moderator_control` retains its normal Resolution predicates. Reports can also be published after recovery has cleared the original condition.
+
+Every report captures the stable reporting Moderator identity and label, timestamp, original transcript path, assistant entry ID, and exact reporting tool-call ID. Replaying the same committed source returns the original report rather than revising it. Publication and explicit read acknowledgment are separate Owner custom entries; neither depends on the current Moderator Run or incident lifetime.
+
+### Human review
+
+In `/agents`, unread reports appear as `REPORT` items in the **Attention Inbox**. Enter opens a dedicated read-only report view—not a live transcript, new Agent, or new session. The **Reports** tab retains all report history, including read reports.
+
+- **m · Mark read** explicitly acknowledges the report and removes pending report attention. The report remains in history.
+- **c · Copy report** copies the full ticket-ready Markdown report, including provenance and evidence.
+- **v · View reporter** switches to the stable reporting Moderator's current context using ordinary Agent selection.
+- **Esc/q · Back** closes the report. Opening, closing, copying, or viewing the reporter does not acknowledge it.
+
+View reporter deliberately does not rewind the Moderator's current conversation. The exact original transcript path, entry, and tool-call reference remain in the report and copied text, so the investigation can be located despite later work. Installed Pi exposes `switchSession` and `navigateTree`, but these replace the active session or move its branch leaf; neither is a read-only jump to an arbitrary transcript entry. Therefore reports do not invoke them. Pi's native `/tree` can be used in the reporter context to inspect the original investigation; selecting a tree entry changes the active branch. The original JSONL can also be inspected using its retained source reference.
+
+No ticket is filed automatically and no report file is exported. Clipboard availability follows Pi's native clipboard support.
+
 ## Cold recovery
 
 Cold discovery validates committed Moderator Inputs and admits valid Moderators as standalone dormant Agents. Recovered Moderators remain routable and restart with the Moderator toolset.
 
 Recovery reconstructs no timer, review interval, attendance, live condition, Handling Key, attempt chain, previous Run, exhausted Operational Attention, scheduling, or Moderator reuse. Current live evidence after recovery must establish a fresh condition.
+
+Reports and read acknowledgments are reconstructed from the Owner transcript on cold recovery, independent of whether the original incident still exists. Unread report attention persists; read report history remains accessible. Ephemeral or externally deleted Workflow transcripts cannot provide durable history.

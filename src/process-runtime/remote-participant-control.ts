@@ -40,6 +40,7 @@ export type OwnerParticipantRequestHandlers<Role extends RemoteParticipantRole> 
 
 export type OwnerParticipantPresentationHandlers = Readonly<{
 	snapshot(): Promise<RemoteAgentSelectorSnapshot>;
+	markReportRead(reportId: string): Promise<void>;
 	select(
 		action: RemoteAgentSelectorAction,
 		signal: AbortSignal,
@@ -50,6 +51,7 @@ export type OwnerParticipantPresentationHandlers = Readonly<{
 export type ControlBackedChildPresentationHandlers = Readonly<{
 	addChangeHandler?(handler: (snapshot: RemoteAgentSelectorSnapshot) => void): () => void;
 	snapshot(): Promise<RemoteAgentSelectorSnapshot>;
+	markReportRead(reportId: string): Promise<void>;
 	select(
 		action: RemoteAgentSelectorAction,
 		signal?: AbortSignal,
@@ -83,6 +85,7 @@ export function createControlBackedChildPresentationHandlers(
 ): ControlBackedChildPresentationHandlers {
 	return {
 		snapshot: () => request("presentation.agents.snapshot", {}),
+		markReportRead: async (reportId) => { await request("presentation.reports.markRead", { reportId }); },
 		select: (action, signal) => request("presentation.agents.select", action, signal),
 	};
 }
@@ -178,6 +181,7 @@ export function createControlBackedChildParticipantHandlers(
 		...common,
 		askUserQuestion: (toolCallId, input, signal) =>
 			request("coordination.askHuman", { toolCallId, input }, signal),
+		reportToUser: (toolCallId, input) => request("coordination.reportToUser", { toolCallId, input: { ...input, evidence: [...input.evidence] } }),
 		moderatorControl: (toolCallId, input) =>
 			request("coordination.moderatorControl", { toolCallId, input }),
 	};
@@ -280,6 +284,14 @@ export async function dispatchParticipantRequestToOwner(
 				request.payload.input,
 				request.signal,
 			);
+			break;
+		case "coordination.reportToUser":
+			if (!("reportToUser" in handlers.coordination)) throw unavailableForRole(request.method);
+			response = await handlers.coordination.reportToUser(request.payload.toolCallId, request.payload.input);
+			break;
+		case "presentation.reports.markRead":
+			await handlers.presentation.markReportRead(request.payload.reportId);
+			response = {};
 			break;
 		case "coordination.moderatorControl":
 			if (!("moderatorControl" in handlers.coordination)) throw unavailableForRole(request.method);

@@ -1041,6 +1041,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 		"ask_user_question",
 		"moderator_control",
 		"read",
+		"report_to_user",
 	]);
 	assert.match(recoveredPrompt, /Captured Moderator rules\./);
 	assert.doesNotMatch(recoveredPrompt, /Changed Moderator rules\./);

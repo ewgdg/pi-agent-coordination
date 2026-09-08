@@ -41,6 +41,7 @@ const roleToolNames = {
 		"agent_wait",
 		"ask_user_question",
 		"moderator_control",
+		"report_to_user",
 	],
 	owner: [
 		"agent_control",
@@ -97,6 +98,7 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	async askUserQuestion() {
 		return { requestId: "request-1", answer: "Answer" };
 	},
+	async reportToUser() { return { reportId: "report-1", createdAt: "2026-01-01T00:00:00.000Z" }; },
 	async moderatorControl() {
 		return { disposition: "resolved" };
 	},

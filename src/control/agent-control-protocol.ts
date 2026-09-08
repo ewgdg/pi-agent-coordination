@@ -574,7 +574,19 @@ const OperationalIncidentAttentionSchema = closed({
 	}),
 	diagnostics: Type.Array(EntryPointerSchema, { uniqueItems: true }),
 });
+const ModeratorReportSchema = closed({
+	...participantCoordinationToolSchemas.report_to_user.properties,
+	reportId: NonEmptyStringSchema,
+	createdAt: NonEmptyStringSchema,
+	reporter: OperationalIncidentAgentSchema,
+	source: closed({ ...ToolCallPointerSchema.properties, transcriptPath: NonEmptyStringSchema }),
+});
+const ReportHistoryItemSchema = closed({
+	report: ModeratorReportSchema,
+	readAt: Type.Optional(NonEmptyStringSchema),
+});
 export const AgentSelectorActionSchema = Type.Union([
+	closed({ kind: Type.Literal("open_report"), reportId: NonEmptyStringSchema }),
 	closed({ kind: Type.Literal("select_agent"), agentId: NonEmptyStringSchema }),
 	closed({
 		kind: Type.Literal("decide"),
@@ -588,6 +600,7 @@ export const AgentSelectorSnapshotSchema = closed({
 	selectedAgentId: NonEmptyStringSchema,
 	humanAttention: Type.Array(HumanAttentionItemSchema, { uniqueItems: true }),
 	operationalAttention: Type.Array(OperationalIncidentAttentionSchema, { uniqueItems: true }),
+	reports: Type.Array(ReportHistoryItemSchema),
 });
 type DeepReadonly<T> = T extends readonly []
 	? readonly []
@@ -715,6 +728,14 @@ export const agentControlMethods = {
 	"coordination.askHuman": {
 		request: ToolIntention(HumanRequestInputSchema),
 		response: Type.Unsafe<HumanAnswer>(HumanAnswerSchema),
+	},
+	"coordination.reportToUser": {
+		request: ToolIntention(participantCoordinationToolSchemas.report_to_user),
+		response: closed({ reportId: NonEmptyStringSchema, createdAt: NonEmptyStringSchema }),
+	},
+	"presentation.reports.markRead": {
+		request: closed({ reportId: NonEmptyStringSchema }),
+		response: EmptyResponseSchema,
 	},
 	"coordination.moderatorControl": {
 		request: ToolIntention(ModeratorControlInputSchema),
