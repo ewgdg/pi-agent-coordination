@@ -392,6 +392,26 @@ test("activity lists only Agents with a current Run", () => {
 	dock.dispose();
 });
 
+test("report inbox sanitizes OSC terminal controls in reporter labels and symptoms", () => {
+	const report = {
+		reportId: "report", createdAt: "2026-01-01T00:00:00.000Z",
+		reporter: { agentId: "moderator", label: "Mod\x1b]8;;https://label.example\x07er" },
+		source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/sessions/moderator.jsonl" },
+		symptom: "Delivery\x1b]52;c;secret\x07 stalled", suspectedDefect: "Continuation absent", uncertainty: "Cause unknown",
+		recoveryActions: "Retried", recoveryOutcome: "Still blocked", evidence: ["entry"],
+	};
+	const snapshot: AgentActivitySnapshot = {
+		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
+		children: [], answerMode: false, humanAttention: [], operationalAttention: [],
+		reports: [{ report }],
+	};
+	const { dock } = createDock(snapshot);
+	const rendered = dock.render(120).join("\n");
+	assert.match(rendered, /Moder.*Delivery.*stalled/);
+	assert.doesNotMatch(rendered, /\x1b|label\.example|secret/);
+	dock.dispose();
+});
+
 test("activity updates volatile state and rebinds scope without retaining a stale subscription", () => {
 	const initial: AgentActivitySnapshot = {
 		scope: agent({ agentId: "owner", label: "Owner", parent: null }),
