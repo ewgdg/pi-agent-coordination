@@ -55,3 +55,9 @@ Investigation/test logs are retained in the agent artifact output for project `p
 - Reporter preparation now runs inside the focused report surface. It shows “Opening reporter…” and consumes input until the replacement is ready. Preparation failure remains visible in the same unread report and allows retry; successful completion closes it without acknowledging.
 - Report dock labels and symptoms are sanitized before preview formatting, consistently with the dedicated report view. An OSC regression covers both fields.
 - Scoped validation: 58 tests passed across report surface, local/child selector, activity dock and selector suites; TypeScript and whitespace checks passed. No incident, acknowledgment, clipboard, or session-navigation semantics expanded.
+
+## Integration rebase validation
+- Rebased onto the current selector implementation, preserving pinned Owner/path, fullscreen pointer controls, linear focus, scroll behavior, and Dormant ancestor browsing.
+- Reports participates in both keyboard and pointer tab navigation, shares the current row activation/rendering path, and keeps Owner available. Empty history has an explicit heading and empty state.
+- Updated tab-return and terminal-sanitization assertions for the three-tab, themed selector. Added pointer activation and empty-history Owner navigation coverage.
+- Validation: 76 focused UI/command tests, five report model/store tests, the fullscreen pointer test, and the real Moderator report integration test pass; TypeScript and whitespace checks pass.
