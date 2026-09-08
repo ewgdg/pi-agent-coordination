@@ -116,7 +116,7 @@ In `/agents`, unread reports appear as `REPORT` items in the **Attention Inbox**
 
 - **m · Mark read** explicitly acknowledges the report and removes pending report attention. The report remains in history.
 - **c · Copy report** copies the full ticket-ready Markdown report, including provenance and evidence.
-- **v · View reporter** switches to the stable reporting Moderator's current context using ordinary Agent selection.
+- **v · View reporter** switches to the stable reporting Moderator's current context using ordinary Agent selection. The report retains input focus and shows loading until preparation completes; failure stays visible in the report for retry.
 - **Esc/q · Back** closes the report. Opening, closing, copying, or viewing the reporter does not acknowledge it.
 
 View reporter deliberately does not rewind the Moderator's current conversation. The exact original transcript path, entry, and tool-call reference remain in the report and copied text, so the investigation can be located despite later work. Installed Pi exposes `switchSession` and `navigateTree`, but these replace the active session or move its branch leaf; neither is a read-only jump to an arbitrary transcript entry. Therefore reports do not invoke them. Pi's native `/tree` can be used in the reporter context to inspect the original investigation; selecting a tree entry changes the active branch. The original JSONL can also be inspected using its retained source reference.

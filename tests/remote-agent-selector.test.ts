@@ -579,3 +579,97 @@ test("local and child /agents open immutable reports before explicitly selecting
 		assert.equal(surfaces, 2, mode);
 	}
 });
+
+test("local and child View reporter retain focused report UI through delayed preparation and failure", { timeout: 5_000 }, async (t) => {
+	for (const mode of ["local", "child"] as const) {
+		await t.test(mode, async () => {
+			const report = {
+				reportId: "report", createdAt: "2026-01-01T00:00:00.000Z",
+				reporter: { agentId: "moderator", label: "Moderator" },
+				source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/sessions/moderator.jsonl" },
+				symptom: "Stopped", suspectedDefect: "Lost continuation", uncertainty: "Unknown cause",
+				recoveryActions: "Retried", recoveryOutcome: "Blocked", evidence: ["entry"],
+			};
+			let rejectFirst!: (error: Error) => void;
+			let finishRetry!: () => void;
+			const first = new Promise<void>((_resolve, reject) => { rejectFirst = reject; });
+			const retry = new Promise<void>((resolve) => { finishRetry = resolve; });
+			let attempts = 0;
+			let reads = 0;
+			const prepare = async (agentId: string) => {
+				assert.equal(agentId, report.reporter.agentId);
+				await (++attempts === 1 ? first : retry);
+				return { kind: "selected" as const };
+			};
+			const command = mode === "local"
+				? captureCommand((pi) => registerAgentsCommand(pi, () => ({
+					...presentationView(),
+					reportHistory: () => [{ report }],
+					markReportRead: () => { reads++; },
+					addAgentActivityChangeHandler: () => () => {},
+					openAgentPresentation: prepare,
+				})))
+				: captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+					snapshot: async () => ({
+						live: [ownerStatus, childStatus], dormant: [], selectedAgentId: "child",
+						humanAttention: [], operationalAttention: [], reports: [{ report }],
+					}),
+					markReportRead: async () => { reads++; },
+					select: (action) => {
+						assert.equal(action.kind, "select_agent");
+						return prepare((action as { agentId: string }).agentId);
+					},
+				}));
+			let reportSurface: Component | undefined;
+			let surfaces = 0;
+			let reportClosed = false;
+			const ui = {
+				custom<T>(factory: (tui: TUI, theme: Theme, keys: KeybindingsManager, done: (result: T) => void) => Component) {
+					const surfaceNumber = ++surfaces;
+					return new Promise<T>((resolve) => {
+						let component: Component & { dispose?(): void };
+						component = factory({ terminal: { rows: 40 }, requestRender() {} } as TUI, {
+							fg: (_color: string, text: string) => text,
+							bg: (_color: string, text: string) => text, bold: (text: string) => text,
+						} as Theme, {} as KeybindingsManager, (value) => {
+							if (surfaceNumber === 2) reportClosed = true;
+							component.dispose?.();
+							resolve(value);
+						});
+						if (surfaceNumber === 1) component.handleInput?.("\r");
+						else {
+							assert.equal(surfaceNumber, 2);
+							reportSurface = component;
+						}
+					});
+				},
+				notify(message: string) { throw new Error(message); },
+			} as unknown as ExtensionUIContext;
+			const completed = command.handler("", { ui } as ExtensionCommandContext);
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			assert.ok(reportSurface);
+			reportSurface.handleInput?.("v");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			assert.equal(attempts, 1);
+			assert.equal(reportClosed, false, "report must keep input focus until preparation finishes");
+			assert.match(reportSurface.render(120).join("\n"), /Opening reporter/);
+			for (const key of ["v", "\x1b", "q", "m", "c", "typed input", "\r"]) reportSurface.handleInput?.(key);
+			assert.equal(attempts, 1);
+			assert.equal(reads, 0);
+			assert.equal(reportClosed, false);
+			rejectFirst(new Error("Reporter preparation failed"));
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			assert.equal(reportClosed, false);
+			assert.match(reportSurface.render(120).join("\n"), /Reporter preparation failed/);
+			assert.match(reportSurface.render(120).join("\n"), /Unread/);
+			reportSurface.handleInput?.("v");
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			assert.equal(attempts, 2);
+			assert.equal(reportClosed, false);
+			finishRetry();
+			await completed;
+			assert.equal(reportClosed, true);
+			assert.equal(reads, 0);
+		});
+	}
+});

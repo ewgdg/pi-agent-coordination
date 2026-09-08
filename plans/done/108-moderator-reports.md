@@ -49,3 +49,9 @@ Completed durable nonblocking reports, explicit acknowledgment/history, Owner ac
 Source navigation limitation is intentional: installed public Pi navigation APIs mutate the current session/context, so the report preserves and copies exact original references but View reporter opens the stable Moderator's current context. Ephemeral/deleted Owner transcripts cannot provide durable history; clipboard behavior follows Pi.
 
 Investigation/test logs are retained in the agent artifact output for project `pi-agent-coordination`, date `2026-09-07`, task `108-moderator-reports`.
+
+## Independent review corrections
+- Added delayed local and child View reporter regressions first; both failed because the report was already closed while preparation waited.
+- Reporter preparation now runs inside the focused report surface. It shows “Opening reporter…” and consumes input until the replacement is ready. Preparation failure remains visible in the same unread report and allows retry; successful completion closes it without acknowledging.
+- Report dock labels and symptoms are sanitized before preview formatting, consistently with the dedicated report view. An OSC regression covers both fields.
+- Scoped validation: 58 tests passed across report surface, local/child selector, activity dock and selector suites; TypeScript and whitespace checks passed. No incident, acknowledgment, clipboard, or session-navigation semantics expanded.

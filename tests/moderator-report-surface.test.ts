@@ -31,7 +31,7 @@ test("opening, copying, and closing a report do not mark it read", async () => {
 	let reads = 0;
 	let copied = "";
 	const result = openModeratorReportSurface(h.ui, item, {
-		markRead() { reads++; }, copyReport(text) { copied = text; },
+		prepareReporter() {}, markRead() { reads++; }, copyReport(text) { copied = text; },
 	});
 	assert.match(h.component.render(80).join("\n"), /Unread/);
 	h.component.handleInput?.("c");
@@ -48,7 +48,7 @@ test("Mark read waits for persistence, is idempotent, and View reporter is separ
 	let reads = 0;
 	let persist!: () => void;
 	const result = openModeratorReportSurface(h.ui, item, {
-		markRead() { reads++; return new Promise<void>((resolve) => { persist = resolve; }); },
+		prepareReporter() {}, markRead() { reads++; return new Promise<void>((resolve) => { persist = resolve; }); },
 		copyReport() {},
 	});
 	h.component.handleInput?.("m");
@@ -68,7 +68,7 @@ test("failed Mark read remains unread and can retry", async () => {
 	const h = harness();
 	let reads = 0;
 	const result = openModeratorReportSurface(h.ui, item, {
-		markRead() { if (++reads === 1) throw new Error("Disk full"); }, copyReport() {},
+		prepareReporter() {}, markRead() { if (++reads === 1) throw new Error("Disk full"); }, copyReport() {},
 	});
 	h.component.handleInput?.("m");
 	await flush();
@@ -87,7 +87,7 @@ test("the complete report scrolls safely within terminal bounds", async () => {
 		symptom: "Safe\x1b]52;c;attack\x07\x1b[2J\rtext\x85",
 		evidence: Array.from({ length: 30 }, (_, i) => `Evidence ${i} 界`),
 	} };
-	const result = openModeratorReportSurface(h.ui, unsafeItem, { markRead() {}, copyReport() {} });
+	const result = openModeratorReportSurface(h.ui, unsafeItem, { prepareReporter() {}, markRead() {}, copyReport() {} });
 	const seen: string[] = [];
 	for (let i = 0; i < 100; i++) {
 		const lines = h.component.render(40);
@@ -111,7 +111,7 @@ test("View reporter leaves an unread report unread, and prior read state survive
 		const h = harness();
 		let reads = 0;
 		const result = openModeratorReportSurface(h.ui, historyItem, {
-			markRead() { reads++; }, copyReport() {},
+			prepareReporter() {}, markRead() { reads++; }, copyReport() {},
 		});
 		assert.match(h.component.render(80).join("\n"), historyItem.readAt ? / · Read/ : / · Unread/);
 		h.component.handleInput?.("v");

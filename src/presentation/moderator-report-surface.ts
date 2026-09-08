@@ -9,6 +9,7 @@ export type ModeratorReportSurfaceResult = "back" | "view_reporter";
 export type ModeratorReportSurfaceOptions = Readonly<{
 	markRead(): Promise<void> | void;
 	copyReport(text: string): Promise<void> | void;
+	prepareReporter(): Promise<void> | void;
 }>;
 
 export function openModeratorReportSurface(
@@ -30,7 +31,7 @@ class ModeratorReportSurface implements Component {
 	readonly #reportText: string;
 	readonly #body: Text;
 	#read: boolean;
-	#pending = false;
+	#pending: "action" | "reporter" | undefined;
 	#closed = false;
 	#feedback = "";
 	#scrollTop = 0;
@@ -59,20 +60,24 @@ class ModeratorReportSurface implements Component {
 		const lines = [
 			this.#theme.fg("accent", this.#theme.bold(`Moderator report · read-only · ${this.#read ? "Read" : "Unread"}`)),
 			...body.slice(this.#scrollTop, this.#scrollTop + this.#viewportRows),
-			this.#theme.fg("muted", this.#pending ? "Working…" : this.#feedback),
+			this.#theme.fg("muted", this.#pending === "reporter" ? "Opening reporter…" : this.#pending ? "Working…" : this.#feedback),
 			this.#theme.fg("dim", "m Mark read · c Copy report · v View reporter · ↑/↓ scroll · PgUp/PgDn · Home/End · Esc/q back"),
 		];
 		return lines.slice(0, height).map((line) => truncateToWidth(line, boundedWidth, ""));
 	}
 
 	handleInput(data: string): void {
-		if (this.#closed) return;
+		// Keep the report focused until the replacement presentation is ready.
+		if (this.#closed || this.#pending === "reporter") return;
 		if (matchesKey(data, Key.escape) || matchesKey(data, "q")) {
 			this.#close("back");
 			return;
 		}
 		if (matchesKey(data, "v")) {
-			this.#close("view_reporter");
+			if (!this.#pending) void this.#perform(async () => {
+				await this.#options.prepareReporter();
+				this.#close("view_reporter");
+			}, "reporter");
 			return;
 		}
 		if (matchesKey(data, "m")) {
@@ -111,18 +116,18 @@ class ModeratorReportSurface implements Component {
 		this.#done(result);
 	}
 
-	async #perform(operation: () => Promise<void>): Promise<void> {
-		this.#pending = true;
+	async #perform(operation: () => Promise<void>, kind: "action" | "reporter" = "action"): Promise<void> {
+		this.#pending = kind;
 		this.#feedback = "";
 		this.#tui.requestRender();
 		try {
 			await operation();
 		} catch (error) {
-			// A failed persistence/clipboard action must stay visible and never imply acknowledgement.
+			// Failed actions stay visible; failed reporter preparation must not dismiss the report.
 			this.#feedback = sanitizeReportTerminalText(error instanceof Error ? error.message : String(error))
 				.replace(/\s+/g, " ");
 		} finally {
-			this.#pending = false;
+			this.#pending = undefined;
 			if (!this.#closed) this.#tui.requestRender();
 		}
 	}
