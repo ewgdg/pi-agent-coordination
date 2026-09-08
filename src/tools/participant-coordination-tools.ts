@@ -346,8 +346,12 @@ const agentObservePhase = Type.Union([
 ]);
 // The pattern only rejects whitespace-only inputs; search matching remains substring-based.
 const agentSearchNonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
+const agentSearchQuery = Type.String({
+	...agentSearchNonBlankString,
+	description: "Case-insensitive literal substring matched against Agent label or description. No wildcard or regex matching. Omit to search using other filters; authorized scope requires at least one of query, agentIdSuffix, or phase.",
+});
 const agentSearchOptionalProperties = {
-	query: Type.Optional(agentSearchNonBlankString),
+	query: Type.Optional(agentSearchQuery),
 	agentIdSuffix: Type.Optional(agentSearchNonBlankString),
 	phase: Type.Optional(agentObservePhase),
 	limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50 })),
@@ -376,7 +380,7 @@ const agentSearchAuthorizedQueryParameters = Type.Object(
 		operation: Type.Literal("search"),
 		scope: Type.Literal("authorized"),
 		...agentSearchOptionalProperties,
-		query: agentSearchNonBlankString,
+		query: agentSearchQuery,
 	},
 	{ additionalProperties: false },
 );
