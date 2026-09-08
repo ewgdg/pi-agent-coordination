@@ -287,11 +287,15 @@ test("visible breadcrumb cells navigate; omitted/current segments and clipped co
 	assert.equal(clipped.resolved, false);
 	clipped.terminal.resize(80, 30);
 	assert.match((await clipped.frame()).join("\n"), /→ Branch/);
-	// Even the blank cell immediately before the complete child control belongs
-	// to the participant body; the final chevron belongs to browsing.
+	// The blank cell immediately before the complete child control is a
+	// separator, matching the gap between the Live/Dormant tabs.
 	const child = await clipped.point("1 child ›");
 	clipped.terminal.mouse(0, child.x - 1, child.y);
 	clipped.terminal.mouse(0, child.x - 1, child.y, true);
+	await clipped.frame();
+	assert.equal(clipped.resolved, false);
+	clipped.terminal.mouse(0, child.x - 2, child.y);
+	clipped.terminal.mouse(0, child.x - 2, child.y, true);
 	await clipped.frame();
 	assert.deepEqual(await clipped.result, { kind: "select_agent", agentId: "branch" });
 });
@@ -356,7 +360,7 @@ test("hover adds a faint background without changing foregrounds or selected bac
 			assert.equal(row.getCell(x)!.isBgDefault(), true, target + " background ends before frame padding at " + x);
 		}
 		const end = target === "Other" ? right - 1
-			: target === "Branch" ? row.translateToString(true).indexOf("1 child")
+			: target === "Branch" ? row.translateToString(true).indexOf("1 child") - 1
 			: p.x + visibleWidth(target);
 		for (let x = p.x; x < end; x++) {
 			assert.equal(row.getCell(x)!.getFgColor(), before[x], target + " retains its foreground at " + x);
@@ -390,13 +394,23 @@ test("row and child button expose separate bounded hover actions", { timeout: 5_
 	h.terminal.mouse(35, body.x, body.y);
 	await h.frame();
 	assert.equal(bg(body.x, body.y), 8);
-	assert.equal(bg(child.x - 1, child.y), 8, "open action extends to the button boundary");
+	assert.equal(
+		h.terminal.screen.buffer.active.getLine(child.y)!.getCell(child.x - 1)!.isBgDefault(),
+		true,
+		"the one-cell margin before child navigation stays unhighlighted",
+	);
+	assert.equal(bg(child.x - 2, child.y), 8, "open action reaches the margin boundary");
 	assert.equal(h.terminal.screen.buffer.active.getLine(child.y)!.getCell(child.x)!.isBgDefault(), true);
 	h.terminal.mouse(35, child.x, child.y);
 	await h.frame();
 	assert.equal(h.terminal.screen.buffer.active.getLine(body.y)!.getCell(body.x)!.isBgDefault(), true);
 	for (let x = child.x; x < child.x + "1 child ›".length; x++) assert.equal(bg(x, child.y), 8);
 	assert.equal(bg(selected.x, selected.y), 4, "child hover does not replace selection");
+	// The margin is a true separator, matching the Live/Dormant tab gap.
+	h.terminal.mouse(0, child.x - 1, child.y);
+	h.terminal.mouse(0, child.x - 1, child.y, true);
+	await h.frame();
+	assert.equal(h.resolved, false, "the margin must not activate the row");
 	await h.click("1 child ›", 8);
 	assert.equal(h.resolved, false);
 	assert.match((await h.frame()).join("\n"), /→ Nested/);
@@ -432,7 +446,8 @@ test("truncated Agent summaries keep tint through their padding without swallowi
 	h.terminal.mouse(35, p.x, p.y);
 	await h.frame();
 	const row = h.terminal.screen.buffer.active.getLine(p.y)!;
-	for (let x = p.x; x < child.x; x++) assert.equal(row.getCell(x)!.getBgColor(), 8);
+	for (let x = p.x; x < child.x - 1; x++) assert.equal(row.getCell(x)!.getBgColor(), 8);
+	assert.equal(row.getCell(child.x - 1)!.isBgDefault(), true, "summary padding ends before the separator");
 	assert.equal(row.getCell(child.x)!.isBgDefault(), true);
 });
 

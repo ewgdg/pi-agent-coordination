@@ -626,15 +626,20 @@ class AgentSelectorSurface implements Component {
 			let bodyEnd = width;
 			if (item.childControl) {
 				// Reserve the hierarchy action before truncating the participant body.
-				const bodyWidth = Math.max(0, width - visibleWidth(item.childControl) - 1);
+				const childWidth = visibleWidth(item.childControl);
+				const bodyWidth = Math.max(0, width - childWidth - 1);
 				line = truncateToWidth(line, bodyWidth, "");
-				line += " ".repeat(Math.max(1, width - visibleWidth(line) - visibleWidth(item.childControl)));
-				bodyEnd = visibleWidth(line);
-				if (visibleWidth(item.childControl) <= width) {
-					regions.push({ start: bodyEnd, end: bodyEnd + visibleWidth(item.childControl),
+				if (childWidth <= width) {
+					// Leave one unowned cell between independent controls, matching tabs and Owner.
+					const bodyTextWidth = visibleWidth(line);
+					const childStart = Math.max(bodyTextWidth + 1, width - childWidth);
+					line += " ".repeat(Math.max(1, childStart - bodyTextWidth));
+					bodyEnd = childStart - 1;
+					regions.push({ start: childStart, end: childStart + childWidth,
 						text: this.#theme.fg("dim", item.childControl),
 						action: { kind: "children", value: item.value } });
 				} else {
+					line += " ".repeat(Math.max(1, width - visibleWidth(line) - childWidth));
 					// Never turn the clipped child-control fragment into an open action.
 					bodyEnd = 0;
 				}
