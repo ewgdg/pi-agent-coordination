@@ -36,6 +36,7 @@ import {
 	type AgentTemplateDiscovery,
 	type AgentTemplateRoot,
 } from "../templates/agent-templates.ts";
+import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
 import { AgentRuntimeSupervisor } from "./agent-runtime-supervisor.ts";
 import {
 	prepareChildRuntime,
@@ -61,6 +62,7 @@ type ParticipantHandlers =
 /** Launches every non-Owner Runtime in a fresh Pi process. */
 export class ProcessChildSessionFactory {
 	readonly #ownerRuntime: AgentSessionRuntime;
+	readonly #onRuntimeQuit: ((agentId: string, projection: HostedAgentProjection) => boolean) | undefined;
 	readonly #templateLoads = new Map<string, Promise<Readonly<{
 		discovery: AgentTemplateDiscovery;
 		snapshot: AgentTemplateCatalogueSnapshot;
@@ -79,6 +81,7 @@ export class ProcessChildSessionFactory {
 
 	constructor(options: {
 		ownerRuntime: AgentSessionRuntime;
+		onRuntimeQuit?(agentId: string, projection: HostedAgentProjection): boolean;
 		ownerIdentity: OwnerIdentity;
 		entryModulePath: string;
 		packageRoot?: string;
@@ -93,6 +96,7 @@ export class ProcessChildSessionFactory {
 		): ParticipantHandlers;
 	}) {
 		this.#ownerRuntime = options.ownerRuntime;
+		this.#onRuntimeQuit = options.onRuntimeQuit;
 		this.#ownerIdentity = options.ownerIdentity;
 		this.#entryModulePath = options.entryModulePath;
 		this.#packageRoot = options.packageRoot ?? resolve(dirname(options.entryModulePath), "..");
@@ -472,6 +476,7 @@ export class ProcessChildSessionFactory {
 		const runtime = new PiChildHostedRuntime(
 			launch,
 			prepared.configuration.allowedTools,
+			(projection) => this.#onRuntimeQuit?.(identity.agentId, projection) === true,
 		);
 		return { runtime, ready: runtime.ready };
 	}

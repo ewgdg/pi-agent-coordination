@@ -296,6 +296,18 @@ export class WorkflowCoordinator {
 		});
 		const sessionFactory = new ProcessChildSessionFactory({
 			ownerRuntime: runtime,
+			onRuntimeQuit: (agentId, projection) => {
+				const selected = this.#activeAgentView;
+				if (
+					selected?.record.identity.agentId !== agentId ||
+					selected.attachment.projection() !== projection
+				) return false;
+				// Native Owner shutdown follows terminal restoration after child exit.
+				// Fence admissions and release Wait now, before dead Control can start
+				// moderation or leave the Owner waiting for an Answer that cannot arrive.
+				this.#beginShutdown();
+				return true;
+			},
 			ownerIdentity: identity,
 			entryModulePath: options.entryModulePath,
 			packageRoot: options.packageRoot ?? resolve(dirname(options.entryModulePath), ".."),
@@ -623,10 +635,15 @@ export class WorkflowCoordinator {
 	}
 
 	shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
-		this.#shuttingDown = true;
-		this.#shutdownController.abort();
+		this.#beginShutdown();
 		this.#shutdownPromise ??= this.#shutdown(disposeNativeRuntime);
 		return this.#shutdownPromise;
+	}
+
+	#beginShutdown(): void {
+		this.#shuttingDown = true;
+		this.#shutdownController.abort();
+		this.#agentWaits.shutdown();
 	}
 
 	#assertAdmissionOpen(): void {
@@ -1394,7 +1411,6 @@ export class WorkflowCoordinator {
 
 	async #shutdown(disposeNativeRuntime: () => Promise<void>): Promise<void> {
 		const cleanupErrors: unknown[] = [];
-		this.#agentWaits.shutdown();
 		const children = [...this.#agents.values()].filter(
 			(record) => record.identity.agentId !== this.#ownerIdentity.agentId,
 		);

@@ -2512,6 +2512,70 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
+test("selected-child native quit fences Workflow shutdown before exit and creates no Moderator", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t);
+	harness.host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("ask_user_question", {
+			question: "Keep this Creation Request open until the human decides.",
+		}, { id: "quit-child-human-request" }), { stopReason: "toolUse" }),
+	]);
+	const child = await spawnFromView(
+		harness.host.session, harness.owner, "spawn-selected-quitter", "Wait for human direction.",
+	);
+	const view = await harness.owner.openAgentView(child.agentId);
+	assert.ok(view);
+	await waitForCondition(() => harness.coordinator.forAgent(child.agentId).obligationFrames().length > 0);
+	harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+		fauxToolCall("agent_wait", {}, { id: "wait-for-quitting-child" }), { stopReason: "toolUse" },
+	));
+	const waiting = assert.rejects(
+		harness.owner.wait("wait-for-quitting-child", {}, new AbortController().signal),
+		/Workflow is shutting down/,
+	);
+	await waitForCondition(() => {
+		const run = harness.owner.status().run;
+		return "attention" in run && run.attention === "agent_wait";
+	});
+	// Exercise native Pi shutdown through the actual child PTY, not a synthetic Run end.
+	let shutdownAtExit: boolean | undefined;
+	let cleanup: Promise<void> | undefined;
+	view.projection().addExitRequestHandler(() => {
+		shutdownAtExit = harness.coordinator.ownerShutdownSignal().aborted;
+		cleanup = harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+	});
+	view.projection().dispatchInput("/quit\r");
+	await waitForCondition(() => shutdownAtExit !== undefined);
+	assert.equal(shutdownAtExit, true, "Workflow must be fenced before presentation observes process exit");
+	await waiting;
+	await cleanup;
+	assert.equal(harness.owner.status(child.agentId).run.phase, "dormant");
+	assert.equal(harness.owner.status().run.phase, "dormant");
+	assert.deepEqual(await findModerators(harness.host), []);
+});
+
+test("an unselected child's native quit remains Run Failure rather than Workflow shutdown", async (t) => {
+	const harness = await createIncidentBoundaryHarness(t);
+	harness.host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("ask_user_question", {
+			question: "Keep the child obligated.",
+		}, { id: "unselected-quit-human-request" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Investigate the unexpected child exit."),
+	]);
+	const child = await spawnFromView(
+		harness.host.session, harness.owner, "spawn-unselected-quitter", "Wait for human direction.",
+	);
+	const view = await harness.owner.openAgentView(child.agentId);
+	assert.ok(view);
+	await waitForCondition(() => harness.coordinator.forAgent(child.agentId).obligationFrames().length > 0);
+	const projection = view.projection();
+	await view.close();
+	// Simulate a child-local quit while the terminal is no longer selected.
+	projection.dispatchInput("/quit\r");
+	await waitForModeratorKind(harness.host, "run_failure");
+	assert.equal(harness.coordinator.ownerShutdownSignal().aborted, false);
+	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+});
+
 test("orderly shutdown closes exhausted Operational Attention", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t, {
 		beforeModeratorRunStart: () => "confirmed_failure",

@@ -492,6 +492,81 @@ for (const failure of ["channel_loss", "process_kill"] as const) {
 	});
 }
 
+for (const scenario of [
+	"selected_quit", "unselected_quit", "reload", "unannounced_exit", "signal_exit", "host_disposal",
+] as const) {
+	test(`hosted child shutdown classification: ${scenario}`, { timeout: 5_000 }, async () => {
+		const handlers = new Set<(event: PiChildRuntimeEvent) => void>();
+		let resolveExit!: (exit: { exitCode: number; signal: number }) => void;
+		const exited = new Promise<{ exitCode: number; signal: number }>((resolve) => {
+			resolveExit = resolve;
+		});
+		let channelClosed: ((error?: unknown) => void) | undefined;
+		const admitted = {
+			snapshot: fakeRuntimeSnapshot({ modelId: "quit-test", thinking: "off", toolExecutionModes: [] }),
+			channel: {
+				onClose(handler: (error?: unknown) => void) {
+					channelClosed = handler;
+					return () => { channelClosed = undefined; };
+				},
+				async request() {
+					return { accepted: true, transcriptCommitted: true, modelCycleStarted: true, queuedInputCount: 0 };
+				},
+			},
+		} as unknown as PiChildProcessRuntime;
+		const launch = Object.assign(fakeLaunch(admitted, handlers), { exited });
+		const observed: string[] = [];
+		const runtime = new PiChildHostedRuntime(launch, [], () => {
+			observed.push("quit_requested");
+			return scenario === "selected_quit";
+		});
+		await runtime.ready;
+		runtime.subscribe((event) => {
+			if (event.type === "agent_end") observed.push(`agent_end:${event.outcome}`);
+		});
+		runtime.projection.addExitRequestHandler(() => observed.push("presentation_exit"));
+		const delivery = runtime.deliver({ kind: "user", content: "Keep work outstanding." });
+		const completion = delivery.completion.then(() => "completed", () => "rejected");
+		for (const handler of handlers) handler(controlEvent("agent.start", {
+			runId: "hosted-run-1", queuedInputCount: 0,
+		}));
+		if (scenario === "selected_quit" || scenario === "unselected_quit" || scenario === "reload") {
+			for (const handler of handlers) handler(controlEvent("session.shutdown", {
+				reason: scenario === "reload" ? "reload" : "quit",
+			}));
+		}
+		if (scenario === "selected_quit") {
+			assert.deepEqual(observed, ["quit_requested"]);
+			assert.equal(runtime.workState(), "unavailable");
+			assert.equal(await completion, "rejected", "shutdown must release in-flight delivery");
+			for (const handler of handlers) handler(controlEvent("agent.start", {
+				runId: "late-child-cycle", queuedInputCount: 0,
+			}));
+			assert.equal(runtime.workState(), "unavailable", "late lifecycle cannot revive a quitting Runtime");
+		}
+		if (scenario === "reload") {
+			assert.equal(runtime.workState(), "active");
+			assert.deepEqual(observed, []);
+		}
+		if (scenario === "host_disposal") {
+			// Settle work normally first; disposal owns the later transport exit.
+			for (const handler of handlers) handler(controlEvent("agent.settled", {
+				runId: "hosted-run-1", queuedInputCount: 0, outcome: "completed",
+			}));
+			assert.equal(await completion, "completed");
+			await runtime.projection.dispose();
+		}
+		resolveExit({ exitCode: 0, signal: scenario === "signal_exit" ? 9 : 0 });
+		channelClosed?.(new Error("Control closed after process quit"));
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		const expected = scenario === "selected_quit" || scenario === "host_disposal";
+		assert.equal(observed.includes("agent_end:error"), !expected);
+		if (scenario !== "host_disposal") assert.equal(observed.at(-1), "presentation_exit");
+		if (!expected) assert.equal(await completion, "rejected");
+		await runtime.dispose();
+	});
+}
+
 function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers<"ordinary"> {
 	const status = {
 		agentId,

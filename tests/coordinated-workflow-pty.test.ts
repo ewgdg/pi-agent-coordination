@@ -585,6 +585,38 @@ test("real Pi CLI can return to Owner and attach the same Agent again", {
 	}
 });
 
+test("native quit in the selected child closes the real Pi Workflow", {
+	skip: !existsSync(SCRIPT),
+	timeout: PTY_WAIT_TIMEOUT_MS,
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-agent-selected-quit-"));
+	const agentDir = join(root, "agent");
+	const broker = await createProcessModelBroker({
+		responseOverride: routeCliRepeatResponse,
+		tokensPerSecond: 20_000,
+	});
+	const terminal = launchPiCli({
+		agentDir,
+		sessionDir: join(root, "sessions"),
+		additionalExtensionPaths: [broker.extensionPath],
+		provider: broker.providerId,
+		model: broker.modelId,
+	});
+	try {
+		await waitForPiCliReady(agentDir);
+		terminal.write("Create one CLI Repeat Worker.\r");
+		await terminal.waitForScreen((frame) =>
+			normalizedFrameText(frame).includes("CLI worker is ready for repeated attachment.")
+		);
+		await attachCliRepeatWorker(terminal, "CLI child before quit", false);
+		terminal.write("/quit\r");
+		await terminal.closed();
+	} finally {
+		terminal.kill();
+		await broker.close();
+	}
+});
+
 test("interactive /reload keeps a selected process child alive after inherited extension changes", {
 	skip: !existsSync(SCRIPT),
 	timeout: 2 * PTY_WAIT_TIMEOUT_MS,

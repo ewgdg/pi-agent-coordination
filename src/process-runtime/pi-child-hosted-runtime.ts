@@ -31,6 +31,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	readonly projection: HostedAgentProjection;
 	readonly ready: Promise<void>;
 	readonly #launch: PiChildProcessLaunch;
+	readonly #onQuit: ((projection: HostedAgentProjection) => boolean) | undefined;
 	readonly #admitted: Promise<PiChildProcessRuntime>;
 	readonly #handlers = new Set<(event: HostedRuntimeEvent) => void>();
 	readonly #settlementWaiters = new Set<SettlementWaiter>();
@@ -51,18 +52,23 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	#shutdownExpected = false;
 	#disposePromise: Promise<void> | undefined;
 
-	constructor(launch: PiChildProcessLaunch, allowedTools: readonly string[]) {
+	constructor(
+		launch: PiChildProcessLaunch,
+		allowedTools: readonly string[],
+		onQuit?: (projection: HostedAgentProjection) => boolean,
+	) {
 		this.#launch = launch;
+		this.#onQuit = onQuit;
 		// Fence volatile Run state before presentation reports the same process exit.
 		// Otherwise Owner restoration can race cleanup intentions over dead Control.
 		void launch.exited.then(
 			(exit) => {
 				if (this.#shutdownExpected) return;
-				this.#fail(new Error(
+				this.#endTransport(new Error(
 					`child_runtime_unexpected_exit: code ${exit.exitCode} signal ${exit.signal}`,
 				));
 			},
-			(error: unknown) => this.#fail(error),
+			(error: unknown) => this.#endTransport(error),
 		);
 		const projection = createPiChildProcessProjection(launch);
 		this.projection = Object.freeze({
@@ -78,10 +84,10 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			this.#adoptSnapshot(runtime.snapshot, allowedTools);
 			this.#removeChannelCloseHandler = runtime.channel.onClose((cause) => {
 				if (this.#shutdownExpected) return;
-				this.#fail(cause ?? new Error("child_runtime_channel_closed"));
+				this.#endTransport(cause ?? new Error("child_runtime_channel_closed"));
 			});
 		});
-		void this.ready.catch((error: unknown) => this.#fail(error));
+		void this.ready.catch((error: unknown) => this.#endTransport(error));
 	}
 
 	snapshot(): EffectiveRuntimeSnapshot {
@@ -232,6 +238,17 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	}
 
 	#handleEvent(event: PiChildRuntimeEvent): void {
+		if (this.#unavailable) return;
+		if (event.event === "session.shutdown" && event.payload.reason === "quit") {
+			if (this.#shutdownExpected) return;
+			// Only the Workflow can accept quit as orderly shutdown. An unselected
+			// child's exit must still expose stranded obligations as Run Failure.
+			if (this.#onQuit?.(this.projection)) {
+				this.#shutdownExpected = true;
+				this.#endTransport(new Error("child_runtime_shutdown"), "shutdown");
+			}
+			return;
+		}
 		if (event.event === "runtime.snapshot.changed") {
 			this.#snapshotRevision += 1;
 			this.#adoptSnapshot(event.payload);
@@ -239,7 +256,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			return;
 		}
 		if (event.event === "runtime.fault") {
-			this.#fail(new Error(
+			this.#endTransport(new Error(
 				`child_runtime_fault: ${event.payload.code}: ${event.payload.message}`,
 			));
 			return;
@@ -305,7 +322,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			this.#runObserved = true;
 			return true;
 		}
-		this.#fail(new Error(
+		this.#endTransport(new Error(
 			`stale_run: child lifecycle ${runId} does not match ${String(this.#currentRunId)}`,
 		));
 		return false;
@@ -361,9 +378,9 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#emit({ type: "state_changed" });
 	}
 
-	#fail(error: unknown): void {
+	#endTransport(error: unknown, cause: "failure" | "shutdown" = "failure"): void {
 		if (this.#unavailable) return;
-		const terminalRun = this.#runObserved;
+		const terminalRun = this.#runObserved && cause === "failure";
 		this.#unavailable = error;
 		this.#cancellation.abort();
 		this.#compacting = false;
