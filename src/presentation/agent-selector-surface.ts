@@ -778,7 +778,7 @@ class AgentSelectorSurface implements Component {
 			}
 		}
 		const rendered: SelectorLine[] = [
-			...(attention.length || reportHistory ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "Report History" : "Attention Inbox")) }, ...attention] : []),
+			...(attention.length || reportHistory ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "History" : "Attention Inbox")) }, ...attention] : []),
 			...(reportHistory ? [] : [this.#activeTab === "live"
 				? this.#scopeTitle(width) : { text: this.#theme.fg("toolTitle", "Agents") }]),
 			...agents,

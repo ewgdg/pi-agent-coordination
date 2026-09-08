@@ -1167,7 +1167,7 @@ test("pending reports open from Attention as distinct actions; read reports rema
 	assert.doesNotMatch(history.component!.render(80).join("\n"), /REPORT.*Moderator/);
 	history.component!.handleInput?.("\t");
 	history.component!.handleInput?.("\t");
-	assert.match(history.component!.render(80).join("\n"), /Report History/);
+	assert.match(history.component!.render(80).join("\n"), /│ History(?:\s|\x1b)/);
 	assert.match(history.component!.render(80).join("\n"), /Read/);
 	history.component!.handleInput?.("\r");
 	assert.deepEqual(await historySelection, { kind: "open_report", reportId: report.reportId });
@@ -1186,7 +1186,7 @@ test("Shift Tab reaches report history and safely displays report summaries", as
 	});
 	harness.component!.handleInput?.("\x1b[Z");
 	const rendered = harness.component!.render(80).join("\n");
-	assert.match(rendered, /Report History/);
+	assert.match(rendered, /│ History(?:\s|\x1b)/);
 	assert.doesNotMatch(rendered, /\x1b\]52|\x1b\[2J|attack/);
 	harness.component!.handleInput?.("\x1b");
 	await selection;
@@ -1216,7 +1216,7 @@ test("Reports pointer tab opens report summaries and keeps Owner available", asy
 	});
 	click(harness.component!, "Reports");
 	const rendered = renderPanel(harness.component!, 80).join("\n");
-	assert.match(rendered, /Report History/);
+	assert.match(rendered, /│ History(?:\s|\x1b)/);
 	assert.doesNotMatch(rendered, /Attention Inbox|No dormant Agents/);
 	click(harness.component!, "REPORT");
 	assert.deepEqual(await selection, { kind: "open_report", reportId: "report" });
@@ -1226,7 +1226,7 @@ test("Reports pointer tab opens report summaries and keeps Owner available", asy
 		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
 	});
 	click(empty.component!, "Reports");
-	assert.match(renderPanel(empty.component!, 80).join("\n"), /Report History/);
+	assert.match(renderPanel(empty.component!, 80).join("\n"), /│ History(?:\s|\x1b)/);
 	assert.match(renderPanel(empty.component!, 80).join("\n"), /No reports/);
 	click(empty.component!, "Owner");
 	assert.deepEqual(await ownerSelection, { kind: "select_agent", agentId: "owner" });

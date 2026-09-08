@@ -92,4 +92,4 @@ An absent description leaves its line empty, keeping the overlay height stable a
 
 Unread Moderator runtime-defect reports appear in the Attention Inbox. Enter opens a dedicated read-only report, without selecting or restarting an Agent. Tab to **Reports** for retained history. Only **Mark read** acknowledges a report; opening, copying, closing, or **View reporter** does not. **Copy report** produces ticket-ready Markdown, and **View reporter** selects the captured stable Moderator identity. See [Operational Incident moderation](operational-incident-moderation.md#nonblocking-runtime-defect-reports) for provenance and navigation semantics.
 
-The Reports tab uses only its Report History heading, with the same Owner footer above help. Down from the final item focuses the footer; Up returns to the final item, and Enter opens Owner. Empty tabs focus the footer directly.
+The Reports tab uses only its History heading, with the same Owner footer above help. Down from the final item focuses the footer; Up returns to the final item, and Enter opens Owner. Empty tabs focus the footer directly.
