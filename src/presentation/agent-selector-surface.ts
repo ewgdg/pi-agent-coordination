@@ -17,8 +17,6 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
-import { extractSegments } from "@earendil-works/pi-tui/dist/utils.js";
-
 import type { AgentRosterStatus } from "../coordination/workflow-coordinator.ts";
 import type { HumanAttentionItem } from "../coordination/human-requests.ts";
 import type { OperationalIncidentAttention } from "../coordination/operational-incidents.ts";
@@ -122,7 +120,7 @@ type PointerAction =
 	| { kind: "children"; value: string }
 	| { kind: "ancestor"; agentId: string; childId: string };
 
-type LineRegion = Readonly<{ start: number; end: number; action: PointerAction }>;
+type LineRegion = Readonly<{ start: number; end: number; text: string; action: PointerAction }>;
 type SelectorLine = Readonly<{ text: string; regions?: readonly LineRegion[]; roster?: boolean }>;
 type HitRegion = LineRegion & Readonly<{ row: number }>;
 
@@ -355,9 +353,9 @@ class AgentSelectorSurface implements Component {
 					// Selection wins; the child button is a separate action, not part of it.
 					const background = selected ? "selectedBg" : "userMessageBg";
 					const regionWidth = region.end - region.start;
-					// Extract inherited foreground styles without replaying stale boundary
-					// codes. Always read the source line, not an already-painted neighbor.
-					let label = extractSegments(line.text, 0, region.start, regionWidth, true).after;
+					// Keep each action's styled text at construction time instead of slicing
+					// ANSI-painted lines, which can replay neighboring foreground codes.
+					let label = truncateToWidth(region.text, regionWidth, "");
 					label += " ".repeat(Math.max(0, regionWidth - visibleWidth(label)));
 					// Truncation may reset all ANSI styles before the action's padding.
 					if (label.includes("\x1b[0m")) {
@@ -627,6 +625,7 @@ class AgentSelectorSurface implements Component {
 			if (item.kind === "owner") continue;
 			const lines = item.kind === "agent" ? agents : attention;
 			let line = listLines[offset] ?? "";
+			let bodyText = line;
 			const regions: LineRegion[] = [];
 			let bodyEnd = width;
 			if (item.childControl) {
@@ -637,15 +636,17 @@ class AgentSelectorSurface implements Component {
 				bodyEnd = visibleWidth(line);
 				if (visibleWidth(item.childControl) <= width) {
 					regions.push({ start: bodyEnd, end: bodyEnd + visibleWidth(item.childControl),
+						text: this.#theme.fg("dim", item.childControl),
 						action: { kind: "children", value: item.value } });
 				} else {
 					// Never turn the clipped child-control fragment into an open action.
 					bodyEnd = 0;
 				}
+				bodyText = line;
 				line += this.#theme.fg("dim", item.childControl);
 			}
 			if (item.action || item.status) {
-				regions.push({ start: 0, end: bodyEnd, action: { kind: "open", value: item.value } });
+				regions.push({ start: 0, end: bodyEnd, text: bodyText, action: { kind: "open", value: item.value } });
 			}
 			lines.push({ text: line, regions, roster: true });
 			if (startIndex + offset === this.#selectedIndex) {
@@ -667,7 +668,7 @@ class AgentSelectorSurface implements Component {
 				(ownerFocused && this.#selectionSpinnerItem?.description
 					? this.#theme.fg("dim", ` ${this.#selectionSpinnerItem.description}`) : ""),
 			regions: [
-				{ start: 0, end: ownerWidth, action: { kind: "open", value: this.#ownerStatus().agentId } },
+				{ start: 0, end: ownerWidth, text: owner, action: { kind: "open", value: this.#ownerStatus().agentId } },
 				...(path.regions ?? []).map((region) => ({
 					...region, start: region.start + ownerWidth, end: region.end + ownerWidth,
 				})),
@@ -769,7 +770,7 @@ class AgentSelectorSurface implements Component {
 			);
 		}
 		const regions: LineRegion[] = [{
-			start: 0, end: visibleWidth("[›]"),
+			start: 0, end: visibleWidth("[›]"), text: this.#theme.fg("toolTitle", "[›]"),
 			action: { kind: "children", value: owner.agentId },
 		}];
 		if (ancestors.length === 0) return { text: "[›]", regions };
@@ -785,6 +786,7 @@ class AgentSelectorSurface implements Component {
 				const child = visibleAncestors[index + 1];
 				if (child) regions.push({
 					start: column, end: column + visibleWidth(ancestor.label),
+					text: this.#theme.fg("toolTitle", ancestor.label),
 					action: { kind: "ancestor", agentId: ancestor.agentId, childId: child.agentId },
 				});
 				column += visibleWidth(ancestor.label) + visibleWidth(" / ");
@@ -809,8 +811,8 @@ class AgentSelectorSurface implements Component {
 		return {
 			text: `${live} ${dormant}`,
 			regions: [
-				{ start: 0, end: visibleWidth(live), action: { kind: "tab", tab: "live" } },
-				{ start: dormantStart, end: dormantStart + visibleWidth(dormant), action: { kind: "tab", tab: "dormant" } },
+				{ start: 0, end: visibleWidth(live), text: live, action: { kind: "tab", tab: "live" } },
+				{ start: dormantStart, end: dormantStart + visibleWidth(dormant), text: dormant, action: { kind: "tab", tab: "dormant" } },
 			],
 		};
 	}
