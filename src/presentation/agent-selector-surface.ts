@@ -762,7 +762,8 @@ class AgentSelectorSurface implements Component {
 		const allStatuses = [...this.#options.live, ...this.#options.dormant];
 		const owner = this.#ownerStatus();
 		const ancestors: AgentRosterStatus[] = [];
-		let current = allStatuses.find(({ agentId }) => agentId === this.#scopeAgentId);
+		const scope = allStatuses.find(({ agentId }) => agentId === this.#scopeAgentId);
+		let current = scope;
 		while (current && current.agentId !== owner.agentId) {
 			ancestors.unshift(current);
 			current = allStatuses.find(
@@ -788,16 +789,25 @@ class AgentSelectorSurface implements Component {
 			let column = visibleWidth(prefix());
 			for (const [index, ancestor] of visibleAncestors.entries()) {
 				const child = visibleAncestors[index + 1];
-				if (child) regions.push({
+				const action = child
+					? { kind: "ancestor" as const, agentId: ancestor.agentId, childId: child.agentId }
+					: scope
+						? {
+							kind: "ancestor" as const,
+							agentId: scope.directSpawnerAgentId ?? owner.agentId,
+							childId: scope.agentId,
+						}
+						: undefined;
+				if (action) regions.push({
 					start: column, end: column + visibleWidth(ancestor.label),
 					text: this.#theme.fg("toolTitle", ancestor.label),
-					action: { kind: "ancestor", agentId: ancestor.agentId, childId: child.agentId },
+					action,
 				});
 				column += visibleWidth(ancestor.label) + visibleWidth(" / ");
 			}
 			return { text: title(), regions };
 		}
-		// Older-path omission and the current (possibly truncated) label are informational.
+		// Omitted and clipped path text is informational, never a partial action.
 		return { text: rootPrefix + truncateToWidth(
 			visibleAncestors.at(-1)?.label ?? "",
 			Math.max(0, width - visibleWidth(rootPrefix)), "…",

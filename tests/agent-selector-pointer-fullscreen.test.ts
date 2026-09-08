@@ -258,7 +258,7 @@ test("preparation feedback survives resizing the roster viewport", { timeout: 5_
 	await h.result;
 });
 
-test("visible breadcrumb cells navigate; omitted/current segments and clipped controls are informational", { timeout: 5_000 }, async (t) => {
+test("visible breadcrumb cells navigate; current segments go to their parent", { timeout: 5_000 }, async (t) => {
 	const live = [
 		status("owner", "Owner", null), status("alpha", "Alpha"),
 		status("beta", "研究", "alpha"), status("gamma", "Gamma", "beta"),
@@ -266,18 +266,40 @@ test("visible breadcrumb cells navigate; omitted/current segments and clipped co
 	];
 	const h = await harness(t, { live, selectedAgentId: "leaf" });
 	await h.click("…");
-	await h.click("Delta");
 	assert.match((await h.frame()).join("\n"), /→ Leaf/);
-	await h.click("研究", 2);
-	assert.match((await h.frame()).join("\n"), /→ Gamma/);
-	assert.equal(h.resolved, false);
-	// At this width only the current scope fits; the discarded ancestor cannot
-	// leave a hit target behind after the resize.
-	h.terminal.resize(19, 15);
+	// The current scope segment acts like Left/h: it selects that scope's
+	// parent while keeping the current scope Agent selected in the roster.
+	const current = await h.point("Delta");
+	h.terminal.mouse(35, current.x, current.y);
 	await h.frame();
-	await h.click("研究");
-	assert.match((await h.frame()).join("\n"), /→ /);
+	assert.equal(h.terminal.screen.buffer.active.getLine(current.y)!.getCell(current.x)!.getBgColor(), 8);
+	h.terminal.mouse(0, current.x, current.y);
+	h.terminal.mouse(0, current.x, current.y, true);
+	await h.frame();
 	assert.equal(h.resolved, false);
+	assert.match((await h.frame()).join("\n"), /→ Delta/);
+	const keyboard = await harness(t, { live, selectedAgentId: "leaf" });
+	await keyboard.input("\x1b[D");
+	assert.equal(keyboard.resolved, false);
+	assert.match((await keyboard.frame()).join("\n"), /→ Delta/);
+	await keyboard.input("\x1b");
+
+	// Older visible ancestors retain their existing direct-scope navigation.
+	const ancestor = await h.point("研究");
+	h.terminal.mouse(0, ancestor.x + 2, ancestor.y);
+	h.terminal.mouse(0, ancestor.x + 2, ancestor.y, true);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Gamma/);
+
+	// A narrowed path may show a truncated current label, but that fragment
+	// must not leave an unsafe parent hit target behind.
+	const narrow = await harness(t, { live, selectedAgentId: "leaf" });
+	narrow.terminal.resize(19, 15);
+	await narrow.frame();
+	await narrow.click("Delta");
+	assert.match((await narrow.frame()).join("\n"), /→ Leaf/);
+	assert.equal(narrow.resolved, false);
+	await narrow.input("\x1b");
 	await h.input("\x1b");
 
 	const clipped = await harness(t);
