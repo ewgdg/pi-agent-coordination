@@ -180,7 +180,7 @@ class AgentSelectorSurface implements Component {
 		this.#list = this.#createList();
 		this.#removeChangeHandler = options.addChangeHandler?.((snapshot) => {
 			this.#options = { ...this.#options, ...snapshot };
-			this.#list = this.#createList();
+			this.#list = this.#createList(true);
 			this.#tui.requestRender();
 		});
 	}
@@ -224,7 +224,12 @@ class AgentSelectorSurface implements Component {
 		if (
 			(matchesKey(listInput, Key.up) && this.#selectedIndex === 0) ||
 			(matchesKey(listInput, Key.down) && this.#selectedIndex === this.#items.length - 1)
-		) return;
+		) {
+			// A boundary key still restores the selected row after wheel scrolling.
+			this.#ensureSelectedVisible();
+			this.#tui.requestRender();
+			return;
+		}
 		this.#list.handleInput(listInput);
 		this.#ensureSelectedVisible();
 		this.#tui.requestRender();
@@ -315,7 +320,7 @@ class AgentSelectorSurface implements Component {
 		const border = (text: string) => this.#theme.fg("border", text);
 		// Resize changes the list's visible window as well as its hit regions.
 		const visibleRows = this.#maximumVisibleRows();
-		if (visibleRows !== this.#visibleRows) this.#list = this.#createList();
+		if (visibleRows !== this.#visibleRows) this.#list = this.#createList(true);
 		const contentLines: SelectorLine[] = [
 			this.#renderTabs(),
 			{ text: "" },
@@ -388,7 +393,7 @@ class AgentSelectorSurface implements Component {
 		));
 	}
 
-	#createList(): SelectList {
+	#createList(preserveScroll = false): SelectList {
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
 			: [this.#ownerItem(), ...this.#options.dormant.map((status) => this.#agentItem(status))];
@@ -408,10 +413,16 @@ class AgentSelectorSurface implements Component {
 		// Rebuilds must remember the resolved fallback, not an absent preferred item.
 		this.#selectedValueByTab[this.#activeTab] = this.#items[this.#selectedIndex]?.value;
 		list.setSelectedIndex(this.#selectedIndex);
-		this.#rosterScrollOffset = Math.max(0, Math.min(
-			this.#selectedIndex - Math.floor(this.#visibleRows / 2),
-			this.#maximumRosterScrollOffset(),
-		));
+		if (preserveScroll) {
+			this.#rosterScrollOffset = Math.min(
+				this.#rosterScrollOffset, this.#maximumRosterScrollOffset(),
+			);
+		} else {
+			this.#rosterScrollOffset = Math.max(0, Math.min(
+				this.#selectedIndex - Math.floor(this.#visibleRows / 2),
+				this.#maximumRosterScrollOffset(),
+			));
+		}
 		list.onSelectionChange = (selected) => {
 			const index = this.#items.indexOf(selected as AgentSelectorItem);
 			if (index < 0) return;

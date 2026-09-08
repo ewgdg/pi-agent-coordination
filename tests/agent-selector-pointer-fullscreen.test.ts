@@ -173,7 +173,11 @@ test("hover highlights without moving keyboard selection; details and other butt
 
 test("wheel scrolls the roster viewport without changing selection", { timeout: 5_000 }, async (t) => {
 	const live = [status("owner", "Owner", null), ...Array.from({ length: 25 }, (_, i) => status("agent-" + String(i).padStart(2, "0"), "Agent " + String(i).padStart(2, "0")))];
-	const h = await harness(t, { live, selectedAgentId: "agent-05" });
+	let publish!: Parameters<NonNullable<AgentSelectorOptions["addChangeHandler"]>>[0];
+	const h = await harness(t, {
+		live, selectedAgentId: "agent-05",
+		addChangeHandler(handler) { publish = handler; return () => {}; },
+	});
 	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 	assert.match((await h.frame()).join("\n"), /agent-05/);
 	const selected = await h.point("Agent 05");
@@ -183,6 +187,16 @@ test("wheel scrolls the roster viewport without changing selection", { timeout: 
 	assert.match(scrolled, /→ Agent 05/, "wheel keeps the selected Agent");
 	assert.match(scrolled, /agent-05/, "wheel keeps the selected Agent's details");
 	assert.doesNotMatch(scrolled, /Agent 00/, "wheel advances the visible roster window");
+	publish({
+		live: live.map((agent) => agent.agentId === "agent-05"
+			? { ...agent, description: "refreshed details" }
+			: agent),
+		dormant: [],
+	});
+	const refreshed = (await h.frame()).join("\n");
+	assert.match(refreshed, /refreshed details/, "live refresh updates visible Agent data");
+	assert.doesNotMatch(refreshed, /Agent 00/, "live refresh preserves the wheel viewport");
+	assert.match(refreshed, /agent-05/, "live refresh preserves selected Agent details");
 
 	// Wheel bounds do not move selection back to the top or bottom.
 	const target = await h.point("Agent 05");
@@ -193,6 +207,17 @@ test("wheel scrolls the roster viewport without changing selection", { timeout: 
 	await h.frame();
 	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 	assert.match((await h.frame()).join("\n"), /Agent 00/);
+
+	// A boundary key also restores a selected row that wheel scrolling moved
+	// out of view, even though the selection itself cannot move further.
+	const boundary = await harness(t, { live, selectedAgentId: "agent-24" });
+	const boundaryTarget = await boundary.point("Agent 24");
+	for (let step = 0; step < 30; step++) boundary.terminal.mouse(64, boundaryTarget.x, boundaryTarget.y);
+	await boundary.frame();
+	assert.doesNotMatch((await boundary.frame()).join("\n"), /Agent 24/);
+	await boundary.input("\x1b[B");
+	assert.match((await boundary.frame()).join("\n"), /→ Agent 24/);
+	await boundary.input("\x1b");
 
 	// Keyboard selection still moves the selected row and keeps it visible.
 	const keyboard = await harness(t, { live, selectedAgentId: "agent-05" });
@@ -221,7 +246,7 @@ test("wheel scrolls the roster viewport without changing selection", { timeout: 
 	await tiny.input("\x1b");
 
 	// Chrome wheel remains handled but does not scroll the roster.
-	for (const targetText of ["Live", "Owner", "informational details", "o Owner"]) {
+	for (const targetText of ["Live", "Owner", "refreshed details", "o Owner"]) {
 		const p = await h.point(targetText);
 		h.terminal.mouse(65, p.x, p.y);
 		await h.frame();
