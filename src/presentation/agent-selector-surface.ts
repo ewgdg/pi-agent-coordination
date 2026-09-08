@@ -7,8 +7,6 @@ import {
 	SelectList,
 	compositeTuiLine,
 	matchesKey,
-	sliceByColumn,
-	stripTerminalSequences,
 	truncateToWidth,
 	visibleWidth,
 	type Component,
@@ -18,6 +16,8 @@ import {
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
+
+import { extractSegments } from "@earendil-works/pi-tui/dist/utils.js";
 
 import type { AgentRosterStatus } from "../coordination/workflow-coordinator.ts";
 import type { HumanAttentionItem } from "../coordination/human-requests.ts";
@@ -344,19 +344,27 @@ class AgentSelectorSurface implements Component {
 					});
 				}
 				let text = line.text;
-				const hovered = line.regions?.find((region) =>
-					region.end <= contentWidth && samePointerAction(region.action, this.#hoveredAction)
-				);
-				if (hovered) {
-					const hoverWidth = hovered.end - hovered.start;
-					// Slices can retain/replay open ANSI styles. Repaint the target with
-					// one readable style and let Pi isolate the adjacent styled segments.
-					const label = truncateToWidth(stripTerminalSequences(
-						sliceByColumn(text, hovered.start, hoverWidth),
-					), hoverWidth, "", true);
-					text = compositeTuiLine(text,
-						this.#theme.bg("selectedBg", this.#theme.fg("text", label)),
-						hovered.start, hoverWidth, contentWidth);
+				for (const region of line.regions ?? []) {
+					if (region.end > contentWidth || region.start >= region.end) continue;
+					const selected = region.action.kind === "tab"
+						? region.action.tab === this.#activeTab
+						: region.action.kind === "open" && region.action.value === this.#items[this.#selectedIndex]?.value;
+					const hovered = samePointerAction(region.action, this.#hoveredAction);
+					if (!selected && !hovered) continue;
+					// userMessageBg is the neutral, subtler surface in both bundled themes.
+					// Selection wins; the child button is a separate action, not part of it.
+					const background = selected ? "selectedBg" : "userMessageBg";
+					const regionWidth = region.end - region.start;
+					// Extract inherited foreground styles without replaying stale boundary
+					// codes. Always read the source line, not an already-painted neighbor.
+					let label = extractSegments(line.text, 0, region.start, regionWidth, true).after;
+					label += " ".repeat(Math.max(0, regionWidth - visibleWidth(label)));
+					// Truncation may reset all ANSI styles before the action's padding.
+					if (label.includes("\x1b[0m")) {
+						label = label.replaceAll("\x1b[0m", "\x1b[0m" + this.#theme.getBgAnsi(background));
+					}
+					text = compositeTuiLine(text, this.#theme.bg(background, label),
+						region.start, regionWidth, contentWidth);
 				}
 				return frameLine(text, contentWidth, leftMargin, rightMargin, border);
 			}),
@@ -847,7 +855,8 @@ function frameLine(
 	rightMargin: number,
 	border: (text: string) => string,
 ): string {
-	const content = truncateToWidth(line, blockWidth, "");
+	// Compositing may end on a styled cell; frame padding must never inherit it.
+	const content = truncateToWidth(line, blockWidth, "") + "\x1b[0m";
 	const contentPadding = " ".repeat(Math.max(0, blockWidth - visibleWidth(content)));
 	return `${border("│")}${" ".repeat(leftMargin)}${content}${contentPadding}${" ".repeat(rightMargin)}${border("│")}`;
 }

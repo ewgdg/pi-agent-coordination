@@ -10,7 +10,7 @@ import type {
 	Component,
 	TUI,
 } from "@earendil-works/pi-tui";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 import type {
 	AgentRosterStatus,
@@ -212,16 +212,16 @@ test("Live and Dormant are explicit keyboard-accessible tabs", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	assert.match(renderPanel(harness.component, 80).join("\n"), /\[ Live \].*Dormant/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), / Live .*Dormant/);
 	harness.component.handleInput?.("\t");
 	const dormant = renderPanel(harness.component, 80).join("\n");
-	assert.match(dormant, /Live.*\[ Dormant \]/);
+	assert.match(dormant, /Live.* Dormant /);
 	assert.match(dormant, /Recent/);
 	assert.match(dormant, /Older/);
 	assert.doesNotMatch(dormant, /→ Owner/);
 
 	harness.component.handleInput?.("\x1b[Z");
-	assert.match(renderPanel(harness.component, 80).join("\n"), /\[ Live \].*Dormant/);
+	assert.match(renderPanel(harness.component, 80).join("\n"), / Live .*Dormant/);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -240,7 +240,7 @@ test("o returns to Owner from the flat Dormant roster", async () => {
 	assert.ok(harness.component);
 
 	const dormant = renderPanel(harness.component, 80).join("\n");
-	assert.match(dormant, /\[ Dormant \]/);
+	assert.match(dormant, / Dormant /);
 	assert.match(dormant, /→ Dormant Agent/);
 	assert.doesNotMatch(dormant, /→ Owner/);
 	harness.component.handleInput?.("o");
@@ -279,7 +279,7 @@ test("reopening preserves the selected Dormant Agent", async () => {
 	assert.ok(harness.component);
 
 	const rendered = renderPanel(harness.component, 80).join("\n");
-	assert.match(rendered, /Live.*\[ Dormant \]/);
+	assert.match(rendered, /Live.* Dormant /);
 	assert.match(rendered, /→ Selected/);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await reopened, undefined);
@@ -435,9 +435,9 @@ test("the selector uses fixed one-cell horizontal padding", async () => {
 	await Promise.resolve();
 	assert.ok(harness.component);
 
-	const tabs = renderPanel(harness.component, 80).find((line) => line.includes("Live"));
-	assert.ok(tabs);
-	assert.equal(tabs.slice(1).search(/\S/u), 1);
+	const owner = renderPanel(harness.component, 80).find((line) => line.includes("[Owner]"));
+	assert.ok(owner);
+	assert.equal(owner.slice(1).search(/\S/u), 1);
 	harness.component.handleInput?.("\x1b");
 	assert.equal(await selection, undefined);
 });
@@ -720,10 +720,12 @@ function surfaceHarness(terminalRows: number): {
 		terminal: { rows: terminalRows },
 		requestRender() {},
 	} as unknown as TUI;
+	// Styling must not add visible cells: pointer geometry uses terminal columns.
 	const theme = {
 		...plainTheme(),
-		bg: (_color: string, text: string) => `[${text}]`,
-	} as Theme;
+		bg: (_color: string, text: string) => `\x1b[44m${text}\x1b[49m`,
+		getBgAnsi: () => "\x1b[44m",
+	} as unknown as Theme;
 	const ui = {
 		custom<T>(
 			factory: (
@@ -761,8 +763,9 @@ function plainTheme(): Theme {
 	return {
 		fg: (_color: string, text: string) => text,
 		bg: (_color: string, text: string) => text,
+		getBgAnsi: () => "",
 		bold: (text: string) => text,
-	} as Theme;
+	} as unknown as Theme;
 }
 
 test("an open selector refreshes compaction and restores current work without moving focus", async () => {
@@ -834,7 +837,7 @@ test("Owner is a pinned button in a linear keyboard focus order", async () => {
 	component.handleInput?.("j");
 	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
 	component.handleInput?.("k");
-	assert.match(renderPanel(component, 80).join("\n"), /\[\[Owner\]\]\[›\]/);
+	assert.match(renderPanel(component, 80).join("\n"), /\[Owner\]\[›\]/);
 	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
 	component.handleInput?.("\x1b[A");
 	component.handleInput?.("\r");
@@ -878,7 +881,7 @@ test("Attention, Owner and Agents form one non-circular order", async () => {
 		assert.match(renderPanel(component, 80).join("\n"), /→ DECIDE/);
 	}
 	component.handleInput?.("j");
-	assert.match(renderPanel(component, 80).join("\n"), /\[\[Owner\]\]\[›\]/);
+	assert.match(renderPanel(component, 80).join("\n"), /\[Owner\]\[›\]/);
 	assert.doesNotMatch(renderPanel(component, 80).join("\n"), /→ /);
 	component.handleInput?.("\x1b[B");
 	assert.match(renderPanel(component, 80).join("\n"), /→ Child/);
@@ -905,7 +908,7 @@ test("Dormant pins Owner without a chevron or heading and Enter selects Owner", 
 	component.handleInput?.("k");
 	component.handleInput?.("l");
 	const rendered = renderPanel(component, 80).join("\n");
-	assert.match(rendered, /\[\[Owner\]\]/);
+	assert.match(rendered, /\[Owner\]/);
 	assert.doesNotMatch(rendered, /Dormant Agents|\[›\]|→ /);
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
@@ -969,7 +972,7 @@ test("focused Owner keeps preparation feedback and input ownership until selecti
 	const component = harness.component!;
 	component.handleInput?.("\r");
 	try {
-		assert.match(renderPanel(component, 80).join("\n"), /\[\[Owner\]\].*loading/);
+		assert.match(renderPanel(component, 80).join("\n"), /\[Owner\].*loading/);
 		component.handleInput?.("\x1b");
 		assert.equal(harness.resolved, false);
 	} finally {
@@ -1005,7 +1008,7 @@ test("primary pointer controls separate browsing, opening, and informational det
 	});
 	const component = harness.component!;
 	const click = (text: string, offset = 0) => {
-		const lines = component.render(80);
+		const lines = component.render(80).map(stripTerminalSequences);
 		const y = lines.findIndex((line) => line.includes(text));
 		assert.ok(y >= 0, text);
 		const x = lines[y]!.indexOf(text) + offset;
@@ -1029,7 +1032,7 @@ test("primary pointer controls separate browsing, opening, and informational det
 });
 
 function renderPanel(component: Component | undefined, width: number): string[] {
-	const lines = component?.render(width) ?? [];
+	const lines = (component?.render(width) ?? []).map(stripTerminalSequences);
 	const top = lines.findIndex((line) => line.includes("┌"));
 	const bottom = lines.findIndex((line) => line.includes("└"));
 	const left = lines[top]?.indexOf("┌") ?? 0;

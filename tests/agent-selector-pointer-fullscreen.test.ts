@@ -9,7 +9,8 @@ import { openAgentSelectorSurface, type AgentSelectorAction, type AgentSelectorO
 const identity = (text: string) => text;
 const theme = {
 	fg: (color: string, text: string) => `\x1b[${color === "text" ? 37 : color === "accent" ? 36 : 90}m${text}\x1b[39m`,
-	bg: (_color: string, text: string) => "\x1b[44m" + text + "\x1b[49m",
+	bg: (color: string, text: string) => `\x1b[${color === "selectedBg" ? 44 : 100}m${text}\x1b[49m`,
+	getBgAnsi: (color: string) => `\x1b[${color === "selectedBg" ? 44 : 100}m`,
 	bold: identity,
 } as Theme;
 
@@ -339,15 +340,17 @@ for (const mode of ["fullscreen", "regular"] as const) {
 	});
 }
 
-test("hover uses one foreground and background for exactly the pointed cells", { timeout: 5_000 }, async (t) => {
+test("hover adds a faint background without changing foregrounds or selected backgrounds", { timeout: 5_000 }, async (t) => {
 	const h = await harness(t);
 	for (const target of ["[Owner]", "Other", "Branch", "[1 child ›]", "Dormant"]) {
 		const p = await h.point(target);
+		const before = Array.from({ length: h.terminal.columns }, (_, x) => h.terminal.screen.buffer.active.getLine(p.y)!.getCell(x)!.getFgColor());
 		h.terminal.mouse(35, p.x, p.y);
 		await h.frame();
 		const row = h.terminal.screen.buffer.active.getLine(p.y)!;
 		const hovered = row.getCell(p.x)!;
-		assert.equal(hovered.getBgColor(), 4, target + " uses selected background");
+		const background = target === "Branch" ? 4 : 8;
+		assert.equal(hovered.getBgColor(), background, target + " uses the appropriate background");
 		const right = row.translateToString(true).lastIndexOf("│");
 		for (let x = right - 1; x < h.terminal.columns; x++) {
 			assert.equal(row.getCell(x)!.isBgDefault(), true, target + " background ends before frame padding at " + x);
@@ -356,8 +359,8 @@ test("hover uses one foreground and background for exactly the pointed cells", {
 			: target === "Branch" ? row.translateToString(true).indexOf("[1 child")
 			: p.x + visibleWidth(target);
 		for (let x = p.x; x < end; x++) {
-			assert.equal(row.getCell(x)!.getFgColor(), 7, target + " uses the readable text foreground at " + x);
-			assert.equal(row.getCell(x)!.getBgColor(), 4, target + " fills the pointed control at " + x);
+			assert.equal(row.getCell(x)!.getFgColor(), before[x], target + " retains its foreground at " + x);
+			assert.equal(row.getCell(x)!.getBgColor(), background, target + " fills the pointed control at " + x);
 		}
 		if (target === "[Owner]") {
 			assert.equal(row.getCell(p.x + target.length)!.isBgDefault(), true, "Owner hover must not bleed onto chevron");
@@ -375,4 +378,60 @@ test("hovering a keyboard-focused Owner does not paint the rest of its row", { t
 	for (let x = p.x + "[Owner]".length; x < h.terminal.columns; x++) {
 		assert.equal(row.getCell(x)!.isBgDefault(), true, "Owner background leaked to column " + x);
 	}
+});
+
+test("row and child button expose separate bounded hover actions", { timeout: 5_000 }, async (t) => {
+	const h = await harness(t, { selectedAgentId: "other" });
+	const body = await h.point("Branch");
+	const child = await h.point("[1 child ›]");
+	const selected = await h.point("Other");
+	const bg = (x: number, y: number) => h.terminal.screen.buffer.active.getLine(y)!.getCell(x)!.getBgColor();
+	assert.equal(bg(selected.x, selected.y), 4, "keyboard-selected row has the stronger background");
+	h.terminal.mouse(35, body.x, body.y);
+	await h.frame();
+	assert.equal(bg(body.x, body.y), 8);
+	assert.equal(bg(child.x - 1, child.y), 8, "open action extends to the button boundary");
+	assert.equal(h.terminal.screen.buffer.active.getLine(child.y)!.getCell(child.x)!.isBgDefault(), true);
+	h.terminal.mouse(35, child.x, child.y);
+	await h.frame();
+	assert.equal(h.terminal.screen.buffer.active.getLine(body.y)!.getCell(body.x)!.isBgDefault(), true);
+	for (let x = child.x; x < child.x + "[1 child ›]".length; x++) assert.equal(bg(x, child.y), 8);
+	assert.equal(bg(selected.x, selected.y), 4, "child hover does not replace selection");
+	await h.click("[1 child ›]", 10);
+	assert.equal(h.resolved, false);
+	assert.match((await h.frame()).join("\n"), /→ Nested/);
+});
+
+test("selected tabs and Owner retain selection color when hovered", { timeout: 5_000 }, async (t) => {
+	const h = await harness(t);
+	await h.input("\x1b[A");
+	for (const target of ["Live", "[Owner]"]) {
+		const p = await h.point(target);
+		const before = h.terminal.screen.buffer.active.getLine(p.y)!.getCell(p.x)!;
+		const foreground = before.getFgColor();
+		assert.equal(before.getBgColor(), 4);
+		h.terminal.mouse(35, p.x, p.y);
+		await h.frame();
+		const after = h.terminal.screen.buffer.active.getLine(p.y)!.getCell(p.x)!;
+		assert.equal(after.getBgColor(), 4);
+		assert.equal(after.getFgColor(), foreground);
+	}
+	await h.click("Dormant");
+	const p = await h.point("Dormant");
+	assert.equal(h.terminal.screen.buffer.active.getLine(p.y)!.getCell(p.x)!.getBgColor(), 4);
+});
+
+test("truncated Agent summaries keep tint through their padding without swallowing the child button", { timeout: 5_000 }, async (t) => {
+	const h = await harness(t, {
+		live: [status("owner", "Owner", null), status("branch", "Long ".repeat(30)), status("other", "Other"), status("child", "Child", "branch")],
+		selectedAgentId: "other",
+	});
+	h.terminal.resize(46, 30);
+	const p = await h.point("Long ");
+	const child = await h.point("[1 child ›]");
+	h.terminal.mouse(35, p.x, p.y);
+	await h.frame();
+	const row = h.terminal.screen.buffer.active.getLine(p.y)!;
+	for (let x = p.x; x < child.x; x++) assert.equal(row.getCell(x)!.getBgColor(), 8);
+	assert.equal(row.getCell(child.x)!.isBgDefault(), true);
 });
