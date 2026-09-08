@@ -42,10 +42,11 @@ const FRAME_ROWS = 2;
 const TAB_ROWS = 1;
 const CONTENT_GAP_ROWS = 2;
 const HELP_ROWS = 1;
+const OWNER_FOOTER_ROWS = 1;
 const MAX_LIVE_SECTION_HEADER_ROWS = 2;
 const EMPTY_LIVE_AGENT_ROWS = 1;
 const FIXED_OVERLAY_ROWS =
-	FRAME_ROWS + TAB_ROWS + CONTENT_GAP_ROWS + HELP_ROWS +
+	FRAME_ROWS + TAB_ROWS + CONTENT_GAP_ROWS + HELP_ROWS + OWNER_FOOTER_ROWS +
 	MAX_LIVE_SECTION_HEADER_ROWS + EMPTY_LIVE_AGENT_ROWS + FOCUSED_DETAIL_ROWS;
 const SCROLL_INDICATOR_ROWS = 1;
 const SELECT_LIST_UP_INPUT = "\x1b[A";
@@ -119,6 +120,7 @@ export function openAgentSelectorSurface(
 }
 
 type PointerAction =
+	| { kind: "root" }
 	| { kind: "tab"; tab: "live" | "dormant" | "reports" }
 	| { kind: "open"; value: string }
 	| { kind: "children"; value: string }
@@ -230,7 +232,7 @@ class AgentSelectorSurface implements Component {
 			: matchesKey(data, "k")
 				? SELECT_LIST_UP_INPUT
 				: data;
-		// SelectList wraps by default; Owner is a boundary, never a wrap destination.
+		// SelectList wraps by default; the footer ends this linear focus order.
 		if (
 			(matchesKey(listInput, Key.up) && this.#selectedIndex === 0) ||
 			(matchesKey(listInput, Key.down) && this.#selectedIndex === this.#items.length - 1)
@@ -293,7 +295,9 @@ class AgentSelectorSurface implements Component {
 
 	#activatePointerAction(action: PointerAction): void {
 		this.#hoveredAction = undefined;
-		if (action.kind === "tab") {
+		if (action.kind === "root") {
+			this.#browseRoot();
+		} else if (action.kind === "tab") {
 			this.#activeTab = action.tab;
 			this.#list = this.#createList();
 		} else if (action.kind === "ancestor") {
@@ -340,9 +344,10 @@ class AgentSelectorSurface implements Component {
 			{ text: "" },
 			...this.#renderPinnedList(contentWidth),
 			{ text: "" },
+			this.#renderOwnerFooter(),
 			{ text: this.#theme.fg(
 				"dim",
-				"o Owner · Tab views · ↑/k ↓/j · →/l children · ←/h parent · Enter · Esc",
+				"Tab views · ↑/k ↓/j · →/l children · ←/h parent · Enter · Esc",
 			) },
 		];
 		const visibleContentLines = fitOverlayContent(
@@ -402,17 +407,18 @@ class AgentSelectorSurface implements Component {
 
 	#maximumVisibleRows(): number {
 		return Math.max(1, Math.min(
-			this.#items.length, MAX_VISIBLE_ROSTER_ROWS,
+			this.#items.length - 1, MAX_VISIBLE_ROSTER_ROWS,
 			this.#maximumOverlayRows() - FIXED_OVERLAY_ROWS - SCROLL_INDICATOR_ROWS,
 		));
 	}
 
 	#createList(preserveScroll = false, ensureSelection = false): SelectList {
+		// Owner ends the shared keyboard order but is painted only in the fixed footer.
 		this.#items = this.#activeTab === "live"
 			? this.#liveItems()
 			: this.#activeTab === "reports"
-				? [this.#ownerItem(), ...(this.#options.reports ?? []).map((item) => this.#reportItem(item))]
-				: [this.#ownerItem(), ...this.#dormantRoster.map((status) => this.#agentItem(status))];
+				? [...(this.#options.reports ?? []).map((item) => this.#reportItem(item)), this.#ownerItem()]
+				: [...this.#dormantRoster.map((status) => this.#agentItem(status)), this.#ownerItem()];
 		this.#hitRegions = [];
 		this.#rosterRows.clear();
 		this.#visibleRows = this.#maximumVisibleRows();
@@ -561,8 +567,8 @@ class AgentSelectorSurface implements Component {
 	#liveItems(): AgentSelectorItem[] {
 		return [
 			...this.#attentionItems(),
-			this.#ownerItem(),
 			...this.#liveChildren(this.#scopeAgentId).map((status) => this.#agentItem(status)),
+			this.#ownerItem(),
 		];
 	}
 
@@ -676,10 +682,11 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#maximumRosterScrollOffset(): number {
-		return Math.max(0, this.#items.length - this.#visibleRows);
+		return Math.max(0, this.#items.length - 1 - this.#visibleRows);
 	}
 
 	#ensureSelectedVisible(): void {
+		if (this.#items[this.#selectedIndex]?.kind === "owner") return;
 		const maximumOffset = this.#maximumRosterScrollOffset();
 		if (this.#selectedIndex < this.#rosterScrollOffset) {
 			this.#rosterScrollOffset = this.#selectedIndex;
@@ -704,8 +711,8 @@ class AgentSelectorSurface implements Component {
 		const viewport = new SelectList(visibleItems, Math.max(1, visibleItems.length), theme);
 		viewport.setSelectedIndex(selectedVisible ? selectedOffset : 0);
 		const lines = viewport.render(width).slice(0, visibleItems.length);
-		if (startIndex > 0 || startIndex + visibleItems.length < this.#items.length) {
-			const range = `  (${this.#selectedIndex + 1}/${this.#items.length})`;
+		if (startIndex > 0 || startIndex + visibleItems.length < this.#items.length - 1) {
+			const range = `  (${Math.min(this.#selectedIndex + 1, this.#items.length - 1)}/${this.#items.length - 1})`;
 			lines.push(this.#theme.fg("muted", truncateToWidth(range, Math.max(0, width - 2), "")));
 		}
 		return lines;
@@ -715,7 +722,7 @@ class AgentSelectorSurface implements Component {
 		const startIndex = Math.max(0, Math.min(
 			this.#rosterScrollOffset, this.#maximumRosterScrollOffset(),
 		));
-		const visibleItems = this.#items.slice(startIndex, startIndex + this.#visibleRows);
+		const visibleItems = this.#items.slice(startIndex, Math.min(startIndex + this.#visibleRows, this.#items.length - 1));
 		const listLines = this.#renderRosterViewport(width, startIndex, visibleItems);
 		const hasAgents = this.#items.some(({ kind }) => kind === "agent");
 		const reportHistory = this.#activeTab === "reports";
@@ -723,18 +730,16 @@ class AgentSelectorSurface implements Component {
 			? this.#items.every(({ kind }) => kind === "owner")
 			: !hasAgents;
 		const visibleAttention = visibleItems.some(({ kind }) => kind === "decide" || kind === "attention");
-		const visibleBodyRows = visibleItems.filter(({ kind }) => kind !== "owner").length;
-		// On very short terminals, trim detail only as needed to keep the pinned
-		// Owner boundary alongside the focused summary and the existing frame.
+		const visibleBodyRows = visibleItems.length;
+		// Short terminals trade detail rows for navigation and the fixed footer.
 		const detailRows = Math.max(0, Math.min(FOCUSED_DETAIL_ROWS,
-			this.#maximumOverlayRows() - FRAME_ROWS - TAB_ROWS - 1 -
+			this.#maximumOverlayRows() - FRAME_ROWS - TAB_ROWS - HELP_ROWS - OWNER_FOOTER_ROWS - 1 -
 			(visibleAttention || reportHistory ? 1 : 0) - visibleBodyRows - (showEmptyMessage ? 1 : 0) -
 			(listLines.length > visibleItems.length ? SCROLL_INDICATOR_ROWS : 0),
 		));
 		const attention: SelectorLine[] = [];
 		const agents: SelectorLine[] = [];
 		for (const [offset, item] of visibleItems.entries()) {
-			if (item.kind === "owner") continue;
 			const lines = item.kind === "agent" ? agents : attention;
 			let line = listLines[offset] ?? "";
 			let bodyText = line;
@@ -772,34 +777,15 @@ class AgentSelectorSurface implements Component {
 					.slice(0, detailRows).map((text) => ({ text })));
 			}
 		}
-		const ownerFocused = this.#items[this.#selectedIndex]?.kind === "owner";
-		const owner = ownerFocused
-			? this.#theme.bg("selectedBg", this.#theme.fg("text", "Owner"))
-			: this.#theme.fg("toolTitle", "Owner");
-		const ownerWidth = visibleWidth(owner);
-		const path = this.#activeTab === "live"
-			? this.#scopeTitle(Math.max(0, width - ownerWidth))
-			: { text: "", regions: [] };
-		const ownerLine: SelectorLine = {
-			text: owner + this.#theme.fg("toolTitle", path.text) +
-				(ownerFocused && this.#selectionSpinnerItem?.description
-					? this.#theme.fg("dim", ` ${this.#selectionSpinnerItem.description}`) : ""),
-			regions: [
-				{ start: 0, end: ownerWidth, text: owner, action: { kind: "open", value: this.#ownerStatus().agentId } },
-				...(path.regions ?? []).map((region) => ({
-					...region, start: region.start + ownerWidth, end: region.end + ownerWidth,
-				})),
-			],
-		};
 		const rendered: SelectorLine[] = [
 			...(attention.length || reportHistory ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "Report History" : "Attention Inbox")) }, ...attention] : []),
-			ownerLine,
+			...(reportHistory ? [] : [this.#activeTab === "live"
+				? this.#scopeTitle(width) : { text: this.#theme.fg("toolTitle", "Agents") }]),
 			...agents,
 			...(showEmptyMessage ? [{ text: this.#theme.fg("dim", reportHistory
 				? "  No reports" : this.#activeTab === "live" ? "  No live Agents" : "  No dormant Agents") }] : []),
 		];
-		// Pinned Owner replaces its list row. Reserve missing window/header slots so
-		// moving across the boundary does not resize the established detail layout.
+		// Reserve detail slots so moving focus to the footer does not resize the panel.
 		const targetRows = this.#visibleRows + FOCUSED_DETAIL_ROWS +
 			(this.#activeTab === "live" ? MAX_LIVE_SECTION_HEADER_ROWS : 1) +
 			(showEmptyMessage ? 1 : 0);
@@ -833,28 +819,28 @@ class AgentSelectorSurface implements Component {
 		];
 	}
 
+	#browseRoot(): void {
+		if (this.#scopeAgentId === this.#ownerStatus().agentId) return;
+		const owner = this.#ownerStatus();
+		let ancestor = [...this.#options.live, ...this.#options.dormant].find(
+			({ agentId }) => agentId === this.#scopeAgentId,
+		);
+		while (ancestor?.directSpawnerAgentId && ancestor.directSpawnerAgentId !== owner.agentId) {
+			const parentId = ancestor.directSpawnerAgentId;
+			ancestor = [...this.#options.live, ...this.#options.dormant].find(
+				({ agentId }) => agentId === parentId,
+			);
+		}
+		this.#scopeAgentId = owner.agentId;
+		const rootAgents = this.#liveItems().filter(({ kind }) => kind === "agent");
+		// Root browsing targets an Agent, not the higher-priority Attention Inbox.
+		this.#selectedValueByTab.live = rootAgents.find(({ value }) => value === ancestor?.agentId)?.value
+			?? rootAgents[0]?.value ?? owner.agentId;
+		this.#list = this.#createList();
+	}
+
 	#zoomIn(): void {
 		const selected = this.#items[this.#selectedIndex];
-		if (selected?.kind === "owner") {
-			const owner = this.#ownerStatus();
-			if (this.#liveChildren(owner.agentId).length === 0) return;
-			let ancestor = [...this.#options.live, ...this.#options.dormant].find(
-				({ agentId }) => agentId === this.#scopeAgentId,
-			);
-			while (ancestor?.directSpawnerAgentId && ancestor.directSpawnerAgentId !== owner.agentId) {
-				const parentId = ancestor.directSpawnerAgentId;
-				ancestor = [...this.#options.live, ...this.#options.dormant].find(
-					({ agentId }) => agentId === parentId,
-				);
-			}
-			this.#scopeAgentId = owner.agentId;
-			const rootAgents = this.#liveItems().filter(({ kind }) => kind === "agent");
-			// Root browsing targets an Agent, not the higher-priority Attention Inbox.
-			this.#selectedValueByTab.live = rootAgents.find(({ value }) => value === ancestor?.agentId)?.value
-				?? rootAgents[0]?.value ?? owner.agentId;
-			this.#list = this.#createList();
-			return;
-		}
 		if (!selected?.status) return;
 		const firstChild = this.#liveChildren(selected.value)[0];
 		if (!firstChild) return;
@@ -887,18 +873,15 @@ class AgentSelectorSurface implements Component {
 				({ agentId }) => agentId === current?.directSpawnerAgentId,
 			);
 		}
-		const rootControl = this.#liveChildren(owner.agentId).length > 0 ? "›" : "";
-		const regions: LineRegion[] = rootControl ? [{
-			start: 1, end: 1 + visibleWidth(rootControl), text: this.#theme.fg("toolTitle", rootControl),
-			action: { kind: "children", value: owner.agentId },
-		}] : [];
-		// The gap between Owner and root navigation is outside both hit regions.
-		const rootSuffix = rootControl ? ` ${rootControl}` : "";
-		if (ancestors.length === 0) return { text: rootSuffix, regions };
+		const regions: LineRegion[] = [{
+			start: 0, end: visibleWidth("Agents"), text: this.#theme.fg("toolTitle", "Agents"),
+			action: { kind: "root" },
+		}];
+		if (ancestors.length === 0) return { text: this.#theme.fg("toolTitle", "Agents"), regions };
 		const visibleAncestors = ancestors.slice(-MAX_BREADCRUMB_AGENT_SEGMENTS);
-		const rootPrefix = `${rootSuffix || " /"} `;
-		const prefix = () => rootPrefix + (ancestors.length > visibleAncestors.length ? "… / " : "");
-		const title = () => prefix() + visibleAncestors.map(({ label }) => label).join(" / ");
+		const rootPrefix = "Agents › ";
+		const prefix = () => rootPrefix + (ancestors.length > visibleAncestors.length ? "… › " : "");
+		const title = () => prefix() + visibleAncestors.map(({ label }) => label).join(" › ");
 		while (visibleAncestors.length > 1 && visibleWidth(title()) > width) {
 			visibleAncestors.shift();
 		}
@@ -920,15 +903,26 @@ class AgentSelectorSurface implements Component {
 					text: this.#theme.fg("toolTitle", ancestor.label),
 					action,
 				});
-				column += visibleWidth(ancestor.label) + visibleWidth(" / ");
+				column += visibleWidth(ancestor.label) + visibleWidth(" › ");
 			}
-			return { text: title(), regions };
+			return { text: this.#theme.fg("toolTitle", title()), regions };
 		}
 		// Omitted and clipped path text is informational, never a partial action.
-		return { text: rootPrefix + truncateToWidth(
+		return { text: this.#theme.fg("toolTitle", rootPrefix + truncateToWidth(
 			visibleAncestors.at(-1)?.label ?? "",
 			Math.max(0, width - visibleWidth(rootPrefix)), "…",
-		), regions };
+		)), regions };
+	}
+
+	#renderOwnerFooter(): SelectorLine {
+		const text = this.#theme.fg("toolTitle", "Go to Owner") + this.#theme.fg("dim", " [o]");
+		const pending = this.#items[this.#selectedIndex]?.kind === "owner"
+			? this.#selectionSpinnerItem?.description : undefined;
+		return {
+			text: text + (pending ? this.#theme.fg("dim", ` ${pending}`) : ""),
+			regions: [{ start: 0, end: visibleWidth(text), text,
+				action: { kind: "open", value: this.#ownerStatus().agentId } }],
+		};
 	}
 
 	#renderTabs(): SelectorLine {
@@ -969,13 +963,15 @@ function fitOverlayContent(lines: SelectorLine[], maximumRows: number): Selector
 		if (emptyLine < 0) break;
 		content.splice(emptyLine, 1);
 	}
-	if (content.length > maximumRows) content.pop();
-	return content.slice(0, maximumRows);
+	// Keep the session action and help visible even when detail rows must be clipped.
+	const footer = content.splice(-OWNER_FOOTER_ROWS - HELP_ROWS);
+	return [...content.slice(0, Math.max(0, maximumRows - footer.length)), ...footer].slice(0, maximumRows);
 }
 
 function samePointerAction(left: PointerAction | undefined, right: PointerAction | undefined): boolean {
 	if (!left || !right) return left === right;
 	switch (left.kind) {
+		case "root": return right.kind === "root";
 		case "tab": return right.kind === "tab" && left.tab === right.tab;
 		case "open":
 		case "children": return right.kind === left.kind && left.value === right.value;

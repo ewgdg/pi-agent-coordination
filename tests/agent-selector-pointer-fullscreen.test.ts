@@ -129,12 +129,12 @@ test("fullscreen pointer tabs, Owner and summary actions use terminal mouse disp
 	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "other" });
 
 	const owner = await harness(t);
-	await owner.click("Owner", 2);
+	await owner.click("Go to Owner [o]", 2);
 	assert.equal(owner.resolved, true);
 	assert.deepEqual(await owner.result, { kind: "select_agent", agentId: "owner" });
 });
 
-test("the entire child control browses, ancestors and Owner chevron return to their scopes", { timeout: 5_000 }, async (t) => {
+test("the entire child control browses, ancestors and Agents heading return to their scopes", { timeout: 5_000 }, async (t) => {
 	for (const offset of [0, 3, 7, 8]) {
 		const h = await harness(t);
 		await h.click("1 child ›", offset);
@@ -144,7 +144,7 @@ test("the entire child control browses, ancestors and Owner chevron return to th
 		assert.match((await h.frame()).join("\n"), /→ Leaf/);
 		await h.click("Branch");
 		assert.match((await h.frame()).join("\n"), /→ Nested/);
-		await h.click("›");
+		await h.click("Agents");
 		assert.match((await h.frame()).join("\n"), /→ Branch/);
 		await h.input("\x1b");
 	}
@@ -233,14 +233,15 @@ test("wheel scrolls the roster viewport without changing selection", { timeout: 
 	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 	assert.match((await h.frame()).join("\n"), /Agent 00/);
 
-	// A boundary key also restores a selected row that wheel scrolling moved
-	// out of view, even though the selection itself cannot move further.
+	// Down reaches the fixed footer; Up restores the final row after wheel browsing.
 	const boundary = await harness(t, { live, selectedAgentId: "agent-24" });
 	const boundaryTarget = await boundary.point("Agent 24");
 	for (let step = 0; step < 30; step++) boundary.terminal.mouse(64, boundaryTarget.x, boundaryTarget.y);
 	await boundary.frame();
 	assert.doesNotMatch((await boundary.frame()).join("\n"), /Agent 24/);
 	await boundary.input("\x1b[B");
+	assert.doesNotMatch((await boundary.frame()).join("\n"), /→ /);
+	await boundary.input("\x1b[A");
 	assert.match((await boundary.frame()).join("\n"), /→ Agent 24/);
 	await boundary.input("\x1b");
 
@@ -271,7 +272,7 @@ test("wheel scrolls the roster viewport without changing selection", { timeout: 
 	await tiny.input("\x1b");
 
 	// Chrome wheel remains handled but does not scroll the roster.
-	for (const targetText of ["Live", "Owner", "refreshed details", "o Owner"]) {
+	for (const targetText of ["Live", "Owner", "refreshed details", "Tab views"]) {
 		const p = await h.point(targetText);
 		h.terminal.mouse(65, p.x, p.y);
 		await h.frame();
@@ -477,19 +478,20 @@ test("hover adds a faint background without changing foregrounds or selected bac
 			assert.equal(row.getCell(x)!.getBgColor(), background, target + " fills the pointed control at " + x);
 		}
 		if (target === "Owner") {
-			assert.equal(row.getCell(p.x + target.length)!.isBgDefault(), true, "Owner hover must not bleed onto chevron");
+			assert.equal(row.getCell(p.x + "Owner [o]".length)!.isBgDefault(), true, "Owner hover must stop after its shortcut");
 		}
 	}
 });
 
 test("hovering a keyboard-focused Owner does not paint the rest of its row", { timeout: 5_000 }, async (t) => {
 	const h = await harness(t);
-	await h.input("\x1b[A");
-	const p = await h.point("Owner");
+	await h.input("j");
+	await h.input("j");
+	const p = await h.point("Go to Owner [o]");
 	h.terminal.mouse(35, p.x, p.y);
 	await h.frame();
 	const row = h.terminal.screen.buffer.active.getLine(p.y)!;
-	for (let x = p.x + "Owner".length; x < h.terminal.columns; x++) {
+	for (let x = p.x + "Go to Owner [o]".length; x < h.terminal.columns; x++) {
 		assert.equal(row.getCell(x)!.isBgDefault(), true, "Owner background leaked to column " + x);
 	}
 });
@@ -528,7 +530,8 @@ test("row and child button expose separate bounded hover actions", { timeout: 5_
 
 test("selected tabs and Owner retain selection color when hovered", { timeout: 5_000 }, async (t) => {
 	const h = await harness(t);
-	await h.input("\x1b[A");
+	await h.input("j");
+	await h.input("j");
 	for (const target of ["Live", "Owner"]) {
 		const p = await h.point(target);
 		const before = h.terminal.screen.buffer.active.getLine(p.y)!.getCell(p.x)!;
@@ -566,10 +569,10 @@ test("dormant-only children expose no child-navigation control, including Owner"
 	assert.doesNotMatch((await h.frame()).join("\n"), /›|\d+ child/);
 	await h.input("l");
 	assert.doesNotMatch((await h.frame()).join("\n"), /›|\d+ child/);
-	const owner = await h.point("Owner");
-	// The cell formerly occupied by the root chevron is now informational.
-	h.terminal.mouse(0, owner.x + "Owner".length, owner.y);
-	h.terminal.mouse(0, owner.x + "Owner".length, owner.y, true);
+	const owner = await h.point("Go to Owner [o]");
+	// The cell after the complete footer action is informational.
+	h.terminal.mouse(0, owner.x + "Go to Owner [o]".length, owner.y);
+	h.terminal.mouse(0, owner.x + "Go to Owner [o]".length, owner.y, true);
 	await h.frame();
 	assert.equal(h.resolved, false);
 
@@ -600,7 +603,7 @@ test("mixed children count and browse only the live roster, including idle child
 	await h.click("1 child ›");
 	assert.match((await h.frame()).join("\n"), /→ Idle Child/);
 	assert.doesNotMatch((await h.frame()).join("\n"), /Sleeping/);
-	await h.click("›");
+	await h.click("Agents");
 	assert.match((await h.frame()).join("\n"), /→ Branch/);
 });
 
@@ -608,17 +611,17 @@ test("text buttons are bracket-free and neighboring actions stay independent", {
 	const h = await harness(t, { live: [...roster, status("custom", "[Custom]")] });
 	const lines = await h.frame();
 	assert.doesNotMatch(lines.join("\n"), /\[Owner\]|\[›\]|\[1 child ›\]/);
-	assert.match(lines.join("\n"), /Owner ›/);
+	assert.match(lines.join("\n"), /Agents/);
 	assert.match(lines.join("\n"), /1 child ›/);
 	assert.match(lines.join("\n"), /\[Custom\]/, "user-provided label brackets are preserved");
-	const owner = await h.point("Owner");
-	h.terminal.mouse(0, owner.x + "Owner".length, owner.y);
-	h.terminal.mouse(0, owner.x + "Owner".length, owner.y, true);
+	const owner = await h.point("Go to Owner [o]");
+	h.terminal.mouse(0, owner.x + "Go to Owner [o]".length, owner.y);
+	h.terminal.mouse(0, owner.x + "Go to Owner [o]".length, owner.y, true);
 	await h.frame();
 	assert.equal(h.resolved, false, "separator is not an Owner action");
 	await h.click("1 child ›", "1 child ›".length - 1);
 	assert.match((await h.frame()).join("\n"), /→ Nested/);
-	await h.click("›");
+	await h.click("Agents");
 	assert.match((await h.frame()).join("\n"), /→ Branch/);
 	await h.click("Owner", "Owner".length - 1);
 	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "owner" });
