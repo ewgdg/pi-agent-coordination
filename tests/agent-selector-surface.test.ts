@@ -1141,7 +1141,7 @@ test("roster refresh retains a newly Dormant parent until its last live descenda
 	assert.match(renderPanel(component, 80).join("\n"), /Child/);
 	publish({ live: [owner, child], dormant: [sleepingParent] });
 	assert.match(renderPanel(component, 80).join("\n"), /No dormant Agents/);
-	component.handleInput?.("\t");
+	component.handleInput?.("\x1b[Z");
 	assert.match(renderPanel(component, 80).join("\n"), /Parent.*1 child/);
 	component.handleInput?.("l"); // Owner keeps focus after the empty roster; browse root first.
 	component.handleInput?.("l");
@@ -1200,7 +1200,47 @@ test("Shift Tab reaches report history and safely displays report summaries", as
 	harness.component!.handleInput?.("\x1b[Z");
 	const rendered = harness.component!.render(80).join("\n");
 	assert.match(rendered, /Report History/);
-	assert.doesNotMatch(rendered, /\x1b|attack/);
+	assert.doesNotMatch(rendered, /\x1b\]52|\x1b\[2J|attack/);
 	harness.component!.handleInput?.("\x1b");
 	await selection;
+});
+
+test("Reports pointer tab opens report summaries and keeps Owner available", async () => {
+	const harness = surfaceHarness(24);
+	const report = {
+		reportId: "report", createdAt: "now", reporter: { agentId: "moderator", label: "Moderator" },
+		source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/tmp/report.jsonl" },
+		symptom: "Delivery stalled", suspectedDefect: "Race", uncertainty: "Unknown",
+		recoveryActions: "Retried", recoveryOutcome: "Recovered", evidence: ["receipt"],
+	};
+	const click = (component: Component, label: string) => {
+		const lines = component.render(80).map(stripTerminalSequences);
+		const y = lines.findIndex((line) => line.includes(label));
+		assert.ok(y >= 0, label);
+		const x = lines[y]!.indexOf(label);
+		component.handleMouse?.({
+			type: "click", button: "left", x, y, screenX: x, screenY: y,
+			width: 80, height: 24, shift: false, alt: false, ctrl: false,
+		});
+	};
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
+		reports: [{ report, readAt: "later" }],
+	});
+	click(harness.component!, "Reports");
+	const rendered = renderPanel(harness.component!, 80).join("\n");
+	assert.match(rendered, /Report History/);
+	assert.doesNotMatch(rendered, /Attention Inbox|No dormant Agents/);
+	click(harness.component!, "REPORT");
+	assert.deepEqual(await selection, { kind: "open_report", reportId: "report" });
+
+	const empty = surfaceHarness(24);
+	const ownerSelection = openAgentSelectorSurface(empty.ui, {
+		live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner",
+	});
+	click(empty.component!, "Reports");
+	assert.match(renderPanel(empty.component!, 80).join("\n"), /Report History/);
+	assert.match(renderPanel(empty.component!, 80).join("\n"), /No reports/);
+	click(empty.component!, "Owner");
+	assert.deepEqual(await ownerSelection, { kind: "select_agent", agentId: "owner" });
 });

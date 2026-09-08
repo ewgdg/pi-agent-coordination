@@ -728,7 +728,7 @@ class AgentSelectorSurface implements Component {
 		// Owner boundary alongside the focused summary and the existing frame.
 		const detailRows = Math.max(0, Math.min(FOCUSED_DETAIL_ROWS,
 			this.#maximumOverlayRows() - FRAME_ROWS - TAB_ROWS - 1 -
-			(visibleAttention ? 1 : 0) - visibleBodyRows - (showEmptyMessage ? 1 : 0) -
+			(visibleAttention || reportHistory ? 1 : 0) - visibleBodyRows - (showEmptyMessage ? 1 : 0) -
 			(listLines.length > visibleItems.length ? SCROLL_INDICATOR_ROWS : 0),
 		));
 		const attention: SelectorLine[] = [];
@@ -792,7 +792,7 @@ class AgentSelectorSurface implements Component {
 			],
 		};
 		const rendered: SelectorLine[] = [
-			...(attention.length ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "Report History" : "Attention Inbox")) }, ...attention] : []),
+			...(attention.length || reportHistory ? [{ text: this.#theme.fg("toolTitle", this.#theme.bold(reportHistory ? "Report History" : "Attention Inbox")) }, ...attention] : []),
 			ownerLine,
 			...agents,
 			...(showEmptyMessage ? [{ text: this.#theme.fg("dim", reportHistory
