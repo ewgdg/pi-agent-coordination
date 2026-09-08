@@ -785,7 +785,7 @@ class AgentSelectorSurface implements Component {
 				)
 			);
 		}
-		const description = status.description === undefined ? "" : `  ${status.description}`;
+		const description = `  ${status.description ?? "No description."}`;
 		return [
 			this.#theme.fg("muted", truncateToWidth(description, width, "")),
 			this.#theme.fg("muted", truncateToWidth(`  ${status.agentId}`, width, "")),

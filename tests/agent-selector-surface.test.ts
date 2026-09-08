@@ -425,6 +425,27 @@ test("focused Agent details use a stable four-row budget", async () => {
 	assert.equal(await selection, undefined);
 });
 
+test("focused Agent details show a display-only fallback for missing descriptions", async () => {
+	const harness = surfaceHarness(30);
+	const owner = agentStatus("owner", "Owner", null);
+	const worker = agentStatus("live-worker", "Live Worker", "owner");
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [owner, worker],
+		dormant: [dormantAgentStatus("worker", "Worker", "owner")],
+		selectedAgentId: worker.agentId,
+	});
+	await Promise.resolve();
+	assert.ok(harness.component);
+
+	assert.match(renderPanel(harness.component, 80).join("\n"), /No description\./);
+	assert.equal(worker.description, undefined);
+	harness.component.handleInput?.("\t");
+	assert.match(renderPanel(harness.component, 80).join("\n"), /No description\./);
+
+	harness.component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
 test("the selector uses fixed one-cell horizontal padding", async () => {
 	const harness = surfaceHarness(30);
 	const selection = openAgentSelectorSurface(harness.ui, {
