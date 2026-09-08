@@ -25,6 +25,7 @@ import {
 	type AgentWorkStatus,
 } from "./selected-agent-status.ts";
 import { boundedToolPreview } from "../tools/bounded-preview.ts";
+import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 
 const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const SPINNER_FRAME_INTERVAL_MS = 80;
@@ -169,7 +170,7 @@ export class AgentActivityDock implements Component {
 			...visibleItems.map((item, index) => {
 				const branch = index === visibleRowCount - 1 ? "└─" : "├─";
 				if (item.kind === "report") {
-					return `${branch} ${this.#theme.fg("warning", "REPORT")} ${boundedToolPreview(item.report.reporter.label)} · ${boundedToolPreview(item.report.symptom)}`;
+					return `${branch} ${this.#theme.fg("warning", "REPORT")} ${boundedToolPreview(sanitizeReportTerminalText(item.report.reporter.label))} · ${boundedToolPreview(sanitizeReportTerminalText(item.report.symptom))}`;
 				}
 				if (item.kind === "human") {
 					return `${branch} ${this.#theme.fg("warning", "DECIDE")} ${this.#theme.bold(item.attention.agentLabel)} · ${boundedToolPreview(item.attention.question)}`;
