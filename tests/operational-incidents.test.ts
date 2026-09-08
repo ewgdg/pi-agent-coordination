@@ -1366,6 +1366,9 @@ test("a Moderator escalates through an ordinary Owner Request before Resolution"
 		predicates: ["outgoing_requests", "obligation_stall"],
 	});
 
+	assert.equal(SessionManager.open(moderator.path).getEntries().some((entry) =>
+		entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.moderator-obligation-reminder"), false);
 	host.model.setResponses([
 		fauxAssistantMessage("The Owner Answer is now available to the Moderator."),
 	]);
@@ -3754,3 +3757,62 @@ async function retryRequestFromView(
 		timestamp: Date.now(),
 	});
 }
+
+test("a settled Moderator receives one handling reminder turn and releases when the incident clears", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true, processVisibleModel: true, implicitModeratorResponses: false,
+	});
+	let reminderTurn = false;
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Demonstrate abandoned handling." },
+			{ id: "spawn-for-moderator-reminder" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Delegated."),
+		fauxAssistantMessage("Still owe an Answer."),
+		fauxAssistantMessage("Still owe an Answer after reminder."),
+		fauxAssistantMessage("I forgot to finish moderation."),
+		(context) => {
+			reminderTurn = JSON.stringify(context.messages.at(-1)).includes(
+				"Inspect the original Moderator Input");
+			return fauxAssistantMessage("I remain settled after the handling reminder.");
+		},
+	]);
+	const ownerPrompt = host.session.prompt("Create the stalled Agent.");
+	const moderator = await waitForModerator(host);
+	await waitForCondition(() => reminderTurn);
+	await waitForCondition(async () => {
+		const { run } = await observeStatus(host, moderator.id);
+		return run.phase === "live" && run.work === "settled";
+	});
+	const reminders = () => SessionManager.open(moderator.path).getEntries().filter(
+		(entry) => entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.moderator-obligation-reminder",
+	);
+	assert.equal(reminders().length, 1);
+	const reminder = reminders()[0];
+	assert.ok(reminder?.type === "custom_message");
+	assert.equal(reminder.display, true);
+	assert.match(JSON.stringify(reminders()[0]), /moderator_control/);
+	// Repeated evidence inspections cannot generate another reminder or a nested Moderator.
+	for (let index = 0; index < 3; index++) {
+		await observeStatus(host, moderator.id);
+		await new Promise<void>((resolve) => setImmediate(resolve));
+	}
+	assert.equal(reminders().length, 1);
+	assert.equal((await findModerators(host)).length, 1);
+	const source = host.session.sessionManager.getEntries().find((entry) =>
+		entry.type === "message" && entry.message.role === "assistant" &&
+		entry.message.content.some((part) => part.type === "toolCall" &&
+			part.id === "spawn-for-moderator-reminder"));
+	assert.ok(source);
+	await executeAndCommitRegisteredTool(host.session, "agent_message", "cancel-reminded-incident", {
+		operation: "cancel",
+		requestMessageId: deriveMessageIdentity({
+			agentId: host.session.sessionId, entryId: source.id,
+			toolCallId: "spawn-for-moderator-reminder",
+		}),
+		reason: "The demonstration is complete.",
+	});
+	await waitForCondition(async () => (await observeStatus(host, moderator.id)).run.phase === "dormant");
+	await host.session.abort();
+	await ownerPrompt;
+});

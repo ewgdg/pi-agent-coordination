@@ -78,6 +78,16 @@ Failure before this commit creates no Agent and consumes no attempt. A committed
 
 An Operation Review trigger contains only `kind`, the exact `toolCall` pointer, and the elapsed `reviewIntervalMs`. It carries no inferred outcome, internal-stage details, deadline timestamp, adapter state, or eager diagnostics.
 
+## Moderator handling reminders
+
+A live, settled Moderator that still owns incident handling receives one visible `agent-coordination.moderator-obligation-reminder` when it has no Delivery progress, Human attention, interactive selection, Interruption Hold, unresolved asynchronous call, or outgoing Request path supplying progress. An intentional parked Wait is excluded. This uses the ordinary Deferred custom Delivery scheduler and starts a model turn, rather than merely adding transcript context.
+
+The reminder directs inspection of the original Moderator Input and current affected Agent/Request evidence, continued handling, and `moderator_control` Resolution only after the original condition and the Moderator's Request responsibilities clear. It does not instruct the Moderator to Answer an incident as though it were a Request.
+
+Each fresh Moderator Input assigns one handling responsibility to one fresh Agent. Durable reminder proof and Delivery identity bound reminders to one per such responsibility, including across successor Runs. A replacement Moderator has its own responsibility and reminder allowance. Clearing handling suppresses an undelivered reminder and requests automatic dormant release; outstanding Requests or other legitimate retention still prevent release.
+
+Settling again after the reminder does not create recursive moderation, consume a failure attempt, or imply Resolution. The handling remains retained until its predicate clears. Further automatic escalation of a non-failing Moderator that ignores its reminder is not defined here; terminal failure continues to use the existing bounded replacement policy below.
+
 ## Bounded handling failure
 
 One continuous condition permits at most two committed automatic attempts: the initial Moderator and one fresh replacement. A post-commit startup failure or terminal Moderator Run failure consumes its attempt. The replacement continues the original condition and points to the first attempt's terminal evidence; Moderator failure never becomes a nested Operational Incident.

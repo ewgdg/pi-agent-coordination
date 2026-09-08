@@ -15,3 +15,6 @@ export const OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE =
 
 export const OBLIGATION_RESUMED_CUSTOM_TYPE = "agent-coordination.obligation-resumed";
 export const OBLIGATION_FOCUS_CUSTOM_TYPE = "agent-coordination.obligation-focus";
+
+export const MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE =
+	"agent-coordination.moderator-obligation-reminder";

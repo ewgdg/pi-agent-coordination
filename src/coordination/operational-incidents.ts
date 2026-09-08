@@ -1,3 +1,8 @@
+import {
+	createModelVisibleModeratorObligationReminder,
+	inspectModeratorObligationReminder,
+	moderatorObligationReminderDeliveryId,
+} from "../protocol/moderator-obligation-reminder.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import { setImmediate } from "node:timers/promises";
@@ -529,7 +534,11 @@ export class OperationalIncidentCoordinator {
 		}
 		for (const snapshot of snapshots) {
 			const existing = this.#handlingByKey.get(snapshot.key);
-			if (existing?.moderatorAgentId !== undefined || existing?.exhausted || existing?.creationFailed) continue;
+			if (existing?.moderatorAgentId !== undefined) {
+				this.#scheduleModeratorObligationReminder(existing);
+				continue;
+			}
+			if (existing?.exhausted || existing?.creationFailed) continue;
 			if (
 				!existing &&
 				snapshot.kind === "obligation_stall" &&
@@ -786,9 +795,7 @@ export class OperationalIncidentCoordinator {
 		};
 	}
 
-	#observeObligationStall(
-		record: AgentRecord,
-	): ObligationStallSnapshot | undefined {
+	#isSettledWithoutProgress(record: AgentRecord): boolean {
 		const run = record.host.observe();
 		if (
 			run.phase !== "live" ||
@@ -799,16 +806,46 @@ export class OperationalIncidentCoordinator {
 			record.host.hasRetentionReason("interactive_selection") ||
 			record.host.hasRetentionReason("interruption_hold")
 		) {
-			return undefined;
+			return false;
 		}
+		// Moderator Requests may depend on another Moderator; ordinary incident
+		// detection keeps its existing non-Moderator dependency graph.
+		return !this.#operationReviews.hasUnresolvedAsynchronousCall(record.identity.agentId) &&
+			!this.#hasExternalProgress(record, new Set(), this.#isModerator(record));
+	}
+
+	#scheduleModeratorObligationReminder(handling: OperationalIncidentHandling): void {
+		const recipient = this.#requireAgent(handling.moderatorAgentId!);
+		if (!this.#isSettledWithoutProgress(recipient)) return;
+		const inspectProof = () => inspectModeratorObligationReminder({
+			moderatorAgentId: recipient.identity.agentId,
+			transcript: recipient.transcript.inspect(),
+		});
+		if (inspectProof()) return;
+		// Do not await the recipient lane from reconciliation: settlement can hold
+		// that lane while waiting for this inspection, just as for ordinary reminders.
+		void this.#messages.admitCustomDelivery(recipient, {
+			messageId: moderatorObligationReminderDeliveryId(recipient.identity.agentId),
+			deliveryMode: "deferred",
+			customMessage: createModelVisibleModeratorObligationReminder(),
+			inspectProof,
+			isSuppressed: () => this.#handlingByKey.get(handling.snapshot.key) !== handling ||
+				handling.moderatorAgentId !== recipient.identity.agentId ||
+				!this.#conditionRemains(handling.snapshot),
+		}).then((admission) => {
+			if (admission !== "pending") {
+				throw new Error(`Moderator Obligation Reminder delivery rejected: ${admission}`);
+			}
+		}).catch((error: unknown) => this.#reportError(error));
+	}
+
+	#observeObligationStall(
+		record: AgentRecord,
+	): ObligationStallSnapshot | undefined {
 		const requestIds = [
 			...record.host.requestRelationshipIds("answer_owed"),
 		].sort();
-		if (requestIds.length === 0) return undefined;
-		if (this.#operationReviews.hasUnresolvedAsynchronousCall(record.identity.agentId)) {
-			return undefined;
-		}
-		if (this.#hasExternalProgress(record, new Set())) return undefined;
+		if (requestIds.length === 0 || !this.#isSettledWithoutProgress(record)) return undefined;
 		const inspectedThrough = statusOf(record).primaryEvidence.inspectedThrough;
 		return {
 			kind: "obligation_stall",
@@ -969,7 +1006,7 @@ export class OperationalIncidentCoordinator {
 			);
 	}
 
-	#hasExternalProgress(record: AgentRecord, path: Set<string>): boolean {
+	#hasExternalProgress(record: AgentRecord, path: Set<string>, includeModerators = false): boolean {
 		const agentId = record.identity.agentId;
 		if (path.has(agentId)) return false;
 		path.add(agentId);
@@ -977,7 +1014,7 @@ export class OperationalIncidentCoordinator {
 			const requestIds = this.#messages.outstandingRequestIdsFor(record);
 			for (const targetAgentId of this.#messages.requestTargetAgentIds(requestIds)) {
 				const target = this.#agents.get(targetAgentId);
-				if (!target || this.#isModerator(target)) continue;
+				if (!target || (!includeModerators && this.#isModerator(target))) continue;
 				const run = target.host.observe();
 				if (run.phase === "starting") return true;
 				if (
@@ -993,7 +1030,7 @@ export class OperationalIncidentCoordinator {
 					run.phase === "live" &&
 					run.work === "settled" &&
 					!target.host.hasRetentionReason("interruption_hold") &&
-					this.#hasExternalProgress(target, path)
+					this.#hasExternalProgress(target, path, includeModerators)
 				) return true;
 			}
 			return false;
@@ -1119,9 +1156,13 @@ export class OperationalIncidentCoordinator {
 			this.#onAttentionChanged();
 		}
 		if (!handling.moderatorAgentId) return;
-		this.#agents
-			.get(handling.moderatorAgentId)
-			?.host.removeRetentionReason("moderator_handling");
+		const moderator = this.#agents.get(handling.moderatorAgentId);
+		if (!moderator) return;
+		moderator.host.removeRetentionReason("moderator_handling");
+		// Handling can clear after the Moderator already settled; no later
+		// settlement event is guaranteed to request its now-unretained release.
+		void this.#messages.requestRelease(moderator)
+			.catch((error: unknown) => this.#reportError(error));
 	}
 }
 

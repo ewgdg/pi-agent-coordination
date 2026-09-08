@@ -531,6 +531,19 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		delivery: {
 			kind: "custom",
 			message: {
+				customType: "agent-coordination.moderator-obligation-reminder",
+				content: "Inspect the original Moderator Input.",
+				display: true,
+			},
+			triggerTurn: true,
+			deliverAs: "followUp",
+		},
+	}), true);
+	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		runId: "run-1",
+		delivery: {
+			kind: "custom",
+			message: {
 				customType: "agent-coordination.run-failure-recovery",
 				content: "{\"recovery\":{\"kind\":\"successor_run_started\",\"successorRunSequence\":2}}",
 				display: true,

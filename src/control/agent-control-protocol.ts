@@ -10,6 +10,7 @@ import type { AgentWaitProgress, AgentWaitResult } from "../protocol/agent-wait.
 import type { HumanAnswer, HumanRequestInput } from "../protocol/human-request.ts";
 import {
 	MODERATOR_ROUTINE_START_CUSTOM_TYPE,
+	MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE,
 	OBLIGATION_REMINDER_CUSTOM_TYPE,
 	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
 } from "../protocol/custom-entry-types.ts";
@@ -489,6 +490,11 @@ const AgentRuntimeDeliverySchema = Type.Union([
 				customType: Type.Literal(MODERATOR_ROUTINE_START_CUSTOM_TYPE),
 				content: Type.Literal(MODERATOR_ROUTINE_START_INSTRUCTION),
 				display: Type.Literal(false),
+			}),
+			closed({
+				customType: Type.Literal(MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE),
+				content: Type.String(),
+				display: Type.Literal(true),
 			}),
 			closed({
 				customType: Type.Literal(OBLIGATION_REMINDER_CUSTOM_TYPE),

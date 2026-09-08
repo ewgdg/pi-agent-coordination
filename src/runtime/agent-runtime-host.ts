@@ -1,3 +1,4 @@
+import type { ModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
@@ -84,6 +85,7 @@ export type AgentRuntimeDelivery =
 		message:
 			| ModelVisibleMessageDelivery
 			| ModelVisibleModeratorRoutineStart
+			| ModelVisibleModeratorObligationReminder
 			| ModelVisibleObligationReminder
 			| ModelVisibleRunFailureRecovery;
 		triggerTurn: boolean;

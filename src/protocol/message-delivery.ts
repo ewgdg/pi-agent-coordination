@@ -6,6 +6,7 @@ import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import {
 	CONVERSATION_FORK_CUSTOM_TYPE,
 	MODERATOR_ROUTINE_START_CUSTOM_TYPE,
+	MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE,
 	OBLIGATION_REMINDER_CUSTOM_TYPE,
 	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
@@ -188,6 +189,7 @@ function readMessageDeliveries(options: {
 				if (
 					entry.customType === CONVERSATION_FORK_CUSTOM_TYPE ||
 					entry.customType === MODERATOR_ROUTINE_START_CUSTOM_TYPE ||
+					entry.customType === MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE ||
 					entry.customType === OBLIGATION_REMINDER_CUSTOM_TYPE ||
 					entry.customType === OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE ||
 					entry.customType === OBLIGATION_RESUMED_CUSTOM_TYPE ||

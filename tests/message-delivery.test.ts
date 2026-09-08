@@ -120,7 +120,7 @@ test("Agent Request Delivery exposes requestMessageId as its correlation identit
 	});
 });
 
-test("host-authored Obligation Reminders do not become Agent Message evidence", () => {
+test("host-authored obligation reminders do not become Agent Message evidence", () => {
 	const sessionManager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = sessionManager.getSessionId();
 	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, {
@@ -156,6 +156,11 @@ test("host-authored Obligation Reminders do not become Agent Message evidence", 
 		true,
 	);
 
+	sessionManager.appendCustomMessageEntry(
+		"agent-coordination.moderator-obligation-reminder",
+		"Inspect the original Moderator Input.",
+		true,
+	);
 	assert.deepEqual(inspectStandaloneMessageDelivery({
 		recipientAgentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
