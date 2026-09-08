@@ -11,7 +11,7 @@ Agent selection prepares the target mode before dismissing the roster. The focus
 Pi's public fullscreen mouse routing supplies parsed events and component-local cell coordinates. The selector uses that API (verified with Pi 0.85.1), not terminal escape decoding or private overlay geometry. Regular terminal mode remains keyboard-only.
 
 - Primary-click **Live** or **Dormant** to switch tabs.
-- Click **[Owner]** to return to Owner and close; click its separate **[›]** to browse the root scope without opening Owner.
+- Click **[Owner]** to return to Owner and close; when the Live root roster is nonempty, click its separate **[›]** to browse the root scope without opening Owner.
 - Click anywhere in an Agent summary's content area outside the trailing child control to open the Agent. The complete **[N children ›]** control browses children instead.
 - Click a visible ancestor breadcrumb to browse that scope, preserving focus on the child along the previous path. The current segment, omitted **…**, and partially clipped controls are informational.
 - Attention summaries use their existing selection actions. Agent detail lines remain informational.
@@ -29,9 +29,9 @@ Live uses one linear, non-circular focus order: Attention items, the pinned Owne
 
 Without Attention, initial focus prefers the selected non-Owner Agent, then the first Agent in scope, then Owner. Opening from Owner therefore starts on the first available Agent.
 
-Agent bodies and hierarchy browsing are separate actions: Enter opens the Agent; Right Arrow or `l` activates its trailing `[N children ›]` control. Child controls add no extra Up/Down focus stop. A leaf has no child control.
+Agent bodies and hierarchy browsing are separate actions: Enter opens the Agent; Right Arrow or `l` activates its trailing `[N children ›]` control. Child controls add no extra Up/Down focus stop. A participant with no children in the Live roster has no child control, even if it has Dormant children. Live includes idle or waiting children, not only children doing active work.
 
-On Live Owner, Right Arrow or `l` activates the separate `[›]` root action without opening Owner. At root it focuses the first Agent; from a nested scope it refocuses the previous top-level ancestor when available, otherwise the first root Agent. Left Arrow or `h` returns to the parent scope and refocuses the Agent along the previous path.
+On Live Owner, the `[›]` root action is present only when the Live root roster has participants to browse. Right Arrow or `l` activates it without opening Owner; with no live root participants it does nothing. At root it focuses the first Agent; from a nested scope it refocuses the previous top-level ancestor when available, otherwise the first root Agent. Left Arrow or `h` returns to the parent scope and refocuses the Agent along the previous path.
 
 The Owner/path line stays visible while the roster scrolls, below any visible Attention rows. The chevron replaces the first path separator: `[Owner][›] Architecture / Research`. Breadcrumbs retain at most the newest three Agent scopes and replace older segments with informational `…` as width tightens, preserving Owner and prioritizing the current scope. At widths too narrow for the current label, that label is truncated.
 

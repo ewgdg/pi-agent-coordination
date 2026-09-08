@@ -490,23 +490,21 @@ class AgentSelectorSurface implements Component {
 		return Math.max(2, Math.min(percentBound, marginBound));
 	}
 
+	#liveChildren(agentId: string): AgentRosterStatus[] {
+		const ownerId = this.#ownerStatus().agentId;
+		// Root browsing also includes live Moderators without a direct Spawner.
+		return this.#options.live.filter((status) =>
+			status.agentId !== ownerId &&
+			(status.directSpawnerAgentId === agentId ||
+				(agentId === ownerId && status.directSpawnerAgentId === null))
+		);
+	}
+
 	#liveItems(): AgentSelectorItem[] {
-		const owner = this.#ownerStatus();
 		return [
 			...this.#attentionItems(),
 			this.#ownerItem(),
-			...this.#options.live
-				.filter((status) =>
-					status.agentId !== owner.agentId &&
-					(
-						status.directSpawnerAgentId === this.#scopeAgentId ||
-						(
-							this.#scopeAgentId === owner.agentId &&
-							status.directSpawnerAgentId === null
-						)
-					)
-				)
-				.map((status) => this.#agentItem(status)),
+			...this.#liveChildren(this.#scopeAgentId).map((status) => this.#agentItem(status)),
 		];
 	}
 
@@ -564,9 +562,7 @@ class AgentSelectorSurface implements Component {
 	}
 
 	#agentItem(status: AgentRosterStatus): AgentSelectorItem {
-		const childCount = this.#options.live.filter(
-			(candidate) => candidate.directSpawnerAgentId === status.agentId,
-		).length;
+		const childCount = this.#liveChildren(status.agentId).length;
 		const children = childCount === 0
 			? undefined
 			: `[${childCount} ${childCount === 1 ? "child" : "children"} ›]`;
@@ -719,6 +715,7 @@ class AgentSelectorSurface implements Component {
 		const selected = this.#items[this.#selectedIndex];
 		if (selected?.kind === "owner") {
 			const owner = this.#ownerStatus();
+			if (this.#liveChildren(owner.agentId).length === 0) return;
 			let ancestor = [...this.#options.live, ...this.#options.dormant].find(
 				({ agentId }) => agentId === this.#scopeAgentId,
 			);
@@ -737,9 +734,7 @@ class AgentSelectorSurface implements Component {
 			return;
 		}
 		if (!selected?.status) return;
-		const firstChild = this.#options.live.find(
-			(status) => status.directSpawnerAgentId === selected.value,
-		);
+		const firstChild = this.#liveChildren(selected.value)[0];
 		if (!firstChild) return;
 		this.#scopeAgentId = selected.value;
 		this.#selectedValueByTab.live = firstChild.agentId;
@@ -769,13 +764,15 @@ class AgentSelectorSurface implements Component {
 				({ agentId }) => agentId === current?.directSpawnerAgentId,
 			);
 		}
-		const regions: LineRegion[] = [{
-			start: 0, end: visibleWidth("[›]"), text: this.#theme.fg("toolTitle", "[›]"),
+		const rootControl = this.#liveChildren(owner.agentId).length > 0 ? "[›]" : "";
+		const regions: LineRegion[] = rootControl ? [{
+			start: 0, end: visibleWidth(rootControl), text: this.#theme.fg("toolTitle", rootControl),
 			action: { kind: "children", value: owner.agentId },
-		}];
-		if (ancestors.length === 0) return { text: "[›]", regions };
+		}] : [];
+		if (ancestors.length === 0) return { text: rootControl, regions };
 		const visibleAncestors = ancestors.slice(-MAX_BREADCRUMB_AGENT_SEGMENTS);
-		const prefix = () => `[›] ${ancestors.length > visibleAncestors.length ? "… / " : ""}`;
+		const rootPrefix = `${rootControl || " /"} `;
+		const prefix = () => rootPrefix + (ancestors.length > visibleAncestors.length ? "… / " : "");
 		const title = () => prefix() + visibleAncestors.map(({ label }) => label).join(" / ");
 		while (visibleAncestors.length > 1 && visibleWidth(title()) > width) {
 			visibleAncestors.shift();
@@ -794,9 +791,9 @@ class AgentSelectorSurface implements Component {
 			return { text: title(), regions };
 		}
 		// Older-path omission and the current (possibly truncated) label are informational.
-		return { text: "[›] " + truncateToWidth(
+		return { text: rootPrefix + truncateToWidth(
 			visibleAncestors.at(-1)?.label ?? "",
-			Math.max(0, width - visibleWidth("[›] ")), "…",
+			Math.max(0, width - visibleWidth(rootPrefix)), "…",
 		), regions };
 	}
 

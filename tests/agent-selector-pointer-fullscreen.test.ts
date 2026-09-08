@@ -435,3 +435,46 @@ test("truncated Agent summaries keep tint through their padding without swallowi
 	for (let x = p.x; x < child.x; x++) assert.equal(row.getCell(x)!.getBgColor(), 8);
 	assert.equal(row.getCell(child.x)!.isBgDefault(), true);
 });
+
+test("dormant-only children expose no child-navigation control, including Owner", { timeout: 5_000 }, async (t) => {
+	const h = await harness(t, { live: [status("owner", "Owner", null)], dormant: [sleeping], selectedAgentId: "owner" });
+	assert.doesNotMatch((await h.frame()).join("\n"), /\[›\]|\[\d+ child/);
+	await h.input("l");
+	assert.doesNotMatch((await h.frame()).join("\n"), /\[›\]|\[\d+ child/);
+	const owner = await h.point("[Owner]");
+	// The cell formerly occupied by the root chevron is now informational.
+	h.terminal.mouse(0, owner.x + "[Owner]".length, owner.y);
+	h.terminal.mouse(0, owner.x + "[Owner]".length, owner.y, true);
+	await h.frame();
+	assert.equal(h.resolved, false);
+
+	const parent = await harness(t, {
+		live: [status("owner", "Owner", null), status("branch", "Branch")],
+		dormant: [{ ...sleeping, directSpawnerAgentId: "branch" }],
+		selectedAgentId: "branch",
+	});
+	assert.doesNotMatch((await parent.frame()).join("\n"), /\[\d+ child/);
+	await parent.input("l");
+	assert.match((await parent.frame()).join("\n"), /→ Branch/);
+	// Without a child button, the trailing content remains part of the open action.
+	const p = await parent.point("Branch");
+	const right = (await parent.frame())[p.y]!.lastIndexOf("│");
+	parent.terminal.mouse(0, right - 2, p.y);
+	parent.terminal.mouse(0, right - 2, p.y, true);
+	await parent.frame();
+	assert.deepEqual(await parent.result, { kind: "select_agent", agentId: "branch" });
+});
+
+test("mixed children count and browse only the live roster, including idle children", { timeout: 5_000 }, async (t) => {
+	const h = await harness(t, {
+		live: [status("owner", "Owner", null), status("branch", "Branch"), status("child", "Idle Child", "branch")],
+		dormant: [{ ...sleeping, directSpawnerAgentId: "branch" }],
+		selectedAgentId: "branch",
+	});
+	assert.match((await h.frame()).join("\n"), /\[1 child ›\]/);
+	await h.click("[1 child ›]");
+	assert.match((await h.frame()).join("\n"), /→ Idle Child/);
+	assert.doesNotMatch((await h.frame()).join("\n"), /Sleeping/);
+	await h.click("[›]");
+	assert.match((await h.frame()).join("\n"), /→ Branch/);
+});
