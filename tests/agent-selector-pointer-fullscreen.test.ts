@@ -171,23 +171,63 @@ test("hover highlights without moving keyboard selection; details and other butt
 	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "branch" });
 });
 
-test("wheel is roster-scoped and keeps scrolling hit targets correct after resizing", { timeout: 5_000 }, async (t) => {
-	const live = [status("owner", "Owner", null), ...Array.from({ length: 25 }, (_, i) => status("agent-" + i, "Agent " + String(i).padStart(2, "0")))];
-	const h = await harness(t, { live, selectedAgentId: "agent-0" });
-	for (const target of ["Live", "Owner", "informational details", "o Owner"]) {
-		const p = await h.point(target);
+test("wheel scrolls the roster viewport without changing selection", { timeout: 5_000 }, async (t) => {
+	const live = [status("owner", "Owner", null), ...Array.from({ length: 25 }, (_, i) => status("agent-" + String(i).padStart(2, "0"), "Agent " + String(i).padStart(2, "0")))];
+	const h = await harness(t, { live, selectedAgentId: "agent-05" });
+	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
+	assert.match((await h.frame()).join("\n"), /agent-05/);
+	const selected = await h.point("Agent 05");
+	for (let step = 0; step < 2; step++) h.terminal.mouse(65, selected.x, selected.y);
+	await h.frame();
+	const scrolled = (await h.frame()).join("\n");
+	assert.match(scrolled, /→ Agent 05/, "wheel keeps the selected Agent");
+	assert.match(scrolled, /agent-05/, "wheel keeps the selected Agent's details");
+	assert.doesNotMatch(scrolled, /Agent 00/, "wheel advances the visible roster window");
+
+	// Wheel bounds do not move selection back to the top or bottom.
+	const target = await h.point("Agent 05");
+	for (let step = 0; step < 30; step++) h.terminal.mouse(65, target.x, target.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /Agent 24/);
+	for (let step = 0; step < 30; step++) h.terminal.mouse(64, target.x, target.y);
+	await h.frame();
+	assert.match((await h.frame()).join("\n"), /→ Agent 05/);
+	assert.match((await h.frame()).join("\n"), /Agent 00/);
+
+	// Keyboard selection still moves the selected row and keeps it visible.
+	const keyboard = await harness(t, { live, selectedAgentId: "agent-05" });
+	const keyboardTarget = await keyboard.point("Agent 05");
+	keyboard.terminal.mouse(65, keyboardTarget.x, keyboardTarget.y);
+	await keyboard.input("\x1b[B");
+	assert.match((await keyboard.frame()).join("\n"), /→ Agent 06/);
+	await keyboard.input("\x1b");
+
+	// Clicking a row revealed only by wheel selects that row.
+	const click = await harness(t, { live, selectedAgentId: "agent-05" });
+	const clickTarget = await click.point("Agent 05");
+	for (let step = 0; step < 8; step++) click.terminal.mouse(65, clickTarget.x, clickTarget.y);
+	await click.frame();
+	await click.click("Agent 15");
+	assert.deepEqual(await click.result, { kind: "select_agent", agentId: "agent-15" });
+
+	const tiny = await harness(t, {
+		live: [status("owner", "Owner", null), status("tiny", "Tiny")],
+		selectedAgentId: "tiny",
+	});
+	const tinyTarget = await tiny.point("Tiny");
+	tiny.terminal.mouse(65, tinyTarget.x, tinyTarget.y);
+	await tiny.frame();
+	assert.match((await tiny.frame()).join("\n"), /→ Tiny/, "tiny rosters keep their selection at the scroll bound");
+	await tiny.input("\x1b");
+
+	// Chrome wheel remains handled but does not scroll the roster.
+	for (const targetText of ["Live", "Owner", "informational details", "o Owner"]) {
+		const p = await h.point(targetText);
 		h.terminal.mouse(65, p.x, p.y);
 		await h.frame();
-		assert.match((await h.frame()).join("\n"), /→ Agent 00/);
+		assert.match((await h.frame()).join("\n"), /→ Agent 05/);
 	}
-	for (let step = 0; step < 12; step++) {
-		const lines = await h.frame();
-		const row = lines.find((line) => line.includes("→ Agent"))!;
-		const p = await h.point(row.trim().replace(/^│\s*/, "").split("  ")[0]!);
-		h.terminal.mouse(65, p.x, p.y);
-		await h.frame();
-	}
-	assert.doesNotMatch((await h.frame()).join("\n"), /→ Agent 00/);
+
 	for (const [columns, rows] of [[46, 15], [24, 10], [120, 30]]) {
 		h.terminal.resize(columns!, rows!);
 		const lines = await h.frame();
@@ -200,11 +240,9 @@ test("wheel is roster-scoped and keeps scrolling hit targets correct after resiz
 		assert.ok(right - left + 1 <= Math.min(80, columns!));
 		assert.equal(left, Math.floor((columns! - (right - left + 1)) / 2));
 	}
-	const lines = await h.frame();
-	const selected = lines.find((line) => line.includes("→ Agent"))!.match(/Agent (\d+)/)![1]!;
-	await h.click("Agent " + selected);
+	await h.click("Agent 05");
 	assert.equal(h.resolved, true);
-	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "agent-" + Number(selected) });
+	assert.deepEqual(await h.result, { kind: "select_agent", agentId: "agent-05" });
 });
 
 test("async preparation retains keyboard focus and blocks pointer actions inside the panel", { timeout: 5_000 }, async (t) => {

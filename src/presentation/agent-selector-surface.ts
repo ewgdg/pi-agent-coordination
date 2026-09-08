@@ -136,6 +136,7 @@ class AgentSelectorSurface implements Component {
 	#items: AgentSelectorItem[] = [];
 	#selectedIndex = 0;
 	#visibleRows = 1;
+	#rosterScrollOffset = 0;
 	#list: SelectList;
 	#selectionPending = false;
 	#hitRegions: HitRegion[] = [];
@@ -225,6 +226,7 @@ class AgentSelectorSurface implements Component {
 			(matchesKey(listInput, Key.down) && this.#selectedIndex === this.#items.length - 1)
 		) return;
 		this.#list.handleInput(listInput);
+		this.#ensureSelectedVisible();
 		this.#tui.requestRender();
 	}
 
@@ -246,9 +248,16 @@ class AgentSelectorSurface implements Component {
 			if (this.#rosterRows.has(event.y) &&
 				event.x >= this.#contentLeft && event.x < this.#contentLeft + this.#contentWidth &&
 				event.wheelDelta) {
-				// SelectList's public wheel behavior scrolls by moving selection one row.
-				this.#list.handleMouse(event);
+				// Wheel browses the visible roster independently from selection.
+				const delta = event.wheelDelta < 0 ? -1 : 1;
+				const maximumOffset = this.#maximumRosterScrollOffset();
+				const nextOffset = Math.max(0, Math.min(
+					maximumOffset, this.#rosterScrollOffset + delta,
+				));
+				const changed = nextOffset !== this.#rosterScrollOffset;
+				this.#rosterScrollOffset = nextOffset;
 				this.#hoveredAction = undefined;
+				return { handled: true, render: changed };
 			}
 			return { handled: true };
 		}
@@ -399,12 +408,17 @@ class AgentSelectorSurface implements Component {
 		// Rebuilds must remember the resolved fallback, not an absent preferred item.
 		this.#selectedValueByTab[this.#activeTab] = this.#items[this.#selectedIndex]?.value;
 		list.setSelectedIndex(this.#selectedIndex);
+		this.#rosterScrollOffset = Math.max(0, Math.min(
+			this.#selectedIndex - Math.floor(this.#visibleRows / 2),
+			this.#maximumRosterScrollOffset(),
+		));
 		list.onSelectionChange = (selected) => {
 			const index = this.#items.indexOf(selected as AgentSelectorItem);
 			if (index < 0) return;
 			this.#selectedIndex = index;
 			this.#selectedValueByTab[this.#activeTab] = selected.value;
 		};
+		this.#ensureSelectedVisible();
 		list.onSelect = ({ value }) => this.#selectItem(value);
 		list.onCancel = () => this.#done(undefined);
 		// Both live refresh and resize rebuild items while preparation can be pending.
@@ -598,13 +612,48 @@ class AgentSelectorSurface implements Component {
 		};
 	}
 
+	#maximumRosterScrollOffset(): number {
+		return Math.max(0, this.#items.length - this.#visibleRows);
+	}
+
+	#ensureSelectedVisible(): void {
+		const maximumOffset = this.#maximumRosterScrollOffset();
+		if (this.#selectedIndex < this.#rosterScrollOffset) {
+			this.#rosterScrollOffset = this.#selectedIndex;
+		} else if (this.#selectedIndex >= this.#rosterScrollOffset + this.#visibleRows) {
+			this.#rosterScrollOffset = this.#selectedIndex - this.#visibleRows + 1;
+		}
+		this.#rosterScrollOffset = Math.max(0, Math.min(this.#rosterScrollOffset, maximumOffset));
+	}
+
+	#renderRosterViewport(width: number, startIndex: number, visibleItems: AgentSelectorItem[]): string[] {
+		const selectedOffset = this.#selectedIndex - startIndex;
+		const selectedVisible = selectedOffset >= 0 && selectedOffset < visibleItems.length;
+		const theme = selectedVisible
+			? this.#selectListTheme()
+			: {
+				selectedPrefix: (text: string) => text,
+				selectedText: (text: string) => text.startsWith("→ ") ? "  " + text.slice(2) : text,
+				description: (text: string) => this.#theme.fg("dim", text),
+				scrollInfo: (text: string) => this.#theme.fg("muted", text),
+				noMatch: (text: string) => this.#theme.fg("muted", text),
+			};
+		const viewport = new SelectList(visibleItems, Math.max(1, visibleItems.length), theme);
+		viewport.setSelectedIndex(selectedVisible ? selectedOffset : 0);
+		const lines = viewport.render(width).slice(0, visibleItems.length);
+		if (startIndex > 0 || startIndex + visibleItems.length < this.#items.length) {
+			const range = `  (${this.#selectedIndex + 1}/${this.#items.length})`;
+			lines.push(this.#theme.fg("muted", truncateToWidth(range, Math.max(0, width - 2), "")));
+		}
+		return lines;
+	}
+
 	#renderPinnedList(width: number): SelectorLine[] {
 		const startIndex = Math.max(0, Math.min(
-			this.#selectedIndex - Math.floor(this.#visibleRows / 2),
-			this.#items.length - this.#visibleRows,
+			this.#rosterScrollOffset, this.#maximumRosterScrollOffset(),
 		));
 		const visibleItems = this.#items.slice(startIndex, startIndex + this.#visibleRows);
-		const listLines = this.#list.render(width);
+		const listLines = this.#renderRosterViewport(width, startIndex, visibleItems);
 		const hasAgents = this.#items.some(({ kind }) => kind === "agent");
 		const visibleAttention = visibleItems.some(({ kind }) => kind === "decide" || kind === "attention");
 		const visibleBodyRows = visibleItems.filter(({ kind }) => kind !== "owner").length;
