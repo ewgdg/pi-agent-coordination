@@ -4,6 +4,11 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { inspectStandaloneMessageDelivery } from "../src/protocol/message-delivery.ts";
+import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
+import { createMessageDeliveryItem, inspectMessageDelivery, type Message } from "../src/protocol/message.ts";
+import { createCreationRequestDeliveryItem, inspectCreationRequestDelivery } from "../src/protocol/creation-request.ts";
+import { inspectAnswerDelivery } from "../src/protocol/message.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 
@@ -51,11 +56,10 @@ test("each Message in one ordered batch has independent Delivery proof", () => {
 		recipientAgentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		source: firstSource,
-		expectedProjection: {
+		identity: {
 			kind: "message",
 			messageId: "message-one",
 			fromAgentId: "sender-agent",
-			content: "First admitted direction.",
 		},
 		subject: "Message message-one",
 	});
@@ -63,11 +67,10 @@ test("each Message in one ordered batch has independent Delivery proof", () => {
 		recipientAgentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		source: secondSource,
-		expectedProjection: {
+		identity: {
 			kind: "message",
 			messageId: "message-two",
 			fromAgentId: "sender-agent",
-			content: "Second admitted direction.",
 		},
 		subject: "Message message-two",
 	});
@@ -112,7 +115,7 @@ test("Agent Request Delivery exposes requestMessageId as its correlation identit
 		recipientAgentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		source,
-		expectedProjection: projection,
+		identity: { kind: projection.kind, messageId: projection.requestMessageId, fromAgentId: projection.fromAgentId },
 		subject: "Request request-message",
 	}).deliveryEvidence, {
 		agentId: recipientAgentId,
@@ -165,7 +168,7 @@ test("host-authored obligation reminders do not become Agent Message evidence", 
 		recipientAgentId,
 		transcript: transcriptFromSessionManager(sessionManager).inspect(),
 		source,
-		expectedProjection: projection,
+		identity: { kind: projection.kind, messageId: projection.messageId, fromAgentId: projection.fromAgentId },
 		subject: "Message message-before-reminder",
 	}).deliveryEvidence, {
 		agentId: recipientAgentId,
@@ -202,9 +205,102 @@ test("one Delivery batch cannot repeat a Message source", () => {
 			recipientAgentId,
 			transcript: transcriptFromSessionManager(sessionManager).inspect(),
 			source,
-			expectedProjection: projection,
+			identity: { kind: projection.kind, messageId: projection.messageId, fromAgentId: projection.fromAgentId },
 			subject: "Message repeated-message",
 		}),
 		/Message Delivery repeats a source/,
 	);
+});
+
+test("committed receipts trust content for every Message kind while writers preserve it", () => {
+	for (const kind of ["message", "request", "answer", "request_cancellation"] as const) {
+		const manager = SessionManager.inMemory(process.cwd());
+		const recipientAgentId = manager.getSessionId();
+		manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: recipientAgentId });
+		const common = { messageId: "identity", workflowId: "workflow", fromAgentId: "sender",
+			targetAgentId: recipientAgentId, deliveryMode: "deferred" as const,
+			source: { agentId: "sender", entryId: "entry", toolCallId: "call" } };
+		const message: Message = kind === "message" ? { ...common, kind, origin: "agent_message", content: "intended" }
+			: kind === "request" ? { ...common, kind, origin: "agent_message", question: "intended" }
+			: kind === "answer" ? { ...common, kind, requestId: "request", answer: "intended" }
+			: { ...common, kind, requestId: "request", reason: "intended" };
+		const item = createMessageDeliveryItem(message);
+		const textKey = kind === "message" ? "content" : kind === "request" ? "question" : kind === "answer" ? "answer" : "reason";
+		assert.equal((item.projection as unknown as Record<string, unknown>)[textKey], "intended");
+		const written = createMessageDelivery([item]);
+		assert.deepEqual(JSON.parse(written.content), { messages: [item.projection] });
+		const inspect = () => inspectMessageDelivery({ recipientAgentId, transcript: transcriptFromSessionManager(manager).inspect(), message });
+		assert.equal(inspect().deliveryEvidence, undefined, "not committed is not delivered");
+		const entryId = manager.appendCustomMessageEntry(written.customType,
+			JSON.stringify({ messages: [{ ...item.projection, [textKey]: "different committed text" }] }),
+			written.display, written.details);
+		assert.deepEqual(inspect().deliveryEvidence, { agentId: recipientAgentId, entryId });
+		for (const changed of [{ messageId: "other" }, { fromAgentId: "other" },
+			{ kind: kind === "message" ? "request" : "message" },
+			...(kind === "answer" || kind === "request_cancellation" ? [{ requestId: "other" }] : [])]) {
+			assert.throws(() => inspectMessageDelivery({ recipientAgentId, transcript: transcriptFromSessionManager(manager).inspect(),
+				message: { ...message, ...changed } as Message }), /Delivery differs from its source/);
+		}
+		assert.equal(inspectMessageDelivery({ recipientAgentId, transcript: transcriptFromSessionManager(manager).inspect(),
+			message: { ...message, source: { ...message.source, toolCallId: "unrelated" } } }).deliveryEvidence, undefined);
+		assert.throws(() => inspectMessageDelivery({ recipientAgentId: "other", transcript: transcriptFromSessionManager(manager).inspect(), message }), /recipient/);
+	}
+});
+
+test("Creation Request receipt needs identity, not reconstructed spawn question", () => {
+	const manager = SessionManager.inMemory(process.cwd());
+	const recipientAgentId = manager.getSessionId();
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: recipientAgentId });
+	const source = { agentId: "spawner", entryId: "spawn-entry", toolCallId: "spawn-call" };
+	const requestId = deriveMessageIdentity(source);
+	assert.deepEqual(createCreationRequestDeliveryItem({ requestId, fromAgentId: "spawner", source, question: "Intended spawn input" }),
+		{ source, projection: { kind: "request", requestMessageId: requestId, fromAgentId: "spawner", question: "Intended spawn input" } });
+	const entryId = manager.appendCustomMessageEntry("agent-coordination.message-delivery",
+		JSON.stringify({ messages: [{ kind: "request", requestMessageId: requestId,
+			fromAgentId: "spawner", question: "Committed question is authoritative." }] }), true, { messages: [source] });
+	const inspect = () => inspectCreationRequestDelivery({ recipientAgentId,
+		transcript: transcriptFromSessionManager(manager).inspect(), requestId, fromAgentId: "spawner", source });
+	assert.deepEqual(inspect().deliveryEvidence, { agentId: recipientAgentId, entryId });
+	assert.throws(() => inspectCreationRequestDelivery({ recipientAgentId,
+		transcript: transcriptFromSessionManager(manager).inspect(), requestId: "unrelated", fromAgentId: "spawner", source }),
+		/Creation Request .* Delivery differs from its source/);
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: recipientAgentId });
+	assert.equal(inspect().deliveryEvidence, undefined, "receipt before current identity is not current-scope delivery");
+});
+
+test("committed Answer retrieval trusts text but preserves source and Request correlation", () => {
+	const manager = SessionManager.inMemory(process.cwd());
+	const requesterAgentId = manager.getSessionId();
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: requesterAgentId });
+	const source = { agentId: "responder", entryId: "answer-entry", toolCallId: "answer-call" };
+	const answer = { kind: "answer" as const, messageId: deriveMessageIdentity(source),
+		requestId: "request", fromAgentId: "responder", targetAgentId: requesterAgentId, source,
+		answer: "Different original answer" };
+	const entryId = manager.appendMessage({ role: "toolResult", toolCallId: "retrieve",
+		toolName: "agent_message", content: [], isError: false, timestamp: Date.now(),
+		details: { disposition: "answer_delivered", requestMessageId: answer.requestId,
+			answerId: answer.messageId, fromAgentId: answer.fromAgentId, answer: "Authoritative retrieved text", answerSource: source } });
+	assert.deepEqual(inspectAnswerDelivery({ requesterAgentId, transcript: transcriptFromSessionManager(manager).inspect(), answer }).deliveryEvidence,
+		{ agentId: requesterAgentId, entryId });
+	assert.throws(() => inspectAnswerDelivery({ requesterAgentId, transcript: transcriptFromSessionManager(manager).inspect(),
+		answer: { ...answer, requestId: "other" } }), /Retrieval differs from its source/);
+});
+
+test("receipt trust does not relax exact schemas, visibility or duplicate policy", () => {
+	for (const scenario of ["extra-field", "hidden", "duplicate"] as const) {
+		const manager = SessionManager.inMemory(process.cwd());
+		const recipientAgentId = manager.getSessionId();
+		manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: recipientAgentId });
+		const source = { agentId: "sender", entryId: "entry", toolCallId: "call" };
+		const identity = { kind: "message" as const, messageId: "message", fromAgentId: "sender" };
+		const content = JSON.stringify({ messages: [{ ...identity, content: "committed",
+			...(scenario === "extra-field" ? { extra: true } : {}) }] });
+		manager.appendCustomMessageEntry("agent-coordination.message-delivery", content,
+			scenario !== "hidden", { messages: [source] });
+		if (scenario === "duplicate") manager.appendCustomMessageEntry(
+			"agent-coordination.message-delivery", content, true, { messages: [source] });
+		assert.throws(() => inspectStandaloneMessageDelivery({ recipientAgentId,
+			transcript: transcriptFromSessionManager(manager).inspect(), source, identity, subject: "Message" }),
+			scenario === "extra-field" ? /invalid shape/ : scenario === "hidden" ? /model-visible/ : /duplicate Deliveries/);
+	}
 });

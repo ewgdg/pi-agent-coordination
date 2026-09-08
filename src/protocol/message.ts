@@ -15,6 +15,7 @@ import {
 import {
 	inspectStandaloneMessageDelivery,
 	type DeliveryInspection,
+	type DeliveryIdentity,
 	type EntryPointer,
 	type MessageDeliveryItem,
 	type ModelVisibleMessage,
@@ -526,14 +527,17 @@ function validateMessageAuthorResult(
 export function inspectMessageDelivery(options: {
 	recipientAgentId: string;
 	transcript: TranscriptInspection;
-	message: Message;
+	message: DeliveryIdentity & Pick<Message, "source" | "targetAgentId">;
 }): DeliveryInspection {
 	const { recipientAgentId, transcript, message } = options;
+	if (recipientAgentId !== message.targetAgentId) {
+		throw new ProtocolInvariantError("Message Delivery inspection names another recipient");
+	}
 	return inspectStandaloneMessageDelivery({
 		recipientAgentId,
 		transcript,
 		source: message.source,
-		expectedProjection: modelVisibleProjection(message),
+		identity: message,
 		subject: `${messageSubject(message)} ${message.messageId}`,
 	});
 }
@@ -541,7 +545,7 @@ export function inspectMessageDelivery(options: {
 export function inspectAnswerDelivery(options: {
 	requesterAgentId: string;
 	transcript: TranscriptInspection;
-	answer: Extract<Message, { kind: "answer" }>;
+	answer: Extract<DeliveryIdentity, { kind: "answer" }> & Pick<Message, "source" | "targetAgentId">;
 }): DeliveryInspection {
 	const { requesterAgentId, transcript, answer } = options;
 	const customDelivery = inspectMessageDelivery({
@@ -558,8 +562,7 @@ export function inspectAnswerDelivery(options: {
 		if (
 			retrieval.requestId !== answer.requestId ||
 			retrieval.answerId !== answer.messageId ||
-			retrieval.fromAgentId !== answer.fromAgentId ||
-			retrieval.answer !== answer.answer
+			retrieval.fromAgentId !== answer.fromAgentId
 		) {
 			throw new ProtocolInvariantError(
 				`Answer ${answer.messageId} Retrieval differs from its source`,
@@ -749,7 +752,7 @@ function modelVisibleProjection(message: Message): ModelVisibleMessage {
 	}
 }
 
-function messageSubject(message: Message): string {
+function messageSubject(message: Pick<Message, "kind">): string {
 	switch (message.kind) {
 		case "message":
 			return "Message";

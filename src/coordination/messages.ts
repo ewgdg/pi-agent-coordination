@@ -526,7 +526,6 @@ export class MessageCoordinator {
 					transcript: recipient.transcript.inspect(),
 					requestId,
 					fromAgentId,
-					question,
 					source,
 				}).deliveryEvidence,
 			isSuppressed: () => this.#isCancellationDelivered(requestId, recipient),
