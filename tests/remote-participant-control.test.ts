@@ -199,7 +199,7 @@ test("Control-backed child presentation requests preserve exact selector snapsho
 		dormant: [],
 		selectedAgentId: "remote-agent",
 		humanAttention: [],
-		operationalAttention: [],
+		operationalAttention: [], reports: [],
 	};
 	const cancellation = new AbortController();
 	const request = (async (method: string, payload: unknown, signal?: AbortSignal) => {
@@ -226,10 +226,11 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 	const calls: unknown[] = [];
 	const handlers: OwnerParticipantRequestHandlers<"moderator"> = {
 		presentation: {
+			async markReportRead() {},
 			async snapshot() {
 				return {
 					live: [], dormant: [], selectedAgentId: "remote-agent",
-					humanAttention: [], operationalAttention: [],
+					humanAttention: [], operationalAttention: [], reports: [],
 				};
 			},
 			async select(action, signal) {
@@ -269,6 +270,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 				calls.push(["ask", toolCallId, input, signal]);
 				return { requestId: "human-owner", answer: "Yes" };
 			},
+			async reportToUser() { return { reportId: "report", createdAt: "2026-01-01T00:00:00.000Z" }; },
 			async moderatorControl(toolCallId, input) {
 				calls.push(["moderator", toolCallId, input]);
 				return { disposition: "resolved" };
@@ -337,7 +339,7 @@ test("Owner dispatch awaits the authenticated child's presentation selection wit
 		presentation: {
 			snapshot: () => ({
 				live: [], dormant: [], selectedAgentId: "remote-agent",
-				humanAttention: [], operationalAttention: [],
+				humanAttention: [], operationalAttention: [], reports: [],
 			}),
 			select: async (_action: unknown, signal: AbortSignal) => {
 				receivedSignal = signal;
@@ -362,4 +364,41 @@ test("Owner dispatch awaits the authenticated child's presentation selection wit
 		error instanceof Error && error.name === "AbortError"
 	);
 	assert.equal(receivedSignal, cancellation.signal);
+});
+
+test("Moderator report transport is nonblocking and ordinary participants cannot publish", async () => {
+	const input = {
+		symptom: "Delivery stopped", suspectedDefect: "No continuation after dispatch",
+		uncertainty: "Cause not proven", recoveryActions: "Retried the message",
+		recoveryOutcome: "Still pending", evidence: ["agent/entry/call"],
+	};
+	const receipt = { reportId: "report-1", createdAt: "2026-01-01T00:00:00.000Z" };
+	const calls: unknown[] = [];
+	const request = (async (method: string, payload: unknown, signal?: AbortSignal) => {
+		calls.push([method, payload, signal]);
+		return receipt;
+	}) as ChildParticipantControlRequester;
+	const moderator = createControlBackedChildParticipantHandlers("moderator", request);
+	assert.deepEqual(await moderator.coordination.reportToUser("report-call", input), receipt);
+	assert.deepEqual(calls, [["coordination.reportToUser", { toolCallId: "report-call", input }, undefined]]);
+	const ordinary = createControlBackedChildParticipantHandlers("ordinary", request);
+	assert.equal("reportToUser" in ordinary.coordination, false);
+	await assert.rejects(dispatchParticipantRequestToOwner({
+		coordination: ordinary.coordination,
+		lifecycle: ordinary.lifecycle,
+		presentation: {} as OwnerParticipantRequestHandlers<"ordinary">["presentation"],
+	}, {
+		method: "coordination.reportToUser", payload: { toolCallId: "report-call", input },
+		signal: new AbortController().signal,
+	} as ControlRequest<typeof agentControlProtocol>), /child_runtime_owner_request_forbidden/);
+});
+
+test("only explicit report Mark read crosses the acknowledgment control boundary", async () => {
+	const calls: unknown[] = [];
+	const presentation = createControlBackedChildPresentationHandlers((async (method, payload) => {
+		calls.push([method, payload]);
+		return {};
+	}) as ChildParticipantControlRequester);
+	await presentation.markReportRead("retained-report");
+	assert.deepEqual(calls, [["presentation.reports.markRead", { reportId: "retained-report" }]]);
 });

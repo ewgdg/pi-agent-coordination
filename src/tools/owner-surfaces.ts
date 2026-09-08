@@ -1,3 +1,6 @@
+import { copyToClipboard } from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
+import { openModeratorReportSurface } from "../presentation/moderator-report-surface.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import type {
@@ -5,7 +8,7 @@ import type {
 	ModeratorAgentCoordinatorView,
 	OrdinaryAgentCoordinatorView,
 } from "../coordination/workflow-coordinator.ts";
-import { openAgentSelectorSurface } from "../presentation/agent-selector-surface.ts";
+import { openAgentSelectorSurface, type AgentSelectorAction } from "../presentation/agent-selector-surface.ts";
 import {
 	openAgentViewSurface,
 	startPhysicalAgentViewSurface,
@@ -79,24 +82,28 @@ export function registerAgentsCommand(
 				reopenSelector = false;
 				const selection = createAgentSelectionSession(view, selectedAgentId);
 				let physicalSurface: PhysicalAgentViewSurface | undefined;
-				const action = await openAgentSelectorSurface(ctx.ui, {
+				let selectorTui: TUI | undefined;
+				const prepareSelection = async (action: AgentSelectorAction, ownerTui: TUI) => {
+					selectorTui = ownerTui;
+					if (action.kind === "open_report") return;
+					await selection.prepare(action);
+					const preparedAgentView = selection.preparedView();
+					if (!preparedAgentView) return;
+					physicalSurface = startPhysicalAgentViewSurface(preparedAgentView, {
+						ownerTui,
+						requestShutdown: () => ctx.shutdown(),
+					});
+					if (physicalSurface) {
+						const unbind = view.bindPhysicalAgentSurface(physicalSurface);
+						void physicalSurface.closed.finally(unbind);
+					}
+					await physicalSurface?.ready;
+				};
+				let action = await openAgentSelectorSurface(ctx.ui, {
 					...createAgentSelectorSnapshot(view, selectedAgentId),
 					addChangeHandler: (handler) => view.addAgentActivityChangeHandler(() =>
 						handler(createAgentSelectorSnapshot(view, selectedAgentId))),
-					async prepareSelection(action, ownerTui) {
-						await selection.prepare(action);
-						const preparedAgentView = selection.preparedView();
-						if (!preparedAgentView) return;
-						physicalSurface = startPhysicalAgentViewSurface(preparedAgentView, {
-							ownerTui,
-							requestShutdown: () => ctx.shutdown(),
-						});
-						if (physicalSurface) {
-							const unbind = view.bindPhysicalAgentSurface(physicalSurface);
-							void physicalSurface.closed.finally(unbind);
-						}
-						await physicalSurface?.ready;
-					},
+					prepareSelection,
 					onSelectionError(error) {
 						ctx.ui.notify(
 							`Agent view failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -104,6 +111,21 @@ export function registerAgentsCommand(
 						);
 					},
 				});
+				if (action?.kind === "open_report") {
+					const reportId = action.reportId;
+					const item = view.reportHistory().find(({ report }) => report.reportId === reportId);
+					if (!item) throw new Error("Report is unavailable");
+					const outcome = await openModeratorReportSurface(ctx.ui, item, {
+						markRead: () => view.markReportRead(reportId),
+						copyReport: copyToClipboard,
+					});
+					if (outcome !== "view_reporter") {
+						reopenSelector = true;
+						continue;
+					}
+					action = { kind: "select_agent", agentId: item.report.reporter.agentId };
+					await prepareSelection(action, selectorTui!);
+				}
 				if (action?.kind === "decide") {
 					try {
 						await selection.complete(action);
@@ -235,6 +257,7 @@ export function participantCoordinatorHandlers(
 			...common,
 			askUserQuestion: (toolCallId, input, signal) =>
 				moderatorView().askHuman(toolCallId, input, signal),
+			reportToUser: (toolCallId, input) => moderatorView().reportToUser(toolCallId, input),
 			moderatorControl: (toolCallId, input) =>
 				moderatorView().moderatorControl(toolCallId, input),
 		};

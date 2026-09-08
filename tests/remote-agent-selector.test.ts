@@ -78,6 +78,8 @@ function presentationView(options: {
 		selectionRoster: () => ({ live: [ownerStatus, childStatus], dormant: [] }),
 		humanAttention: options.humanAttention ?? (() => []),
 		operationalAttention: () => [],
+		reportHistory: () => [],
+		markReportRead: () => {},
 		openAgentView: options.openAgentView ?? (async () => undefined),
 		openAgentPresentation: options.openAgentPresentation ?? (async (agentId) => ({
 			kind: "selected",
@@ -104,7 +106,7 @@ test("selector snapshot is one exact scoped presentation boundary value", () => 
 		dormant: [],
 		selectedAgentId: "child",
 		humanAttention: attention,
-		operationalAttention: [],
+		operationalAttention: [], reports: [],
 	});
 });
 
@@ -145,6 +147,7 @@ test("remote registered /agents owner selects Owner without opening the selector
 	const actions: unknown[] = [];
 	let snapshotCalls = 0;
 	const presentation = {
+		async markReportRead() {},
 		async snapshot() {
 			snapshotCalls += 1;
 			return {
@@ -152,7 +155,7 @@ test("remote registered /agents owner selects Owner without opening the selector
 				dormant: [],
 				selectedAgentId: "child",
 				humanAttention: [],
-				operationalAttention: [],
+				operationalAttention: [], reports: [],
 			};
 		},
 		async select(action: unknown) {
@@ -190,6 +193,7 @@ test("registered /agents rejects unsupported arguments before opening or selecti
 
 	let remoteSnapshotCalls = 0;
 	const remoteCommand = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+		async markReportRead() {},
 		async snapshot() {
 			remoteSnapshotCalls += 1;
 			return {
@@ -197,7 +201,7 @@ test("registered /agents rejects unsupported arguments before opening or selecti
 				dormant: [],
 				selectedAgentId: "child",
 				humanAttention: [],
-				operationalAttention: [],
+				operationalAttention: [], reports: [],
 			};
 		},
 		async select() {
@@ -445,7 +449,7 @@ function captureCommand(register: (pi: ExtensionAPI) => void): CapturedCommand {
 test("remote selector uses completion delivered during snapshot acquisition, not the stale RPC result", { timeout: 5_000 }, async () => {
 	const initial = {
 		live: [ownerStatus, { ...childStatus, compacting: true }],
-		dormant: [], selectedAgentId: "child", humanAttention: [], operationalAttention: [],
+		dormant: [], selectedAgentId: "child", humanAttention: [], operationalAttention: [], reports: [],
 	};
 	const completed = {
 		...initial,
@@ -454,6 +458,7 @@ test("remote selector uses completion delivered during snapshot acquisition, not
 	let publish: ((snapshot: RemoteAgentSelectorSnapshot) => void) | undefined;
 	let removed = false;
 	const command = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+		async markReportRead() {},
 		async snapshot() {
 			// The child receives completion while the older Owner RPC is still pending.
 			await Promise.resolve();
@@ -496,6 +501,7 @@ test("remote selector releases its subscription when snapshot acquisition fails"
 	let subscribed = false;
 	let removed = false;
 	const command = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+		async markReportRead() {},
 		async snapshot() {
 			assert.equal(subscribed, true);
 			throw new Error("snapshot failed");
@@ -508,4 +514,68 @@ test("remote selector releases its subscription when snapshot acquisition fails"
 	}));
 	await assert.rejects(command.handler("", {} as ExtensionCommandContext), /snapshot failed/);
 	assert.equal(removed, true);
+});
+
+test("local and child /agents open immutable reports before explicitly selecting the stable reporter", { timeout: 5_000 }, async () => {
+	const report = {
+		reportId: "report-1", createdAt: "2026-01-01T00:00:00.000Z",
+		reporter: { agentId: "original-moderator", label: "Moderator" },
+		source: { agentId: "original-moderator", entryId: "original-entry", toolCallId: "original-call", transcriptPath: "/sessions/original.jsonl" },
+		symptom: "Delivery stopped", suspectedDefect: "Continuation absent", uncertainty: "Cause unknown",
+		recoveryActions: "Retried delivery", recoveryOutcome: "Still blocked", evidence: ["agent/entry/call"],
+	};
+	for (const mode of ["local", "child"] as const) {
+		const selected: unknown[] = [];
+		let acknowledged = false;
+		const snapshot = {
+			live: [ownerStatus, childStatus], dormant: [], selectedAgentId: "child",
+			humanAttention: [], operationalAttention: [], reports: [{ report }],
+		};
+		const command = mode === "local"
+			? captureCommand((pi) => registerAgentsCommand(pi, () => ({
+				...presentationView(),
+				reportHistory: () => [{ report }],
+				markReportRead: () => { acknowledged = true; },
+				addAgentActivityChangeHandler: () => () => {},
+				openAgentPresentation: async (agentId) => {
+					selected.push({ kind: "select_agent", agentId });
+					return { kind: "selected" };
+				},
+			})))
+			: captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+				snapshot: async () => snapshot,
+				markReportRead: async () => { acknowledged = true; },
+				select: async (action) => { selected.push(action); return { kind: "selected" }; },
+			}));
+		let surfaces = 0;
+		const ui = {
+			custom<T>(factory: (tui: TUI, theme: Theme, keys: KeybindingsManager, done: (result: T) => void) => Component) {
+				return new Promise<T>((resolve) => {
+					let component: Component & { dispose?(): void };
+					component = factory({
+						terminal: { rows: 40 }, requestRender() {},
+					} as TUI, {
+						fg: (_color: string, text: string) => text,
+						bg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					} as Theme, {} as KeybindingsManager, (value) => { component.dispose?.(); resolve(value); });
+					surfaces++;
+					if (surfaces === 1) {
+						assert.match(component.render(100).join("\n"), /REPORT/);
+						component.handleInput?.("\r");
+					} else {
+						assert.equal(surfaces, 2);
+						assert.deepEqual(selected, []);
+						assert.match(component.render(100).join("\n"), /original-moderator/);
+						component.handleInput?.("v");
+					}
+				});
+			},
+			notify(message: string) { throw new Error(message); },
+		} as unknown as ExtensionUIContext;
+		await command.handler("", { ui } as ExtensionCommandContext);
+		assert.deepEqual(selected, [{ kind: "select_agent", agentId: "original-moderator" }], mode);
+		assert.equal(acknowledged, false, mode);
+		assert.equal(surfaces, 2, mode);
+	}
 });

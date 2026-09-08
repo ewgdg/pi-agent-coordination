@@ -590,9 +590,10 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 	};
 	return {
 		presentation: {
+			markReportRead: async () => {},
 			snapshot: async () => ({
 				live: [status], dormant: [], selectedAgentId: agentId,
-				humanAttention: [], operationalAttention: [],
+				humanAttention: [], operationalAttention: [], reports: [],
 			}),
 			async select() { return { kind: "selected" }; },
 		},

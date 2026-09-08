@@ -173,6 +173,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		"ls",
 		"moderator_control",
 		"read",
+		"report_to_user",
 		"write",
 	]);
 

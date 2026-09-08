@@ -1,3 +1,6 @@
+import { boundedToolPreview } from "./bounded-preview.ts";
+import { Text } from "@earendil-works/pi-tui";
+import type { ReportToUserInput } from "../protocol/moderator-report.ts";
 import { obligationStack, resolveIncomingRequestReference } from "../protocol/obligation-focus.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
@@ -157,7 +160,10 @@ type HumanParticipantCoordinationToolHandler = Readonly<{
 	): Promise<HumanAnswer>;
 }>;
 
+export type ReportToUserReceipt = Readonly<{ reportId: string; createdAt: string }>;
+
 type ModeratorParticipantCoordinationToolHandler = Readonly<{
+	reportToUser(toolCallId: string, input: ReportToUserInput): Promise<ReportToUserReceipt>;
 	moderatorControl(
 		toolCallId: string,
 		input: ModeratorControlInput,
@@ -488,6 +494,15 @@ const moderatorControlParameters = objectRootUnion(Type.Union([
 	),
 ]));
 
+const reportToUserParameters = Type.Object({
+	symptom: Type.String({ minLength: 1, description: "Observed runtime malfunction." }),
+	suspectedDefect: Type.String({ minLength: 1, description: "Why the evidence suggests a runtime defect rather than expected behavior." }),
+	uncertainty: Type.String({ minLength: 1, description: "What remains unknown or unproven." }),
+	recoveryActions: Type.String({ minLength: 1, description: "Investigation and autonomous recovery actions attempted." }),
+	recoveryOutcome: Type.String({ minLength: 1, description: "Observed recovery outcome, including unresolved work." }),
+	evidence: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Exact transcript, entry, tool-call, diagnostic or other preserved evidence references." }),
+}, { additionalProperties: false });
+
 export const participantCoordinationToolSchemas = {
 	agent_message: agentMessageParameters,
 	agent_wait: agentWaitParameters,
@@ -496,6 +511,7 @@ export const participantCoordinationToolSchemas = {
 	agent_control: agentControlParameters,
 	ask_user_question: askUserQuestionParameters,
 	moderator_control: moderatorControlParameters,
+	report_to_user: reportToUserParameters,
 } as const;
 
 type AvailableHandlers = CommonParticipantCoordinationToolHandlers &
@@ -683,6 +699,28 @@ export function registerParticipantCoordinationTools<
 	}
 
 	if (role === "moderator") {
+		pi.registerTool<typeof reportToUserParameters, ReportToUserReceipt>({
+			name: "report_to_user",
+			label: "Report to User",
+			description: "Preserve an immutable suspected runtime defect report in the human Attention Inbox. Returns immediately without human acknowledgment; does not close an incident or settle an Answer obligation.",
+			promptSnippet: "Report suspected runtime defects nonblocking after investigation and autonomous recovery attempts.",
+			promptGuidelines: [
+				"Before report_to_user, investigate, preserve exact evidence, and attempt safe autonomous recovery. Distinguish suspected defects from uncertainty and record recovery outcomes.",
+				"Use report_to_user, not ask_user_question, for end-of-investigation runtime defect reporting. Reporting never resolves an unresolved incident or discharges an Answer obligation; use moderator_control only when its resolution predicates clear.",
+			],
+			executionMode: "sequential",
+			parameters: reportToUserParameters,
+			renderCall: (args, theme) => new Text(theme.fg("toolTitle", "Report to User") + " " + boundedToolPreview(args.symptom ?? ""), 0, 0),
+			renderResult: (result, _options, theme, context) => new Text(theme.fg(
+				context.isError ? "error" : result.details ? "success" : "muted",
+				!context.isError && result.details
+					? `Report retained · ${result.details.reportId}`
+					: boundedToolPreview(result.content.filter((part) => part.type === "text").map((part) => part.text).join("\n")),
+			), 0, 0),
+			async execute(toolCallId, parameters) {
+				return toolResult(await availableHandlers.reportToUser!(toolCallId, parameters));
+			},
+		});
 		pi.registerTool<typeof moderatorControlParameters, ModeratorControlReceipt>({
 			name: "moderator_control",
 			label: "Control Moderation",

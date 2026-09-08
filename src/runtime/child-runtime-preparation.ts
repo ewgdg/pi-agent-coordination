@@ -39,6 +39,7 @@ const COORDINATION_TOOLS_BY_ROLE = {
 		"agent_observe",
 		"ask_user_question",
 		"moderator_control",
+		"report_to_user",
 	],
 } as const;
 const COORDINATION_TOOL_NAMES = new Set<string>(

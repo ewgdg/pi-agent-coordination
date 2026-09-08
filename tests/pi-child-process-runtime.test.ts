@@ -1651,11 +1651,12 @@ function ordinaryOwnerHandlers(options: Readonly<{
 }> = {}): OwnerParticipantRequestHandlers<"ordinary"> {
 	return {
 		presentation: {
+			markReportRead: async () => {},
 			snapshot: async () => {
 				if (options.presentationSnapshotError) throw options.presentationSnapshotError;
 				return options.selectorSnapshot ?? ({
 					live: [], dormant: [], selectedAgentId: "process-child",
-					humanAttention: [], operationalAttention: [],
+					humanAttention: [], operationalAttention: [], reports: [],
 				});
 			},
 			async select(action) {
@@ -1752,7 +1753,7 @@ function processSelectorSnapshot(childAgentId: string): Awaited<ReturnType<
 		dormant: [],
 		selectedAgentId: childAgentId,
 		humanAttention: [],
-		operationalAttention: [],
+		operationalAttention: [], reports: [],
 	};
 }
 

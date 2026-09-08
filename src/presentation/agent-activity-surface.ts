@@ -1,3 +1,4 @@
+import type { ReportHistoryItem } from "../protocol/moderator-report.ts";
 import type {
 	ExtensionUIContext,
 	Theme,
@@ -42,6 +43,7 @@ export type AgentActivitySnapshot = Readonly<{
 	answerMode: boolean;
 	humanAttention: readonly HumanAttentionItem[];
 	operationalAttention: readonly OperationalIncidentAttention[];
+	reports?: readonly ReportHistoryItem[];
 }>;
 
 export type AgentActivitySource = Readonly<{
@@ -105,6 +107,7 @@ export class AgentActivityDock implements Component {
 			? this.#renderAttention(
 				snapshot.humanAttention,
 				snapshot.operationalAttention,
+				snapshot.reports ?? [],
 			)
 			: [];
 		const liveChildren = snapshot.children.filter(hasLiveRun);
@@ -144,6 +147,7 @@ export class AgentActivityDock implements Component {
 	#renderAttention(
 		human: readonly HumanAttentionItem[],
 		operational: readonly OperationalIncidentAttention[],
+		reports: readonly ReportHistoryItem[],
 	): string[] {
 		const items = [
 			...human.map((attention) => ({
@@ -154,6 +158,7 @@ export class AgentActivityDock implements Component {
 				kind: "operational" as const,
 				attention,
 			})),
+			...reports.filter(({ readAt }) => readAt === undefined).map(({ report }) => ({ kind: "report" as const, report })),
 		];
 		if (items.length === 0) return [];
 		const visibleItems = items.slice(0, MAX_VISIBLE_ATTENTION_ROWS);
@@ -163,6 +168,9 @@ export class AgentActivityDock implements Component {
 			this.#heading("Attention Inbox"),
 			...visibleItems.map((item, index) => {
 				const branch = index === visibleRowCount - 1 ? "└─" : "├─";
+				if (item.kind === "report") {
+					return `${branch} ${this.#theme.fg("warning", "REPORT")} ${boundedToolPreview(item.report.reporter.label)} · ${boundedToolPreview(item.report.symptom)}`;
+				}
 				if (item.kind === "human") {
 					return `${branch} ${this.#theme.fg("warning", "DECIDE")} ${this.#theme.bold(item.attention.agentLabel)} · ${boundedToolPreview(item.attention.question)}`;
 				}

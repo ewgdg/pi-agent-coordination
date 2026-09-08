@@ -788,6 +788,8 @@ async function handleOwnerRequest(
 		case "coordination.spawn":
 		case "coordination.templateSnapshot":
 		case "coordination.askHuman":
+		case "coordination.reportToUser":
+		case "presentation.reports.markRead":
 		case "coordination.moderatorControl":
 		case "presentation.agents.snapshot":
 		case "presentation.agents.select":
@@ -1241,6 +1243,7 @@ class RemoteAgentActivitySource implements AgentActivitySource {
 			answerMode: selector.humanAttention.some(({ agentId }) => agentId === this.#agentId),
 			humanAttention: selector.humanAttention,
 			operationalAttention: selector.operationalAttention,
+			reports: selector.reports,
 		};
 	}
 

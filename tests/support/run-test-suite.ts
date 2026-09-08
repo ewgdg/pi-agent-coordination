@@ -31,6 +31,7 @@ const PROCESS_TEST_FILES = new Set([
 	"message.test.ts",
 	"named-pipe-control-transport.test.ts",
 	"operational-incidents.test.ts",
+	"moderator-report-integration.test.ts",
 	"owner-bootstrap.test.ts",
 	"owner-fork.test.ts",
 	"owner-settlement-parking.test.ts",

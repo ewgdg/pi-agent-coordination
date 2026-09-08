@@ -37,6 +37,7 @@ const moderatorTools = [
 	"agent_wait",
 	"ask_user_question",
 	"moderator_control",
+	"report_to_user",
 ] as const;
 const plainTheme = {
 	fg: (_color: string, text: string) => text,
@@ -431,3 +432,19 @@ function assertProviderCompatibleObjectSchema(schema: unknown, toolName: string)
 		assert.equal(variant.additionalProperties, false, toolName);
 	}
 }
+
+test("report publication failure remains visible instead of claiming pending or retained", async (t) => {
+	const host = await createTestOwnerHost(t, createModeratorBoundExtension(() => ({} as ModeratorAgentCoordinatorView)));
+	const tool = host.session.getToolDefinition("report_to_user");
+	assert.ok(tool?.renderResult);
+	const lines = tool.renderResult({
+		content: [{ type: "text", text: "Report persistence failed" }], details: undefined,
+	}, { expanded: false, isPartial: false }, plainTheme, {
+		args: {}, toolCallId: "report-failure", invalidate() {}, lastComponent: undefined,
+		state: {}, cwd: host.cwd, argsComplete: true, isPartial: false, expanded: false,
+		showImages: false, isError: true, executionStarted: true,
+	}).render(120);
+	assert.match(lines.join("\n"), /Report persistence failed/);
+	assert.doesNotMatch(lines.join("\n"), /Report retained|Report pending/);
+	await host.runtime.dispose();
+});

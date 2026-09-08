@@ -2,7 +2,7 @@
 
 `/agents` first opens a centered, bounded roster overlay, leaving the surrounding chat visible and updating. The framed selector is at most 80 columns wide, stays within the terminal height, and shows at most ten roster rows at once. Pi's native `SelectList` supplies roster rows and scrolling; the selector keeps keyboard focus linear and renders Owner/path outside the scrolling rows. `/agents owner` trims its argument and returns directly to the exact mounted Workflow Owner presentation without opening the selector; it is a harmless no-op when Owner is already mounted. Other arguments fail with `Usage: /agents [owner]`.
 
-Enter on an Agent body opens that durable Agent's full-window interactive view. Selecting the already-mounted participant simply closes the selector without reopening or replacing its view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. The pinned `Owner` button is focusable from either tab and every Live scope. Enter on it (or the global `o` shortcut) returns to that exact existing Owner presentation; Owner is a global destination rather than a roster entry.
+Enter on an Agent body opens that durable Agent's full-window interactive view. Selecting the already-mounted participant simply closes the selector without reopening or replacing its view. The Owner's native runtime session, services, diagnostics, transcript container, editor implementation and text, footer, and extension UI context remain mounted underneath. The pinned `Owner` button is focusable from any tab and every Live scope. Enter on it (or the global `o` shortcut) returns to that exact existing Owner presentation; Owner is a global destination rather than a roster entry.
 
 Agent selection prepares the target mode before dismissing the roster. The focused row shows an animated loading indicator throughout preparation. When switching between children, the current selector keeps rendering until the replacement frame takes over; the previous Runtime remains retained through the handoff. The selector retains keyboard focus during asynchronous preparation and ignores further selector input until the handoff completes. Its rendered rectangle blocks pointer fallthrough inside the panel. Outside the panel, Pi retains its native pointer behavior: clicks or wheel events can reach the underlying UI, and a click may move keyboard focus there. Pi 0.85.1 couples pointer blocking to painted overlay bounds; the selector does not blank the chat to create a full-screen input shield.
 
@@ -10,7 +10,7 @@ Agent selection prepares the target mode before dismissing the roster. The focus
 
 Pi's public fullscreen mouse routing supplies parsed events and component-local cell coordinates. The selector uses that API (verified with Pi 0.85.1), not terminal escape decoding or private overlay geometry. Regular terminal mode remains keyboard-only.
 
-- Primary-click **Live** or **Dormant** to switch tabs.
+- Primary-click **Live**, **Dormant**, or **Reports** to switch tabs.
 - Text buttons use unbracketed labels; spacing separates neighboring actions, and brackets in participant-provided labels remain unchanged.
 - Click **Owner** to return to Owner and close; when the Live root roster is nonempty, click its separate **›** to browse the root scope without opening Owner.
 - Click anywhere in an Agent summary's content area outside the trailing child control to open the Agent. The complete **N children ›** control browses children instead.
@@ -26,7 +26,7 @@ These controls apply only to `/agents`. The above-editor activity dock remains i
 
 Live uses one linear, non-circular focus order: Attention items, the pinned Owner button, then scoped Agent bodies. Up on the first item and Down on the last item stay put.
 
-- **Attention Inbox** contains Owner-visible Human `DECIDE` items and exhausted Operational `ATTENTION` items. A `DECIDE` row identifies the requesting Agent and shows a bounded one-line question preview. The first attention item receives initial focus. Selecting `DECIDE` opens that Agent's full-window view at its pending request and focuses its native editor. Selecting an Operational `ATTENTION` item with exactly one affected Agent opens that Agent's full-window view without changing the incident. Multi-Agent attention remains informational, and Enter leaves the selector open.
+- **Attention Inbox** contains Owner-visible Human `DECIDE`, exhausted Operational `ATTENTION`, and unread Moderator `REPORT` items. Report rows open the dedicated report view described below. A `DECIDE` row identifies the requesting Agent and shows a bounded one-line question preview. The first attention item receives initial focus. Selecting `DECIDE` opens that Agent's full-window view at its pending request and focuses its native editor. Selecting an Operational `ATTENTION` item with exactly one affected Agent opens that Agent's full-window view without changing the incident. Multi-Agent attention remains informational, and Enter leaves the selector open.
 - **Scoped Agents**, below `Owner ›` and the current path, contains the current scope's direct ordinary children with a current Run, plus Dormant ancestors needed to reach those Agents at any depth. Current-Run children retain creation order; retained Dormant ancestors follow in roster recency order. Live Moderators appear at the Owner scope as standalone participants. Each row uses the human-facing work status: `active`, `compacting`, `idle`, `waiting` with its reason, `starting`, `ending`, or `dormant`.
 
 Without Attention, initial focus prefers the selected non-Owner Agent, then the first Agent in scope, then Owner. Opening from Owner therefore starts on the first available Agent.
@@ -55,7 +55,7 @@ The attachment adds no fixed header. It suspends Owner rendering and presents th
 
 A scoped activity dock lives inside the native above-editor widget area. For a selected non-Owner Agent, its first row is `label · compact Agent ID · status`; the label is accented and bold, the identity is dim, and only the status receives its semantic status color. Rendered statuses are lowercase: `dormant` when no exact Run exists, `active` while a Run executes work, `idle` when a current Run is settled, `waiting` with a named reason when progress needs human input, an Agent answer, or resumption, and `starting`, `ending`, or `failed` during those lifecycle conditions. While the selected Agent awaits a Human Answer, the dock also shows `ANSWER · Enter submits` directly above the unchanged native editor.
 
-With Owner selected, the dock shows the Owner-only Attention Inbox before Owner's direct children that have a current Run. With another Agent selected, it shows only that Agent's identity and direct children that have a current Run. Starting, live, and ending child rows stay in creation order and project Run state, attention, model/thinking configuration, and queued-input count. Each dock section shows its first three rows; when more exist, a final dim `… N more` row reports the hidden remainder. Dormant Agents remain available through `/agents` but do not appear in the activity dock. Human `DECIDE` and exhausted operational `ATTENTION` occur only in the Owner dock; `/agents` retains every attention item and its existing action.
+With Owner selected, the dock shows the Owner-only Attention Inbox before Owner's direct children that have a current Run. With another Agent selected, it shows only that Agent's identity and direct children that have a current Run. Starting, live, and ending child rows stay in creation order and project Run state, attention, model/thinking configuration, and queued-input count. Each dock section shows its first three rows; when more exist, a final dim `… N more` row reports the hidden remainder. Dormant Agents remain available through `/agents` but do not appear in the activity dock. Human `DECIDE`, exhausted operational `ATTENTION`, and unread Moderator `REPORT` items occur only in the Owner dock; `/agents` retains every attention item and its existing action.
 
 All input is routed directly to the selected child PTY. Printable text, paste, completion, commands, extension shortcuts, custom editors, and focused child overlays behave as they do in native Pi. The attachment does not steal Escape; custom editors such as pi-vim keep their normal Escape semantics.
 
@@ -80,10 +80,14 @@ The focused roster row reserves four detail lines:
 
 An absent description leaves its line empty, keeping the overlay height stable as focus moves. On very short terminals, detail lines are trimmed only as needed to keep the focused summary, pinned Owner boundary, and frame visible.
 
-- Tab or Shift-Tab: switch Live and Dormant
+- Tab or Shift-Tab: cycle Live, Dormant, and Reports
 - `o`: return to Owner
 - Up/Down or `k`/`j`: move linearly through Attention, Owner, and Agent bodies; stop at both boundaries
 - Right or `l`: browse Live Owner/root or activate the focused Agent's trailing child control
 - Left or `h`: return to the parent Live scope and refocus the previous path
 - Enter: perform the focused body or Owner action
 - Escape: close the selector
+
+## Moderator reports
+
+Unread Moderator runtime-defect reports appear in the Attention Inbox. Enter opens a dedicated read-only report, without selecting or restarting an Agent. Tab to **Reports** for retained history. Only **Mark read** acknowledges a report; opening, copying, closing, or **View reporter** does not. **Copy report** produces ticket-ready Markdown, and **View reporter** selects the captured stable Moderator identity. See [Operational Incident moderation](operational-incident-moderation.md#nonblocking-runtime-defect-reports) for provenance and navigation semantics.
