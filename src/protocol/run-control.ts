@@ -1,3 +1,5 @@
+import { coordinationEntries, indexedState } from "../transcript/retained-transcript.ts";
+import type { EntryPointer } from "./message-delivery.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 import {
@@ -120,4 +122,68 @@ function sameRunControlInput(left: RunControlInput, right: RunControlInput): boo
 	if (left.operation !== right.operation || left.agentId !== right.agentId) return false;
 	return left.operation !== "resume" ||
 		(right.operation === "resume" && left.content === right.content);
+}
+
+/** Resume authors a Message; interrupt and terminate do not. */
+export function findAuthoredSupervisoryResumeMessages(options: {
+	workflowId: string;
+	authorAgentId: string;
+	transcript: TranscriptInspection;
+}): readonly Extract<Message, { kind: "message" }>[] {
+	const { workflowId, authorAgentId, transcript } = options;
+	return indexedState(transcript).project(
+		findAuthoredSupervisoryResumeMessages,
+		authorAgentId,
+		coordinationEntries(transcript, authorAgentId, "tool:agent_control"),
+		() => [] as Extract<Message, { kind: "message" }>[],
+		(messages, entry) => {
+			if (entry.type !== "message" || entry.message.role !== "assistant") return messages;
+			for (const part of entry.message.content) {
+				if (part.type !== "toolCall" || part.name !== "agent_control") continue;
+				let input: RunControlInput;
+				try { input = validateRunControlInput(part.arguments); }
+				catch { continue; } // Invalid native calls cannot author resume Messages.
+				if (input.operation !== "resume") continue;
+				messages.push(createSupervisoryResumeMessage({
+					workflowId, fromAgentId: authorAgentId, input,
+					source: { agentId: authorAgentId, entryId: entry.id, toolCallId: part.id },
+				}));
+			}
+			return messages;
+		},
+	);
+}
+
+export function inspectSupervisoryResumeAuthorResult(options: {
+	message: Extract<Message, { kind: "message" }>;
+	transcript: TranscriptInspection;
+	deliveryEvidence?: EntryPointer;
+}): "canonical" | "not_created" | "indeterminate" {
+	const { message, transcript, deliveryEvidence } = options;
+	const results = coordinationEntries(transcript, message.fromAgentId, `result:${message.source.toolCallId}`)
+		.filter(entry => entry.type === "message" && entry.message.role === "toolResult" &&
+			entry.message.toolName === "agent_control" && entry.message.toolCallId === message.source.toolCallId);
+	if (results.length > 1) throw new Error(`invariant_violation: Message ${message.messageId} has multiple author results`);
+	const result = results[0];
+	if (!result || result.type !== "message" || result.message.role !== "toolResult") {
+		return deliveryEvidence ? "canonical" : "indeterminate";
+	}
+	const details = result.message.details;
+	let created = false;
+	if (!result.message.isError) {
+		if (!isRecord(details) || details.agentId !== message.targetAgentId || details.messageId !== message.messageId) {
+			throw new Error(`invariant_violation: resume Message ${message.messageId} author result has invalid identity`);
+		}
+		const keys = Object.keys(details).sort().join(",");
+		if (keys === "agentId,messageId,messageStatus" && details.messageStatus === "sent") {
+			created = true;
+		} else if (!(keys === "agentId,delivery,messageId,rejectionReason" && details.delivery === "rejected" &&
+			["not_held", "resume_slot_occupied", "target_unavailable"].includes(String(details.rejectionReason)))) {
+			throw new Error(`invariant_violation: resume Message ${message.messageId} author result has invalid shape`);
+		}
+	}
+	if (!created && deliveryEvidence) {
+		throw new Error(`invariant_violation: resume Message ${message.messageId} has a non-authoring result and Delivery`);
+	}
+	return created ? "canonical" : "not_created";
 }

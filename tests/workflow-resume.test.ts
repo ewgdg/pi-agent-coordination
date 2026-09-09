@@ -1,9 +1,11 @@
+import { RunSupervisor } from "../src/coordination/run-supervision.ts";
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { AgentTranscript } from "../src/transcript/agent-transcript.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { MessageCoordinator, type AgentMessageInput } from "../src/coordination/messages.ts";
+import { MessageCoordinator, type MessageBoundaryHooks, type AgentMessageInput } from "../src/coordination/messages.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import { inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
 import type { AgentRuntimeHost, AgentRunHandle, AgentRuntimeDelivery, AgentRunEndCause } from "../src/runtime/agent-runtime-host.ts";
@@ -171,12 +173,129 @@ test("a failed durable transcript read is indeterminate rather than guessed as u
 	assert.equal(h.responder.dispatches.length, 0);
 });
 
-function harness(t: { after(fn: () => void | Promise<void>): void }) {
+
+test("blocked sibling successors continue the old foreground once, before or during recovery", { timeout: 5_000 }, async t => {
+	for (const timing of ["before", "during"] as const) {
+		const h = harness(t);
+		const old = await h.message(h.requester, "old", { operation: "request", targetAgent: "responder", question: "Old work" });
+		assert.ok("requestMessageId" in old);
+		h.responder.stop();
+		await h.recover();
+		const agents = new Map([h.requester, h.responder].map(p => [p.record.identity.agentId, p.record]));
+		const supervisor = new RunSupervisor({ agents, ownerAgentId: "requester", messages: h.messages });
+		let siblingAdmitted = false;
+		const sibling = async () => {
+			if (siblingAdmitted) return;
+			siblingAdmitted = true;
+			await h.message(h.requester, "sibling", { operation: "request", targetAgent: "responder", question: "Sibling work" });
+		};
+		if (timing === "before") await sibling();
+		const resume = () => resumeWorkflow({
+			workflowId: "requester", agents, messages: h.messages, quarantinedAgentIds: new Set(),
+			activate: async (record, requestIds) => {
+				await sibling();
+				const result = await supervisor.continueDormantResponder(record, {
+					requestMessageIds: requestIds,
+					recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record),
+				});
+				return { agentId: record.identity.agentId, requestIds, disposition: result === "activated" ? "admitted" : "skipped", reason: result };
+			},
+		});
+		const first = await resume();
+		await Promise.all([resume(), resume()]);
+		await flush();
+		assert.equal(first.activations[0]?.disposition, "admitted", timing);
+		assert.equal(h.responder.dispatches.filter(d => d.kind === "custom" && d.message.customType === "agent-coordination.workflow-continuation").length, 1);
+		assert.deepEqual(h.deliveries(h.responder).map(d => d.source.toolCallId), ["old"]);
+		await h.message(h.responder, "answer-old", { operation: "answer", requestId: old.requestMessageId, answer: "Done" });
+		h.responder.settle();
+		await flush();
+		assert.deepEqual(h.deliveries(h.responder).map(d => d.source.toolCallId), ["old", "sibling"]);
+	}
+});
+
+test("recovery reconstructs committed supervisory resume as original ordinary Steer", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	const input = { operation: "resume", agentId: "responder", content: "Important supervisor direction" };
+	call(h.requester, "supervisory", "agent_control", input);
+	const entry = h.requester.manager.getEntries().at(-1)!;
+	const messageId = deriveMessageIdentity({ agentId: "requester", entryId: entry.id, toolCallId: "supervisory" });
+	commit(h.requester, "supervisory", "agent_control", { agentId: "responder", messageId, messageStatus: "sent" });
+	const receipt = await h.resume();
+	await flush();
+	assert.deepEqual(receipt.indeterminate, []);
+	assert.ok(receipt.deliveries.some(d => d.messageId === messageId && d.disposition === "scheduled"));
+	assert.equal(h.deliveries(h.responder).length, 1);
+	assert.equal(h.deliveries(h.responder)[0]?.source.toolCallId, "supervisory");
+	assert.deepEqual(h.deliveries(h.responder)[0]?.projection, {
+		kind: "message", messageId, fromAgentId: "requester", content: input.content,
+	});
+	assert.equal(receipt.deliveries[0]?.targetAgentId, "responder");
+	assert.equal(h.responder.dispatches[0]?.kind === "custom" && h.responder.dispatches[0].deliverAs, "steer");
+	assert.equal((await h.resume()).deliveries[0]?.reason, "delivered");
+});
+
+
+test("supervisory recovery does not resurrect rejected or errored sources and reports missing commitment", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	for (const state of ["not_held", "resume_slot_occupied", "target_unavailable", "error", "unfinished"] as const) {
+		call(h.requester, state, "agent_control", { operation: "resume", agentId: "responder", content: state });
+		const entry = h.requester.manager.getEntries().at(-1)!;
+		const messageId = deriveMessageIdentity({ agentId: "requester", entryId: entry.id, toolCallId: state });
+		if (state === "error") {
+			h.requester.manager.appendMessage({ role: "toolResult", toolCallId: state, toolName: "agent_control", content: [], isError: true, timestamp: Date.now() });
+		} else if (state !== "unfinished") {
+			commit(h.requester, state, "agent_control", { agentId: "responder", messageId, delivery: "rejected", rejectionReason: state });
+		}
+	}
+	const receipt = await h.resume();
+	assert.deepEqual(receipt.deliveries.map(d => d.reason), ["not_created", "not_created", "not_created", "not_created", "inspection_incomplete"]);
+	assert.equal(h.responder.dispatches.length, 0);
+});
+
+test("recovery coalesces live resume reservations outside ordinary capacity", { timeout: 5_000 }, async t => {
+	const h = harness(t, { afterResumeReservation: () => "defer" });
+	const hold = h.responder.hold();
+	h.policy.publish(Object.freeze({ ...h.policy.current(), maxPendingDeliveriesPerAgent: 1 }));
+	await h.message(h.requester, "ordinary", { operation: "send", targetAgent: "responder", content: "Fill ordinary capacity" });
+	const input = { operation: "resume" as const, agentId: "responder", content: "Reserved direction" };
+	call(h.requester, "supervisory", "agent_control", input);
+	const supervisor = new RunSupervisor({
+		agents: new Map([h.requester, h.responder].map(p => [p.record.identity.agentId, p.record])),
+		ownerAgentId: "requester", messages: h.messages,
+	});
+	const sent = await supervisor.execute("requester", "supervisory", input);
+	assert.ok("messageStatus" in sent && sent.messageStatus === "sent");
+	commit(h.requester, "supervisory", "agent_control", sent);
+	for (const receipt of await Promise.all([h.resume(), h.resume()])) {
+		assert.equal(receipt.deliveries.find(d => d.messageId === sent.messageId)?.reason, "already_scheduled");
+	}
+	assert.equal(h.responder.record.host.currentInterruptionHold(), hold);
+	assert.equal(h.responder.dispatches.length, 0);
+
+	// Losing the process-local reservation does not authorize clearing a later Hold.
+	await h.recover();
+	h.responder.clearHold();
+	const newerHold = h.responder.hold();
+	const recovered = await h.resume();
+	assert.equal(recovered.deliveries.find(d => d.messageId === sent.messageId)?.reason, "capacity_exhausted");
+	h.policy.publish(Object.freeze({ ...h.policy.current(), maxPendingDeliveriesPerAgent: 2 }));
+	await h.resume();
+	assert.equal(h.responder.record.host.currentInterruptionHold(), newerHold);
+	assert.equal(h.responder.dispatches.length, 0);
+	h.responder.clearHold();
+	await h.resume();
+	await flush();
+	assert.equal(h.deliveries(h.responder).filter(d => d.source.toolCallId === "supervisory").length, 1);
+	assert.equal(h.responder.record.host.currentInterruptionHold(), undefined);
+});
+
+function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHooks?: MessageBoundaryHooks) {
 	const requester = runtimeParticipant("requester");
 	const responder = runtimeParticipant("responder");
 	const participants = [requester, responder];
 	const agents = new Map(participants.map(p => [p.record.identity.agentId, p.record]));
-	const options = { agents, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false };
+	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false };
 	let messages = new MessageCoordinator(options);
 	for (const p of participants) messages.integrate(p.record);
 	t.after(() => messages.shutdownDeliveryProgress());
@@ -215,12 +334,17 @@ function runtimeParticipant(agentId: string) {
 	const p = participant(agentId);
 	let handle: AgentRunHandle | undefined = { sequence: 1 };
 	let sequence = 1;
+	let hasInput = true;
+	let hold: import("../src/runtime/agent-runtime-host.ts").InterruptionHoldHandle | undefined;
+	let holdSequence = 0;
 	let attention: "none" | "agent_wait" = "none";
 	const ended = new Set<(handle: AgentRunHandle, cause: AgentRunEndCause) => void>();
 	const proofCommits: (() => void)[] = [];
 	const settled = new Set<(handle: AgentRunHandle, state: "settled") => void>();
 	const runtime = {
 		...p, blocked: false, deferProof: false, ending: false, failed: false,
+		hold() { runtime.blocked = true; hold = { run: handle!, sequence: ++holdSequence }; return hold; },
+		clearHold() { runtime.blocked = false; hold = undefined; },
 		commitPending() { for (const commit of proofCommits.splice(0)) commit(); },
 		settle() { if (handle) for (const handler of settled) handler(handle, "settled"); },
 		dispatches: [] as AgentRuntimeDelivery[],
@@ -232,11 +356,16 @@ function runtimeParticipant(agentId: string) {
 	};
 	p.record.host = {
 		lane: new SerialLane(),
+		residualRequestCounts: () => ({ incoming: 0, outgoing: 0 }),
+		currentInterruptionHold: () => hold,
+		isCurrentInterruptionHold: (candidate: unknown) => candidate === hold,
+		currentRunHasInput: () => hasInput,
 		currentHandle: () => handle, latestStartedRunSequence: () => sequence,
 		isCurrent: (candidate: AgentRunHandle) => candidate === handle,
 		startInLane: async () => {
 			runtime.ending = false;
 			runtime.failed = false;
+			hasInput = false;
 			handle = { sequence: ++sequence };
 			return handle;
 		},
@@ -258,6 +387,7 @@ function runtimeParticipant(agentId: string) {
 		endAgentWait: () => { attention = "none"; },
 		currentRunFailed: () => handle !== undefined && runtime.failed,
 		deliverInLane: (input: AgentRuntimeDelivery) => {
+			hasInput = true;
 			runtime.dispatches.push(input);
 			if (input.kind !== "custom") throw new Error("Expected coordination Delivery");
 			const m = input.message;

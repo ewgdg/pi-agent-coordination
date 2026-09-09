@@ -54,6 +54,7 @@ type BoundAgentRuntime = {
 	runtime: HostedAgentRuntime;
 	unsubscribe: () => void;
 	admitted: boolean;
+	hasInput: boolean;
 	failed: boolean;
 	expectedInterruption: boolean;
 	releaseDeferredUntilInputSettles: boolean;
@@ -277,6 +278,13 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		return run.runtime.workState();
 	}
 
+	currentRunHasInput(): boolean {
+		const run = this.#runtime;
+		return !!run?.admitted && (run.hasInput || run.runtime.workState() !== "settled" ||
+			run.runtime.hasPendingActivity() || run.runtime.queuedInputCount() > 0 ||
+			hasInFlightProjectionInput(run));
+	}
+
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification {
 		return this.#requireLiveRuntime().classifyToolBatch(toolNames);
 	}
@@ -294,6 +302,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		confirmation?: TranscriptCommitConfirmation,
 	): AgentRuntimeDeliveryDispatch {
 		const dispatched = this.#requireLiveRuntime().deliver(delivery, confirmation);
+		this.#runtime!.hasInput = true;
 		this.#trackOperation(dispatched.completion);
 		return dispatched;
 	}
@@ -711,6 +720,7 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#runSequence += 1;
 		run.handle = Object.freeze({ sequence: this.#runSequence });
 		run.admitted = true;
+		run.hasInput = false;
 		// Startup owns an exact Run before readiness. Keep that identity for terminal
 		// cleanup, while #starting fences execution/release during yielding catch-up.
 		const relationships = await this.#runStartInitializer?.();
@@ -1101,6 +1111,8 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			runtime,
 			unsubscribe: () => undefined,
 			admitted,
+			// A bound native Run can already own input before this supervisor exists.
+			hasInput: admitted,
 			failed: false,
 			expectedInterruption: false,
 			releaseDeferredUntilInputSettles: false,
@@ -1111,6 +1123,9 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		// the exact hosted Runtime if event binding itself fails.
 		this.#runtime = run;
 		run.unsubscribe = runtime.subscribe((event) => {
+			if (run.admitted && (event.type === "agent_end" || runtime.workState() === "active")) {
+				run.hasInput = true;
+			}
 			if (event.type === "state_changed") {
 				this.#notifyStateChanged();
 				if (

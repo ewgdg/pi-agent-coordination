@@ -1,3 +1,4 @@
+import { inspectSupervisoryResumeAuthorResult } from "./run-control.ts";
 import { resolveAgentMessageReferences } from "./message-reference.ts";
 import { coordinationEntries, indexedState } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
@@ -260,6 +261,9 @@ export function inspectCanonicalMessage(options: {
 	deliveryEvidence?: EntryPointer;
 }): CanonicalMessageInspection {
 	const { message, authorTranscript, deliveryEvidence } = options;
+	if (message.kind === "message" && message.origin === "agent_control") {
+		return { state: inspectSupervisoryResumeAuthorResult({ message, transcript: authorTranscript, deliveryEvidence }), message };
+	}
 	if (message.kind === "request" && message.origin === "agent_spawn") {
 		return { state: "canonical", message };
 	}

@@ -39,6 +39,42 @@ for (const prepared of [false, true]) test(`shutdown during ${prepared ? "prepar
 	assert.equal(host.hasRetentionReason("awaiting_answer", "unpublished-request"), false);
 });
 
+
+test("Run input ownership survives settlement and resets only for a successor", { timeout: 5_000 }, async () => {
+	const resources = [createRunResource(), createRunResource()];
+	let next = 0;
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "input-ownership-agent", startSession: async () => resources[next++]!.startedRun,
+	});
+	const first = resources[0]!;
+	first.startedRun.runtime.deliver = () => ({ completion: Promise.resolve() });
+	await host.lane.run(() => host.startInLane(["pending_delivery"]));
+	assert.equal(host.currentRunHasInput(), false);
+	host.deliverInLane({ kind: "user", content: "Continue the foreground" });
+	assert.equal(host.currentWorkState(), "settled");
+	assert.equal(host.currentRunHasInput(), true, "dispatch owns continuation even before runtime activity publishes");
+	await host.lane.run(() => host.discardAndEndInLane("termination"));
+	await host.lane.run(() => host.startInLane(["pending_delivery"]));
+	assert.equal(host.currentRunHasInput(), false);
+	await host.lane.run(() => host.discardAndEndInLane("termination"));
+});
+
+test("native Runtime activity owns continuation after it settles", { timeout: 5_000 }, async () => {
+	const resource = createRunResource();
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "native-input-ownership-agent", startSession: async () => resource.startedRun,
+	});
+	await host.lane.run(() => host.startInLane(["pending_delivery"]));
+	let work: "active" | "settled" = "active";
+	resource.startedRun.runtime.workState = () => work;
+	resource.emitStateChanged();
+	assert.equal(host.currentRunHasInput(), true);
+	work = "settled";
+	resource.emitStateChanged();
+	assert.equal(host.currentRunHasInput(), true);
+	await host.lane.run(() => host.discardAndEndInLane("termination"));
+});
+
 test("clean release disposes the exact projection and session once", async () => {
 	const resource = createRunResource();
 	const host = AgentRuntimeSupervisor.createChild({

@@ -1,3 +1,4 @@
+import { findAuthoredSupervisoryResumeMessages } from "../protocol/run-control.ts";
 import { findAuthoredAgentMessageSources, inspectCanonicalRequestResolution } from "../protocol/request-resolution.ts";
 import { compareCommittedToolCallOrder, deriveMessageIdentity } from "../protocol/identities.ts";
 import type { WorkflowResumeDelivery } from "../protocol/workflow-resume.ts";
@@ -160,6 +161,7 @@ export class MessageCoordinator {
 		const transcript = record.transcript.inspect();
 		return [
 			...sources.map(({ source }) => source),
+			...findAuthoredSupervisoryResumeMessages({ workflowId: record.identity.workflowId, authorAgentId: record.identity.agentId, transcript }).map(message => message.source),
 			...[...this.#agents.values()].flatMap(child =>
 				"spawnSource" in child.identity && child.identity.directSpawnerAgentId === record.identity.agentId
 					? [child.identity.spawnSource]
@@ -169,7 +171,11 @@ export class MessageCoordinator {
 	}
 
 	recoveryMessage(authorAgentId: string, messageId: string): Message {
-		return this.#requestEvidence.requireCallerAuthoredMessage(this.#requireAgent(authorAgentId), messageId);
+		const author = this.#requireAgent(authorAgentId);
+		return findAuthoredSupervisoryResumeMessages({
+			workflowId: author.identity.workflowId, authorAgentId, transcript: author.transcript.inspect(),
+		}).find(message => message.messageId === messageId) ??
+			this.#requestEvidence.requireCallerAuthoredMessage(author, messageId);
 	}
 
 	recoveryRequestIds(record: AgentRecord): readonly string[] {
