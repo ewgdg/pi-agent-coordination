@@ -1,3 +1,4 @@
+import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import { randomUUID } from "node:crypto";
 import { createWorkflowContinuation, inspectWorkflowContinuation } from "../protocol/workflow-continuation.ts";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
@@ -16,6 +17,8 @@ import {
 import { isModeratorIdentity } from "../protocol/moderator-input.ts";
 
 export class RunSupervisor {
+	// Accepted custom input owns continuation even while dispatch is still queued.
+	readonly #continuationRuns = new WeakSet<AgentRunHandle>();
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #ownerAgentId: string;
 	readonly #messages: MessageCoordinator;
@@ -141,11 +144,18 @@ export class RunSupervisor {
 			.filter((id) => capturedIds.has(id));
 		return record.host.lane.run(async () => {
 			if (record.host.blocksOrdinaryDelivery()) return "held";
-			if (record.host.observe().phase !== "dormant") return "already_running";
+			const state = record.host.observe();
+			const currentHandle = record.host.currentHandle();
+			// A queued sibling can start a successor without supplying any input:
+			// its Delivery is still blocked by the interrupted foreground Request.
+			if (state.phase !== "dormant" && (
+				state.phase !== "live" || record.host.currentRunHasInput() ||
+				(currentHandle && this.#continuationRuns.has(currentHandle))
+			)) return "already_running";
 			if (outstandingIds().length === 0) return "resolved";
 			// Retain the startup-to-scheduler gap; the scheduler owns retention
 			// after admission and the Run initializer restores Request relationships.
-			const handle = await record.host.startInLane(["pending_delivery"]);
+			const handle = currentHandle ?? await record.host.startInLane(["pending_delivery"]);
 			let admitted = false;
 			try {
 				if (!record.host.isCurrent(handle)) return "fenced";
@@ -171,9 +181,10 @@ export class RunSupervisor {
 					isSuppressed: () => !record.host.isCurrent(handle) || outstandingIds().length === 0,
 				});
 				admitted = result === "pending";
+				if (admitted) this.#continuationRuns.add(handle);
 				return result === "pending" ? "activated" : result;
 			} finally {
-				if (!admitted && record.host.isCurrent(handle)) {
+				if (!admitted && !currentHandle && record.host.isCurrent(handle)) {
 					record.host.removeRetentionReason("pending_delivery");
 					await record.host.releaseIfEligibleInLane(handle);
 				}

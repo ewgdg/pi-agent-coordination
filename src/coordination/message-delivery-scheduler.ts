@@ -302,7 +302,7 @@ export class MessageDeliveryScheduler {
 			pending = new Map();
 			this.#pendingByAgent.set(record.identity.agentId, pending);
 		}
-		if (pending.has(delivery.messageId)) {
+		if (this.hasScheduling(record.identity.agentId, delivery.messageId)) {
 			// Coalesce identity while rechecking progress. An earlier admission may
 			// have stopped before dispatch; existing reservations still prevent repeats.
 			await this.#drainInLane(record);
@@ -433,7 +433,8 @@ export class MessageDeliveryScheduler {
 	}
 
 	hasScheduling(recipientAgentId: string, messageId: string): boolean {
-		return this.#pendingByAgent.get(recipientAgentId)?.has(messageId) === true ||
+		return this.#reservedResumeByAgent.get(recipientAgentId)?.delivery.messageId === messageId ||
+			this.#pendingByAgent.get(recipientAgentId)?.has(messageId) === true ||
 			this.hasDispatchReservation(recipientAgentId, messageId);
 	}
 

@@ -10,6 +10,7 @@ import { SerialLane } from "../src/runtime/serial-lane.ts";
 function harness() {
 	let handle: { sequence: number } | undefined;
 	let held = false;
+	let hasInput = false;
 	let requests = ["request"];
 	let starts = 0;
 	let afterStart = () => {};
@@ -21,6 +22,7 @@ function harness() {
 			lane: new SerialLane(),
 			observe: () => ({ phase: handle ? "live" : "dormant" }),
 			currentHandle: () => handle,
+			currentRunHasInput: () => hasInput,
 			blocksOrdinaryDelivery: () => held,
 			isCurrent: (candidate: unknown) => candidate === handle,
 			async startInLane() { starts++; handle = { sequence: starts }; afterStart(); return handle; },
@@ -46,7 +48,7 @@ function harness() {
 		deliveries,
 		get starts() { return starts; },
 		setHeld: () => { held = true; },
-		setRunning: () => { handle = { sequence: 99 }; },
+		setRunning: () => { handle = { sequence: 99 }; hasInput = true; },
 		resolve: () => { requests = []; },
 		afterStart: (callback: () => void) => { afterStart = callback; },
 	};

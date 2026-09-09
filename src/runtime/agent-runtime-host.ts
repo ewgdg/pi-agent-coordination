@@ -118,6 +118,8 @@ export interface AgentRuntimeHost {
 	effectiveRuntimeSnapshot(): EffectiveRuntimeSnapshot | undefined;
 	synchronizeRuntimeState(): Promise<EffectiveRuntimeSnapshot>;
 	currentWorkState(): AgentRuntimeWorkState;
+	/** Whether this exact Run has accepted input or owned model activity. */
+	currentRunHasInput(): boolean;
 	classifyToolBatch(toolNames: readonly string[]): ToolBatchClassification;
 	exactRunCancellationSignal(handle: AgentRunHandle): AbortSignal;
 	deliverInLane(
