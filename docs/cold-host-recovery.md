@@ -36,3 +36,21 @@ Creation Requests use the same predicates after verified child Identity makes th
 Quarantining a peer does not erase relationships that the verified Agent's own transcript proves. Those local Retention Reasons return, while an operation that needs the quarantined peer's source transcript fails with `evidence_unavailable`.
 
 Cold bootstrap reconstructs no per-responder Request queue, general delivery queue, Delivery Invocation, pending scheduling, previous Run, Run sequence, model turn, Operational Incident, Handling Key, Moderator attempt chain, exhausted Operational Attention, or automatic Message replay. Waiting Request order and every other uncommitted item remain lost. Transcript proof, polling, and explicit same-identity retry remain available. A fresh explicit [Agent Wait](agent-messaging.md#join-outstanding-answers) renews intent for its fixed snapshot and ensures same-identity scheduling for captured unanswered, undelivered Requests through normal admission, which may start a Dormant recipient. This is not cold-start replay: unfinished Wait calls are not reconstructed, and ordinary Messages and unrelated Requests remain unscheduled.
+
+## Explicit Workflow continuation
+
+After reopening the Owner session, call `workflow_resume({})` to renew continuation intent across that current Workflow. Only the Owner has this tool; it takes no Agent or Workflow selector. Cold bootstrap stays passive.
+
+Recovery takes a fixed snapshot of verified durable evidence, then admits work through the normal recipient lanes:
+
+- Undelivered Messages and Requests retain their original identities, authorship, recipients, payloads, Delivery modes, ancestry, and context preparation.
+- Committed undelivered Answers return to their original requesters, not to the Owner requesting recovery. Completed responder work is not restarted.
+- A dormant responder with delivered, unanswered Requests restores its transcript, foreground and suspended obligations, and frame-owned dependencies before a successor Run receives runtime-generated continuation input. The original Request is not redelivered and still owns the work; recovery authors no replacement Request or ordinary Agent Message.
+- The continuation explicitly says that the Owner requested continuation and instructs the Agent to inspect interrupted operations before repeating them. Coordination recovery cannot determine whether an interrupted command already produced side effects.
+- Running Agents remain running without duplicate continuation input. Ordinary delivered Message history alone never justifies restarting a dormant Agent.
+
+Recovery admission order is newly defined from its snapshot, not a restoration of the lost waiting queue. Normal causal eligibility, capacity, applicable live Holds, and exact Run fencing still apply. Queued, reserved, and in-flight scheduling coalesces with recovery; live cancellation and completion suppress stale work. Repeated calls do not duplicate Delivery or continuation activation.
+
+The call returns when recovery is admitted, not when the Workflow finishes. Its receipt reports scheduled deliveries, admitted responder activations, skips, and blocked or indeterminate items. Admission is neither Delivery nor completion proof. Incomplete, unavailable, or contradictory evidence is reported rather than treated as proof that work is absent.
+
+Use per-Message retry for one original authored Message, `agent_wait` for a fresh join of the caller's outstanding dependencies, and `workflow_resume` for Owner-requested Workflow continuation. Recovery does not restore volatile Wait calls, Promises, or timers. A recovered responder may call a fresh Wait when its next decision requires its restored dependencies.
