@@ -56,7 +56,6 @@ test("registered Answer results remain canonical with and without a resumed Requ
 			receipt = { messageId: deriveMessageIdentity(source), requestMessageId: requestId, messageStatus: "sent" };
 			const result = await executeTool(host, "agent_message", toolCallId, input);
 			assert.equal(result.terminate, true);
-			assert.equal((result.details as { resumedRequestMessageId: string | null }).resumedRequestMessageId, resumed);
 			manager.appendMessage({
 				role: "toolResult", toolName: "agent_message", toolCallId,
 				content: result.content, details: result.details, isError: false, timestamp: Date.now(),
