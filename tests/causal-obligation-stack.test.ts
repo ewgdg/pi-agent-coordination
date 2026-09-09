@@ -142,16 +142,15 @@ test("startup persists recovered focus before new Request ancestry is authored",
 	h.responder.record.transcript = transcriptFromSessionManager(h.responder.manager);
 	const evidence = new RequestEvidence(h.agents);
 	const handlers = new Map<string, Function>();
-	const presented: unknown[] = [];
 	registerParticipantLifecycle({
 		on: (name: string, handler: Function) => handlers.set(name, handler),
 		appendEntry: (type: string, data: unknown) => h.responder.manager.appendCustomEntry(type, data),
-		sendMessage: (message: unknown) => presented.push(message),
 	} as unknown as import("@earendil-works/pi-coding-agent").ExtensionAPI, {
 		executionStarted: async () => evidence.obligationFrames(h.responder.record),
 	} as import("../src/pi-integration/participant-lifecycle.ts").ParticipantLifecycleHandlers);
 	await handlers.get("agent_start")!({}, { sessionManager: h.responder.manager });
-	assert.match(JSON.stringify(presented), new RegExp(root));
+	const presented = await handlers.get("context")!({ messages: [] }, { sessionManager: h.responder.manager });
+	assert.match(JSON.stringify(presented.messages), new RegExp(root));
 	const dependency = h.request(h.responder, h.requester);
 	assert.equal(evidence.parentRequestId(dependency), root);
 	h.responder.record.transcript = transcriptFromSessionManager(SessionManager.open(path));
