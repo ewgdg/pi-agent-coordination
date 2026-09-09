@@ -180,11 +180,11 @@ test("Agent selection keeps the selector focused until view preparation complete
 	assert.equal(harness.resolved, false);
 	const pendingAgentRow =
 		renderPanel(harness.component, 80).find((line) => line.includes("→")) ?? "";
-	assert.match(pendingAgentRow, /→ Agent\s+⠋ loading/);
+	assert.match(pendingAgentRow, /→ Agent\*\s+⠋ loading/);
 	assert.equal(pendingAgentRow.indexOf("Agent"), idleAgentRow.indexOf("Agent"));
 	assert.doesNotMatch(pendingAgentRow, /live\/settled/);
 	await waitFor(() =>
-		!/→ Agent\s+⠋ loading/.test(
+		!/→ Agent\*\s+⠋ loading/.test(
 			renderPanel(harness.component, 80).find((line) => line.includes("→")) ?? "",
 		)
 	);
@@ -730,7 +730,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 	}
 }
 
-function surfaceHarness(terminalRows: number): {
+function surfaceHarness(terminalRows: number, styledBold = false): {
 	ui: ExtensionUIContext;
 	component: Component | undefined;
 	resolved: boolean;
@@ -748,6 +748,7 @@ function surfaceHarness(terminalRows: number): {
 		...plainTheme(),
 		bg: (_color: string, text: string) => `\x1b[44m${text}\x1b[49m`,
 		getBgAnsi: () => "\x1b[44m",
+		bold: (text: string) => styledBold ? `\x1b[1m${text}\x1b[22m` : text,
 	} as unknown as Theme;
 	const ui = {
 		custom<T>(
@@ -1275,3 +1276,71 @@ function clickLabel(component: Component, label: string): void {
 		width: 80, height: 30, shift: false, alt: false, ctrl: false,
 	});
 }
+
+for (const dormant of [false, true]) {
+	test(`mounted participant label stays marked independently of focus and tab (dormant=${dormant})`, async () => {
+		const harness = surfaceHarness(30, true);
+		const builder = dormant
+			? dormantAgentStatus("builder", "Builder", "owner")
+			: agentStatus("builder", "Builder", "owner");
+		const peer = dormant
+			? dormantAgentStatus("peer", "Peer", "owner")
+			: agentStatus("peer", "Peer", "owner");
+		const selection = openAgentSelectorSurface(harness.ui, {
+			live: [agentStatus("owner", "Owner", null), ...(dormant ? [] : [builder, peer])],
+			dormant: dormant ? [builder, peer] : [],
+			selectedAgentId: "builder",
+		});
+		const component = harness.component!;
+		const markedRow = () => component.render(80).find(line => line.includes("Builder*")) ?? "";
+		assert.match(markedRow(), /→ \x1b\[1mBuilder\*\x1b\[22m/);
+		assert.match(markedRow(), /\x1b\[44m/);
+		assert.match(stripTerminalSequences(markedRow()), dormant ? /dormant/ : /idle/);
+		component.handleInput?.("j");
+		assert.match(markedRow(), /\x1b\[1mBuilder\*\x1b\[22m/);
+		assert.doesNotMatch(markedRow(), /→|\x1b\[44m/);
+		assert.match(renderPanel(component, 80).join("\n"), /→ Peer/);
+		assert.doesNotMatch(renderPanel(component, 80).join("\n"), /Peer\*|Owner\*/);
+		component.handleInput?.("\t");
+		assert.doesNotMatch(renderPanel(component, 80).join("\n"), /\*/);
+		component.handleInput?.("\x1b[Z");
+		assert.match(markedRow(), /\x1b\[1mBuilder\*\x1b\[22m/);
+		component.handleInput?.("\x1b");
+		assert.equal(await selection, undefined);
+	});
+}
+
+test("mounted participant marker does not follow scope into breadcrumbs", async () => {
+	const harness = surfaceHarness(30, true);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null), agentStatus("builder", "Builder", "owner"),
+			agentStatus("child", "Child", "builder")],
+		dormant: [], selectedAgentId: "builder",
+	});
+	const component = harness.component!;
+	component.handleInput?.("l");
+	const nested = renderPanel(component, 80).join("\n");
+	assert.match(nested, /Agents › Builder/);
+	assert.doesNotMatch(nested, /\*/);
+	component.handleInput?.("h");
+	assert.match(renderPanel(component, 80).join("\n"), /→ Builder\*/);
+	component.handleInput?.("\x1b");
+	assert.equal(await selection, undefined);
+});
+
+test("mounted Owner marks only its action label across all tabs and focus", async () => {
+	const harness = surfaceHarness(30, true);
+	const selection = openAgentSelectorSurface(harness.ui, {
+		live: [agentStatus("owner", "Owner", null), agentStatus("builder", "Builder", "owner")],
+		dormant: [], selectedAgentId: "owner",
+	});
+	const component = harness.component!;
+	for (const key of ["", "j", "\t", "\t"]) {
+		if (key) component.handleInput?.(key);
+		const lines = component.render(80);
+		assert.match(lines.join("\n"), /Go to \x1b\[1mOwner\*\x1b\[22m \[o\]/);
+		assert.equal(stripTerminalSequences(lines.join("\n")).split("*").length - 1, 1);
+	}
+	component.handleInput?.("\r");
+	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
+});

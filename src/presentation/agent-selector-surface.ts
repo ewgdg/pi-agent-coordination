@@ -653,7 +653,7 @@ class AgentSelectorSurface implements Component {
 			status.directSpawnerAgentId === null;
 		return {
 			value: status.agentId,
-			label: status.label,
+			label: this.#participantLabel(status.agentId, status.label),
 			description: [
 				formatRun(status, this.#theme),
 				moderator ? status.description : undefined,
@@ -914,8 +914,15 @@ class AgentSelectorSurface implements Component {
 		)), regions };
 	}
 
+	#participantLabel(agentId: string, label: string): string {
+		// Mounted identity is independent of keyboard focus and hierarchy browsing.
+		return agentId === this.#options.selectedAgentId
+			? this.#theme.bold(`${label}*`)
+			: label;
+	}
+
 	#renderOwnerFooter(): SelectorLine {
-		const text = this.#theme.fg("toolTitle", "Go to Owner") + this.#theme.fg("dim", " [o]");
+		const text = this.#theme.fg("toolTitle", `Go to ${this.#participantLabel(this.#ownerStatus().agentId, "Owner")}`) + this.#theme.fg("dim", " [o]");
 		const pending = this.#items[this.#selectedIndex]?.kind === "owner"
 			? this.#selectionSpinnerItem?.description : undefined;
 		return {

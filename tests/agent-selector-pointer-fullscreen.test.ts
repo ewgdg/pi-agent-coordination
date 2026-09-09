@@ -569,10 +569,10 @@ test("dormant-only children expose no child-navigation control, including Owner"
 	assert.doesNotMatch((await h.frame()).join("\n"), /›|\d+ child/);
 	await h.input("l");
 	assert.doesNotMatch((await h.frame()).join("\n"), /›|\d+ child/);
-	const owner = await h.point("Go to Owner [o]");
+	const owner = await h.point("Go to Owner* [o]");
 	// The cell after the complete footer action is informational.
-	h.terminal.mouse(0, owner.x + "Go to Owner [o]".length, owner.y);
-	h.terminal.mouse(0, owner.x + "Go to Owner [o]".length, owner.y, true);
+	h.terminal.mouse(0, owner.x + "Go to Owner* [o]".length, owner.y);
+	h.terminal.mouse(0, owner.x + "Go to Owner* [o]".length, owner.y, true);
 	await h.frame();
 	assert.equal(h.resolved, false);
 
