@@ -287,10 +287,10 @@ test("Message results show a suffix collapsed and retain the full ID on expansio
 	assert.ok(renderResult(receipt, true, 120).includes(messageId));
 });
 
-test("Answer receipt displays only the answered and resumed transition", () => {
-	const content = "Answered: Core — clarify interface\nResumed: Owner — implement feature";
+for (const expanded of [false, true]) test(`Answer receipt displays only the answered and resumed transition (expanded: ${expanded})`, () => {
+	const content = "Answered: aB3dE5gH · Core — clarify interface\nResumed: iJ7lM9oP · Owner — implement feature";
 	const rendered = renderAgentMessageResult({ content: [{ type: "text", text: content }], details: {
 		messageId: "answer", requestMessageId: "request", messageStatus: "sent",
-	} }, { expanded: false, isPartial: false }, plainTheme).render(100).join("\n");
+	} }, { expanded, isPartial: false }, plainTheme).render(100).join("\n");
 	assert.equal(rendered.split("\n").map(line => line.trimEnd()).join("\n"), content);
 });

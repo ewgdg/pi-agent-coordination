@@ -14,6 +14,7 @@ import { Type, type TSchema } from "typebox";
 
 import type { AgentStatus } from "../coordination/agent-record.ts";
 import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
+import { formatMessageIdentity } from "../presentation/message-identity.ts";
 import type { AgentLabelResolver } from "../presentation/agent-identity.ts";
 import type { AgentSpawnReceipt } from "../coordination/spawning.ts";
 import type { AgentMessageInput } from "../protocol/agent-message-input.ts";
@@ -51,6 +52,19 @@ import {
 	renderAgentSpawnResult,
 } from "./spawn-renderer.ts";
 import { renderAgentTemplatePromptGuide } from "./agent-template-prompt-guide.ts";
+
+// Transition metadata belongs to the tool result, not the transport receipt.
+type AgentMessageToolReceipt = AgentMessageReceipt & { resumedRequestMessageId?: string | null };
+
+const ANSWER_TRANSITION_SNIPPET_LENGTH = 80;
+
+function answerTransitionSnippet(question: string): string {
+	const firstLine = question.split(/\r\n|[\n\r\u2028\u2029]/, 1)[0]!.replace(/\s+/g, " ").trim();
+	const characters = [...firstLine];
+	return characters.length <= ANSWER_TRANSITION_SNIPPET_LENGTH
+		? firstLine
+		: `${characters.slice(0, ANSWER_TRANSITION_SNIPPET_LENGTH - 1).join("")}…`;
+}
 
 export type ParticipantCoordinationRole = "ordinary" | "moderator" | "owner";
 
@@ -553,7 +567,7 @@ export function registerParticipantCoordinationTools<
 		});
 	}
 
-	pi.registerTool<typeof agentMessageParameters, AgentMessageReceipt>({
+	pi.registerTool<typeof agentMessageParameters, AgentMessageToolReceipt>({
 		name: "agent_message",
 		label: "Message Agent",
 		description:
@@ -594,8 +608,8 @@ export function registerParticipantCoordinationTools<
 			if (!("messageStatus" in receipt) || !("requestMessageId" in receipt)) return toolResult(receipt);
 			const answered = frames.find(frame => frame.requestId === requestId)!;
 			const resumed = frames.filter(frame => frame.requestId !== requestId).at(-1);
-			const describe = (frame: typeof answered) => `${resolveAgentLabel(frame.requesterAgentId) ?? frame.requesterAgentId} — ${frame.question.replace(/\s+/g, " ").trim()}`;
-			return { details: receipt, terminate: true, content: [{ type: "text", text:
+			const describe = (frame: typeof answered) => `${formatMessageIdentity(frame.requestId)} · ${resolveAgentLabel(frame.requesterAgentId) ?? frame.requesterAgentId} — ${answerTransitionSnippet(frame.question)}`;
+			return { details: { ...receipt, resumedRequestMessageId: resumed?.requestId ?? null }, terminate: true, content: [{ type: "text", text:
 				`Answered: ${describe(answered)}\nResumed: ${resumed ? describe(resumed) : "none"}` }] };
 		},
 	});

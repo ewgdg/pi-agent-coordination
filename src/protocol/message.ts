@@ -462,8 +462,16 @@ function validateMessageAuthorResult(
 	}
 	const keys = Object.keys(value).sort();
 	const identityKey = message.kind === "request" ? "requestMessageId" : "messageId";
+	// Answer tool results additionally identify the resumed obligation for compact displays.
+	const transitionKeys = message.kind === "answer" && "resumedRequestMessageId" in value
+		? ["resumedRequestMessageId"]
+		: [];
+	if (transitionKeys.length && value.resumedRequestMessageId !== null &&
+		(typeof value.resumedRequestMessageId !== "string" || !value.resumedRequestMessageId.length)) {
+		throw new Error(`invariant_violation: Message ${messageId} author result has an invalid resumed Request ID`);
+	}
 	const correlationKeys = message.kind === "answer"
-		? ["requestMessageId"]
+		? ["requestMessageId", ...transitionKeys]
 		: message.kind === "message" ||
 				message.kind === "request" ||
 				message.kind === "request_cancellation"

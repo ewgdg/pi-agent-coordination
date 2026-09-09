@@ -135,9 +135,11 @@ The coordinator validates the target and derives its recipient. Answer commitmen
 Use Answer as the only tool call in its turn. A successful Answer terminates that execution, then the runtime presents the restored foreground on a subsequent continuation. The visible receipt contains only the transition:
 
 ```text
-Answered: sync-core — clarify interface
-Resumed: Owner — implement feature
+Answered: aB3dE5gH · sync-core — clarify interface
+Resumed: iJ7lM9oP · Owner — implement feature
 ```
+
+Both human and agent views use the same compact text: the Request ID’s eight-character suffix, requester label, and the question’s first line with whitespace normalized, capped at 80 Unicode characters including a truncation ellipsis. Structured details retain the full answered `requestMessageId` and `resumedRequestMessageId` (or `null` when nothing resumes).
 
 An empty stack displays `Resumed: none`. No assistant recap follows the Answer. Ordinary Messages to the requester of any foreground or suspended obligation are rejected; use a reverse Request for a decision, or keep provisional findings local. Sending becomes available when no unresolved frame owes that requester.
 
