@@ -428,6 +428,7 @@ test("retry and normal agent-end boundaries do not falsely cancel the exact host
 		queuedInputCount: 0,
 	}));
 	assert.equal(cancellation.aborted, false);
+	emit(controlEvent("message.dispatch.completed", { deliveryId: "delivery-1" }));
 	emit(controlEvent("agent.settled", {
 		runId: "hosted-run-1",
 		outcome: "completed",
@@ -550,6 +551,7 @@ for (const scenario of [
 		}
 		if (scenario === "host_disposal") {
 			// Settle work normally first; disposal owns the later transport exit.
+			for (const handler of handlers) handler(controlEvent("message.dispatch.completed", { deliveryId: "delivery-1" }));
 			for (const handler of handlers) handler(controlEvent("agent.settled", {
 				runId: "hosted-run-1", queuedInputCount: 0, outcome: "completed",
 			}));

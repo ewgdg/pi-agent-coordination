@@ -128,6 +128,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		"agent.start",
 		"agent.end",
 		"agent.settled",
+		"message.dispatch.completed",
 		"presentation.agents.changed",
 		"coordination.wait.progress",
 		"session.shutdown",
@@ -179,6 +180,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		queuedInputCount: 0,
 	}), true);
 	const preparedRequestDelivery = {
+		deliveryId: "prepared-delivery",
 		runId: "run-prepared-request",
 		delivery: {
 			kind: "custom",
@@ -472,6 +474,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		outcome: "back",
 	}), false);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		deliveryId: "delivery-1",
 		runId: "run-1",
 		delivery: {
 			kind: "user",
@@ -483,6 +486,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		},
 	}), true);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		deliveryId: "delivery-1",
 		runId: "run-1",
 		delivery: {
 			kind: "custom",
@@ -499,6 +503,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		},
 	}), true);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		deliveryId: "delivery-1",
 		runId: "run-1",
 		delivery: {
 			kind: "custom",
@@ -514,6 +519,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		},
 	}), true);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		deliveryId: "delivery-1",
 		runId: "run-1",
 		delivery: {
 			kind: "custom",
@@ -527,6 +533,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		},
 	}), true);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		deliveryId: "delivery-1",
 		runId: "run-1",
 		delivery: {
 			kind: "custom",
@@ -540,6 +547,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		},
 	}), true);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		deliveryId: "delivery-1",
 		runId: "run-1",
 		delivery: {
 			kind: "custom",
@@ -553,6 +561,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		},
 	}), true);
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
+		deliveryId: "delivery-1",
 		runId: "run-1",
 		delivery: { kind: "user", content: "Direction", retry: true },
 	}), false);
@@ -562,6 +571,13 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		modelCycleStarted: true,
 		queuedInputCount: 0,
 	}), true);
+	assert.equal(Check(agentControlEvents["message.dispatch.completed"].payload, {
+		deliveryId: "delivery-1",
+	}), true);
+	assert.equal(Check(agentControlEvents["message.dispatch.completed"].payload, {
+		deliveryId: "delivery-1", error: "dispatch failed",
+	}), true);
+	assert.equal(Check(agentControlEvents["message.dispatch.completed"].payload, {}), false);
 	assert.equal(Check(agentControlMethods["run.interrupt"].request, {}), false);
 	assert.equal(Check(agentControlMethods["run.interrupt"].request, {
 		runId: "run-1",

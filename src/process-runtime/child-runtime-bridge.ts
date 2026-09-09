@@ -691,6 +691,19 @@ async function handleOwnerRequest(
 					throw error;
 				});
 				const { wasActive, completion } = admission;
+				// Transcript admission stays early; only this exact native dispatch
+				// Promise proves idle-started Delivery completion.
+				void completion.then(
+					() => state.channel.sendEvent("message.dispatch.completed", {
+						deliveryId: request.payload.deliveryId,
+					}),
+					(error: unknown) => state.channel.sendEvent("message.dispatch.completed", {
+						deliveryId: request.payload.deliveryId,
+						error: error instanceof Error ? error.message : String(error),
+					}),
+				).catch((error: unknown) =>
+					reportFault(state.channel, "delivery_completion_failed", error)
+				);
 				commit = admission.commit;
 				if (!wasActive) {
 					void completion.then(

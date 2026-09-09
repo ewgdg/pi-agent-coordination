@@ -4,6 +4,13 @@ import test from "node:test";
 import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { MessageDeliveryScheduler } from "../src/coordination/message-delivery-scheduler.ts";
+import type { AgentRecord } from "../src/coordination/agent-record.ts";
+import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
+import { SerialLane } from "../src/runtime/serial-lane.ts";
+import type { AgentRuntimeHost } from "../src/runtime/agent-runtime-host.ts";
+import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
+import type { PiChildProcessLaunch, PiChildProcessRuntime, PiChildRuntimeEvent } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { createChildRuntimeBinding } from "../src/process-runtime/child-runtime-bridge.ts";
 import { NativeInputSubmissionIdentity } from "../src/process-runtime/native-input-submission-identity.ts";
 import { TerminalInputSubmissionAcknowledger } from "../src/process-runtime/terminal-input-submission-acknowledger.ts";
@@ -26,15 +33,24 @@ const deliveryMessage = createMessageDelivery([{
 }]);
 const replacementType = "test.compaction-replacement";
 
-for (const path of [
+const paths = [
 	{ name: "optional working zone", tokens: 120_000, preparation },
 	{ name: "mandatory working zone", tokens: 190_000, preparation },
 	{ name: "native threshold", tokens: 190_000, preparation: undefined },
-]) {
-	test(`${path.name} commits queued Delivery without waiting for the replacement turn`, {
+] as const;
+const cases = [
+	...paths.flatMap((path) => [false, true].map((replacementFinishesFirst) => ({
+		path, replacementFinishesFirst,
+	}))),
+];
+for (const { path, replacementFinishesFirst } of cases) {
+	test(`${path.name}: replacement ${replacementFinishesFirst ? "finishes before rejection" : "still active"}`, {
 		timeout: 5_000,
 	}, async (t) => {
 		let context!: ExtensionContext;
+		let safeBoundary: () => Promise<void> = async () => {};
+		let safeBoundaries = 0;
+		const cancellation = new AbortController();
 		let manualSignal: AbortSignal | undefined;
 		let manualAttempts = 0;
 		let finishReplacement!: () => void;
@@ -44,6 +60,7 @@ for (const path of [
 		const requestInModel = new Promise<void>((resolve) => { requestSeen = resolve; });
 		const host = await createTestOwnerHost(t, (pi) => {
 			pi.on("session_start", (_event, ctx) => { context = ctx; });
+			pi.on("turn_end", async () => { await safeBoundary(); safeBoundaries += 1; });
 			pi.on("session_before_compact", (event) => {
 				if (event.reason === "manual") {
 					manualAttempts += 1;
@@ -51,7 +68,7 @@ for (const path of [
 				}
 				return { cancel: true };
 			});
-			pi.on("session_compact_failed", (event) => {
+			pi.on("session_compact_failed", async (event) => {
 				if (event.reason !== "manual" || !event.aborted || manualSignal?.aborted) return;
 				// Extensions may replace compaction with an ordinary model turn.
 				pi.sendMessage({
@@ -59,6 +76,10 @@ for (const path of [
 					content: "Save checkpoint notes and continue.",
 					display: true,
 				}, { triggerTurn: true, deliverAs: "steer" });
+				if (replacementFinishesFirst) {
+					await host.session.waitForIdle();
+					await new Promise<void>((resolve) => setImmediate(resolve));
+				}
 			});
 		}, {
 			settings: { compaction: { enabled: true, reserveTokens: 16_000, keepRecentTokens: 24 } },
@@ -84,10 +105,14 @@ for (const path of [
 		host.model.setResponses([respond, respond]);
 
 		type ControlState = Parameters<typeof createChildRuntimeBinding>[0];
+		const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
 		const events: Array<{ event: string; payload: unknown }> = [];
 		// Keep transport outside this focused binding test; Pi and bridge lifecycle are real.
 		const channel = {
-			async sendEvent(event: string, payload: unknown) { events.push({ event, payload }); },
+			async sendEvent(event: string, payload: unknown) {
+				events.push({ event, payload });
+				for (const handler of eventHandlers) handler({ event, payload } as PiChildRuntimeEvent);
+			},
 		} as unknown as ControlState["channel"];
 		const inputSubmissionAcknowledger = new TerminalInputSubmissionAcknowledger(() => {});
 		const state: ControlState = {
@@ -105,25 +130,82 @@ for (const path of [
 			inputSubmissionAcknowledger.bind(), () => {}, () => {},
 		);
 		state.currentBinding = binding;
-		try {
-			const receipt = await binding.handleOwnerRequest({
-				method: "message.deliver",
-				payload: {
-					runId: "prepared-run",
-					delivery: {
-						kind: "custom",
-						message: { ...deliveryMessage, details: { messages: [...deliveryMessage.details.messages] } },
-						triggerTurn: true,
-						...(path.preparation ? { workingZonePreparation: path.preparation } : {}),
-					},
+		const parent = new PiChildHostedRuntime({
+			exited: new Promise(() => {}),
+			addChangeHandler: () => () => {},
+			addFailureHandler: () => () => {},
+			ready: async () => ({
+				snapshot: {
+					cwd: context.cwd, model: { provider: "test", modelId: "test" }, thinking: "off",
+					tools: [], skills: [], skillSources: [], extensions: [], toolExecutionModes: [],
+					projectTrusted: true, sessionId: session.sessionId, sessionPath: null,
+					systemPrompt: null, loadContextFiles: true,
 				},
-				signal: new AbortController().signal,
+				channel: {
+					onClose: () => () => {},
+					request: async (method: string, payload: unknown) => binding.handleOwnerRequest({
+						method, payload, signal: cancellation.signal,
+					} as Parameters<typeof binding.handleOwnerRequest>[0]),
+				},
+			} as unknown as PiChildProcessRuntime),
+			onEvent: (handler: (event: PiChildRuntimeEvent) => void) => {
+				eventHandlers.add(handler);
+				return () => { eventHandlers.delete(handler); };
+			},
+			dispose: async () => {},
+		} as unknown as PiChildProcessLaunch, []);
+		await parent.ready;
+		let dispatched!: ReturnType<typeof parent.deliver>;
+		const handle = Object.freeze({ sequence: 1 });
+		const scheduler = new MessageDeliveryScheduler({ workflowPolicy: new WorkflowPolicyStore() });
+		const record = {
+			identity: { agentId: "recipient" },
+			host: {
+				lane: new SerialLane(),
+				currentHandle: () => handle,
+				isCurrent: (candidate: unknown) => candidate === handle,
+				addSettledHandler: (handler: (settledHandle: typeof handle, outcome: "settled") => void) =>
+					parent.subscribe((event) => { if (event.type === "agent_settled") handler(handle, "settled"); }),
+				addEndedHandler: () => () => {},
+				addRetentionReason() {},
+				removeRetentionReason() {},
+				blocksOrdinaryDelivery: () => false,
+				currentWorkState: () => parent.workState(),
+				observe: () => ({ phase: "live", work: parent.workState(), attention: "none", retentionReasons: [] }),
+				deliverInLane: () => dispatched = parent.deliver({
+					kind: "custom",
+					message: deliveryMessage,
+					triggerTurn: true,
+					...(path.preparation ? { workingZonePreparation: path.preparation } : {}),
+				}, { inspectCommit: () => true }),
+				finishIsolatedResumptionInLane() {},
+				discardAndEndInLane: async () => { assert.fail("successful Delivery must not fail its Run"); },
+				releaseIfEligibleInLane() {},
+			} as unknown as AgentRuntimeHost,
+		} as unknown as AgentRecord;
+		scheduler.integrate(record);
+		safeBoundary = () => scheduler.reachSafeBoundary(record);
+		try {
+			await scheduler.admitCustom(record, {
+				messageId: "actual-request",
+				deliveryMode: "deferred",
+				customMessage: deliveryMessage,
+				inspectProof: () => {
+					const entry = session.sessionManager.getEntries().find((entry) =>
+						entry.type === "custom_message" && entry.customType === deliveryMessage.customType);
+					return entry ? { agentId: "recipient", entryId: entry.id } : undefined;
+				},
 			});
-			assert.deepEqual(receipt, {
-				accepted: true, transcriptCommitted: true, modelCycleStarted: true, queuedInputCount: 0,
-			});
+			let completed = false;
+			void dispatched.completion.then(() => { completed = true; }, () => {});
+			const commitResult = await dispatched.transcriptCommit?.catch((error: unknown) => error);
+			assert.equal(commitResult, true);
 			await requestInModel;
 			assert.equal(session.isIdle, false);
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			assert.equal(completed, false, "Owner completion must remain pending during the actual Request");
+			assert.equal(parent.workState(), "active");
+			assert.equal(state.currentRunId, replacementFinishesFirst ? "native-run-1" : "hosted-run-1");
 			assert.equal(manualAttempts, 1);
 			assert.equal(manualSignal?.aborted, false);
 			assert.deepEqual(host.ui.notifications, []);
@@ -133,19 +215,23 @@ for (const path of [
 				replacementType, deliveryMessage.customType,
 			]);
 			assert.equal(committed[1]?.content, deliveryMessage.content);
-			assert.equal(events.some(({ event }) => event === "agent.settled"), false);
+			assert.equal(events.filter(({ event }) => event === "agent.settled").length, replacementFinishesFirst ? 1 : 0);
 
 			finishReplacement();
 			await session.waitForIdle();
-			assert.deepEqual(events.filter(({ event }) => event === "agent.settled"), [{
-				event: "agent.settled",
-				payload: { runId: "prepared-run", outcome: "completed", queuedInputCount: 0 },
-			}]);
+			await dispatched.completion;
+			assert.equal(safeBoundaries, replacementFinishesFirst ? 2 : 1);
+			assert.equal(parent.workState(), "settled");
+			assert.deepEqual(events.filter(({ event }) => event.startsWith("agent.")).map(({ event, payload }) => [event, (payload as { runId: string }).runId]), [
+				["agent.start", "hosted-run-1"], ["agent.end", "hosted-run-1"], ["agent.settled", "hosted-run-1"],
+				...(replacementFinishesFirst ? [["agent.start", "native-run-1"], ["agent.end", "native-run-1"], ["agent.settled", "native-run-1"]] : []),
+			]);
 			assert.deepEqual(events.filter(({ event }) => event === "runtime.fault"), []);
 		} finally {
 			finishReplacement();
 			await session.waitForIdle();
 			binding.dispose();
+			await parent.dispose();
 		}
 	});
 }

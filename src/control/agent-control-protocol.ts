@@ -763,6 +763,7 @@ export const agentControlMethods = {
 	},
 	"message.deliver": {
 		request: closed({
+			deliveryId: NonEmptyStringSchema,
 			runId: NonEmptyStringSchema,
 			delivery: AgentRuntimeDeliverySchema,
 		}),
@@ -828,6 +829,12 @@ export const agentControlEvents = {
 			runId: NonEmptyStringSchema,
 			outcome: RunOutcomeSchema,
 			queuedInputCount: QueuedInputCountSchema,
+		}),
+	},
+	"message.dispatch.completed": {
+		payload: closed({
+			deliveryId: NonEmptyStringSchema,
+			error: Type.Optional(Type.String()),
 		}),
 	},
 	"presentation.agents.changed": { payload: RemoteAgentSelectorSnapshotSchema },
