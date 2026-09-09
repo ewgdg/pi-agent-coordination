@@ -17,7 +17,6 @@ import {
 	type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 
-import { moderatorIncidentFromDescription } from "../protocol/agent-metadata.ts";
 import type { ReportHistoryItem } from "../protocol/moderator-report.ts";
 import { sanitizeReportTerminalText } from "./moderator-report-surface.ts";
 import type { AgentRosterStatus } from "../coordination/workflow-coordinator.ts";
@@ -652,15 +651,12 @@ class AgentSelectorSurface implements Component {
 			: `${childCount} ${childCount === 1 ? "child" : "children"} ›`;
 		const moderator = status.agentId !== status.workflowId &&
 			status.directSpawnerAgentId === null;
-		const incident = moderator && status.description !== undefined
-			? moderatorIncidentFromDescription(status.description)
-			: undefined;
 		return {
 			value: status.agentId,
 			label: status.label,
 			description: [
 				formatRun(status, this.#theme),
-				incident === undefined ? undefined : `incident: ${incident}`,
+				moderator ? status.description : undefined,
 			].filter(Boolean).join(" · "),
 			status,
 			kind: "agent",

@@ -69,7 +69,7 @@ test("native fork is cancelled for a matching Moderator bootstrap", async (t) =>
 			creationPreset: null,
 			metadata: {
 				label: "Moderator",
-				description: "Moderating run failure",
+				description: "Incident: run failure",
 			},
 		},
 	);

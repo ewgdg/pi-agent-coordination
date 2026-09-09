@@ -501,7 +501,7 @@ test("Dormant Moderator rows show its incident kind while details preserve its r
 	const harness = surfaceHarness(30);
 	const moderator = selectorAgent({
 		...dormantAgentStatus("moderator-id", "Moderator", null),
-		description: "Moderating obligation stall",
+		description: "Incident: obligation stall",
 	}, "moderator-provider", "moderator-model", "high", 0);
 	const selection = openAgentSelectorSurface(harness.ui, {
 		live: [agentStatus("owner", "Owner", null)],
@@ -514,10 +514,9 @@ test("Dormant Moderator rows show its incident kind while details preserve its r
 
 	const rendered = renderPanel(harness.component, 80);
 	const moderatorRow = rendered.find((line) => line.includes("Moderator")) ?? "";
-	assert.match(moderatorRow, /Moderator.*dormant · incident: obligation stall/);
-	assert.doesNotMatch(moderatorRow, /Moderating obligation stall/);
+	assert.match(moderatorRow, /Moderator.*dormant · Incident: obligation stall/);
 	assert.match(rendered.join("\n"), /moderator-id/);
-	assert.match(rendered.join("\n"), /Moderating obligation stall/);
+	assert.equal(rendered.filter((line) => line.includes("Incident: obligation stall")).length, 2);
 	harness.component.handleInput?.("\r");
 	assert.deepEqual(await selection, {
 		kind: "select_agent",

@@ -493,19 +493,19 @@ test("resolves fixed Owner and Moderator role metadata", () => {
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("run_failure"), {
 		label: "Moderator",
-		description: "Moderating run failure",
+		description: "Incident: run failure",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("obligation_stall"), {
 		label: "Moderator",
-		description: "Moderating obligation stall",
+		description: "Incident: obligation stall",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("dependency_deadlock"), {
 		label: "Moderator",
-		description: "Moderating dependency deadlock",
+		description: "Incident: dependency deadlock",
 	});
 	assert.deepEqual(resolveModeratorAgentMetadata("operation_review"), {
 		label: "Moderator",
-		description: "Moderating operation review",
+		description: "Incident: operation review",
 	});
 });
 

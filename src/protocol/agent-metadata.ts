@@ -56,21 +56,11 @@ export function resolveModeratorAgentMetadata(
 	return {
 		label: "Moderator",
 		description: normalizeAgentMetadata(
-			`Moderating ${MODERATOR_INCIDENT_BY_TRIGGER[triggerKind]}`,
+			`Incident: ${MODERATOR_INCIDENT_BY_TRIGGER[triggerKind]}`,
 			"description",
 			MAX_AGENT_DESCRIPTION_CODE_POINTS,
 		),
 	};
-}
-
-/** Resolve the incident kind encoded by trusted Moderator metadata. */
-export function moderatorIncidentFromDescription(description: string): string | undefined {
-	for (const triggerKind of Object.keys(MODERATOR_INCIDENT_BY_TRIGGER) as ModeratorTriggerKind[]) {
-		if (resolveModeratorAgentMetadata(triggerKind).description === description) {
-			return MODERATOR_INCIDENT_BY_TRIGGER[triggerKind];
-		}
-	}
-	return undefined;
 }
 
 function normalizeAgentMetadata(
