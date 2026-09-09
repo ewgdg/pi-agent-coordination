@@ -39,3 +39,11 @@ Incident 2026-09-09: blocked review kAwu0w1dLmTOD5_CDQwyXxw6A8D-3b-5lGQedffTlQ8 
 - GREEN: the same contract plus publication-error rendering test pass (2/2, ~0.5s).
 - Moderator report guidance now requires current status/path, exact toolCallId/toolResult matching across the physical transcript, actual tail ID/timestamp, and explicit uncertainty for unavailable evidence. It distinguishes historical inspectedThrough/excerpts from the current tail and missing results from proven crashes. No enforcement or schema added.
 - A separate read-only delivery investigator found no new confirmed defect: all 12 preparation matrix tests pass, and the scheduler's "Recipient Run ended before Delivery proof" is a secondary failure diagnostic, not the originating fault. Tool-driven rollover remains outside that fixture.
+
+## Checkpoint: observation stack safety
+- Requester accepted the bounded stack-safety correction while requiring an explicit incident causal limit.
+- RED: `node --test tests/agent-transcript-observation.test.ts` reproduces RangeError with 20,000 observations; nested/duplicate scope, callback failure, reader failure and fresh-read behavior pass on the original code.
+- GREEN: observation, AgentTranscript, and workflow-resume tests pass (36/36, ~0.5s).
+- Replaced per-Agent recursive callbacks with one iterative synchronous scope, with reverse-order restoration in finally; the coordination wrapper captures its roster before inspection. Removed the obsolete single-observation entry path.
+- This proves roster-independent stack depth, not the cause of the 11-child incident. No synchronous reconciliation reentrancy or live-Map growth was established in the reviewed paths; retained transcript readers and request graph evaluation do not call the scope recursively.
+- Typecheck currently reports unrelated `tests/workflow-resume.test.ts:428` (outstandingRequests does not exist); no task-file diagnostics.

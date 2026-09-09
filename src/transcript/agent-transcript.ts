@@ -52,11 +52,27 @@ export class AgentTranscript {
 		return this.#observation ?? this.#reader.read();
 	}
 
-	/** Share one physical observation within a synchronous consumer operation. */
-	withObservation<T>(work: () => T, inspection: TranscriptInspection = this.inspect()): T {
-		const previous = this.#observation;
-		this.#observation = inspection;
-		try { return work(); } finally { this.#observation = previous; }
+	/** Share physical observations for one synchronous consumer; no await may cross this scope. */
+	static withObservations<T>(
+		observations: Iterable<readonly [AgentTranscript, TranscriptInspection | undefined]>,
+		work: () => T,
+	): T {
+		const previous: [AgentTranscript, TranscriptInspection | undefined][] = [];
+		try {
+			// Enter iteratively: nesting one callback per Agent exhausts the JS stack.
+			for (const [transcript, inspection] of observations) {
+				const observed = inspection ?? transcript.inspect();
+				previous.push([transcript, transcript.#observation]);
+				transcript.#observation = observed;
+			}
+			return work();
+		} finally {
+			// Reverse order also restores duplicate transcripts and enclosing scopes.
+			for (let index = previous.length - 1; index >= 0; index--) {
+				const [transcript, observation] = previous[index]!;
+				transcript.#observation = observation;
+			}
+		}
 	}
 
 	refresh(): Promise<TranscriptInspection> {

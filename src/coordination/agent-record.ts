@@ -11,7 +11,7 @@ import type {
 	EffectiveAgentRunConfiguration,
 } from "../templates/agent-configuration.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
-import type { AgentTranscript, TranscriptInspection } from "../transcript/agent-transcript.ts";
+import { AgentTranscript, type TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 export type AgentIdentity = OwnerIdentity | ChildAgentIdentity | ModeratorIdentity;
 
@@ -103,10 +103,8 @@ export async function refreshAgentTranscripts(records: Iterable<AgentRecord>): P
 
 /** No await may cross this observation: the next event-loop turn must read again. */
 export function withAgentTranscriptObservations<T>(records: Iterable<AgentRecord>, work: () => T, inspections?: ReadonlyMap<AgentRecord, TranscriptInspection>): T {
-	const iterator = records[Symbol.iterator]();
-	const observeNext = (): T => {
-		const next = iterator.next();
-		return next.done ? work() : next.value.transcript.withObservation(observeNext, inspections?.get(next.value));
-	};
-	return observeNext();
+	return AgentTranscript.withObservations(
+		Array.from(records, record => [record.transcript, inspections?.get(record)] as const),
+		work,
+	);
 }

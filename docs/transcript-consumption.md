@@ -57,7 +57,11 @@ There are three different positions:
 Synchronous consumers share an observation within each catch-up chunk. No
 observation is held across an await. Each relationship chunk refreshes physical
 sources asynchronously and pins the returned views without synchronously draining
-later appends. Completed updates reacquire evidence before returning.
+later appends. Completed updates reacquire evidence before returning. Workflow scopes
+capture the Agent roster before inspection and enter observations iteratively, so
+roster size does not add synchronous call-stack depth. Nested scopes reuse or
+explicitly override the pinned views and restore enclosing views in reverse order,
+including when a reader or consumer throws.
 
 A JSONL record commits only at its terminating newline. The reader retains split
 UTF-8 bytes until the complete line is available and rejects invalid UTF-8 or JSON.
