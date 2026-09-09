@@ -41,6 +41,10 @@ Cold bootstrap reconstructs no per-responder Request queue, general delivery que
 
 After reopening the Owner session, call `workflow_resume({})` to renew continuation intent across that current Workflow. Only the Owner has this tool; it takes no Agent or Workflow selector. Cold bootstrap stays passive.
 
+Successful admission already schedules eligible pending deliveries and continues eligible unfinished Requests; extra resume/wake-up Messages or replacement Requests are unnecessary. Messages carrying genuinely new instructions remain appropriate. Read blocked or indeterminate entries before choosing targeted recovery rather than treating the receipt as Delivery or completion proof.
+
+The tool's compact view summarizes scheduled Messages, admitted responders, skips, and blocked/indeterminate work. Expand it for the full admission receipt, including identities and reasons.
+
 Recovery takes a fixed snapshot of verified durable evidence, then admits work through the normal recipient lanes:
 
 - Undelivered Messages and Requests retain their original identities, authorship, recipients, payloads, Delivery modes, ancestry, and context preparation.

@@ -14,6 +14,7 @@ import {
 	type Component,
 } from "@earendil-works/pi-tui";
 
+import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import type { AgentStatus } from "../coordination/agent-record.ts";
 import type {
 	AgentWaitInput,
@@ -41,6 +42,41 @@ import { boundedToolPreview } from "./bounded-preview.ts";
 import { renderMessageProjection } from "./message-delivery-renderer.ts";
 import { messageReceiptStatusColor } from "./message-renderer.ts";
 import { formatMessageIdentity } from "../presentation/message-identity.ts";
+
+export function renderWorkflowResumeCall(_args: object, theme: Theme): Text {
+	return toolCall(theme, "resume", ["Workflow"]);
+}
+
+export function renderWorkflowResumeResult(
+	result: AgentToolResult<WorkflowResumeReceipt>,
+	options: ToolRenderResultOptions,
+	theme: Theme,
+	context: Readonly<{ isError: boolean }>,
+): Text {
+	if (context.isError) {
+		const error = toolResultText(result);
+		return new Text(theme.fg("error", options.expanded ? error : boundedToolPreview(error)), 0, 0);
+	}
+	if (options.isPartial || result.details === undefined) return pending(theme, "resuming Workflow");
+	const details = result.details;
+	const scheduled = details.deliveries.filter(item => item.disposition === "scheduled").length;
+	const admitted = details.activations.filter(item => item.disposition === "admitted").length;
+	const outcomes = [...details.deliveries, ...details.activations];
+	const skipped = outcomes.filter(item => item.disposition === "skipped").length;
+	const blocked = outcomes.filter(item => item.disposition === "blocked").length;
+	const indeterminate = outcomes.filter(item => item.disposition === "indeterminate").length + details.indeterminate.length;
+	const summary = [
+		`${scheduled} Message${scheduled === 1 ? "" : "s"} scheduled`,
+		`${admitted} responder${admitted === 1 ? "" : "s"} admitted`,
+		...(skipped ? [`${skipped} skipped`] : []),
+		...(blocked ? [`${blocked} blocked`] : []),
+		...(indeterminate ? [`${indeterminate} indeterminate`] : []),
+		...(scheduled === 0 && admitted === 0 ? ["no eligible work admitted"] : []),
+	].join(" · ");
+	// Scheduling and responder admission are not Delivery or task completion.
+	return receipt(theme, `admission · ${summary}`, details, options,
+		blocked || indeterminate ? "warning" : scheduled || admitted ? "success" : "dim");
+}
 
 export function renderAgentWaitCall(
 	args: AgentWaitInput,

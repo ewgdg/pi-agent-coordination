@@ -30,6 +30,8 @@ import type {
 import type { RunControlInput, RunControlReceipt } from "../protocol/run-control.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../templates/agent-templates.ts";
 import {
+	renderWorkflowResumeCall,
+	renderWorkflowResumeResult,
 	renderAgentControlCall,
 	renderAgentControlResult,
 	renderAgentObserveCall,
@@ -544,13 +546,17 @@ export function registerParticipantCoordinationTools<
 		pi.registerTool({
 			name: "workflow_resume",
 			label: "Resume Workflow",
-			description: "Owner only: explicitly resume unfinished coordination in the current Workflow from a fixed verified durable snapshot. Returns recovery admission, not Delivery or completion.",
+			description: "Owner only: resume unfinished coordination in the current Workflow from a fixed verified durable snapshot. Automatically schedules eligible pending Messages and continues dormant responders with delivered unanswered Requests; no extra wake-up Messages are needed. Returns recovery admission, not Delivery or completion.",
 			promptSnippet: "Resume the current Workflow after restart without replacement Requests.",
-			promptGuidelines: ["workflow_resume renews Workflow continuation intent. It does not restore interrupted tools or volatile Wait calls; inspect side effects before repeating interrupted work."],
+			promptGuidelines: [
+				"workflow_resume already schedules eligible pending deliveries and admits continuation for dormant responders with delivered unanswered Requests. After successful admission, extra resume/wake-up Messages or replacement Requests are unnecessary. Messages carrying genuinely new instructions remain appropriate; do not send them solely to trigger work already admitted.",
+				"workflow_resume returns admission, not Delivery or completion. Inspect blocked or indeterminate entries before deciding on targeted recovery; running Agents receive no duplicate continuation, and Holds, capacity, and causal eligibility remain effective.",
+				"workflow_resume does not restore interrupted tools or volatile Wait calls; inspect side effects before repeating interrupted work.",
+			],
 			executionMode: "sequential",
 			parameters: workflowResumeParameters,
-			renderCall: () => new Text("Resume Workflow", 0, 0),
-			renderResult: (result) => new Text(boundedToolPreview(JSON.stringify(result.details)), 0, 0),
+			renderCall: renderWorkflowResumeCall,
+			renderResult: renderWorkflowResumeResult,
 			async execute(toolCallId) {
 				return toolResult(await availableHandlers.resumeWorkflow!(toolCallId));
 			},
