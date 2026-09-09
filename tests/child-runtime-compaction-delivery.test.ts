@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Type } from "typebox";
 
-import { fauxAssistantMessage, type FauxResponseStep } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import { MessageDeliveryScheduler } from "../src/coordination/message-delivery-scheduler.ts";
@@ -43,7 +44,7 @@ const cases = [
 		(["deferred", "steer"] as const).map((deliveryMode) => ({ path, replacementFinishesFirst, deliveryMode })))),
 ];
 for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
-	test(`${deliveryMode}, ${path.name}: replacement ${replacementFinishesFirst ? "finishes before rejection" : "still active"}`, {
+	test(`${deliveryMode}, ${path.name} after a completed turn: tool-bearing replacement ${replacementFinishesFirst ? "finishes before rejection" : "still active"}`, {
 		timeout: 5_000,
 	}, async (t) => {
 		let context!: ExtensionContext;
@@ -58,6 +59,11 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 		let requestSeen!: () => void;
 		const requestInModel = new Promise<void>((resolve) => { requestSeen = resolve; });
 		const host = await createTestOwnerHost(t, (pi) => {
+			pi.registerTool({
+				name: "checkpoint", label: "Checkpoint", description: "Complete checkpoint work.",
+				parameters: Type.Object({}),
+				async execute() { return { content: [{ type: "text", text: "Checkpoint complete." }], details: {} }; },
+			});
 			pi.on("session_start", (_event, ctx) => { context = ctx; });
 			pi.on("turn_end", async () => { await safeBoundary(); safeBoundaries += 1; });
 			pi.on("session_before_compact", (event) => {
@@ -91,17 +97,25 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 			session.sessionManager.appendMessage(fauxAssistantMessage("Prior response."));
 		}
 		session.agent.state.messages = session.sessionManager.buildSessionContext().messages;
+		let previousTurnDone = false;
 		session.getContextUsage = () => ({
-			tokens: path.tokens, contextWindow: 200_000, percent: path.tokens / 2_000,
+			tokens: previousTurnDone ? path.tokens : 0, contextWindow: 200_000,
+			percent: previousTurnDone ? path.tokens / 2_000 : 0,
 		});
+		let checkpointRequested = false;
 		const respond: FauxResponseStep = async (modelContext) => {
+			if (!previousTurnDone) return fauxAssistantMessage("Earlier work completed.");
+			if (!checkpointRequested) {
+				checkpointRequested = true;
+				return fauxAssistantMessage(fauxToolCall("checkpoint", {}, { id: "replacement-checkpoint" }), { stopReason: "toolUse" });
+			}
 			if (JSON.stringify(modelContext.messages).includes(preparation.prospectiveRequest.question)) {
 				requestSeen();
 				await replacementGate;
 			}
 			return fauxAssistantMessage("Checkpoint and Request processed.");
 		};
-		host.model.setResponses([respond, respond]);
+		host.model.setResponses([respond, respond, respond, respond]);
 
 		type ControlState = Parameters<typeof createChildRuntimeBinding>[0];
 		const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
@@ -181,6 +195,21 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 		scheduler.integrate(record);
 		safeBoundary = () => scheduler.reachSafeBoundary(record);
 		try {
+			// Reuse the same bridge/adapter after an earlier model cycle settles.
+			const previous = parent.deliver({
+				kind: "user",
+				content: "Earlier work.",
+				deliverAs: "followUp",
+			}, { inspectCommit: () => true });
+			await previous.completion;
+			await session.waitForIdle();
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			await record.host.lane.idle();
+			assert.equal(parent.workState(), "settled");
+			previousTurnDone = true;
+			safeBoundaries = 0;
+			events.length = 0;
+
 			await scheduler.admit(record, {
 				messageId: "actual-request",
 				deliveryMode,
@@ -205,7 +234,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 			assert.equal(completed, false, "Owner completion must remain pending during the actual Request");
 			assert.deepEqual(failures, [], "replacement settlement must not fail the actual Delivery");
 			assert.equal(parent.workState(), "active");
-			assert.equal(state.currentRunId, replacementFinishesFirst ? "native-run-1" : "hosted-run-1");
+			assert.equal(state.currentRunId, replacementFinishesFirst ? "native-run-1" : "hosted-run-2");
 			assert.equal(manualAttempts, 1);
 			assert.equal(manualSignal?.aborted, false);
 			assert.deepEqual(host.ui.notifications, []);
@@ -224,10 +253,12 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 			await record.host.lane.run(() => {});
 			assert.deepEqual(failures, [], "successful Delivery must not fail its Run");
 			// followUp starts after replacement turn_end; steering can join that turn.
-			assert.equal(safeBoundaries, replacementFinishesFirst || deliveryMode === "deferred" ? 2 : 1);
+			assert.equal(safeBoundaries, replacementFinishesFirst || deliveryMode === "deferred" ? 3 : 2);
+			assert.ok(session.sessionManager.getEntries().some(entry => entry.type === "message" &&
+				entry.message.role === "toolResult" && entry.message.toolCallId === "replacement-checkpoint" && !entry.message.isError));
 			assert.equal(parent.workState(), "settled");
 			assert.deepEqual(events.filter(({ event }) => event.startsWith("agent.")).map(({ event, payload }) => [event, (payload as { runId: string }).runId]), [
-				["agent.start", "hosted-run-1"], ["agent.end", "hosted-run-1"], ["agent.settled", "hosted-run-1"],
+				["agent.start", "hosted-run-2"], ["agent.end", "hosted-run-2"], ["agent.settled", "hosted-run-2"],
 				...(replacementFinishesFirst ? [["agent.start", "native-run-1"], ["agent.end", "native-run-1"], ["agent.settled", "native-run-1"]] : []),
 			]);
 			assert.deepEqual(events.filter(({ event }) => event === "runtime.fault"), []);

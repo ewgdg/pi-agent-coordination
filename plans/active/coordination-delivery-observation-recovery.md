@@ -53,3 +53,18 @@ Incident 2026-09-09: blocked review kAwu0w1dLmTOD5_CDQwyXxw6A8D-3b-5lGQedffTlQ8 
 - Replaced it with `tests/failed-delivery-observation.test.ts` at the scheduler's supported blocked-Delivery observation seam. It records a real scheduling failure, changes recipient state from dormant to unrelated active work and settled, and checks that the same blocked Message remains continuously observable. Explicit selection still suspends it and Delivery proof clears it.
 - Confirmed RED against `e6a976b^` scheduler in a disposable checkout: active work incorrectly returns [] instead of the existing scheduling_failure. GREEN on current scheduler (~0.37s).
 - This is precise proof of the suppression/reappearance defect that releases moderation keys. Existing integration selection/recurrence coverage passes, but the live incident's exact nudge lifecycle is not replayed by this unit seam.
+
+## Final delivery investigation and acceptance boundary
+- Requester accepted a bounded final lifecycle coverage step and explicit unresolved cause, with no guessed delivery patch.
+- Expanded the existing 12-case preparation matrix to reuse the bridge/hosted adapter after a completed user turn and execute a real checkpoint tool/result during the preparation replacement. Deferred/Steer × optional/mandatory/native threshold × replacement active/finished all pass (~0.66s); actual Request commit remains exactly once and completion remains pending while its model work is gated.
+- This is added coverage, not a new failure reproduction. It does not emulate the installed Codex new_context extension's context rollover or a transport exit, and its scheduler-facing host is still a controlled stub.
+- `adee790` already correlates exact `message.dispatch.completed` in child bridge/hosted adapter and waits outside the scheduler lane. `f0cb9f5` already drains disposed dispatches and tracks prepared Steer completion. Both predate this task and were already installed; they are not new fixes here.
+- The original lower-level Run failure/termination that produced "Recipient Run ended before Delivery proof" remains unidentified. That message is a scheduler consequence, not evidence of compaction as cause. Ordinary nudges do not renew failed Request scheduling; no automatic retry or replacement Request was added.
+- Concurrent recipient-relative-recovery work is excluded from task commits. It adds recipient-specific outbound recovery status/guidance and gates pending delivery while a continuation receipt is finalized; it is not counted as this task's delivery fix.
+
+## Final checks and outcome
+- Focused contracts: `node --test tests/child-runtime-compaction-delivery.test.ts tests/owner-parked-delivery-scheduler.test.ts tests/failed-delivery-observation.test.ts tests/agent-transcript-observation.test.ts tests/agent-transcript.test.ts tests/request-evidence.test.ts`: 58/58 pass (~0.75s).
+- Focused moderation: failure detection, explicit selection/recurrence, Hold exclusion, and observable failure after leaf termination pass.
+- Registered Moderator guidance/publication-error rendering: 2/2 pass.
+- Final `npm run typecheck` passes; the earlier concurrent workflow-resume diagnostic no longer occurs. `git diff --check` passes. No full integration suite, installed checkout changes, or live reload.
+- Outcome is partial: corrected known-failure observation continuity, proven roster-independent observation stack safety, and improved current-primary-evidence report guidance. Original delivery-loss trigger and incident-specific overflow trigger remain unresolved. Do not report all incident causes fixed.
