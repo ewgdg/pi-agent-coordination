@@ -1,5 +1,5 @@
 import { MODERATOR_REPORT_CUSTOM_TYPE, MODERATOR_REPORT_READ_CUSTOM_TYPE } from "./moderator-report.ts";
-import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, OBLIGATION_RESUMED_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
+import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
@@ -208,7 +208,7 @@ function readMessageDeliveries(options: {
 					entry.customType === MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE ||
 					entry.customType === OBLIGATION_REMINDER_CUSTOM_TYPE ||
 					entry.customType === OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE ||
-					entry.customType === OBLIGATION_RESUMED_CUSTOM_TYPE ||
+					entry.customType === REQUEST_ATTENTION_CUSTOM_TYPE ||
 					entry.customType === OBLIGATION_FOCUS_CUSTOM_TYPE ||
 					entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE ||
 					entry.customType === WORKFLOW_CONTINUATION_CUSTOM_TYPE

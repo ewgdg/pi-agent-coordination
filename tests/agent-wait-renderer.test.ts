@@ -36,6 +36,12 @@ function renderContext() {
 	};
 }
 
+test("selected Wait shows the requested references in its call", () => {
+	const call = renderAgentWaitCall({ requestMessageIds: ["abc123", "def456"] }, plainTheme).render(120).join("\n");
+	assert.match(call, /abc123/);
+	assert.match(call, /def456/);
+});
+
 test("Agent Wait rendering shows snapshot responders, then their Answers", () => {
 	const context = renderContext();
 	const call = renderAgentWaitCall({}, plainTheme).render(120).join("\n");

@@ -287,10 +287,12 @@ test("Message results show a suffix collapsed and retain the full ID on expansio
 	assert.ok(renderResult(receipt, true, 120).includes(messageId));
 });
 
-for (const expanded of [false, true]) test(`Answer receipt displays only the answered and resumed transition (expanded: ${expanded})`, () => {
-	const content = "Answered: aB3dE5gH · Core — clarify interface\nResumed: iJ7lM9oP · Owner — implement feature";
-	const rendered = renderAgentMessageResult({ content: [{ type: "text", text: content }], details: {
+for (const expanded of [false, true]) test(`Answer uses the ordinary messaging receipt (expanded: ${expanded})`, () => {
+	const receipt = {
 		messageId: "answer", requestMessageId: "request", messageStatus: "sent",
-	} }, { expanded, isPartial: false }, plainTheme).render(100).join("\n");
-	assert.equal(rendered.split("\n").map(line => line.trimEnd()).join("\n"), content);
+	} as const;
+	const rendered = renderAgentMessageResult({ content: [{ type: "text", text: JSON.stringify(receipt, null, 2) }],
+		details: receipt }, { expanded, isPartial: false }, plainTheme).render(100).join("\n");
+	assert.equal(rendered.split("\n")[0]?.trimEnd(), "sent · answer");
+	assert.equal(rendered.includes('"requestMessageId"'), expanded);
 });

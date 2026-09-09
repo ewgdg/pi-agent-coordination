@@ -31,7 +31,14 @@ Use existing public test interfaces: authored tool calls and canonical transcrip
 - Confirmed Request schema already exposes Steer, while Request eligibility still gates delivery by foreground ancestry/cooperative waiting and scheduler currently selects only the first eligible Request before filtering by delivery mode.
 - Design inspection completed for ownership, cancellation, and terminal Answer continuation. Foreground-based dependency inference is incompatible with free execution order; use Agent-owned outbound relationships and keep immutable attention ancestry only as scheduling provenance.
 - Focused baseline passed: causal-obligation-stack, request-resolution, message-tool (21 tests).
-- User extended the ticket with optional explicit Wait selection after agreeing that no-argument Wait should cover all outstanding outbound Requests. No implementation beyond this plan yet.
+- User extended the ticket with optional explicit Wait selection and suffix matching; implemented Agent-owned dependencies, all/selected snapshots, Steer priority/batching, arbitrary delivered unresolved Answer order, and neutral reminders in `241a31e`, `4d67a22`, and `7648f3a`.
+- Implemented ordinary terminal Answer receipts, selected Wait surface/rendering, attention glossary and maintained documentation. Removed the retired Answer transition metadata path rather than retaining compatibility logic.
+- Independent surface review found two native lifecycle gaps: queued post-Answer input could cause a duplicate continuation, and `triggerTurn: false` presentation at `agent_start` missed the first generation. Fixed both with native regressions in `934880f`: project the current complete set through Pi's pre-generation context hook and count only the last completed turn for continuation.
+- Independent core review found no confirmed correctness bug. Added parked selected-Wait isolation, selected cancellation, and multi-Steer preemption/reservation coverage in `02d375d`; no further production fix was needed.
+- Workflow coordination was blocked by a pre-existing moderator-report evidence issue. User repaired the runtime separately; explicit Workflow resume renewed unfinished delegation. Preserved those unrelated repair commits.
+- Final combined focused run passed 135 tests across Request/Wait evidence, control schema, reminder/Delivery evidence, tool surfaces/renderers, and lifecycle (including five native generation/continuation tests). Excluded the known unrelated Spawn-description assertion.
+- Final process runs passed all seven causal Request/preemption cases, both Deferred-after-Answer cases, and the Steer Wait-preemption case (10 total). Typecheck and diff check passed; no full suite run.
+- Supplemental existing Hold/termination tests could not reach their assertions: their shared spawn fixture waited for an obligation reminder and settled live Run. No claim those supervision paths were validated by that attempt; no unrelated fixture changes included.
 
 ## Decisions
 
@@ -41,8 +48,10 @@ Use existing public test interfaces: authored tool calls and canonical transcrip
 
 ## Surprises and discoveries
 
-To be updated at implementation checkpoints.
+- An Owner with unresolved self-authored Requests now correctly remains parked under Agent-wide dependency tracking. Answer-order tests wait for Delivery rather than assuming full Owner settlement before answering.
+- Public Pi `terminate: true` skips automatic model follow-up but does not discard queued input. Attention presentation must be available before generation, and already-consumed post-Answer input must count as the continuation opportunity.
+- An existing `participant-tool-registrar` Spawn-schema test expects wording absent from the baseline description (`Omit template and config` versus `Inherit the completed parent conversation...`). This unrelated assertion remains unchanged and is excluded from the passing focused registrar run.
 
 ## Outcomes and retrospective
 
-Pending.
+Implemented the agreed attention model, all/selected Wait with suffix references, Agent-owned outbound dependencies, freely targeted delivered unresolved Answers, ordinary terminal Answer receipts, and neutral nonduplicating continuation. Maintained docs/glossary and task-owned tests now use the corrected semantics. Unrelated runtime repair commits remain intact; their temporary Answer presentation metadata allowance is retired with the producer it supported.

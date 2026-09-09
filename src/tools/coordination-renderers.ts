@@ -40,12 +40,13 @@ import type { AgentObserveInput } from "./participant-coordination-tools.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 import { renderMessageProjection } from "./message-delivery-renderer.ts";
 import { messageReceiptStatusColor } from "./message-renderer.ts";
+import { formatMessageIdentity } from "../presentation/message-identity.ts";
 
 export function renderAgentWaitCall(
-	_args: AgentWaitInput,
+	args: AgentWaitInput,
 	theme: Theme,
 ): Text {
-	return toolCall(theme, "wait", []);
+	return toolCall(theme, "wait", args.requestMessageIds?.map(id => formatMessageIdentity(id)) ?? []);
 }
 
 export function renderAgentWaitResult(

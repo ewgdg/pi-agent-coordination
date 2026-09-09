@@ -13,7 +13,7 @@ export const RUN_FAILURE_RECOVERY_CUSTOM_TYPE =
 export const OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE =
 	"agent-coordination.operational-diagnostic";
 
-export const OBLIGATION_RESUMED_CUSTOM_TYPE = "agent-coordination.obligation-resumed";
+export const REQUEST_ATTENTION_CUSTOM_TYPE = "agent-coordination.request-attention";
 export const OBLIGATION_FOCUS_CUSTOM_TYPE = "agent-coordination.obligation-focus";
 
 export const MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE =

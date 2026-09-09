@@ -30,9 +30,9 @@ import { AGENT_IDENTITY_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "../src
 import { inspectAgentMessageAuthorResult } from "../src/protocol/message.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 
-test("registered Answer results remain canonical with and without a resumed Request", { timeout: 5_000 }, async (t) => {
-	for (const resumed of [null, "remaining-request"]) {
-		await t.test(resumed ?? "no remaining Request", async (t) => {
+test("registered Answer results remain canonical with and without other obligations", { timeout: 5_000 }, async (t) => {
+	for (const remaining of [null, "remaining-request"]) {
+		await t.test(remaining ?? "no remaining Request", async (t) => {
 			const requestId = "r".repeat(43);
 			let receipt: { messageId: string; requestMessageId: string; messageStatus: "sent" };
 			const host = await createRegistrarHost(t, "ordinary", {
@@ -44,7 +44,7 @@ test("registered Answer results remain canonical with and without a resumed Requ
 			manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
 			const frame = (id: string) => ({ requestId: id, requesterAgentId: "requester", question: "Finish the Request." });
 			manager.appendCustomEntry(OBLIGATION_FOCUS_CUSTOM_TYPE, {
-				frames: [...(resumed ? [frame(resumed)] : []), frame(requestId)],
+				frames: [...(remaining ? [frame(remaining)] : []), frame(requestId)],
 			});
 			const input = { operation: "answer" as const, requestId, answer: "Done." };
 			const toolCallId = "answer-result-roundtrip";
@@ -56,6 +56,7 @@ test("registered Answer results remain canonical with and without a resumed Requ
 			receipt = { messageId: deriveMessageIdentity(source), requestMessageId: requestId, messageStatus: "sent" };
 			const result = await executeTool(host, "agent_message", toolCallId, input);
 			assert.equal(result.terminate, true);
+			assert.deepEqual(result.details, receipt, "Answer uses the unmodified standard messaging receipt");
 			manager.appendMessage({
 				role: "toolResult", toolName: "agent_message", toolCallId,
 				content: result.content, details: result.details, isError: false, timestamp: Date.now(),
@@ -206,12 +207,16 @@ test("Agent Message schema requires explicit Answer and Cancellation targets", (
 	}
 });
 
-test("Agent Wait schema accepts only a parameterless join", () => {
+test("Agent Wait accepts all outbound Requests or a non-empty Request selection", () => {
 	const schema = participantCoordinationToolSchemas.agent_wait;
 	assert.equal(Value.Check(schema, {}), true);
 	assert.equal(Value.Check(schema, {
 		requestMessageIds: ["request-a"],
-	}), false);
+	}), true);
+	for (const input of [{ requestMessageIds: [] }, { requestMessageIds: [""] },
+		{ requestMessageIds: "request-a" }, { requestMessageIds: [7] }, { unknown: true }]) {
+		assert.equal(Value.Check(schema, input), false);
+	}
 });
 
 test("Agent Observe schema describes omitted status identity as self-observation", () => {
@@ -439,9 +444,9 @@ test("participant registrar preserves role-specific tool presentation metadata",
 	assert.deepEqual(toolMetadata(ordinary, "agent_wait"), {
 		label: "Wait for Answers",
 		description:
-			"Join all captured outstanding Agent Requests' committed Answers. Calling Wait renews intent and restores missing Request delivery scheduling without creating duplicate Requests; primary human input or an eligible inbound Request may preempt.",
+			"Join all or selected outstanding outbound Requests' Answers. Renew missing Request delivery scheduling without duplicates; primary human input or an eligible inbound Request may preempt.",
 		promptSnippet:
-			"Join all outstanding Agent Request Answers unless primary human input or an inbound Agent Request preempts the wait.",
+			"Wait for all your outstanding outbound Requests, or select requestMessageIds by full ID or unique suffix.",
 		renderShell: undefined,
 	});
 	assert.deepEqual(toolMetadata(ordinary, "agent_spawn"), {

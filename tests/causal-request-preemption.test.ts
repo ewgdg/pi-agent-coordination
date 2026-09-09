@@ -54,7 +54,7 @@ for (const { extra, unrelated, siblings } of [{ extra: false, unrelated: false, 
 				operation: "answer", requestId: clarification.requestMessageId.slice(-12), answer: "USE_INTERFACE_A",
 			});
 			if (text.includes("answer-clarification")) {
-				assert.match(text, /Current Request:/, "resumed focus must appear on the subsequent continuation");
+				assert.match(text, /Outstanding Requests/, "remaining obligations must be available on the subsequent continuation");
 				resumed = true;
 			}
 			if (text.includes("CORE_COMPLETE") && (!extra || text.includes("EXTRA_COMPLETE"))) return call("answer-implementation", "agent_message", {
@@ -126,24 +126,32 @@ test("Cancellation reaches a parked foreground and leaves downstream cleanup pos
 	assert.equal(cleaned, true, "the parked responder must receive Cancellation and clean up its own downstream Request");
 });
 
-for (const { rootQuestion, rootSnippet } of [
-	{ rootQuestion: `  Root\twork ${"x".repeat(80)}\nHidden root details`, rootSnippet: `Root work ${"x".repeat(69)}…` },
-	{ rootQuestion: "😀".repeat(80), rootSnippet: "😀".repeat(80) },
-	{ rootQuestion: "😀".repeat(81), rootSnippet: `${"😀".repeat(79)}…` },
-]) test(`a stale Answer reference cannot resolve the resumed parent, including source replay (snippet ${[...rootQuestion].length} characters)`, { timeout: 5_000 }, async t => {
+for (const oldestFirst of [true, false]) test(`either delivered Request may be answered first, preserving replay isolation (oldest first: ${oldestFirst})`, { timeout: 5_000 }, async t => {
 	const { executeAndCommitRegisteredTool: execute, executeRegisteredTool } = await import("./support/agent-session.ts");
 	const { obligationStack } = await import("../src/protocol/obligation-focus.ts");
 	const { transcriptFromSessionManager } = await import("../src/pi-integration/session-manager-transcript.ts");
 	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true });
-	host.model.setResponses(Array.from({ length: 12 }, () => fauxAssistantMessage("Keep the current Request open")));
+	host.model.setResponses(Array.from({ length: 12 }, () => fauxAssistantMessage("Keep the Requests open")));
 	const agentId = host.session.sessionId;
-	const root = await execute(host.session, "agent_message", "self-root", { operation: "request", targetAgent: agentId, question: rootQuestion });
-	await host.session.waitForIdle();
-	const nested = await execute(host.session, "agent_message", "self-nested", { operation: "request", targetAgent: agentId, question: "  Nested\t clarification  \r\nHidden nested details" });
-	await host.session.waitForIdle();
-	const nestedId = (nested.details as { requestMessageId: string }).requestMessageId;
+	const frames = () => obligationStack(transcriptFromSessionManager(host.session.sessionManager).inspect(), agentId);
+	const waitForRequest = async (requestId: string) => {
+		// Owner settlement now retains all outbound work, including these self Requests.
+		// The Answer contract needs Delivery, not a fully settled Owner.
+		const deadline = Date.now() + 1_000;
+		while (!frames().some(frame => frame.requestId === requestId) && Date.now() < deadline) {
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
+		assert.ok(frames().some(frame => frame.requestId === requestId), "Request must be delivered before Answer");
+	};
+	const root = await execute(host.session, "agent_message", "self-root", { operation: "request", targetAgent: agentId, question: "Root work" });
 	const rootId = (root.details as { requestMessageId: string }).requestMessageId;
-	const answerInput = { operation: "answer", requestId: nestedId.slice(-12), answer: "Clarified" };
+	await waitForRequest(rootId);
+	const nested = await execute(host.session, "agent_message", "self-nested", { operation: "request", targetAgent: agentId, question: "New work", deliveryMode: "steer" });
+	const nestedId = (nested.details as { requestMessageId: string }).requestMessageId;
+	await waitForRequest(nestedId);
+	const firstId = oldestFirst ? rootId : nestedId;
+	const remainingId = oldestFirst ? nestedId : rootId;
+	const answerInput = { operation: "answer", requestId: firstId.slice(-12), answer: "Finished this Request" };
 	host.session.sessionManager.appendMessage(fauxAssistantMessage([
 		fauxToolCall("agent_message", answerInput, { id: "batched-answer" }),
 		fauxToolCall("agent_wait", {}, { id: "batched-wait" }),
@@ -151,19 +159,18 @@ for (const { rootQuestion, rootSnippet } of [
 	await assert.rejects(host.session.getToolDefinition("agent_message")!.execute(
 		"batched-answer", answerInput as never, undefined, undefined, host.session.extensionRunner.createContext(),
 	), /only tool call/);
-	const result = await execute(host.session, "agent_message", "resolve-nested", answerInput);
-	assert.deepEqual(result.content, [{ type: "text", text:
-		`Answered: ${nestedId.slice(-8)} · Owner — Nested clarification\nResumed: ${rootId.slice(-8)} · Owner — ${rootSnippet}` }]);
-	assert.equal((result.details as { requestMessageId: string }).requestMessageId, nestedId);
-	assert.equal((result.details as { resumedRequestMessageId: string }).resumedRequestMessageId, rootId);
-	const frames = () => obligationStack(transcriptFromSessionManager(host.session.sessionManager).inspect(), agentId);
-	assert.equal(frames().at(-1)?.requestId, rootId);
+	const result = await execute(host.session, "agent_message", "resolve-first", answerInput);
+	assert.deepEqual(result.content, [{ type: "text", text: JSON.stringify(result.details) }]);
+	assert.equal(result.terminate, true);
+	assert.equal((result.details as { requestMessageId: string }).requestMessageId, firstId);
+	assert.deepEqual(frames().map(frame => frame.requestId), [remainingId]);
 	const answerTool = host.session.getToolDefinition("agent_message")!;
-	const replay = await answerTool.execute("resolve-nested", answerInput as never, undefined, undefined, host.session.extensionRunner.createContext());
+	const replay = await answerTool.execute("resolve-first", answerInput as never, undefined, undefined, host.session.extensionRunner.createContext());
 	assert.equal((replay.details as { disposition: string }).disposition, "already_answered");
-	await assert.rejects(executeRegisteredTool(host.session, "agent_message", "stale-nested", answerInput), /foreground Request/);
-	assert.equal(frames().at(-1)?.requestId, rootId);
-	const final = await execute(host.session, "agent_message", "resolve-root", { operation: "answer", requestId: rootId, answer: "Done" });
-	assert.match(JSON.stringify(final.content), /Resumed: none/);
-	assert.equal((final.details as { resumedRequestMessageId: null }).resumedRequestMessageId, null);
+	await assert.rejects(executeRegisteredTool(host.session, "agent_message", "stale-first", answerInput), /unresolved|already|resolved/);
+	assert.deepEqual(frames().map(frame => frame.requestId), [remainingId]);
+	const final = await execute(host.session, "agent_message", "resolve-remaining", { operation: "answer", requestId: remainingId, answer: "Done" });
+	assert.equal(final.terminate, true);
+	assert.deepEqual(final.content, [{ type: "text", text: JSON.stringify(final.details) }]);
+	assert.deepEqual(frames(), []);
 });

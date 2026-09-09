@@ -126,11 +126,11 @@ Use a Request when the recipient owes one mechanically correlated Answer:
 
 The Request fixes its requester, responder, Workflow, question, Answer destination, and delivery mode. Request commitment retains the requester's current Run with `awaiting_answer`.
 
-Each Request's runtime-derived parent is the author's foreground Request immediately before its committed source; an author with no foreground creates a root. Creation Requests follow the same rule. Ancestry is immutable and source ordered, independently of cycles in the Agent communication graph.
+Each Request's runtime-derived parent is the author's attention foreground immediately before its committed source; an author with no foreground creates a root. Creation Requests follow the same rule. This immutable source-ordered ancestry supports Deferred eligibility, not inference of which task the agent is executing. Outbound Requests belong to their author Agent.
 
-An Agent has one foreground Answer obligation and a stack of suspended obligations. At a cooperative waiting boundary (a parked `agent_wait` or settled execution), an incoming descendant of the foreground may push a new frame. Active generation and tools are not interrupted. Unrelated and sibling Requests remain queued; eligible descendants may bypass them, preserving admission order among eligible candidates. With no foreground, the first queued Request may deliver. Ordinary Messages, Answers, Cancellations, and Supervisory Resume remain outside Request ordering.
+The Request stack controls attention, not execution order. Steer Requests become eligible regardless of ancestry at the next safe model boundary, after active generation and its complete tool batch finish. Pending Steer Requests preserve admission order and take precedence over Deferred. Deferred Requests remain serialized: at a cooperative waiting boundary (parked `agent_wait` or settled execution), a descendant of the attention foreground may enter; unrelated and sibling Deferred Requests remain queued. Without a foreground, the first queued Deferred Request may enter. Ordinary Messages, Answers, Cancellations, and Supervisory Resume remain outside Request ordering.
 
-Answer explicitly names the foreground Request, using its canonical Message ID or a unique suffix among prior delivered incoming Requests:
+Answer explicitly names any delivered unresolved Request addressed to the responder, using its canonical Message ID or a unique case-sensitive suffix among prior delivered incoming Requests:
 
 ```json
 {
@@ -140,18 +140,13 @@ Answer explicitly names the foreground Request, using its canonical Message ID o
 }
 ```
 
-The coordinator validates the target and derives its recipient. Answer commitment ends exactly that obligation even if return scheduling fails. A fresh call targeting a suspended, resolved, or unknown Request is rejected; replaying the same committed source returns its existing receipt and cannot resolve a resumed parent. Answers use fixed Steer delivery.
+The coordinator validates the target and derives its recipient. Answer commitment ends exactly that obligation even if return scheduling fails. Fresh calls targeting resolved, undelivered, or unknown Requests are rejected; replaying the same committed source returns its existing receipt without resolving any other obligation. Answers use fixed Steer delivery.
 
-Use Answer as the only tool call in its turn. A successful Answer terminates that execution, then the runtime presents the restored foreground on a subsequent continuation. The visible receipt contains only the transition:
+Use Answer as the only tool call in its turn. Its tool implementation returns the ordinary messaging receipt and `terminate: true`, ending that model/tool loop without a redundant assistant recap. The normal receipt reflects actual scheduling status, usually `sent`; there is no Answer-specific transition text or designated next Request.
 
-```text
-Answered: aB3dE5gH · sync-core — clarify interface
-Resumed: iJ7lM9oP · Owner — implement feature
-```
+When delivered unresolved obligations remain after a newly committed Answer, the runtime offers one neutral continuation unless native input already provides one. Before each model generation, the current complete outstanding set replaces earlier attention snapshots in context and leaves work order to the Agent. Input already consumed after Answer counts as that continuation opportunity. With no remaining obligations, Answer creates no summary turn. Pi can still continue queued input before `agent_settled`.
 
-Both human and agent views use the same compact text: the Request ID’s eight-character suffix, requester label, and the question’s first line with whitespace normalized, capped at 80 Unicode characters including a truncation ellipsis. Structured details retain the full answered `requestMessageId` and `resumedRequestMessageId` (or `null` when nothing resumes).
-
-An empty stack displays `Resumed: none`. No assistant recap follows the Answer. Ordinary Messages to the requester of any foreground or suspended obligation are rejected; use a reverse Request for a decision, or keep provisional findings local. Sending becomes available when no unresolved frame owes that requester.
+Ordinary Messages to the requester of any unresolved obligation are rejected; use a reverse Request for a decision, or keep provisional findings local. Sending becomes available when no unresolved obligation owes that requester.
 
 ## Agent delegation
 
@@ -195,15 +190,23 @@ Incomplete or contradictory evidence schedules nothing. If direct Answer Deliver
 
 ## Join outstanding Answers
 
-`agent_wait` is designed to join Answers. Prefer it only when one next decision requires every outstanding outbound Agent Request Answer together and avoiding one model turn per Answer matters:
+`agent_wait` joins Answers when one next decision needs a set together. Without arguments, it captures all outstanding outbound Requests authored by the caller Agent:
 
 ```json
 {}
 ```
 
-If strict fan-in is unnecessary, let ordinary Answer Delivery reactivate the Agent. Do not poll merely to wait. Ordinary Messages do not satisfy Agent Requests.
+To join only selected outbound Requests, provide `requestMessageIds`:
 
-When the committed sequential `agent_wait` call begins execution, it takes one fixed snapshot of outstanding Requests owned by the caller's foreground frame (or independent work when there is no foreground). The snapshot preserves canonical Request authoring order, includes unanswered Requests and committed Answers that lack requester-side Delivery proof, and excludes cancelled Requests and Answers already delivered to the requester. A Request authored after the Wait call is outside that snapshot, including a later Request in the same assistant tool batch. A call with no outstanding Requests is rejected.
+```json
+{ "requestMessageIds": ["request-id-or-unique-suffix", "another-request-id"] }
+```
+
+The non-empty list accepts full IDs or unique case-sensitive suffixes from the caller's prior authored Requests, including Creation Requests. The whole selection is validated before any scheduling or parking: unknown, ambiguous, foreign-authored, non-Request, cancelled, and already-consumed targets fail explicitly. Canonical identities are deduplicated and ordered by authorship, not input order. Committed Answers without caller-side Delivery proof remain outstanding and can be retrieved by either form.
+
+Select dependencies that can progress without an Answer you still owe. If strict fan-in is unnecessary, let ordinary Answer Delivery reactivate the Agent. Do not poll merely to wait. Ordinary Messages do not satisfy Agent Requests.
+
+When the committed sequential `agent_wait` call begins execution, it fixes one non-empty snapshot of all outstanding outbound Requests or the explicit selection, independent of attention order. The snapshot preserves canonical Request authoring order, includes unanswered Requests and committed Answers without requester-side Delivery proof, and excludes cancellations and Answers already delivered to the requester. Later Request sources are outside the snapshot, including later calls in the same assistant tool batch. Unselected Requests remain outstanding and keep ordinary delivery behavior. A call with no outstanding Requests is rejected.
 
 An explicit Wait renews delivery intent for its captured Requests. Shared Message scheduling inspects canonical evidence and ensures original, same-identity scheduling for unanswered, undelivered Requests, including Creation Requests. It preserves the original payload, routing, Delivery mode, ancestry, and context preparation. Queued, reserved, frozen, and in-flight scheduling coalesces; a causally blocked sibling queue remains scheduled and keeps its ordering. Already delivered Requests are awaited without replay, cancelled Requests are never replayed, and committed Answers use ordinary retrieval.
 
@@ -217,7 +220,7 @@ The wait registers before its final evidence inspection, responds to live Answer
 
 Primary interactive human input directed at the waiting Agent continues through Pi's native steering path. Wait preemption begins only after Pi admits that steering input, so the non-error `{ "disposition": "preempted" }` result cannot start another model turn ahead of the user message. The next model generation receives both. Explicit follow-up input remains queued until later.
 
-An eligible inbound Agent Request also preempts the parked Wait so the recipient can answer or otherwise act on that Request. The Request may come from any Agent, but must descend from the waiting foreground when one exists. Cancellation of a delivered Request can also preempt the Wait. Its Delivery is reserved and committed before the next model generation. At either preemption boundary, the complete Answer aggregate wins if it is already ready. Otherwise the Wait returns `{ "disposition": "preempted" }`, consumes no Answer, and creates no requester-side Answer Delivery proof. Follow the new human direction or handle the inbound Request first. Call `agent_wait` again only if one decision still requires every then-outstanding Answer; the new call takes a fresh snapshot. Ordinary Deferred and Steer Agent Messages remain queued.
+An eligible inbound Request preempts the parked Wait to bring work to attention: Steer qualifies regardless of ancestry, while Deferred retains descendant eligibility when a foreground exists. Delivered Request Cancellation can also preempt. Its Delivery is reserved and committed before the next model generation. A complete Answer aggregate wins if already ready; otherwise Wait returns `{ "disposition": "preempted" }`, consumes no Answer, and creates no requester-side Answer Delivery proof. Consider the new input and choose what to handle next. Call `agent_wait` again only if a join is still needed, with the desired selection; each call fixes a fresh snapshot. Ordinary Deferred and Steer Agent Messages remain queued.
 
 Interruption, exact-Run fencing, termination, or shutdown ends the live wait without consuming undelivered Answers. A successful aggregate result becomes Delivery proof only when its native tool result commits. Ordinary Answer Delivery or explicit Request retry therefore remains available if result commitment loses a race.
 
@@ -259,7 +262,7 @@ Only the requester may abandon its exact Request:
 
 `requestMessageId` names the Request Message being withdrawn. A newly committed Cancellation receipt returns its own `messageId`, canonical `targetAgentId`, and Delivery outcome. If the Request was already resolved, the receipt instead returns `already_cancelled` with `cancellationMessageId` or `already_answered` with `answerMessageId`; it does not repeat the Request identity from the call.
 
-Cancellation commitment ends only that requester wait. Fixed-Steer Cancellation Delivery removes only the named foreground or suspended frame and supplies actionable context; it does not abort tools, retract facts, undo effects, or terminate a Run. Cancellation delivered before a waiting Request suppresses that Request without waking the responder for obsolete work. Nested frames remain live. Unfinished outgoing dependencies transfer to the nearest surviving original enclosing frame, or independent work if none remains; Answer resolution uses the same ownership rule. Cancellation remains one hop: downstream Requests require explicit cancellation by their author. Answers for suspended frames settle their own dependencies without changing foreground focus.
+Cancellation commitment ends only that requester wait. Fixed-Steer Cancellation Delivery removes only the named incoming obligation and supplies actionable context; it does not abort tools, retract facts, undo effects, or terminate a Run. Cancellation delivered before a waiting Request suppresses that Request without waking the responder for obsolete work. Other incoming obligations and Agent-owned outbound Requests remain intact, irrespective of attention order. Cancellation remains one hop: downstream Requests require explicit cancellation by their author. Answering an incoming Request likewise neither transfers nor cancels outbound dependencies.
 
 Answer and Cancellation facts serialize independently in the requester and responder lanes. Either may commit while the other's Delivery is unavailable. Committed facts remain canonical, and a locally cancelled Request cannot be revived by retry or a late Answer.
 
@@ -321,20 +324,20 @@ Agent identity and a selected Agent Runtime can outlive any individual Run. When
 
 Before an idle model-starting custom Delivery commits, the child Turn Compaction Gateway recomputes Pi's current native threshold. A continuation Request with `contextPreparation` also applies its working-zone threshold. The gateway calls the active public strategy at most once for that exact admission, preserves the exact custom message, and completes preparation before Delivery transcript commitment. A custom Delivery that does not trigger a model turn commits without compaction or interruption. Active Steer and Follow-up Delivery uses Pi's raw queue; when work is queued after `agent_end`, Pi's native threshold compaction proceeds before the continuation.
 
-Live scheduling, including the per-responder waiting Request order, is intentionally disposable. Run failure, exact Run termination, or Workflow shutdown discards every uncommitted item for that host. A successor reconstructs the foreground, suspended stack, ancestry, and frame-owned dependencies from durable source, Delivery, and resolution evidence; it does not reconstruct waiting queue order. Receipts are not rewritten, Messages are not replayed automatically, and backlog is not transferred to a successor Run. Poll and explicit same-identity retry remain available. A fresh explicit Wait also renews scheduling for only its captured unanswered, undelivered Requests; Owner `workflow_resume` additionally renews Workflow-wide scheduling and continuation for dormant responders with delivered unanswered Requests; cold bootstrap itself remains passive.
+Live scheduling, including per-responder waiting Request order, is intentionally disposable. Run failure, exact Run termination, or Workflow shutdown discards every uncommitted scheduling item for that host. A successor reconstructs outstanding obligations, attention ancestry, and Agent-owned outbound dependencies from durable source, Delivery, and resolution evidence; it does not reconstruct waiting queue order. Receipts are not rewritten, Messages are not replayed automatically, and backlog is not transferred to a successor Run. Poll, same-identity retry, and a fresh all-Requests or selected Wait remain available. Owner `workflow_resume` additionally renews Workflow-wide scheduling and continuation for dormant responders with delivered unanswered Requests; cold bootstrap itself remains passive.
 
 Malformed or contradictory transcript evidence is an invariant violation. Unknown Agents, cross-Workflow routes, and poll or retry by anyone other than the original sender are rejected before they can claim Delivery state.
 
 ### Durable focus and recovery
 
-The retained transcript projection records focus at each committed assistant source. This binds new Request ancestry and `agent_wait` snapshots to their original frames, so later Answers or cancellations cannot retarget them. Physical protocol entries survive compaction. A resumed frame takes a fresh Wait snapshot of its own remaining dependencies; pending Promises are never reconstructed.
+The retained transcript projection records attention at each committed assistant source, preserving original Request ancestry. Wait snapshots derive from the caller's authored outbound Requests and the committed Wait selection, not attention frames. Physical protocol entries survive compaction. Later calls may take fresh snapshots; pending Promises are never reconstructed.
 
-If an Answer reached its requester before the responder saved its result, startup reconciles canonical cross-transcript proof and appends a local focus recovery boundary before new model authorship. The restored Request is presented before generation, including after compaction. No additional mutable obligation database is needed.
+If an Answer reached its requester before the responder saved its result, startup reconciles canonical cross-transcript proof and appends a local focus recovery boundary before new model authorship. All remaining obligations are presented before generation, including after compaction, with work order left to the Agent. No additional mutable obligation database is needed.
 
 ### Workflow continuation versus retry and Wait
 
 Only the Owner can call `workflow_resume({})`, implicitly scoped to its current Workflow. It takes a fixed verified recovery snapshot and admits original undelivered Messages, Requests, and committed Answers through normal scheduling. Answers still go to their original requesters.
 
-For a dormant responder with delivered unanswered Requests, it restores the transcript, foreground/suspended obligations, and dependencies, then admits runtime-generated continuation input once for that activation. The input identifies Owner-requested continuation and requires checking interrupted operations before repeating their possible effects. It is not an authored Agent Message, replacement Request, or redelivery; the original Request continues to own the work. Running Agents get no duplicate continuation, and ordinary delivered Message history alone does not trigger activation.
+For a dormant responder with delivered unanswered Requests, it restores the transcript, outstanding obligations, attention ancestry, and Agent-owned dependencies, then admits runtime-generated continuation input once for that activation. The input identifies Owner-requested continuation and requires checking interrupted operations before repeating their possible effects. It is not an authored Agent Message, replacement Request, or redelivery; the original Requests retain their obligations. Running Agents get no duplicate continuation, and ordinary delivered Message history alone does not trigger activation.
 
 Per-Message `retry` repairs or retrieves one caller-authored identity. `agent_wait` renews delivery for its captured dependencies and joins their Answers; it does not restart already-delivered responder work. `workflow_resume` resumes coordination across the Workflow and returns an admission report without waiting for completion. None restores a lost Promise, Wait call, or waiting-queue order. Holds, capacity, causal eligibility, and Run fences remain effective; stale cancelled/completed work is skipped and unverifiable evidence is surfaced. See the [recovery contract](cold-host-recovery.md#explicit-workflow-continuation).
