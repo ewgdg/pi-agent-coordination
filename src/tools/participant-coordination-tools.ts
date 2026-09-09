@@ -64,6 +64,8 @@ While any foreground or suspended Answer obligation remains, agent_message opera
 
 agent_message operation "answer" requires requestId (the foreground Request ID or a unique suffix) and answer text. Use it as the only tool call in its turn. It resolves exactly the foreground obligation and ends execution; the runtime presents any resumed obligation on a subsequent continuation. Do not add an assistant-message recap or summary.
 
+In your Answer, summarize completed work and provide enough context for the requester to avoid repeating it. Include relevant artifacts and any checks or delegated reviews already performed, their scope, outcomes, and remaining gaps. This is reporting guidance only: it does not require additional verification or delegation.
+
 agent_message operation "send" creates no Answer expectation. Continue normally and poll only when Delivery proof matters.
 For poll/retry messageId and cancel requestMessageId, use the full ID or a unique case-sensitive suffix from your own earlier authored Messages (including Creation Requests). Ambiguous suffixes fail; use a longer suffix or the full ID. Receipts retain full canonical IDs.
 </agent_message>`;
