@@ -1,3 +1,4 @@
+import { createWorkflowContinuation, inspectWorkflowContinuation } from "../protocol/workflow-continuation.ts";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
 import {
@@ -123,6 +124,55 @@ export class RunSupervisor {
 			this.#messages.prepareInterruptionInLane(target);
 			const disposition = await target.host.interruptCurrentRunInLane();
 			return { agentId: target.identity.agentId, disposition };
+		});
+	}
+
+	/** Admit recovery through ordinary scheduling; admission is not turn completion. */
+	continueDormantResponder(
+		record: AgentRecord,
+		options: {
+			requestMessageIds: readonly string[];
+			recheckRequestMessageIds(): readonly string[];
+		},
+	): Promise<"activated" | "already_running" | "held" | "resolved" | "fenced" | "target_unavailable" | "capacity_exhausted"> {
+		const capturedIds = new Set(options.requestMessageIds);
+		const outstandingIds = () => options.recheckRequestMessageIds()
+			.filter((id) => capturedIds.has(id));
+		return record.host.lane.run(async () => {
+			if (record.host.blocksOrdinaryDelivery()) return "held";
+			if (record.host.observe().phase !== "dormant") return "already_running";
+			if (outstandingIds().length === 0) return "resolved";
+			// Retain the startup-to-scheduler gap; the scheduler owns retention
+			// after admission and the Run initializer restores Request relationships.
+			const handle = await record.host.startInLane(["pending_delivery"]);
+			let admitted = false;
+			try {
+				if (!record.host.isCurrent(handle)) return "fenced";
+				if (record.host.blocksOrdinaryDelivery()) return "held";
+				const requestMessageIds = outstandingIds();
+				if (requestMessageIds.length === 0) return "resolved";
+				const customMessage = createWorkflowContinuation({
+					agentId: record.identity.agentId,
+					runSequence: handle.sequence,
+					requestMessageIds,
+				});
+				const result = await this.#messages.admitCustomDeliveryInLane(record, {
+					messageId: JSON.stringify(["workflow_continuation", record.identity.agentId, handle.sequence]),
+					deliveryMode: "deferred",
+					customMessage,
+					inspectProof: () => inspectWorkflowContinuation(
+						record.identity.agentId, record.transcript.inspect(), customMessage,
+					),
+					isSuppressed: () => !record.host.isCurrent(handle) || outstandingIds().length === 0,
+				});
+				admitted = result === "pending";
+				return result === "pending" ? "activated" : result;
+			} finally {
+				if (!admitted && record.host.isCurrent(handle)) {
+					record.host.removeRetentionReason("pending_delivery");
+					await record.host.releaseIfEligibleInLane(handle);
+				}
+			}
 		});
 	}
 
