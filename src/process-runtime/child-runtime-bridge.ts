@@ -1012,6 +1012,9 @@ async function reportRuntimeLifecycle(
 		return;
 	}
 	if (event.type !== "agent_settled" || !state.currentRunId) return;
+	// Pi awaits extension settlement hooks before notifying session listeners.
+	// A hook can already have started a successor; the old edge cannot settle it.
+	if (runtime.session.isStreaming) return;
 	const runId = state.currentRunId;
 	await state.channel.sendEvent("agent.settled", {
 		runId,
