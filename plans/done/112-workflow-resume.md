@@ -38,3 +38,10 @@ Known unrelated baseline failure: the full participant-tool registrar suite expe
 
 ## Surprises and discoveries
 A cold host resets Run sequence counters, so Run sequence alone cannot identify continuation admission. Each activation now has a fresh identity, preventing old transcript proof from suppressing a later cold-host continuation.
+
+## PR review correction checkpoints
+- Reproduced both review bugs with failing focused tests: a blocked sibling-created successor skipped foreground continuation, and committed supervisory resume sources were omitted. A separate reservation regression failed because recovery counted a live resume slot against ordinary capacity.
+- Added exact-Run input/activity ownership so recovery can use an empty successor without duplicating an existing turn or accepted continuation. Covered sibling admission both before snapshot and between snapshot and activation, plus repeated/concurrent recovery and eventual sibling Delivery after Answer.
+- Added supervisory resume source and author-result inspection, preserving original Message identity, Steer payload, rejected/error/unfinished evidence outcomes, current reservations, and newer Holds.
+- Final focused validation: 67/67 passed across recovery, continuation, Runtime lifecycle, and Wait recovery; four selected cold-host recovery tests passed; typecheck and diff whitespace checks passed. Independent reviewer cross-check found no material blockers.
+- Supplemental validation limitations: the unchanged parked-Owner scheduler test fails because its host double lacks `addEndedHandler` (both the call and omission verified in pre-fix HEAD). Two selected process supervision tests produced no result before the run was stopped after more than two minutes; no success is claimed for them. No unrelated test/fixture fixes or full integration suite were included.
