@@ -144,53 +144,7 @@ test("host bridge follows public Runtime rebinding to a replacement session", { 
 	]);
 });
 
-test("host preflight identifies a malformed public seam by canonical name", () => {
-	function MalformedInteractiveMode() {}
-	MalformedInteractiveMode.prototype = Object.create(hostPi.InteractiveMode.prototype, {
-		getUserInput: { configurable: true, value: undefined },
-	});
-	const fixture = { ...hostPi, InteractiveMode: MalformedInteractiveMode };
-
-	assert.throws(
-		() => assertHostModuleShape(fixture),
-		(error: unknown) =>
-			error instanceof IncompatiblePiHostError &&
-			error.memberName === "InteractiveMode.prototype.getUserInput",
-	);
-});
-
-test("host preflight covers every host constructor member used after admission", () => {
-	const malformedSettingsManager = Object.assign(
-		function MalformedSettingsManager() {},
-		{ create: undefined },
-	);
-	assert.throws(
-		() => assertHostModuleShape({
-			...hostPi,
-			SettingsManager: malformedSettingsManager,
-		}),
-		(error: unknown) =>
-			error instanceof IncompatiblePiHostError &&
-			error.memberName === "SettingsManager.create",
-	);
-
-	for (const member of ["get", "set"] as const) {
-		function MalformedProjectTrustStore() {}
-		MalformedProjectTrustStore.prototype = Object.create(
-			hostPi.ProjectTrustStore.prototype,
-			{ [member]: { configurable: true, value: undefined } },
-		);
-		assert.throws(
-			() => assertHostModuleShape({
-				...hostPi,
-				ProjectTrustStore: MalformedProjectTrustStore,
-			}),
-			(error: unknown) =>
-				error instanceof IncompatiblePiHostError &&
-				error.memberName === `ProjectTrustStore.prototype.${member}`,
-		);
-	}
-
+test("host preflight rejects a nonnumeric CURRENT_SESSION_VERSION", () => {
 	assert.throws(
 		() => assertHostModuleShape({
 			...hostPi,

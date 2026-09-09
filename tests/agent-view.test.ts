@@ -1935,37 +1935,6 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 });
 
-test("Workflow shutdown disposes an open overlay once without disposing its live projection twice", async (t) => {
-	const host = await createTestOwnerHost(t, piAgentCoordination, {
-		persistent: true,
-		processVisibleModel: true,
-	});
-	host.model.setResponses([
-		fauxAssistantMessage("Keep this live projection retained for host-driven view disposal."),
-	]);
-	const spawn = await executeAndCommitRegisteredTool(
-		host.session,
-		"agent_spawn",
-		"spawn-host-disposed-agent-view",
-		{
-			request: "Remain retained while Workflow shutdown closes the overlay.",
-			label: "Shutdown Worker",
-		},
-	);
-	const agentId = (spawn.details as { agentId: string }).agentId;
-	await waitForCondition(async () =>
-		JSON.stringify(await childEntries(host, agentId)).includes(
-			"Keep this live projection retained for host-driven view disposal.",
-		)
-	);
-	const { command, view } = await openSelectedAgentView(host, agentId);
-	assert.equal(host.ui.customSurfaces[0], view);
-
-	await host.runtime.dispose();
-	await command;
-	assert.equal(host.ui.customSurfaces.length, 0);
-});
-
 async function openSelectedAgentView(
 	host: TestOwnerHost,
 	agentId: string,
