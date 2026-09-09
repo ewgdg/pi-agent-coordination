@@ -64,7 +64,10 @@ Incident 2026-09-09: blocked review kAwu0w1dLmTOD5_CDQwyXxw6A8D-3b-5lGQedffTlQ8 
 
 ## Final checks and outcome
 - Focused contracts: `node --test tests/child-runtime-compaction-delivery.test.ts tests/owner-parked-delivery-scheduler.test.ts tests/failed-delivery-observation.test.ts tests/agent-transcript-observation.test.ts tests/agent-transcript.test.ts tests/request-evidence.test.ts`: 58/58 pass (~0.75s).
-- Focused moderation: failure detection, explicit selection/recurrence, Hold exclusion, and observable failure after leaf termination pass.
+- Focused moderation: explicit selection/recurrence, Hold exclusion, and observable failure after leaf termination pass (3/3). Existing `blocked Delivery failure moderates an upstream obligated parent immediately` fails at tests/operational-incidents.test.ts:3204 (`3 !== 2`, dispatch hook calls). It also fails identically in the disposable checkout with the pre-task scheduler, so it is not caused by this scheduler change; no adjacent fix included.
 - Registered Moderator guidance/publication-error rendering: 2/2 pass.
 - Final `npm run typecheck` passes; the earlier concurrent workflow-resume diagnostic no longer occurs. `git diff --check` passes. No full integration suite, installed checkout changes, or live reload.
 - Outcome is partial: corrected known-failure observation continuity, proven roster-independent observation stack safety, and improved current-primary-evidence report guidance. Original delivery-loss trigger and incident-specific overflow trigger remain unresolved. Do not report all incident causes fixed.
+
+- Validation evidence retained under `~/.agents/artifacts/outputs/pi-agent-coordination/2026-09-09/coordination-delivery-observation-recovery/` (RED/GREEN logs, final checks, primary evidence summary).
+- Concurrent recovery work committed independently as `dd10441`; excluded from this task's claims and authored commit list.
