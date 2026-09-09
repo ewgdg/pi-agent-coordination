@@ -40,6 +40,7 @@ import {
 	executeAndCommitRegisteredTool,
 	openDormantAgentView,
 	openLiveAgentView,
+	returnAgentViewToOwner,
 } from "./support/agent-session.ts";
 import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
 import {
@@ -2635,22 +2636,6 @@ async function waitForModerator(
 		await waitForConditionPoll();
 	}
 	throw new Error("Expected an Obligation Stall Moderator");
-}
-
-async function returnAgentViewToOwner(
-	host: Awaited<ReturnType<typeof createTestOwnerHost>>,
-	opened: Readonly<{ command: Promise<void> }>,
-): Promise<void> {
-	const returnCommand = host.runtime.session.prompt("/agents");
-	await waitForCondition(() => host.ui.customSurfaces.length === 2);
-	const ownerSelector = host.ui.customSurfaces.at(-1);
-	assert.ok(ownerSelector);
-	assert.match(
-		stripTerminalSequences(ownerSelector.render(80).join("\n")),
-		/o Owner · Tab views/,
-	);
-	ownerSelector.handleInput?.("o");
-	await Promise.all([returnCommand, opened.command]);
 }
 
 function renderProcessExecutionGateExtension(

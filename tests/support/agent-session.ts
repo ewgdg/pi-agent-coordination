@@ -138,7 +138,7 @@ function selectAgentInCurrentTree(
 ): boolean {
 	const firstRender = surface.render(80).join("\n");
 	let currentRender = firstRender;
-	do {
+	for (let attempt = 0; attempt < MAX_SELECTOR_NAVIGATION_STEPS; attempt += 1) {
 		if (focusedDetailsShowAgent(surface, targetAgentId)) {
 			surface.handleInput?.("\r");
 			return true;
@@ -152,9 +152,12 @@ function selectAgentInCurrentTree(
 				surface.handleInput?.("h");
 			}
 		}
+		const beforeMove = surface.render(80).join("\n");
 		surface.handleInput?.("j");
 		currentRender = surface.render(80).join("\n");
-	} while (currentRender !== firstRender);
+		// Native navigation clamps at the Owner row rather than wrapping.
+		if (currentRender === beforeMove || currentRender === firstRender) break;
+	}
 	return false;
 }
 
@@ -162,7 +165,8 @@ function focusedDetailsShowAgent(
 	surface: NonNullable<TestOwnerHost["ui"]["customSurfaces"][number]>,
 	targetAgentId: string,
 ): boolean {
-	const lines = surface.render(80);
+	// Pi renders styling even without a TTY; identity matching uses visible text.
+	const lines = surface.render(80).map(stripTerminalSequences);
 	const selectedRow = lines.findIndex((line) => line.includes("→"));
 	if (selectedRow < 0) return false;
 	return lines
