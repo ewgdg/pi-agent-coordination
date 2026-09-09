@@ -89,14 +89,14 @@ test("fresh Wait may start a Dormant recipient, but a parked Wait cannot undo la
 	assert.equal(h.deliveries(h.responder).length, 0);
 });
 
-test("cancellation during Wait suppresses lost Request scheduling and ends the join", async (t) => {
+for (const selected of [false, true]) test(`${selected ? "selected" : "all-Requests"} cancellation during Wait suppresses lost Request scheduling and ends the join`, { timeout: 5_000 }, async (t) => {
 	const h = harness(t);
 	h.responder.blocked = true;
 	const receipt = await h.message(h.requester, "cancelled-request", {
 		operation: "request", targetAgent: "responder", question: "Work no longer needed.",
 	});
 	assert.ok("requestMessageId" in receipt);
-	const waiting = assert.rejects(h.wait("cancelled-wait"), /was cancelled/);
+	const waiting = assert.rejects(h.wait("cancelled-wait", selected ? { requestMessageIds: [receipt.requestMessageId] } : {}), /was cancelled/);
 	await flush();
 	await h.responder.record.host.lane.run(() => h.messages.discardSchedulingInLane(h.responder.record));
 	await h.message(h.requester, "cancel", {
@@ -557,12 +557,101 @@ test("Answer rejects unknown, undelivered, cancelled and wrong-responder Request
 	await assert.rejects(h.message(h.responder, "answer-cancelled", { operation: "answer", requestId: request.requestMessageId, answer: "Invalid" }), /was cancelled/);
 });
 
+
+for (const resolution of ["answer", "cancel"] as const) test(`parked selected Wait requires both selected Answers despite unselected ${resolution}`, { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const ids: string[] = [];
+	for (const name of ["A", "B", "C"]) {
+		const receipt = await h.message(h.requester, name, {
+			operation: "request", targetAgent: "responder", question: name, deliveryMode: "steer",
+		});
+		assert.ok("requestMessageId" in receipt);
+		ids.push(receipt.requestMessageId);
+	}
+	let settled = false;
+	const waiting = h.wait("selected-pending", { requestMessageIds: [ids[1]!, ids[0]!] });
+	void waiting.then(() => { settled = true; }, () => { settled = true; });
+	await flush();
+	const run = h.requester.record.host.observe();
+	assert.ok("attention" in run && run.attention === "agent_wait");
+	if (resolution === "answer") {
+		await h.message(h.responder, "resolve-C", { operation: "answer", requestId: ids[2]!, answer: "C done" });
+	} else {
+		await h.message(h.requester, "resolve-C", { operation: "cancel", requestMessageId: ids[2]!, reason: "C withdrawn" });
+	}
+	await h.tick();
+	assert.equal(settled, false, "unselected resolution must neither complete nor fail the parked join");
+	await h.message(h.responder, "answer-B", { operation: "answer", requestId: ids[1]!, answer: "B done" });
+	await h.tick();
+	assert.equal(settled, false, "one selected Answer is insufficient");
+	await h.message(h.responder, "answer-A", { operation: "answer", requestId: ids[0]!, answer: "A done" });
+	await h.tick();
+	const result = await waiting;
+	assert.ok("answers" in result);
+	assert.deepEqual(result.answers.map(answer => answer.requestMessageId), ids.slice(0, 2));
+	h.commitWait("selected-pending", result);
+});
+
+test("parked Wait preserves Steer Request order across preemption reservation and the next batch", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const upstream = h.addRecipient("upstream");
+	const foreground = await h.message(upstream, "foreground", { operation: "request", targetAgent: "requester", question: "Current duty" });
+	assert.ok("requestMessageId" in foreground);
+	const dependency = await h.message(h.requester, "dependency", { operation: "request", targetAgent: "responder", question: "Await this Answer" });
+	assert.ok("requestMessageId" in dependency);
+	h.requester.blocked = true;
+	const deferred = await h.message(upstream, "deferred", { operation: "request", targetAgent: "requester", question: "Unrelated Deferred" });
+	assert.ok("requestMessageId" in deferred);
+	const ids: string[] = [];
+	for (const name of ["first", "second", "third"]) {
+		const receipt = await h.message(upstream, name, { operation: "request", targetAgent: "requester", question: name, deliveryMode: "steer" });
+		assert.ok("requestMessageId" in receipt);
+		ids.push(receipt.requestMessageId);
+	}
+	const waiting = h.wait("preempted-join", { requestMessageIds: [dependency.requestMessageId] });
+	await flush();
+	const run = h.requester.record.host.observe();
+	assert.ok("attention" in run && run.attention === "agent_wait");
+	h.requester.deferProof = true;
+	h.requester.blocked = false;
+	h.requester.settle();
+	await flush();
+	const result = await waiting;
+	assert.deepEqual(result, { disposition: "preempted" });
+	const dispatchedIds = () => h.requester.dispatches.flatMap(dispatch => {
+		assert.ok(dispatch.kind === "custom" && typeof dispatch.message.content === "string");
+		return JSON.parse(dispatch.message.content).messages.map((message: { requestMessageId: string }) => message.requestMessageId);
+	});
+	const foregroundId = foreground.requestMessageId;
+	assert.deepEqual(dispatchedIds(), [foregroundId, ids[0]], "the preempting Request owns a single dispatch before proof");
+	h.commitWait("preempted-join", result);
+	await h.tick();
+	h.requester.settle();
+	await flush();
+	assert.deepEqual(dispatchedIds(), [foregroundId, ids[0]], "an unproven reservation must not dispatch again");
+	h.requester.commitPending();
+	h.requester.deferProof = false;
+	h.requester.settle();
+	await flush();
+	assert.deepEqual(dispatchedIds(), [foregroundId, ...ids], "remaining Steer Requests keep admission order ahead of blocked Deferred");
+	const batch = h.requester.dispatches.at(-1);
+	assert.ok(batch?.kind === "custom" && typeof batch.message.content === "string");
+	assert.deepEqual(JSON.parse(batch.message.content).messages.map((message: { requestMessageId: string }) => message.requestMessageId), ids.slice(1));
+	h.requester.settle();
+	await h.tick();
+	assert.deepEqual(h.deliveries(h.requester).map(delivery =>
+		delivery.projection.kind === "request" && delivery.projection.requestMessageId), [foregroundId, ...ids]);
+	assert.deepEqual(dispatchedIds(), [foregroundId, ...ids], "later boundaries must not duplicate either reservation or batch");
+});
+
 function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHooks?: MessageBoundaryHooks) {
 	const requester = runtimeParticipant("requester");
 	const responder = runtimeParticipant("responder");
 	const participants = [requester, responder];
 	const agents = new Map(participants.map(p => [p.record.identity.agentId, p.record]));
-	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false };
+	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false,
+		preemptAgentWait: (record: Parameters<AgentWaitCoordinator["preemptForInboundRequest"]>[0], reserve: () => boolean) => waits.preemptForInboundRequest(record, reserve),
+	};
 	let messages = new MessageCoordinator(options);
 	let timer: (() => void) | undefined;
 	let waits: AgentWaitCoordinator;
