@@ -101,11 +101,21 @@ Maintainers can run the focused compatibility gate with:
 npm run test:conformance
 ```
 
-`npm test` remains the complete regression suite. During development, `npm run test:fast` runs in-memory tests with bounded parallelism, while `npm run test:process` runs real process, PTY, socket, and process-visible-model tests serially. Both runners impose per-test deadlines. On Linux, the supervisor contains the complete Node/PTY descendant tree in a dedicated cgroup so an interrupted run cannot leave hot workers behind. Run one process-heavy file without bypassing that supervision:
+`npm test` remains the complete regression suite. Use the supervised npm entry points for all development runs: `test:fast` (four concurrent files), `test:process` (serial), and `test:conformance` (serial). Direct `node --test` execution bypasses containment and is not supported for development runs.
+
+Select one file and optionally a test name without bypassing supervision:
 
 ```bash
-npm run test:process -- --file=agent-request.test.ts
+npm run test:process -- --file=agent-request.test.ts --test-name-pattern='request'
+npm run test:fast -- --file=host-shape.test.ts
+npm run test:conformance -- --file=host-shape.test.ts --list
 ```
+
+Node's file timeout is 5 seconds for fast tests and 120 seconds for process/conformance tests. Independently, the supervisor starts a wall-clock timer when it launches the Node runner: `ceil(selected files / suite concurrency) × file timeout + 5 seconds`. A focused process file therefore gets 125 seconds; a name filter does not reduce that budget. Expiry reports the deadline, sends SIGTERM, then uses existing descendant force-kill cleanup after at most 100 ms of termination grace, and exits with code 124. Startup before launch and cleanup add time beyond that budget. This timer remains responsive when a test worker spins synchronously.
+
+For a deliberately different budget, append `--deadline-ms=10000`. It must be an integer from 1 through 2147483647; zero cannot disable containment. Forwarded Node flags do not alter the independently calculated suite budget; use the explicit deadline override when changing concurrency or Node timeouts.
+
+On Linux with writable cgroup-v2 support, the existing cgroup and guardian contain Node/PTY descendants even if the supervisor is killed. Otherwise cleanup is best-effort: Linux tracks observed descendants via `/proc` (short-lived/reparented processes can escape observation); other Unix systems kill the runner process group, and Windows kills only the root process. The deadline requires the supervisor itself to remain alive and responsive; it is not a machine-level resource limit.
 
 ## Trust and persistence
 

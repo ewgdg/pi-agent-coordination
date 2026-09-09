@@ -54,9 +54,24 @@ const PROCESS_TEST_FILES = new Set([
 	"windows-process-control-transport.test.ts",
 ]);
 
+const CONFORMANCE_TEST_FILES = new Set([
+	"host-shape.test.ts",
+	"host-module-world.test.ts",
+	"pi-host-behavior-conformance.test.ts",
+	"interactive-host-conformance.test.ts",
+	"extension-conformance.test.ts",
+	"agent-selector-surface.test.ts",
+	"human-request.test.ts",
+	"human-request-pty.test.ts",
+	"owner-workflow.test.ts",
+	"coordinated-workflow-pty.test.ts",
+]);
+// Allow runner startup in addition to one file-timeout budget per concurrency wave.
+const SUITE_STARTUP_ALLOWANCE_MS = 5_000;
+
 const suite = process.argv[2];
-if (suite !== "fast" && suite !== "process") {
-	throw new Error('Test suite must be "fast" or "process"');
+if (suite !== "fast" && suite !== "process" && suite !== "conformance") {
+	throw new Error('Test suite must be "fast", "process", or "conformance"');
 }
 
 const testsDirectory = fileURLToPath(new URL("..", import.meta.url));
@@ -70,7 +85,9 @@ if (missingProcessFiles.length > 0) {
 }
 
 const suiteFiles = allTestFiles
-	.filter((file) => PROCESS_TEST_FILES.has(file) === (suite === "process"));
+	.filter((file) => suite === "conformance"
+		? CONFORMANCE_TEST_FILES.has(file)
+		: PROCESS_TEST_FILES.has(file) === (suite === "process"));
 const fileSelectors = process.argv.slice(3)
 	.filter((argument) => argument.startsWith("--file="));
 if (fileSelectors.length > 1) throw new Error("Select at most one test file");
@@ -80,8 +97,16 @@ if (selectedFile && !suiteFiles.includes(selectedFile)) {
 }
 const selectedFiles = (selectedFile ? [selectedFile] : suiteFiles)
 	.map((file) => join(testsDirectory, file));
+const deadlineArguments = process.argv.slice(3)
+	.filter((argument) => argument.startsWith("--deadline-ms="));
+if (deadlineArguments.length > 1) throw new Error("Select at most one supervisor deadline");
+const deadlineOverride = deadlineArguments[0]?.slice("--deadline-ms=".length);
+if (deadlineOverride !== undefined && (
+	!/^\d+$/.test(deadlineOverride) || Number(deadlineOverride) < 1
+	|| Number(deadlineOverride) > 2_147_483_647
+)) throw new Error("Supervisor deadline must be an integer between 1 and 2147483647 milliseconds");
 const forwardedArguments = process.argv.slice(3)
-	.filter((argument) => !argument.startsWith("--file="));
+	.filter((argument) => !argument.startsWith("--file=") && !argument.startsWith("--deadline-ms="));
 if (forwardedArguments.includes("--list")) {
 	for (const file of selectedFiles) console.log(basename(file));
 	process.exit(0);
@@ -100,4 +125,6 @@ process.exitCode = await runTestProcess([
 	"--test-reporter=dot",
 	...forwardedArguments,
 	...selectedFiles,
-]);
+], deadlineOverride === undefined
+	? Math.ceil(selectedFiles.length / concurrency) * timeoutMs + SUITE_STARTUP_ALLOWANCE_MS
+	: Number(deadlineOverride));

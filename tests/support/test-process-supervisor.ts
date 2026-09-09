@@ -15,7 +15,10 @@ const PROCESS_SCAN_INTERVAL_MS = 10;
 const TERMINATION_GRACE_MS = 100;
 const SUPERVISED_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
 
-export async function runTestProcess(arguments_: readonly string[]): Promise<number> {
+export async function runTestProcess(arguments_: readonly string[], deadlineMs: number): Promise<number> {
+	if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 || deadlineMs > 2_147_483_647) {
+		throw new Error("Test deadline must be an integer between 1 and 2147483647 milliseconds");
+	}
 	let requestTermination!: (signal: NodeJS.Signals) => void;
 	const terminationRequested = new Promise<NodeJS.Signals>((resolve) => {
 		requestTermination = resolve;
@@ -28,7 +31,7 @@ export async function runTestProcess(arguments_: readonly string[]): Promise<num
 	}
 
 	try {
-		return await runOwnedTestProcess(arguments_, terminationRequested);
+		return await runOwnedTestProcess(arguments_, terminationRequested, deadlineMs);
 	} finally {
 		for (const [signal, handler] of handlers) process.off(signal, handler);
 	}
@@ -37,6 +40,7 @@ export async function runTestProcess(arguments_: readonly string[]): Promise<num
 async function runOwnedTestProcess(
 	arguments_: readonly string[],
 	terminationRequested: Promise<NodeJS.Signals>,
+	deadlineMs: number,
 ): Promise<number> {
 	const cgroup = LinuxCgroupOwner.tryCreate();
 	try {
@@ -69,12 +73,17 @@ async function runOwnedTestProcess(
 		child.once("error", reject);
 		child.once("exit", (code, signal) => resolve({ code, signal }));
 	});
+	let deadlineTimer: NodeJS.Timeout;
+	const deadline = new Promise<{ kind: "deadline" }>((resolve) => {
+		deadlineTimer = setTimeout(() => resolve({ kind: "deadline" }), deadlineMs);
+	});
 	try {
 		const rootIdentity = cgroup
 			? { pid: child.pid!, startTime: statFields(child.pid!)[19]! }
 			: undefined;
 		if (cgroup && rootIdentity) await cgroup.admitStoppedRoot(rootIdentity);
 		const outcome = await Promise.race([
+			deadline,
 			childExit.then((exit) => ({ kind: "exit" as const, exit })),
 			terminationRequested.then((signal) => ({ kind: "termination" as const, signal })),
 			...(cgroup ? [cgroup.guardianFailure] : []),
@@ -85,9 +94,15 @@ async function runOwnedTestProcess(
 				? 128 + signalNumber(outcome.exit.signal)
 				: outcome.exit.code ?? 1;
 		}
+		if (outcome.kind === "deadline") {
+			console.error(`Test suite exceeded its ${deadlineMs}ms supervisor deadline`);
+			await processTree.terminate("SIGTERM", childExit);
+			return 124;
+		}
 		await processTree.terminate(outcome.signal, childExit);
 		return 128 + signalNumber(outcome.signal);
 	} finally {
+		clearTimeout(deadlineTimer!);
 		await processTree.dispose();
 	}
 }

@@ -54,6 +54,47 @@ test("the suite supervisor leaves no test descendants", {
 	}
 });
 
+test("the supervisor deadline contains synchronous spin and ignored termination", {
+	timeout: SUPERVISOR_TEST_TIMEOUT_MS,
+	skip: process.platform !== "linux",
+}, async (t) => {
+	for (const mode of ["block", "hang"] as const) {
+		const fixture = await launchFixture(t, mode, 300);
+		await waitForProcessExit(fixture.runner.pid!, 2_000);
+		if (fixture.runner.exitCode === null && fixture.runner.signalCode === null) {
+			await new Promise<void>((resolve) => fixture.runner.once("exit", () => resolve()));
+		}
+		assert.equal(fixture.runner.exitCode, 124);
+		await assertNoProcessesAlive(fixture.evidence);
+	}
+});
+
+test("conformance uses supervised selection and rejects invalid deadlines", {
+	timeout: FEEDBACK_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const env = { ...process.env };
+	delete env.NODE_TEST_CONTEXT;
+	const listed = await runCommand("npm", ["run", "test:conformance", "--",
+		"--file=host-shape.test.ts", "--list"], { cwd: PROJECT_ROOT, env });
+	assert.equal(listed.code, 0, listed.output);
+	assert.ok(listed.output.trim().endsWith("host-shape.test.ts"));
+	const expired = await runCommand(process.execPath, [
+		"tests/support/run-test-suite.ts", "fast", "--file=host-shape.test.ts",
+		"--deadline-ms=1",
+	], { cwd: PROJECT_ROOT, env });
+	assert.equal(expired.code, 124, expired.output);
+	assert.match(expired.output, /supervisor deadline/);
+	for (const value of ["", "0", "-1", "NaN", "1.5", "2147483648"]) {
+		const invalid = await runCommand(process.execPath, [
+			"tests/support/run-test-suite.ts", "fast", "--file=host-shape.test.ts",
+			"--deadline-ms=" + value,
+		], { cwd: PROJECT_ROOT, env });
+		assert.notEqual(invalid.code, 0);
+		assert.match(invalid.output, /deadline/i);
+	}
+});
+
 test("the suite isolates Pi settings inherited from a spawned Agent", {
 	timeout: PROCESS_TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
@@ -127,6 +168,7 @@ type FixtureHarness = Readonly<{
 async function launchFixture(
 	t: TestContext,
 	mode: "hang" | "block" | "complete" | "timeout",
+	deadlineMs = 5_000,
 ): Promise<FixtureHarness> {
 	const fixtureDirectory = await mkdtemp(join(tmpdir(), "pi-test-runner-tree-"));
 	const fixturePath = join(fixtureDirectory, "orphan-process-tree.test.mjs");
@@ -140,6 +182,7 @@ async function launchFixture(
 				new URL("./support/test-process-supervisor.ts", import.meta.url).href,
 				fixturePath,
 				mode,
+				deadlineMs,
 			),
 			"utf8",
 		),
@@ -154,8 +197,13 @@ async function launchFixture(
 		env: runnerEnvironment,
 		stdio: "ignore",
 	});
+	// This watchdog lives outside the fixture supervisor, so a missing deadline
+	// still fails safely. Teardown also kills recorded detached descendants.
+	const watchdog = setTimeout(() => runner.kill("SIGTERM"), 2_500);
+	runner.once("exit", () => clearTimeout(watchdog));
 	let evidence: ProcessEvidence | undefined;
 	t.after(async () => {
+		clearTimeout(watchdog);
 		for (const pid of [
 			evidence?.descendantPid,
 			evidence?.guardianPid,
@@ -268,6 +316,7 @@ function testSupervisorLauncher(
 	supervisorUrl: string,
 	fixturePath: string,
 	mode: "hang" | "block" | "complete" | "timeout",
+	deadlineMs: number,
 ): string {
 	return `
 import { runTestProcess } from ${JSON.stringify(supervisorUrl)};
@@ -277,7 +326,7 @@ process.exitCode = await runTestProcess([
 	"--test-reporter=dot",
 	${mode === "timeout" ? '"--test-timeout=100",' : ""}
 	${JSON.stringify(fixturePath)},
-]);
+], ${deadlineMs});
 `;
 }
 
@@ -290,6 +339,7 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import test from "node:test";
 
 test("orphan process tree fixture", async () => {
+	process.on("SIGTERM", () => {});
 	const descendant = spawn(process.execPath, [
 		"--input-type=module",
 		"--eval",
