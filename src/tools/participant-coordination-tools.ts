@@ -546,7 +546,7 @@ export function registerParticipantCoordinationTools<
 		pi.registerTool({
 			name: "workflow_resume",
 			label: "Resume Workflow",
-			description: "Owner only: resume the current Workflow from a verified durable snapshot, scheduling eligible pending Messages and continuing dormant responders with unanswered Requests. Returns admission, not Delivery or completion.",
+			description: "Owner only: resume the current Workflow from a verified durable snapshot, scheduling eligible pending Messages and continuing dormant responders with unanswered Requests.",
 			promptSnippet: "Resume unfinished coordination after restart.",
 			promptGuidelines: [
 				WORKFLOW_RECOVERY_GUIDANCE,

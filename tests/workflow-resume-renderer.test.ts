@@ -81,9 +81,8 @@ test("Workflow Resume renders pending and tool errors rather than undefined JSON
 	assert.doesNotMatch(output, /undefined|scheduled|admitted/);
 });
 
-test("Workflow Resume guidance explains automatic continuation, not completion or redundant wake-ups", () => {
+test("Workflow Resume guidance explains automatic continuation without redundant wake-ups", () => {
 	assert.match(resumeTool.description, /scheduling eligible pending/i);
-	assert.match(resumeTool.description, /not Delivery or completion/i);
 	const guide = resumeTool.promptGuidelines!.join("\n");
 	assert.match(guide, /wake-up/i);
 	assert.match(guide, /do not send redundant/i);
