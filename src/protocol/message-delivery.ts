@@ -8,6 +8,7 @@ import {
 	MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE,
 	OBLIGATION_REMINDER_CUSTOM_TYPE,
 	RUN_FAILURE_RECOVERY_CUSTOM_TYPE,
+	WORKFLOW_CONTINUATION_CUSTOM_TYPE,
 } from "./custom-entry-types.ts";
 import {
 	deriveMessageIdentity,
@@ -206,7 +207,8 @@ function readMessageDeliveries(options: {
 					entry.customType === OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE ||
 					entry.customType === OBLIGATION_RESUMED_CUSTOM_TYPE ||
 					entry.customType === OBLIGATION_FOCUS_CUSTOM_TYPE ||
-					entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE
+					entry.customType === RUN_FAILURE_RECOVERY_CUSTOM_TYPE ||
+					entry.customType === WORKFLOW_CONTINUATION_CUSTOM_TYPE
 				)
 					continue;
 				if (entry.type !== "custom_message" || entry.customType !== MESSAGE_DELIVERY_CUSTOM_TYPE) {
