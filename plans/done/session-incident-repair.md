@@ -37,4 +37,10 @@ Require red/green regression evidence for each implemented bug fix. Use targeted
 
 Both evidenced defects are repaired in the source checkout. The two reports do not justify changing renewal semantics or deduplicating distinct stalled Messages. Pre-existing uncommitted work remains untouched.
 
-The installed extension is a separate checkout and has not been updated; deployment and runtime reload are still needed before the running installation uses these fixes. No stopped workflow was resumed or transcript rewritten.
+After the user deployed those fixes, old-session reload exposed another committed-contract mismatch: lifecycle still emits obligation-resumed, while the delivery reader imported an unexported Request Attention constant. Uncommitted producer/constant renames masked this during earlier validation. New sessions did not contain the offending record; old cold discovery failed before registering the agents command.
+
+Follow-up repair 298bf7e restores the reader to the currently committed producer contract, without accepting a second format or introducing migration logic. A regression uses the real lifecycle producer rather than repeating its custom type. The repair was implemented and validated in a clean temporary worktree: 25 targeted tests and typechecking pass, Pi's extension loader succeeds, and read-only discovery of the actual stopped workflow recovers all five descendants with zero quarantine. Delivery projection succeeds for all six transcripts. The equivalent integrated commit has the same tree; the dirty development tree also passes 29 targeted tests and typechecking.
+
+The in-flight Request Attention rename remains uncommitted, including its matching reader rename; existing development file contents were preserved when integrating the clean repair. Deployment validation must use committed code and the entire affected recovery scope, not only a dirty development tree or the Owner transcript.
+
+The follow-up repair is committed locally but has not been deployed by the agent. No stopped workflow was resumed or transcript rewritten; an interactive reload remains the final user-side check.
