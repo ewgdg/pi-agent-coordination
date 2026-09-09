@@ -47,3 +47,9 @@ Incident 2026-09-09: blocked review kAwu0w1dLmTOD5_CDQwyXxw6A8D-3b-5lGQedffTlQ8 
 - Replaced per-Agent recursive callbacks with one iterative synchronous scope, with reverse-order restoration in finally; the coordination wrapper captures its roster before inspection. Removed the obsolete single-observation entry path.
 - This proves roster-independent stack depth, not the cause of the 11-child incident. No synchronous reconciliation reentrancy or live-Map growth was established in the reviewed paths; retained transcript readers and request graph evaluation do not call the scope recursively.
 - Typecheck currently reports unrelated `tests/workflow-resume.test.ts:428` (outstandingRequests does not exist); no task-file diagnostics.
+
+## Validation correction: precise failed-Delivery regression
+- Re-running the stabilized nudge integration fixture against pre-fix scheduler showed it also passes. The earlier RED was confounded by its model-response/Moderator completion race; it is not causal proof and that low-value fixture has been removed.
+- Replaced it with `tests/failed-delivery-observation.test.ts` at the scheduler's supported blocked-Delivery observation seam. It records a real scheduling failure, changes recipient state from dormant to unrelated active work and settled, and checks that the same blocked Message remains continuously observable. Explicit selection still suspends it and Delivery proof clears it.
+- Confirmed RED against `e6a976b^` scheduler in a disposable checkout: active work incorrectly returns [] instead of the existing scheduling_failure. GREEN on current scheduler (~0.37s).
+- This is precise proof of the suppression/reappearance defect that releases moderation keys. Existing integration selection/recurrence coverage passes, but the live incident's exact nudge lifecycle is not replayed by this unit seam.
