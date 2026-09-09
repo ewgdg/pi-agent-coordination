@@ -325,8 +325,12 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		input: {},
 	}), true);
 	assert.equal(Check(agentControlMethods["coordination.wait"].request, {
-		toolCallId: "call-legacy-wait",
+		toolCallId: "call-selected-wait",
 		input: { requestMessageIds: ["request-message"] },
+	}), true);
+	assert.equal(Check(agentControlMethods["coordination.wait"].request, {
+		toolCallId: "call-empty-selection-wait",
+		input: { requestMessageIds: [] },
 	}), false);
 	assert.equal(Check(agentControlMethods["coordination.wait"].response, {
 		disposition: "preempted",
