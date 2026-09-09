@@ -44,6 +44,7 @@ const roleToolNames = {
 		"report_to_user",
 	],
 	owner: [
+		"workflow_resume",
 		"agent_control",
 		"agent_message",
 		"agent_observe",
@@ -67,6 +68,7 @@ const agentStatus = {
 const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	ParticipantCoordinationToolHandlers<"moderator"> &
 	ParticipantCoordinationToolHandlers<"owner"> = {
+	async resumeWorkflow() { return { workflowId: "workflow", deliveries: [], activations: [], indeterminate: [] }; },
 	async message() {
 		return {
 			messageId: "message-1",
@@ -125,6 +127,13 @@ test("participant registrar exposes the exact closed sequential role tool sets",
 			await host.runtime.dispose();
 		});
 	}
+});
+
+test("Workflow resume accepts only the current Workflow's parameterless Owner operation", () => {
+	const schema = participantCoordinationToolSchemas.workflow_resume;
+	assert.equal(Value.Check(schema, {}), true);
+	assert.equal(Value.Check(schema, { workflowId: "other" }), false);
+	assert.equal(Value.Check(schema, { agentId: "child" }), false);
 });
 
 test("Agent Message schema requires explicit Answer and Cancellation targets", () => {

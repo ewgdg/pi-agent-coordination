@@ -278,6 +278,13 @@ export class MessageDeliveryScheduler {
 		return record.host.lane.run(() => this.#admitInLane(record, delivery));
 	}
 
+	admitCustomInLane(
+		record: AgentRecord,
+		delivery: ScheduledCustomDelivery,
+	): Promise<MessageDeliveryAdmission> {
+		return this.#admitInLane(record, delivery);
+	}
+
 	admitInLane(
 		record: AgentRecord,
 		delivery: ScheduledMessageDelivery,
@@ -423,6 +430,11 @@ export class MessageDeliveryScheduler {
 		if (this.#parkedRunByAgent.get(record.identity.agentId) === handle) {
 			this.#parkedRunByAgent.delete(record.identity.agentId);
 		}
+	}
+
+	hasScheduling(recipientAgentId: string, messageId: string): boolean {
+		return this.#pendingByAgent.get(recipientAgentId)?.has(messageId) === true ||
+			this.hasDispatchReservation(recipientAgentId, messageId);
 	}
 
 	hasDispatchReservation(recipientAgentId: string, messageId: string): boolean {
