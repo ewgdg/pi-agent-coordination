@@ -49,3 +49,14 @@ The ordering contract is authoritative handling clearance/Resolution versus nati
 Review found that failed reminder preparation released its reservation but did not advance ordinary deliveries admitted behind it. No native turn had started, so no later settlement was guaranteed. Added deterministic actual-scheduler regressions for both an ordinary Message and Request admitted while preparation is held. Both failed first with zero dispatches after failure cleanup; failure now drains eligible pending delivery before release evaluation. No external scheduling boundary is used by either regression.
 
 Follow-up validation: `node --test tests/stale-moderator-reminder-delivery.test.ts` passed all 5 tests; `npm run typecheck` passed. Red/green evidence is retained with the task artifacts.
+
+## Upstream startup progress correction
+Actual generation probes on233080f and11a1746 found an earlier root cause: Moderator Input is precommitted, and initial routine-start bypasses scheduler progress while the child still projects settled. Represent that initial delivery through the existing scheduler, preserving its progress until native proof/settlement. Add a real generation-seam regression before production changes, preserve valid post-settlement reminder behavior, then run focused checks and commit separately. No timing grace period or compaction changes.
+
+The generation regression failed before the production change with one reminder generated during the held first native startup (expected zero). The fix routes the initial Moderator routine-start through existing Deferred custom Delivery admission, with durable routine-start proof. No new time delay, no-progress exception, native work-state mutation, or compaction logic was added. The same regression now confirms zero generation through first-start admission and the first active model call, followed by exactly one valid reminder after genuine settlement.
+
+Validation:
+- `node --test --test-concurrency=1 tests/moderator-startup-progress.test.ts tests/stale-moderator-reminder-delivery.test.ts`: 6 passed.
+- `node --test --test-name-pattern 'post-commit Moderator startup failure|terminal Moderator Run failure|two committed Moderator failures|a settled Moderator receives one handling reminder|clearing the incident before native reminder' tests/operational-incidents.test.ts`: 5 passed, including failure replacement, handling clearance and dormant release.
+- `npm run typecheck` and whitespace check: passed.
+- New real-process test is classified in the process suite. It uses a native first-start hook gate and actual operational reconciliation; observing generation does not alter admission or Runtime state. The native gate's file publication is atomic, and polling/operation waits are bounded.
