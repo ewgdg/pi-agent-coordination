@@ -3166,15 +3166,18 @@ async function waitForConditionPoll(): Promise<void> {
 
 test("blocked Delivery failure moderates an upstream obligated parent immediately", async (t) => {
 	const clock = new ControllableOperationReviewClock();
-	let requests = 0;
+	const requestDispatches: string[] = [];
 	let blockedRequestId = "";
 	const { host, coordinator, owner } = await createIncidentBoundaryHarness(t, {}, {
 		deliveryProgressClock: clock,
 		messageBoundaryHooks: {
 			scheduleDeliveryDispatch(context, dispatch) {
-				if (context.kind === "request" && ++requests > 1) {
-					blockedRequestId = context.messageId;
-					throw new Error("controlled pre-dispatch failure");
+				if (context.kind === "request") {
+					requestDispatches.push(context.messageId);
+					if (requestDispatches.length > 1) {
+						blockedRequestId = context.messageId;
+						throw new Error("controlled pre-dispatch failure");
+					}
 				}
 				dispatch();
 			},
@@ -3184,10 +3187,11 @@ test("blocked Delivery failure moderates an upstream obligated parent immediatel
 		fauxAssistantMessage(fauxToolCall("agent_spawn", {
 			request: "Do the leaf work.", label: "Blocked Leaf",
 		}, { id: "spawn-blocked-leaf" }), { stopReason: "toolUse" }),
-		fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "wait-blocked-leaf" }), { stopReason: "toolUse" }),
+		// Agent Wait explicitly renews undelivered Requests; settle instead to isolate moderation.
+		fauxAssistantMessage("The leaf remains responsible for the work; do not retry delivery."),
 		fauxAssistantMessage("Investigate the blocked delivery, without retrying."),
 	]);
-	const parent = await spawnFromView(host.session, owner, "spawn-obligated-parent", "Delegate then join.");
+	const parent = await spawnFromView(host.session, owner, "spawn-obligated-parent", "Delegate, then leave the blocked Request outstanding without retrying.");
 	const moderator = await waitForModeratorKind(host, "delivery_stall");
 	const inputEntry = SessionManager.open(moderator.path).getEntries().find(
 		(entry) => entry.type === "custom_message" && entry.customType === "agent-coordination.moderator-input",
@@ -3199,20 +3203,39 @@ test("blocked Delivery failure moderates an upstream obligated parent immediatel
 	assert.ok(input.trigger.agentIds.includes(parent.agentId));
 	assert.ok(input.trigger.requests.sources.some((source: { toolCallId: string }) => source.toolCallId === "spawn-obligated-parent"));
 	assert.ok(input.trigger.requests.sources.some((source: { toolCallId: string }) => source.toolCallId === "spawn-blocked-leaf"));
-	await coordinator.forAgent(parent.agentId).reachSafeBoundary();
+
+	const parentView = coordinator.forAgent(parent.agentId);
+	for (let pass = 0; pass < 3; pass++) await parentView.reachSafeBoundary();
 	assert.equal((await findModerators(host)).length, 1);
-	assert.equal(requests, 2, "moderation never retries scheduling");
+	assert.deepEqual(requestDispatches, [parent.requestMessageId, blockedRequestId],
+		"moderation must not renew either Creation Request");
+	const leafTranscript = transcriptFromSessionManager(SessionManager.open(
+		await sessionPathFor(host, input.trigger.delivery.recipientAgentId),
+	)).inspect();
+	assert.deepEqual(obligationStack(leafTranscript, input.trigger.delivery.recipientAgentId), [],
+		"the undelivered leaf must not acquire an Answer obligation");
+	const parentRun = parentView.status(parent.agentId).run;
+	assert.ok(parentRun.phase === "live" && parentRun.work === "settled");
+	assert.ok(parentRun.retentionReasons.some(({ reason }) => reason === "answer_owed"));
+	assert.ok(parentRun.retentionReasons.some(({ reason }) => reason === "awaiting_answer"));
 });
 
 test("blocked Delivery deadline catches a silent leaf while its obligated parent parks in agent_wait", async (t) => {
 	const clock = new ControllableOperationReviewClock();
-	let requests = 0;
+	const scheduledRequestIds = new Set<string>();
+	let blockedRequestId = "";
 	const { host, coordinator, owner } = await createIncidentBoundaryHarness(t, {}, {
 		deliveryProgressClock: clock,
 		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"deliveryProgressIntervalMs":1000}')),
 		messageBoundaryHooks: {
 			scheduleDeliveryDispatch(context, dispatch) {
-				if (context.kind === "request" && ++requests > 1) return;
+				if (context.kind === "request") {
+					scheduledRequestIds.add(context.messageId);
+					if (scheduledRequestIds.size > 1) {
+						blockedRequestId ||= context.messageId;
+						return;
+					}
+				}
 				dispatch();
 			},
 		},
@@ -3232,17 +3255,32 @@ test("blocked Delivery deadline catches a silent leaf while its obligated parent
 	await assertNoModeratorKindAtSafeBoundary(owner, host, "delivery_stall");
 	// Transcript polls and lifecycle safe-boundary heartbeats are not progress.
 	for (let n = 0; n < 3; n++) await owner.reachSafeBoundary();
+	await assertNoModeratorKindAtSafeBoundary(owner, host, "delivery_stall");
 	clock.advanceBy(1);
 	const moderator = await waitForModeratorKind(host, "delivery_stall");
 	const entry = SessionManager.open(moderator.path).getEntries()[0];
 	assert.ok(entry?.type === "custom_message");
-	assert.deepEqual(JSON.parse(entry.content as string).trigger.reason, {
+	const trigger = JSON.parse(entry.content as string).trigger;
+	assert.equal(trigger.delivery.messageId, blockedRequestId);
+	assert.ok(trigger.agentIds.includes(parent.agentId));
+	assert.deepEqual(trigger.reason, {
 		kind: "progress_deadline", stage: "eligible", intervalMs: 1000,
 	});
 	clock.advanceBy(10_000);
 	await coordinator.forAgent(parent.agentId).reachSafeBoundary();
 	assert.equal((await findModerators(host)).length, 1);
-	assert.equal(requests, 2);
+	// Parked Wait may revisit the same pending scheduling; those visits are not new
+	// Messages or Delivery progress. The settled-parent test isolates moderation retries.
+	assert.deepEqual([...scheduledRequestIds], [parent.requestMessageId, blockedRequestId]);
+	const leafTranscript = transcriptFromSessionManager(SessionManager.open(
+		await sessionPathFor(host, trigger.delivery.recipientAgentId),
+	)).inspect();
+	assert.deepEqual(obligationStack(leafTranscript, trigger.delivery.recipientAgentId), [],
+		"the silent leaf must remain undelivered after deadline moderation");
+	const parentRun = owner.status(parent.agentId).run;
+	assert.ok(parentRun.phase === "live" && parentRun.attention === "agent_wait");
+	assert.ok(parentRun.retentionReasons.some(({ reason }) => reason === "answer_owed"));
+	assert.ok(parentRun.retentionReasons.some(({ reason }) => reason === "awaiting_answer"));
 });
 
 test("blocked Delivery Moderator creation failure produces deduplicated Owner attention with diagnostics", async (t) => {
