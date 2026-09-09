@@ -45,6 +45,33 @@ const PROCESS_AGENT_VIEW_PROBE = fileURLToPath(
 	new URL("./fixtures/process-agent-view-probe-extension.ts", import.meta.url),
 );
 
+test("selector navigation stops at a non-wrapping boundary when the Agent is absent", () => {
+	let row = 0;
+	let renders = 0;
+	const surface: Component = {
+		render() {
+			assert.ok(++renders < 50, "navigation must stop instead of spinning at the boundary");
+			return [`→ row ${row}`, "|owner|"];
+		},
+		handleInput(input) {
+			if (input === "j") row = Math.min(row + 1, 1);
+		},
+		invalidate() {},
+	};
+	assert.equal(selectAgentInCurrentTree(surface, "missing", "owner"), false);
+});
+
+test("selector navigation recognizes an Agent in ANSI-styled focused details", () => {
+	let selected = false;
+	const surface: Component = {
+		render: () => ["→ Worker", "|\x1b[36mworker\x1b[39m|"],
+		handleInput(input) { selected = input === "\r"; },
+		invalidate() {},
+	};
+	assert.equal(selectAgentInCurrentTree(surface, "worker", "owner"), true);
+	assert.equal(selected, true);
+});
+
 test("/agents presents the live Agent's native interactive mode while Owner stays bound", async (t) => {
 	const probe = configureProcessAgentViewProbe(t, "interactive");
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
@@ -2009,7 +2036,8 @@ function selectAgentInCurrentTree(
 ): boolean {
 	const firstRender = surface.render(80).join("\n");
 	let currentRender = firstRender;
-	do {
+	// Selector focus does not wrap; comparing only with the first frame spins at the footer.
+	for (let attempt = 0; attempt < MAX_SELECTOR_NAVIGATION_STEPS; attempt += 1) {
 		if (focusedDetailsShowAgent(surface, targetAgentId)) {
 			surface.handleInput?.("\r");
 			return true;
@@ -2023,9 +2051,11 @@ function selectAgentInCurrentTree(
 				surface.handleInput?.("h");
 			}
 		}
+		const beforeMove = surface.render(80).join("\n");
 		surface.handleInput?.("j");
 		currentRender = surface.render(80).join("\n");
-	} while (currentRender !== firstRender);
+		if (currentRender === beforeMove || currentRender === firstRender) break;
+	}
 	return false;
 }
 
@@ -2052,7 +2082,7 @@ function selectAgentByLabel(surface: Component, label: string): string | undefin
 }
 
 function focusedDetailsShowAgent(surface: Component, targetAgentId: string): boolean {
-	const lines = surface.render(80);
+	const lines = surface.render(80).map(stripTerminalSequences);
 	const selectedRow = lines.findIndex((line) => line.includes("→"));
 	if (selectedRow < 0) return false;
 	return lines
