@@ -86,7 +86,7 @@ test("an earlier settlement cannot mark a running child continuation idle", {
 		assert.deepEqual(selectedAgentWorkStatus(run, false), { kind: "active" });
 		await host.lane.run(() => scheduler.admitCustomInLane(record, {
 			messageId: "queued-deferred", deliveryMode: "deferred", inspectProof: () => undefined,
-			customMessage: createWorkflowContinuation({ activationId: "queued-continuation", agentId, runSequence: 1, requestMessageIds: [] }),
+			customMessage: createWorkflowContinuation({ activationId: "queued-continuation", agentId, runSequence: 1, outstandingRequests: [] }),
 		}));
 		assert.deepEqual(scheduler.blockedDeliveries(), []);
 		clock.advanceBy(policy.current().deliveryProgressIntervalMs);

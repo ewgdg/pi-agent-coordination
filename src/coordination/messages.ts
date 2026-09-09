@@ -650,7 +650,7 @@ export class MessageCoordinator {
 		return this.#deliveryScheduler.requestRelease(record);
 	}
 
-	agentWaitStarted(record: AgentRecord): Promise<void> {
+	deliveryEligibilityChanged(record: AgentRecord): Promise<void> {
 		return this.#deliveryScheduler.requestQueueAdvanced(record);
 	}
 

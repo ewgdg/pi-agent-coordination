@@ -173,7 +173,7 @@ export class AgentWaitCoordinator {
 			try {
 				caller.host.beginAgentWait(handle, toolCallId);
 				this.#suspendExecution(caller);
-				void this.#messages.agentWaitStarted(caller).catch((error: unknown) => {
+				void this.#messages.deliveryEligibilityChanged(caller).catch((error: unknown) => {
 					this.#fence(
 						callerAgentId,
 						toolCallId,

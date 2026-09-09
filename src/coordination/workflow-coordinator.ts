@@ -515,13 +515,15 @@ export class WorkflowCoordinator {
 		if (!isDeepStrictEqual(committed.input, {})) throw new Error("invalid_input: workflow_resume accepts only {}");
 		return resumeWorkflow({
 			workflowId: this.#ownerIdentity.workflowId,
+			ownerAgentId: agentId,
 			agents: this.#agents,
 			quarantinedAgentIds: this.#quarantinedWorkflowAgentIds,
 			messages: this.#messages,
-			activate: async (record, requestIds) => {
+			activate: async (record, requestIds, recovery) => {
 				this.#assertAdmissionOpen();
 				const outcome = await this.#runSupervisor.continueDormantResponder(record, {
 					requestMessageIds: requestIds,
+					recovery,
 					recheckRequestMessageIds: () => {
 						this.#assertAdmissionOpen();
 						return this.#messages.recoveryRequestIds(record);

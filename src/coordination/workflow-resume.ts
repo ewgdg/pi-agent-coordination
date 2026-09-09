@@ -1,16 +1,17 @@
 import { withAgentTranscriptObservations, type AgentRecord } from "./agent-record.ts";
 import type { MessageCoordinator } from "./messages.ts";
 import type { Message } from "../protocol/message.ts";
-import type { WorkflowResumeActivation, WorkflowResumeDelivery, WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
+import type { OutstandingRequestRecovery, WorkflowRecoveryView, WorkflowResumeActivation, WorkflowResumeDelivery, WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 /** Snapshot order is Agent ID, then physical source order; it is not the lost volatile queue. */
 export async function resumeWorkflow(options: {
 	workflowId: string;
+	ownerAgentId: string;
 	agents: ReadonlyMap<string, AgentRecord>;
 	quarantinedAgentIds: ReadonlySet<string>;
 	messages: MessageCoordinator;
-	activate(record: AgentRecord, requestIds: readonly string[]): Promise<WorkflowResumeActivation>;
+	activate(record: AgentRecord, requestIds: readonly string[], recovery: { isReady(): boolean; view(): WorkflowRecoveryView }): Promise<WorkflowResumeActivation>;
 }): Promise<WorkflowResumeReceipt> {
 	const records = [...options.agents.values()].sort((a, b) => a.identity.agentId.localeCompare(b.identity.agentId));
 	const inspections = new Map<AgentRecord, TranscriptInspection>();
@@ -28,6 +29,7 @@ export async function resumeWorkflow(options: {
 	const deliveries: WorkflowResumeDelivery[] = [];
 	const activations: WorkflowResumeActivation[] = [];
 	const pending: Message[] = [];
+	const requests: Extract<Message, { kind: "request" }>[] = [];
 	const responders: { record: AgentRecord; requestIds: readonly string[] }[] = [];
 	const readable = records.filter(record => !unavailable.has(record.identity.agentId));
 	withAgentTranscriptObservations(readable, () => {
@@ -42,6 +44,7 @@ export async function resumeWorkflow(options: {
 				for (const candidate of options.messages.recoveryMessageCandidates(record)) {
 					try {
 						const message = options.messages.recoveryMessage(candidate.authorAgentId, candidate.messageId);
+						if (message.kind === "request") requests.push(message);
 						if (unavailable.has(message.targetAgentId)) throw new Error("evidence_unavailable: recipient transcript");
 						const inspected = options.messages.inspectRecoveryMessage(message);
 						if (inspected) deliveries.push(inspected);
@@ -55,23 +58,85 @@ export async function resumeWorkflow(options: {
 			}
 		}
 	}, inspections);
+
+	let ready = false;
+	const views = new Map<string, WorkflowRecoveryView>();
+	const recoveryFor = (agentId: string) => ({
+		isReady: () => ready,
+		view: () => views.get(agentId) ?? { outstandingRequests: [] },
+	});
 	// Activate interrupted obligations before queued siblings can start the same Run.
 	// Both paths still recheck current evidence and use the normal recipient lane.
-	for (const { record, requestIds } of responders) {
-		try {
-			activations.push(await options.activate(record, requestIds));
-		} catch (error) {
-			activations.push({ agentId: record.identity.agentId, requestIds, disposition: "indeterminate", reason: recoveryError(error) });
+	try {
+		for (const { record, requestIds } of responders) {
+			try {
+				activations.push(await options.activate(record, requestIds, recoveryFor(record.identity.agentId)));
+			} catch (error) {
+				activations.push({ agentId: record.identity.agentId, requestIds, disposition: "indeterminate", reason: recoveryError(error) });
+			}
 		}
-	}
-	for (const message of pending) {
-		try {
-			deliveries.push(await options.messages.resumeMessage(message));
-		} catch (error) {
-			deliveries.push({ messageId: message.messageId, targetAgentId: message.targetAgentId, kind: message.kind, disposition: "indeterminate", reason: recoveryError(error) });
+		for (const message of pending) {
+			try {
+				deliveries.push(await options.messages.resumeMessage(message));
+			} catch (error) {
+				deliveries.push({ messageId: message.messageId, targetAgentId: message.targetAgentId, kind: message.kind, disposition: "indeterminate", reason: recoveryError(error) });
+			}
 		}
+	} finally {
+		// Even failed recovery must release its admission barrier. Suppression,
+		// exact-Run fences and shutdown still belong to ordinary scheduling.
+		for (const record of records) {
+			const outstandingRequests = requests
+				.filter(request => request.fromAgentId === record.identity.agentId)
+				.flatMap(request => {
+					const delivery = deliveries.find(item => item.messageId === request.messageId);
+					if (delivery?.reason === "not_created" || delivery?.reason === "request_resolved") return [];
+					const activation = activations.find(item =>
+						item.agentId === request.targetAgentId && item.requestIds.includes(request.messageId));
+					const unknown = indeterminate.find(item => item.agentId === request.targetAgentId);
+					return [Object.freeze({
+						requestMessageId: request.messageId,
+						targetAgentId: request.targetAgentId,
+						...requestRecoveryOutcome(activation, delivery, unknown?.reason),
+					})];
+				});
+			views.set(record.identity.agentId, Object.freeze({ outstandingRequests: Object.freeze(outstandingRequests) }));
+		}
+		// No recipient lane waits here: all admissions finish before any
+		// continuation can dispatch, including cycles of outstanding delegations.
+		ready = true;
+		await Promise.all(responders.map(async ({ record }) => {
+			try { await options.messages.deliveryEligibilityChanged(record); }
+			catch (error) { indeterminate.push({ agentId: record.identity.agentId, reason: recoveryError(error) }); }
+		}));
 	}
-	return { workflowId: options.workflowId, deliveries, activations, indeterminate };
+	return { workflowId: options.workflowId, ...recoveryFor(options.ownerAgentId).view(), deliveries, activations, indeterminate };
+}
+
+function requestRecoveryOutcome(
+	activation: WorkflowResumeActivation | undefined,
+	delivery: WorkflowResumeDelivery | undefined,
+	unavailableReason: string | undefined,
+): Pick<OutstandingRequestRecovery, "status" | "reason"> {
+	if (unavailableReason || delivery?.disposition === "indeterminate") {
+		return { status: "indeterminate", reason: unavailableReason ?? delivery?.reason };
+	}
+	if (activation) {
+		if (activation.disposition === "admitted") return { status: "continuation_admitted" };
+		if (activation.reason === "already_running") return { status: "already_running" };
+		if (activation.reason === "resolved") return { status: "resolved" };
+		return {
+			status: activation.disposition === "blocked" ? "blocked" : "indeterminate",
+			reason: activation.reason ?? "recovery_evidence_unavailable",
+		};
+	}
+	if (delivery?.disposition === "scheduled" || delivery?.reason === "already_scheduled") {
+		return { status: "delivery_scheduled" };
+	}
+	return {
+		status: delivery?.disposition === "blocked" ? "blocked" : "indeterminate",
+		reason: delivery?.reason === "delivered" ? "responder_recovery_unavailable" : delivery?.reason ?? "recovery_evidence_unavailable",
+	};
 }
 
 function recoveryError(error: unknown): string {

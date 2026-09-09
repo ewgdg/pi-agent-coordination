@@ -1,4 +1,4 @@
-import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
+import { WORKFLOW_RECOVERY_GUIDANCE, type WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 import { Text } from "@earendil-works/pi-tui";
@@ -549,7 +549,7 @@ export function registerParticipantCoordinationTools<
 			description: "Owner only: resume the current Workflow from a verified durable snapshot, scheduling eligible pending Messages and continuing dormant responders with unanswered Requests. Returns admission, not Delivery or completion.",
 			promptSnippet: "Resume unfinished coordination after restart.",
 			promptGuidelines: [
-				"After workflow_resume, do not send redundant wake-up Messages or replacement Requests; send only genuinely new instructions. Inspect blocked or indeterminate entries before targeted recovery.",
+				WORKFLOW_RECOVERY_GUIDANCE,
 				"Interrupted tools and volatile Wait calls are not restored; inspect side effects before repeating interrupted work.",
 			],
 			executionMode: "sequential",

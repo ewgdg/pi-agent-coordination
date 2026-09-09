@@ -1,3 +1,4 @@
+import type { WorkflowRecoveryView } from "../protocol/workflow-resume.ts";
 import type { AgentRunHandle } from "../runtime/agent-runtime-host.ts";
 import { randomUUID } from "node:crypto";
 import { createWorkflowContinuation, inspectWorkflowContinuation } from "../protocol/workflow-continuation.ts";
@@ -137,6 +138,7 @@ export class RunSupervisor {
 		options: {
 			requestMessageIds: readonly string[];
 			recheckRequestMessageIds(): readonly string[];
+			recovery: { isReady(): boolean; view(): WorkflowRecoveryView };
 		},
 	): Promise<"activated" | "already_running" | "held" | "resolved" | "fenced" | "target_unavailable" | "capacity_exhausted"> {
 		const capturedIds = new Set(options.requestMessageIds);
@@ -165,18 +167,19 @@ export class RunSupervisor {
 				// Run sequences restart with a cold host; retained proof must identify
 				// this activation independently of that process-local counter.
 				const activationId = randomUUID();
-				const customMessage = createWorkflowContinuation({
+				const customMessage = () => createWorkflowContinuation({
 					activationId,
 					agentId: record.identity.agentId,
 					runSequence: handle.sequence,
-					requestMessageIds,
+					...options.recovery.view(),
 				});
 				const result = await this.#messages.admitCustomDeliveryInLane(record, {
 					messageId: JSON.stringify(["workflow_continuation", record.identity.agentId, activationId]),
 					deliveryMode: "deferred",
-					customMessage,
+					get customMessage() { return customMessage(); },
+					isReady: () => options.recovery.isReady(),
 					inspectProof: () => inspectWorkflowContinuation(
-						record.identity.agentId, record.transcript.inspect(), customMessage,
+						record.identity.agentId, record.transcript.inspect(), customMessage(),
 					),
 					isSuppressed: () => !record.host.isCurrent(handle) || outstandingIds().length === 0,
 				});

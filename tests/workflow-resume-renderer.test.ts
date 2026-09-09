@@ -22,6 +22,7 @@ const context = {
 };
 const receipt: WorkflowResumeReceipt = {
 	workflowId: "workflow-full-id",
+	outstandingRequests: [],
 	deliveries: [{ messageId: "message-full-id", targetAgentId: "target-full-id", kind: "request", disposition: "scheduled" }],
 	activations: [{ agentId: "responder-full-id", requestIds: ["request-full-id"], disposition: "admitted" }],
 	indeterminate: [],

@@ -1,3 +1,4 @@
+import { WORKFLOW_RECOVERY_GUIDANCE, type WorkflowRecoveryView } from "./workflow-resume.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import type { EntryPointer } from "./moderator-input.ts";
@@ -12,18 +13,17 @@ export type ModelVisibleWorkflowContinuation = Readonly<{
 	display: true;
 }>;
 
-export function createWorkflowContinuation(options: {
+export function createWorkflowContinuation(options: WorkflowRecoveryView & {
 	activationId: string;
 	agentId: string;
 	runSequence: number;
-	requestMessageIds: readonly string[];
 }): ModelVisibleWorkflowContinuation {
 	return {
 		customType: WORKFLOW_CONTINUATION_CUSTOM_TYPE,
 		display: true,
 		content: JSON.stringify({
 			...options,
-			guidance: "The Owner explicitly requested workflow continuation. Continue the outstanding Request work under your existing Answer obligations. Inspect interrupted tool side effects before repeating any operation; do not assume an interrupted tool did nothing. This is runtime-generated continuation, not a new Message or Request.",
+			guidance: WORKFLOW_RECOVERY_GUIDANCE + " The Owner explicitly requested workflow continuation. Continue the outstanding Request work under your existing Answer obligations. Inspect interrupted tool side effects before repeating any operation; do not assume an interrupted tool did nothing. This is runtime-generated continuation, not a new Message or Request.",
 		}),
 	};
 }

@@ -28,6 +28,8 @@ type ScheduledDeliveryBase = Readonly<{
 	deliveryMode: MessageDeliveryMode;
 	inspectProof(): EntryPointer | undefined;
 	isSuppressed?(): boolean;
+	/** Recovery admission may precede final model-visible receipt construction. */
+	isReady?(): boolean;
 	afterCommit?(): void;
 	isIncomingRequest?: boolean;
 	preemptsAgentWait?: boolean;
@@ -992,6 +994,9 @@ export class MessageDeliveryScheduler {
 		pending: ReadonlyMap<string, ScheduledDelivery>,
 	): ScheduledDelivery[] {
 		const deliveries = [...pending.values()];
+		// An admitted continuation owns the next recovery turn. Queued siblings
+		// must not overtake it while its recipient-relative receipt is finalized.
+		if (deliveries.some(delivery => delivery.isReady?.() === false)) return [];
 		// Steer admission order is independent of Deferred head-of-line eligibility.
 		// Deferred still admits only one causally eligible Request at a time.
 		const frontDeferredRequest = deliveries.find(

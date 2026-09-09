@@ -26,6 +26,7 @@ test("recovery schedules original Requests and Messages once, preserving context
 	const receipt = await h.resume();
 	await flush();
 	assert.equal(receipt.deliveries.filter(item => item.disposition === "scheduled").length, 2);
+	assert.equal(receipt.outstandingRequests[0]?.status, "delivery_scheduled");
 	h.responder.settle();
 	await flush();
 	assert.equal(h.deliveries(h.responder).length, 2);
@@ -181,6 +182,8 @@ test("a failed durable transcript read is indeterminate rather than guessed as u
 	assert.ok(receipt.indeterminate.some(item => item.agentId === "responder" && item.reason.includes("unreadable transcript")));
 	assert.equal(receipt.deliveries.length, 0);
 	assert.equal(receipt.activations.length, 0);
+	assert.equal(receipt.outstandingRequests[0]?.status, "indeterminate");
+	assert.match(receipt.outstandingRequests[0]?.reason ?? "", /unreadable transcript/);
 	assert.equal(h.responder.dispatches.length, 0);
 });
 
@@ -202,11 +205,12 @@ test("blocked sibling successors continue the old foreground once, before or dur
 		};
 		if (timing === "before") await sibling();
 		const resume = () => resumeWorkflow({
-			workflowId: "requester", agents, messages: h.messages, quarantinedAgentIds: new Set(),
-			activate: async (record, requestIds) => {
+			workflowId: "requester", ownerAgentId: "requester", agents, messages: h.messages, quarantinedAgentIds: new Set(),
+			activate: async (record, requestIds, recovery) => {
 				await sibling();
 				const result = await supervisor.continueDormantResponder(record, {
 					requestMessageIds: requestIds,
+					recovery,
 					recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record),
 				});
 				return { agentId: record.identity.agentId, requestIds, disposition: result === "activated" ? "admitted" : "skipped", reason: result };
@@ -304,14 +308,15 @@ test("recovery coalesces live resume reservations outside ordinary capacity", { 
 function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHooks?: MessageBoundaryHooks) {
 	const requester = runtimeParticipant("requester");
 	const responder = runtimeParticipant("responder");
-	const participants = [requester, responder];
+	const worker = runtimeParticipant("worker");
+	const participants = [requester, responder, worker];
 	const agents = new Map(participants.map(p => [p.record.identity.agentId, p.record]));
 	const options = { agents, boundaryHooks, workflowPolicy: new WorkflowPolicyStore(), isShuttingDown: () => false };
 	let messages = new MessageCoordinator(options);
 	for (const p of participants) messages.integrate(p.record);
 	t.after(() => messages.shutdownDeliveryProgress());
 	return {
-		requester, responder, policy: options.workflowPolicy,
+		requester, responder, worker, agents, policy: options.workflowPolicy,
 		get messages() { return messages; },
 		async recover() {
 			for (const p of participants) messages.discardSchedulingInLane(p.record);
@@ -329,9 +334,9 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 		},
 		resume(quarantinedAgentIds = new Set<string>()) {
 			return resumeWorkflow({
-				workflowId: "requester", agents, messages, quarantinedAgentIds,
+				workflowId: "requester", ownerAgentId: "requester", agents, messages, quarantinedAgentIds,
 				activate: async (record, requestIds): Promise<WorkflowResumeActivation> => ({
-					agentId: record.identity.agentId, requestIds, disposition: "skipped", reason: "running",
+					agentId: record.identity.agentId, requestIds, disposition: "skipped", reason: "already_running",
 				}),
 			});
 		},
@@ -419,3 +424,117 @@ function commit(p: ReturnType<typeof participant>, id: string, name: string, det
 	p.manager.appendMessage({ role: "toolResult", toolCallId: id, toolName: name, content: [{ type: "text", text: JSON.stringify(details) }], details, isError: false, timestamp: Date.now() });
 }
 async function flush() { for (let i = 0; i < 8; i++) await setImmediate(); }
+
+test("Owner recovery reports only its outbound Requests with target recovery status", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	const request = await h.message(h.requester, "scoped", { operation: "request", targetAgent: "responder", question: "Work" });
+	assert.ok("requestMessageId" in request);
+	const receipt = await h.resume();
+	assert.deepEqual(receipt.outstandingRequests, [{
+		requestMessageId: request.requestMessageId, targetAgentId: "responder", status: "already_running",
+	}]);
+});
+
+function continuationViews(p: ReturnType<typeof runtimeParticipant>) {
+	return p.dispatches.flatMap(delivery => delivery.kind === "custom" &&
+		delivery.message.customType === "agent-coordination.workflow-continuation"
+		? [JSON.parse(delivery.message.content)] : []);
+}
+
+test("nested cyclic recovery finalizes recipient-relative views before dispatch without holding lanes", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	const outer = await h.message(h.requester, "outer-view", { operation: "request", targetAgent: "responder", question: "Outer" });
+	const inner = await h.message(h.responder, "inner-view", { operation: "request", targetAgent: "worker", question: "Inner" });
+	h.responder.settle();
+	await flush();
+	const reverse = await h.message(h.worker, "reverse-view", { operation: "request", targetAgent: "responder", deliveryMode: "steer", question: "Decision" });
+	assert.ok("requestMessageId" in outer && "requestMessageId" in inner && "requestMessageId" in reverse);
+	h.responder.stop(); h.worker.stop();
+	await h.recover();
+	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+	let admissions = 0;
+	const receipt = await resumeWorkflow({
+		workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
+		activate: async (record, requestIds, recovery) => {
+			const result = await supervisor.continueDormantResponder(record, {
+				requestMessageIds: requestIds, recovery, recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record),
+			});
+			admissions++;
+			assert.equal(continuationViews(h.responder).length + continuationViews(h.worker).length, 0, "no notification before all admissions");
+			// An admission never keeps this lane waiting for another recipient.
+			await record.host.lane.run(() => {});
+			return { agentId: record.identity.agentId, requestIds, disposition: result === "activated" ? "admitted" : "skipped", reason: result };
+		},
+	});
+	assert.equal(admissions, 2);
+	await flush();
+	const expected = (requestMessageId: string, targetAgentId: string) => [{ requestMessageId, targetAgentId, status: "continuation_admitted" }];
+	assert.deepEqual(receipt.outstandingRequests, expected(outer.requestMessageId, "responder"));
+	assert.deepEqual(continuationViews(h.responder)[0].outstandingRequests, expected(inner.requestMessageId, "worker"));
+	assert.deepEqual(continuationViews(h.worker)[0].outstandingRequests, expected(reverse.requestMessageId, "responder"));
+	assert.equal("requestMessageIds" in continuationViews(h.responder)[0], false);
+});
+
+test("scoped recovery reports held and failed admissions without claiming continuation", { timeout: 5_000 }, async t => {
+	for (const failure of ["held", "unavailable"] as const) {
+		const h = harness(t);
+		const request = await h.message(h.requester, "failure-view", { operation: "request", targetAgent: "responder", question: "Work" });
+		assert.ok("requestMessageId" in request);
+		h.responder.stop(); await h.recover();
+		if (failure === "held") h.responder.blocked = true;
+		else h.responder.record.host.startInLane = async () => { throw new Error("runtime unavailable"); };
+		const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+		const receipt = await resumeWorkflow({
+			workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
+			activate: async (record, requestIds, recovery) => {
+				const outcome = await supervisor.continueDormantResponder(record, { requestMessageIds: requestIds, recovery, recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record) });
+				return { agentId: record.identity.agentId, requestIds, disposition: outcome === "activated" ? "admitted" : "blocked", reason: outcome };
+			},
+		});
+		assert.deepEqual(receipt.outstandingRequests, [{
+			requestMessageId: request.requestMessageId, targetAgentId: "responder",
+			status: failure === "held" ? "blocked" : "indeterminate",
+			reason: failure === "held" ? "held" : "runtime unavailable",
+		}]);
+		assert.equal(continuationViews(h.responder).length, 0);
+	}
+});
+
+test("a later activation failure still releases earlier continuations with truthful dependent status", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	await h.message(h.requester, "release-outer", { operation: "request", targetAgent: "responder", question: "Outer" });
+	const inner = await h.message(h.responder, "release-inner", { operation: "request", targetAgent: "worker", question: "Inner" });
+	assert.ok("requestMessageId" in inner);
+	h.responder.stop(); h.worker.stop(); await h.recover();
+	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+	const receipt = await resumeWorkflow({
+		workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
+		activate: async (record, requestIds, recovery) => {
+			if (record.identity.agentId === "worker") throw new Error("host_shutting_down");
+			const result = await supervisor.continueDormantResponder(record, { requestMessageIds: requestIds, recovery, recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record) });
+			return { agentId: record.identity.agentId, requestIds, disposition: result === "activated" ? "admitted" : "skipped", reason: result };
+		},
+	});
+	assert.equal(receipt.outstandingRequests[0]?.status, "continuation_admitted");
+	assert.deepEqual(continuationViews(h.responder)[0].outstandingRequests, [{
+		requestMessageId: inner.requestMessageId, targetAgentId: "worker", status: "indeterminate", reason: "host_shutting_down",
+	}]);
+	assert.equal(continuationViews(h.worker).length, 0);
+});
+
+test("cancellation while continuation is gated suppresses stale runtime input", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	const request = await h.message(h.requester, "gated-cancel", { operation: "request", targetAgent: "responder", question: "Work" });
+	assert.ok("requestMessageId" in request);
+	h.responder.stop(); await h.recover();
+	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+	await resumeWorkflow({
+		workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
+		activate: async (record, requestIds, recovery) => {
+			const result = await supervisor.continueDormantResponder(record, { requestMessageIds: requestIds, recovery, recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record) });
+			await h.message(h.requester, "cancel-admitted", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "No longer needed" });
+			return { agentId: record.identity.agentId, requestIds, disposition: result === "activated" ? "admitted" : "skipped", reason: result };
+		},
+	});
+	assert.equal(continuationViews(h.responder).length, 0);
+});
