@@ -24,6 +24,36 @@ import {
 	type ParticipantLifecycleHandlers,
 } from "../src/pi-integration/participant-lifecycle.ts";
 
+import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
+import { inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
+import { obligationStack } from "../src/protocol/obligation-focus.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
+
+test("lifecycle Request presentation preserves recovery without becoming Delivery evidence", { timeout: 5_000 }, async () => {
+	const sessionManager = SessionManager.inMemory(process.cwd());
+	const agentId = sessionManager.getSessionId();
+	sessionManager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
+	const frame = { requestId: "current-request", requesterAgentId: "requester", question: "Finish this Request." };
+	const pi = new CapturedExtensionApi();
+	pi.api.appendEntry = (customType, data) => { sessionManager.appendCustomEntry(customType, data); };
+	pi.api.sendMessage = (message) => {
+		sessionManager.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+	};
+	registerParticipantLifecycle(pi.api, lifecycleHandlers({
+		async executionStarted() { return [frame]; },
+	}));
+	const context = { ...createExtensionContext(), sessionManager };
+	await pi.emit("agent_start", { type: "agent_start" }, context);
+	const presentation = sessionManager.getLeafEntry();
+	assert.equal(presentation?.type, "custom_message");
+	assert.ok(presentation?.type === "custom_message" && presentation.display);
+	// Re-read the producer's committed records, rather than duplicating its custom type in a fixture.
+	const transcript = transcriptFromSessionManager(sessionManager).inspect();
+	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId: agentId, transcript }), []);
+	assert.deepEqual(obligationStack(transcript, agentId), [frame]);
+	await pi.emit("agent_start", { type: "agent_start" }, context);
+});
+
 const lifecycleEventNames = [
 	"agent_end",
 	"agent_start",
