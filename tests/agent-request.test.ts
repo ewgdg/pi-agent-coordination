@@ -426,12 +426,12 @@ test("ordinary Message authorship to the requester resumes after Cancellation De
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("a responder receives only the front Request and promotion preserves authored delivery mode", async (t) => {
+test("a Steer Request reaches an occupied responder and cancelling the earlier Request leaves it outstanding", async (t) => {
 	const harness = await createDormantChildHarness(t);
 	harness.host.model.setResponses([
 		fauxAssistantMessage("The first Request is active."),
-		fauxAssistantMessage("The Cancellation released the active Request."),
-		fauxAssistantMessage("The promoted Steer Request is now active."),
+		fauxAssistantMessage("Both Requests remain actionable."),
+		fauxAssistantMessage("The earlier Request was cancelled."),
 	]);
 
 	const firstCallId = "serial-request-first";
@@ -482,7 +482,7 @@ test("a responder receives only the front Request and promotion preserves author
 	const secondInput = {
 		operation: "request" as const,
 		targetAgent: harness.childId,
-		question: "Deliver only after the first Request resolves.",
+		question: "Bring this Request to attention while the earlier one remains outstanding.",
 		deliveryMode: "steer" as const,
 	};
 	harness.host.session.sessionManager.appendMessage(
@@ -508,15 +508,13 @@ test("a responder receives only the front Request and promotion preserves author
 		isError: false,
 		timestamp: Date.now(),
 	});
-	await new Promise<void>((resolve) => setTimeout(resolve, 50));
-	assert.equal(
-		SessionManager.open(childSessionFile).getEntries().some(
-			(entry) =>
-				entry.type === "custom_message" &&
-				entry.customType === "agent-coordination.message-delivery" &&
-				JSON.stringify(entry.details) === JSON.stringify({ messages: [secondSource] }),
-		),
-		false,
+	await waitForEntry(childSessionFile, (entry) =>
+		entry.type === "custom_message" &&
+		entry.customType === "agent-coordination.message-delivery" &&
+		JSON.stringify(entry.details) === JSON.stringify({ messages: [secondSource] }),
+	);
+	await waitForCondition(() =>
+		retentionCount(harness.view.status(harness.childId).run, "answer_owed") === 2,
 	);
 
 	if (!("requestMessageId" in firstReceipt)) {
@@ -526,7 +524,7 @@ test("a responder receives only the front Request and promotion preserves author
 	const cancelInput = {
 		operation: "cancel" as const,
 		requestMessageId: firstReceipt.requestMessageId,
-		reason: "Advance the incoming Request queue.",
+		reason: "Withdraw only the earlier Request.",
 	};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -558,7 +556,7 @@ test("a responder receives only the front Request and promotion preserves author
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("an explicit Answer resolves its foreground Request and promotes the next Request", async (t) => {
+test("an explicit Answer resolves its named Request and releases queued Deferred work", async (t) => {
 	const harness = await createDormantChildHarness(t);
 	let releaseFirstAnswer!: () => void;
 	const firstAnswerGate = new Promise<void>((resolve) => {
@@ -809,7 +807,7 @@ test("Request retry reports indeterminate when admission confirmation is lost", 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
 
-test("only the requester may cancel and an Agent without an active Request cannot Answer", async (t) => {
+test("only the requester may cancel and only the responder may Answer", async (t) => {
 	const harness = await createDormantChildHarness(t);
 	const requestInput = {
 		operation: "request" as const,
@@ -904,7 +902,7 @@ test("only the requester may cancel and an Agent without an active Request canno
 	);
 	await assert.rejects(
 		harness.view.message(unauthorizedAnswerCallId, unauthorizedAnswerInput),
-		/no active Request/,
+		/wrong_participant/,
 	);
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
@@ -4089,7 +4087,7 @@ test("Cancellation Delivery wins the responder lane before a later Answer", asyn
 	assert.equal(losingAnswer.message.isError, true);
 	assert.match(
 		JSON.stringify(losingAnswer.message.content),
-		/no active Request/,
+		/was cancelled/,
 	);
 	await waitForCondition(
 		() => harness.view.status(harness.childId).run.phase === "dormant",

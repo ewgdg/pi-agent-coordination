@@ -47,12 +47,6 @@ export type AgentAnswerReceipt =
 		requestMessageId: string;
 		answerId: string;
 		disposition: "already_answered";
-	}>
-	| Readonly<{
-		messageId: string;
-		requestMessageId: string;
-		cancellationId: string;
-		disposition: "already_cancelled";
 	}>;
 
 export type RequestCancellationReceipt =

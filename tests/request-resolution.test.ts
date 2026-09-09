@@ -8,7 +8,8 @@ import {
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
-import { inspectCommittedAgentWaitResult } from "../src/protocol/agent-wait.ts";
+import { requestHistory } from "./support/request-history.ts";
+import { inspectCommittedAgentWaitResult, resolveAgentWaitSelection, validateAgentWaitInput } from "../src/protocol/agent-wait.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import {
 	inspectAgentMessageAuthorResult,
@@ -571,4 +572,43 @@ test("selector-authored Message inspection accepts its resolved target identity"
 		input,
 		resolvedTargetAgentId: targetAgentId,
 	}), "canonical");
+});
+
+test("Wait input rejects malformed explicit selections", () => {
+	for (const input of [null, [], { other: [] }, { requestMessageIds: [] }, { requestMessageIds: [""] }, { requestMessageIds: [" "] }, { requestMessageIds: [1] }, { requestMessageIds: "id" }]) {
+		assert.throws(() => validateAgentWaitInput(input), /invalid_input/);
+	}
+	assert.deepEqual(validateAgentWaitInput({}), {});
+	assert.deepEqual(validateAgentWaitInput({ requestMessageIds: ["id"] }), { requestMessageIds: ["id"] });
+});
+
+test("Wait selection rejects ambiguous caller-authored suffixes", () => {
+	const h = requestHistory();
+	// SHA-256 base64url IDs have fewer than 65 possible final characters.
+	const ids = Array.from({ length: 65 }, () => h.request());
+	const suffix = ids.find((id, index) => ids.some((other, otherIndex) => otherIndex < index && other.endsWith(id.slice(-1))))!.slice(-1);
+	const toolCallId = "ambiguous-wait";
+	const source = { agentId: "requester", toolCallId, entryId: h.requester.manager.appendMessage(
+		fauxAssistantMessage(fauxToolCall("agent_wait", { requestMessageIds: [suffix] }, { id: toolCallId }), { stopReason: "toolUse" }),
+	) };
+	assert.throws(() => resolveAgentWaitSelection(h.requester.record.transcript.inspect(), source, [suffix]), /ambiguous_target/);
+});
+
+for (const mismatch of ["missing", "extra", "reordered"] as const) test(`explicit Wait result rejects ${mismatch} selection membership or order`, () => {
+	const h = requestHistory();
+	const ids = [h.request(), h.request(), h.request()];
+	const toolCallId = "selected-wait";
+	h.requester.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_wait", {
+		requestMessageIds: [ids[1]!.slice(-12), ids[0]!, ids[1]!],
+	}, { id: toolCallId }), { stopReason: "toolUse" }));
+	const returned = mismatch === "missing" ? ids.slice(0, 1) : mismatch === "extra" ? ids : ids.slice(0, 2).reverse();
+	const result = { answers: returned.map(requestMessageId => ({
+		disposition: "answer_already_delivered", requestMessageId, answerId: "answer-" + requestMessageId,
+		deliveryEvidence: { agentId: "requester", entryId: "delivery-" + requestMessageId },
+	})) };
+	h.requester.manager.appendMessage({ role: "toolResult", toolCallId, toolName: "agent_wait",
+		content: [{ type: "text", text: JSON.stringify(result) }], details: result, isError: false, timestamp: Date.now() });
+	assert.throws(() => inspectCommittedAgentWaitResult({
+		agentId: "requester", transcript: h.requester.record.transcript.inspect(), toolCallId,
+	}), /differs from its explicit Request selection/);
 });

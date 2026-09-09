@@ -1,3 +1,4 @@
+import { resolveMessageReference } from "../protocol/message-reference.ts";
 import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
 import { indexedState, type RetainedTranscript } from "../transcript/retained-transcript.ts";
 import { setImmediate as yieldTurn } from "node:timers/promises";
@@ -219,13 +220,12 @@ export class RequestEvidence {
 		throw new Error(`unknown_identity: Request ${requestId}`);
 	}
 
-	outstandingRequestIdsAt(author: AgentRecord, waitSource: ToolCallPointer): readonly string[] {
+	outstandingRequestIdsAt(author: AgentRecord, waitSource: ToolCallPointer, selectors?: readonly string[]): readonly string[] {
 		if (waitSource.agentId !== author.identity.agentId) {
 			throw new Error("wrong_participant: Agent Wait source belongs to another Agent");
 		}
 		const transcript = author.transcript.inspect();
 		const requestIds = new Set(this.residualRelationshipsFor(author).awaitingAnswerRequestIds);
-		const frames = obligationStack(transcript, author.identity.agentId, waitSource);
 		for (const candidate of cancellationSourcesAfter({
 			authorAgentId: author.identity.agentId,
 			transcript,
@@ -237,15 +237,9 @@ export class RequestEvidence {
 			)
 				requestIds.add(candidate.input.requestMessageId);
 		}
-		return [...requestIds]
+		const outstanding = [...requestIds]
 			.map((requestId) => this.requireRequest(requestId))
-			.filter(
-				(request) => {
-					if (compareCommittedToolCallOrder(transcript, request.source, waitSource) >= 0) return false;
-					const owners = obligationStack(transcript, author.identity.agentId, request.source);
-					return belongsToForeground(owners, frames);
-				},
-			)
+			.filter(request => compareCommittedToolCallOrder(transcript, request.source, waitSource) < 0)
 			.sort((left, right) => compareCommittedToolCallOrder(transcript, left.source, right.source))
 			.flatMap((request) => {
 				const cancellation = this.findCancellation(request);
@@ -265,6 +259,16 @@ export class RequestEvidence {
 				if (delivery) return [];
 				return [request.messageId];
 			});
+		if (selectors === undefined) return outstanding;
+		if (!selectors.length) throw new Error("invalid_input: Agent Wait selection must not be empty");
+		const selected = new Set(selectors.map(selector => resolveMessageReference(transcript, waitSource, selector)));
+		// Validate every identity before returning the selected source-ordered snapshot.
+		for (const id of selected) {
+			const message = this.requireCallerAuthoredMessage(author, id);
+			if (message.kind !== "request") throw new Error(`wrong_message_kind: Message ${id} is not a Request`);
+			if (!outstanding.includes(id)) throw new Error(`invalid_state: Request ${id} is not outstanding`);
+		}
+		return outstanding.filter(id => selected.has(id));
 	}
 
 	obligationFrames(agent: AgentRecord): readonly ObligationFrame[] {
@@ -272,19 +276,8 @@ export class RequestEvidence {
 		return obligationStack(agent.transcript.inspect(), agent.identity.agentId).filter(frame => owed.has(frame.requestId));
 	}
 
-	activeRequestFor(responder: AgentRecord): Request {
-		const frame = this.obligationFrames(responder).at(-1);
-		if (!frame) throw new Error("invalid_state: Agent has no active Request");
-		return this.requireRequest(frame.requestId);
-	}
-
-	foregroundOutstandingRequestIds(agent: AgentRecord): readonly string[] {
-		const transcript = agent.transcript.inspect();
-		const frames = this.obligationFrames(agent);
-		return this.residualRelationshipsFor(agent).awaitingAnswerRequestIds.filter(requestId => {
-			const source = this.requireRequest(requestId).source;
-			return belongsToForeground(obligationStack(transcript, agent.identity.agentId, source), frames);
-		});
+	outstandingRequestIdsFor(agent: AgentRecord): readonly string[] {
+		return this.residualRelationshipsFor(agent).awaitingAnswerRequestIds;
 	}
 
 	parentRequestId(requestId: string): string | undefined {
@@ -294,6 +287,7 @@ export class RequestEvidence {
 	}
 
 	isRequestBlocked(responder: AgentRecord, requestId: string): boolean {
+		if (this.requireRequest(requestId).deliveryMode === "steer") return false;
 		const foreground = this.obligationFrames(responder).at(-1);
 		if (!foreground) return false;
 		const run = responder.host.observe();
@@ -945,9 +939,3 @@ type RelationshipGraph = {
 	pending?: Generator<void>;
 	pendingSources?: Map<AgentRecord, RelationshipCursor>;
 };
-
-/** Removed frames pass unfinished dependencies to their nearest surviving enclosing frame. */
-function belongsToForeground(sourceFrames: readonly ObligationFrame[], currentFrames: readonly ObligationFrame[]): boolean {
-	const owner = sourceFrames.findLast(owner => currentFrames.some(frame => frame.requestId === owner.requestId));
-	return owner?.requestId === currentFrames.at(-1)?.requestId;
-}

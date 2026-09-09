@@ -347,11 +347,13 @@ export class MessageCoordinator {
 	outstandingRequestIds(
 		callerAgentId: string,
 		waitSource: ToolCallPointer,
+		selectors?: readonly string[],
 	): readonly string[] {
 		const caller = this.#requireAgent(callerAgentId);
 		const requestMessageIds = this.#requestEvidence.outstandingRequestIdsAt(
 			caller,
 			waitSource,
+			selectors,
 		);
 		if (requestMessageIds.length === 0) {
 			throw new Error(
@@ -483,7 +485,7 @@ export class MessageCoordinator {
 	}
 
 	outstandingRequestIdsFor(requester: AgentRecord): readonly string[] {
-		return this.#requestEvidence.foregroundOutstandingRequestIds(requester);
+		return this.#requestEvidence.outstandingRequestIdsFor(requester);
 	}
 
 	hasUnsettledAnswerObligation(
@@ -755,8 +757,8 @@ export class MessageCoordinator {
 			const request = repeatedAnswer
 				? this.#requestEvidence.requireRequest(repeatedAnswer.requestId)
 				: this.#requestEvidence.requireRequest(input.requestId);
-			if (!repeatedAnswer && this.#requestEvidence.activeRequestFor(caller).messageId !== request.messageId) {
-				throw new Error("invalid_state: Answer must name the current foreground Request");
+			if (request.targetAgentId !== caller.identity.agentId) {
+				throw new Error("wrong_participant: Answer Request belongs to another responder");
 			}
 			const requester = this.#requireAgent(request.fromAgentId);
 			const delivery = inspectMessageDelivery({
@@ -776,6 +778,7 @@ export class MessageCoordinator {
 			}
 			const existing = this.#requestEvidence.findAnswer(request);
 			if (existing) {
+				if (!repeatedAnswer) throw new Error(`invalid_state: Request ${request.messageId} is already answered`);
 				return { disposition: "existing", request, requester, answer: existing } as const;
 			}
 			const cancellation = this.#requestEvidence.findCancellation(request);
@@ -787,12 +790,7 @@ export class MessageCoordinator {
 					message: cancellation,
 				}).deliveryEvidence
 			) {
-				return {
-					disposition: "cancelled",
-					request,
-					requester,
-					cancellation,
-				} as const;
+				throw new Error(`invalid_state: Request ${request.messageId} was cancelled`);
 			}
 			const answer = resolveCommittedAnswer({
 				responderAgentId: caller.identity.agentId,
@@ -810,14 +808,6 @@ export class MessageCoordinator {
 				requestMessageId: admitted.request.messageId,
 				answerId: admitted.answer.messageId,
 				disposition: "already_answered",
-			};
-		}
-		if (admitted.disposition === "cancelled") {
-			return {
-				messageId: admitted.cancellation.messageId,
-				requestMessageId: admitted.request.messageId,
-				cancellationId: admitted.cancellation.messageId,
-				disposition: "already_cancelled",
 			};
 		}
 		const { answer, request, requester } = admitted;

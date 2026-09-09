@@ -113,6 +113,7 @@ export class AgentWaitCoordinator {
 		const requestMessageIds = this.#messages.outstandingRequestIds(
 			callerAgentId,
 			call.source,
+			call.input.requestMessageIds,
 		);
 		const requestRelationships = this.#messages.requestRelationships(requestMessageIds);
 		onProgress?.({

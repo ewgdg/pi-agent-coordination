@@ -662,8 +662,8 @@ export class MessageDeliveryScheduler {
 		if (!pending || pending.size === 0) return;
 		const eligible = this.#eligibleDeliveries(pending);
 		const incomingRequest = eligible.find(
-			(delivery) => delivery.isIncomingRequest || delivery.preemptsAgentWait,
-		);
+			(delivery) => delivery.deliveryMode === "steer" && (delivery.isIncomingRequest || delivery.preemptsAgentWait),
+		) ?? eligible.find((delivery) => delivery.isIncomingRequest || delivery.preemptsAgentWait);
 		const run = record.host.observe();
 		if ("attention" in run && run.attention === "agent_wait") {
 			if (incomingRequest && this.#preemptAgentWait) {
@@ -991,14 +991,14 @@ export class MessageDeliveryScheduler {
 		pending: ReadonlyMap<string, ScheduledDelivery>,
 	): ScheduledDelivery[] {
 		const deliveries = [...pending.values()];
-		// Preserve admission order among eligible Requests; descendants can bypass
-		// unrelated queued work while the current obligation is cooperatively waiting.
-		const frontRequest = deliveries.find(
-			delivery => delivery.isIncomingRequest && !delivery.isIncomingRequestBlocked?.(),
+		// Steer admission order is independent of Deferred head-of-line eligibility.
+		// Deferred still admits only one causally eligible Request at a time.
+		const frontDeferredRequest = deliveries.find(
+			delivery => delivery.isIncomingRequest && delivery.deliveryMode !== "steer" && !delivery.isIncomingRequestBlocked?.(),
 		);
 		return deliveries.filter((delivery) =>
 			!delivery.isIncomingRequest ||
-			delivery === frontRequest
+			delivery.deliveryMode === "steer" || delivery === frontDeferredRequest
 		);
 	}
 

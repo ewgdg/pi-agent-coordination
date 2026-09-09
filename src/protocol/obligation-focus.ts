@@ -10,7 +10,7 @@ export type ObligationFrame = Readonly<{
 	question: string;
 }>;
 
-/** Physical protocol facts survive compaction; snapshots bind ownership to authorship. */
+/** Physical attention history survives compaction; snapshots preserve scheduling ancestry. */
 export function obligationStack(
 	transcript: TranscriptInspection,
 	agentId: string,

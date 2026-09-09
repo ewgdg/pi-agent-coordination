@@ -1,3 +1,4 @@
+import { resolveMessageReference } from "./message-reference.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { isDeepStrictEqual } from "node:util";
 
@@ -10,7 +11,7 @@ import {
 	type ToolCallPointer,
 } from "./identities.ts";
 
-export type AgentWaitInput = Readonly<Record<never, never>>;
+export type AgentWaitInput = Readonly<{ requestMessageIds?: string[] }>;
 
 export type AgentWaitProgress = Readonly<{
 	waitingFor: readonly Readonly<{
@@ -116,9 +117,14 @@ export function inspectCommittedAgentWaitResult(options: {
 	if ("disposition" in result) {
 		return { state: "preempted", resultEntryId: match.id };
 	}
-	// The parameterless call carries no identities. Its native result durably
-	// materializes the coordinator's live snapshot, so reinspection verifies that
-	// every slot is caller-authored before the Wait and remains in source order.
+	// The native result materializes the live snapshot. Explicit selection also
+	// binds its membership, while every result must preserve caller source order.
+	if (call.input.requestMessageIds) {
+		const selected = resolveAgentWaitSelection(options.transcript, call.source, call.input.requestMessageIds);
+		if (!isDeepStrictEqual(selected, result.answers.map(answer => answer.requestMessageId))) {
+			throw new ProtocolInvariantError("Agent Wait result differs from its explicit Request selection");
+		}
+	}
 	const requestSources = result.answers.map(({ requestMessageId }) =>
 		findCallerRequestSource({
 			agentId: options.agentId,
@@ -194,15 +200,33 @@ export function validateAgentWaitResult(value: unknown): AgentWaitResult {
 }
 
 export function validateAgentWaitInput(value: unknown): AgentWaitInput {
-	if (
-		typeof value !== "object" ||
-		value === null ||
-		Array.isArray(value) ||
-		Object.keys(value).length !== 0
-	) {
-		throw new Error("invalid_input: Agent Wait does not accept parameters");
+	if (!isRecord(value) || Object.keys(value).some(key => key !== "requestMessageIds")) {
+		throw new Error("invalid_input: Agent Wait accepts only requestMessageIds");
 	}
-	return {};
+	if (!("requestMessageIds" in value)) return {};
+	if (!Array.isArray(value.requestMessageIds) || value.requestMessageIds.length === 0 ||
+		value.requestMessageIds.some(id => typeof id !== "string" || id.trim().length === 0)) {
+		throw new Error("invalid_input: Agent Wait requestMessageIds must be a nonempty array of nonblank strings");
+	}
+	return { requestMessageIds: value.requestMessageIds };
+}
+
+/** Resolve the entire selection before the coordinator can renew delivery intent. */
+export function resolveAgentWaitSelection(
+	transcript: TranscriptInspection,
+	source: ToolCallPointer,
+	selectors: readonly string[],
+): readonly string[] {
+	const ids = [...new Set(selectors.map(selector => resolveMessageReference(transcript, source, selector)))];
+	const sources = new Map(ids.map(requestMessageId => [requestMessageId, findCallerRequestSource({
+		agentId: source.agentId, transcript, requestMessageId,
+	})]));
+	for (const requestSource of sources.values()) {
+		if (compareCommittedToolCallOrder(transcript, requestSource, source) >= 0) {
+			throw new Error("invalid_input: Agent Wait selection must precede its call");
+		}
+	}
+	return ids.sort((left, right) => compareCommittedToolCallOrder(transcript, sources.get(left)!, sources.get(right)!));
 }
 
 function committedAgentWaitCall(options: {

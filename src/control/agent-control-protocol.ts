@@ -325,10 +325,6 @@ const AgentMessageReceiptSchema = Type.Union([
 		answerId: NonEmptyStringSchema, disposition: Type.Literal("already_answered"),
 	}),
 	closed({
-		messageId: NonEmptyStringSchema, requestMessageId: NonEmptyStringSchema,
-		cancellationId: NonEmptyStringSchema, disposition: Type.Literal("already_cancelled"),
-	}),
-	closed({
 		disposition: Type.Literal("already_answered"),
 		answerMessageId: NonEmptyStringSchema,
 	}),

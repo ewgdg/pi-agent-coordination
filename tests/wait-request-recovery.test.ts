@@ -294,7 +294,7 @@ test("fresh Wait restores a canonical Creation Request under its Spawn identity"
 	h.responder.record.creationInput = input;
 	h.responder.stop();
 	await h.recover();
-	const waiting = h.wait("creation-wait");
+	const waiting = h.wait("creation-wait", { requestMessageIds: [requestId.slice(-12)] });
 	await flush();
 	assert.deepEqual(h.deliveries(h.responder).map(d => d.projection), [{
 		kind: "request", requestMessageId: requestId, fromAgentId: "requester", question: input.request,
@@ -457,6 +457,106 @@ test("late delivery-maintenance failure cannot replace a preempted Wait result",
 	assert.deepEqual(committed.message.details, { disposition: "preempted" });
 });
 
+for (const answerLatestFirst of [false, true]) test(`delivered Requests can be answered ${answerLatestFirst ? "latest" : "earlier"} first`, { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	const first = await h.message(h.requester, "first", { operation: "request", targetAgent: "responder", question: "First" });
+	h.responder.settle();
+	await flush();
+	const second = await h.message(h.requester, "second", { operation: "request", targetAgent: "responder", question: "Second", deliveryMode: "steer" });
+	assert.ok("requestMessageId" in first && "requestMessageId" in second);
+	await h.tick();
+	assert.deepEqual(h.deliveries(h.responder).map(d => d.projection.kind === "request" && d.projection.requestMessageId), [first.requestMessageId, second.requestMessageId]);
+	const [answered, remaining] = answerLatestFirst ? [second.requestMessageId, first.requestMessageId] : [first.requestMessageId, second.requestMessageId];
+	const input = { operation: "answer" as const, requestId: answered, answer: "First done" };
+	const receipt = await h.message(h.responder, "answer-first", input);
+	assert.ok("messageStatus" in receipt);
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), [remaining]);
+	const replay = await h.messages.execute("responder", "answer-first", input);
+	assert.ok("disposition" in replay && replay.disposition === "already_answered");
+	await assert.rejects(h.message(h.responder, "fresh-stale-answer", input), /already answered/);
+	await h.message(h.responder, "answer-second", { operation: "answer", requestId: remaining, answer: "Second done" });
+	assert.deepEqual(h.messages.answerObligationRequestIds(h.responder.record), []);
+});
+
+test("explicit Wait selects suffixes, deduplicates in source order and leaves unselected Requests outstanding", { timeout: 5_000 }, async (t) => {
+	const h = harness(t, { beforeDeliveryAdmission: ({ operation }) => operation === "answer" ? "confirmed_failure" : undefined });
+	const ids: string[] = [];
+	for (const id of ["one", "two", "three"]) {
+		const receipt = await h.message(h.requester, id, { operation: "request", targetAgent: "responder", question: id, deliveryMode: "steer" });
+		assert.ok("requestMessageId" in receipt);
+		ids.push(receipt.requestMessageId);
+	}
+	await h.message(h.responder, "answer-three", { operation: "answer", requestId: ids[2]!, answer: "Three" });
+	await h.message(h.responder, "answer-one", { operation: "answer", requestId: ids[0]!, answer: "One" });
+	const result = await h.wait("selected", { requestMessageIds: [ids[2]!.slice(-12), ids[0]!, ids[2]!] });
+	assert.ok("answers" in result);
+	assert.deepEqual(result.answers.map(a => a.requestMessageId), [ids[0], ids[2]]);
+	h.commitWait("selected", result);
+	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), [ids[1]]);
+	await assert.rejects(h.wait("consumed", { requestMessageIds: [ids[0]!] }), /not outstanding/);
+});
+
+test("explicit Wait rejects all invalid selections before renewing any Request delivery", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	h.responder.blocked = true;
+	const request = await h.message(h.requester, "lost", { operation: "request", targetAgent: "responder", question: "Lost" });
+	assert.ok("requestMessageId" in request);
+	for (const input of [{ requestMessageIds: [] }, { requestMessageIds: [" "] }, { requestMessageIds: [request.requestMessageId, "unknown-suffix"] }]) {
+		await assert.rejects(h.wait("invalid-" + JSON.stringify(input), input), /invalid_input|unknown_identity/);
+		assert.deepEqual(h.deliveries(h.responder), []);
+	}
+	const ordinary = await h.message(h.requester, "ordinary", { operation: "send", targetAgent: "responder", content: "Hello" });
+	assert.ok("messageId" in ordinary);
+	await assert.rejects(h.wait("wrong-kind", { requestMessageIds: [ordinary.messageId] }), /wrong_message_kind/);
+	const foreign = await h.message(h.responder, "foreign", { operation: "request", targetAgent: "requester", question: "Foreign" });
+	assert.ok("requestMessageId" in foreign);
+	await assert.rejects(h.wait("foreign-selection", { requestMessageIds: [foreign.requestMessageId] }), /wrong_participant/);
+	await h.message(h.requester, "cancel-lost", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "Withdraw" });
+	await assert.rejects(h.wait("cancelled-selection", { requestMessageIds: [request.requestMessageId] }), /not outstanding/);
+});
+
+test("queued Steer Requests form an admission-ordered batch past a blocked Deferred head", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	await h.message(h.requester, "initial", { operation: "request", targetAgent: "responder", question: "Initial", deliveryMode: "steer" });
+	h.responder.blocked = true;
+	const deferred = await h.message(h.requester, "deferred-head", { operation: "request", targetAgent: "responder", question: "Deferred" });
+	const ids: string[] = [];
+	for (const id of ["steer-one", "steer-two"]) {
+		const receipt = await h.message(h.requester, id, { operation: "request", targetAgent: "responder", question: id, deliveryMode: "steer" });
+		assert.ok("requestMessageId" in receipt);
+		ids.push(receipt.requestMessageId);
+	}
+	h.responder.blocked = false;
+	h.responder.settle();
+	await flush();
+	const lastDispatch = h.responder.dispatches.at(-1);
+	assert.ok(lastDispatch?.kind === "custom" && typeof lastDispatch.message.content === "string");
+	assert.deepEqual(JSON.parse(lastDispatch.message.content).messages.map((message: { requestMessageId: string }) => message.requestMessageId), ids);
+	assert.ok("requestMessageId" in deferred);
+	assert.equal(h.deliveries(h.responder).filter(d => d.projection.kind === "request" && d.projection.requestMessageId === deferred.requestMessageId).length, 0);
+	h.responder.settle();
+	await flush();
+	assert.equal(h.deliveries(h.responder).length, 3, "Steer batch must not redeliver at the next boundary");
+});
+
+test("Answer rejects unknown, undelivered, cancelled and wrong-responder Requests", { timeout: 5_000 }, async (t) => {
+	const h = harness(t);
+	h.responder.blocked = true;
+	const request = await h.message(h.requester, "undelivered", { operation: "request", targetAgent: "responder", question: "Pending" });
+	assert.ok("requestMessageId" in request);
+	await assert.rejects(h.message(h.responder, "answer-undelivered", { operation: "answer", requestId: request.requestMessageId, answer: "Invalid" }), /has not been delivered/);
+	await assert.rejects(h.message(h.requester, "answer-wrong-responder", { operation: "answer", requestId: request.requestMessageId, answer: "Invalid" }), /wrong_participant/);
+	await assert.rejects(h.message(h.responder, "answer-unknown", { operation: "answer", requestId: "a".repeat(43), answer: "Invalid" }), /unknown_identity/);
+	h.responder.blocked = false;
+	h.responder.settle();
+	await flush();
+	await h.message(h.requester, "cancel-delivered", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "Withdraw" });
+	h.responder.settle();
+	await flush();
+	assert.ok(h.deliveries(h.responder).some(d => d.projection.kind === "request_cancellation"));
+	await assert.rejects(h.message(h.responder, "answer-cancelled", { operation: "answer", requestId: request.requestMessageId, answer: "Invalid" }), /was cancelled/);
+});
+
 function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHooks?: MessageBoundaryHooks) {
 	const requester = runtimeParticipant("requester");
 	const responder = runtimeParticipant("responder");
@@ -507,9 +607,9 @@ function harness(t: { after(fn: () => void | Promise<void>): void }, boundaryHoo
 			commit(p, id, "agent_message", result);
 			return result;
 		},
-		wait(id: string) {
-			call(requester, id, "agent_wait", {});
-			const result = waits.wait("requester", id, {}, abort.signal);
+		wait(id: string, input: import("../src/protocol/agent-wait.ts").AgentWaitInput = {}) {
+			call(requester, id, "agent_wait", input);
+			const result = waits.wait("requester", id, input, abort.signal);
 			pending.push(result);
 			return result;
 		},
