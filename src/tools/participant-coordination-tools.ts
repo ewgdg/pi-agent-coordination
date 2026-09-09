@@ -546,12 +546,11 @@ export function registerParticipantCoordinationTools<
 		pi.registerTool({
 			name: "workflow_resume",
 			label: "Resume Workflow",
-			description: "Owner only: resume unfinished coordination in the current Workflow from a fixed verified durable snapshot. Automatically schedules eligible pending Messages and continues dormant responders with delivered unanswered Requests; no extra wake-up Messages are needed. Returns recovery admission, not Delivery or completion.",
-			promptSnippet: "Resume the current Workflow after restart without replacement Requests.",
+			description: "Owner only: resume the current Workflow from a verified durable snapshot, scheduling eligible pending Messages and continuing dormant responders with unanswered Requests. Returns admission, not Delivery or completion.",
+			promptSnippet: "Resume unfinished coordination after restart.",
 			promptGuidelines: [
-				"workflow_resume already schedules eligible pending deliveries and admits continuation for dormant responders with delivered unanswered Requests. After successful admission, extra resume/wake-up Messages or replacement Requests are unnecessary. Messages carrying genuinely new instructions remain appropriate; do not send them solely to trigger work already admitted.",
-				"workflow_resume returns admission, not Delivery or completion. Inspect blocked or indeterminate entries before deciding on targeted recovery; running Agents receive no duplicate continuation, and Holds, capacity, and causal eligibility remain effective.",
-				"workflow_resume does not restore interrupted tools or volatile Wait calls; inspect side effects before repeating interrupted work.",
+				"After workflow_resume, do not send redundant wake-up Messages or replacement Requests; send only genuinely new instructions. Inspect blocked or indeterminate entries before targeted recovery.",
+				"Interrupted tools and volatile Wait calls are not restored; inspect side effects before repeating interrupted work.",
 			],
 			executionMode: "sequential",
 			parameters: workflowResumeParameters,
