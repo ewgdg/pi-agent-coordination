@@ -202,12 +202,13 @@ export class MessageDeliveryScheduler {
 		) return true;
 		// Dispatched work belongs to delivery machinery until proof commits; its
 		// prompt Promise must not turn subsequent model duration into a deadline.
-		if (item.dispatched) return false;
+		// Unrelated recipient work cannot restore a lost scheduling continuation.
+		// Only renewed scheduling progress, proof or suppression clears that failure.
+		if (item.dispatched || item.failed) return false;
 		if (delivery.isIncomingRequest && delivery.isIncomingRequestBlocked?.()) return true;
 		const atDeliveryBoundary = this.#isDeliveryBoundary(record);
 		if (run.phase === "live" && run.work === "active" &&
 			run.attention === "none" && !atDeliveryBoundary) return true;
-		if (item.failed) return false;
 		const pending = this.#pendingByAgent.get(record.identity.agentId);
 		if (!pending || !this.#eligibleDeliveries(pending).includes(delivery)) return true;
 		const canPreemptWait = run.phase === "live" && run.attention === "agent_wait" &&

@@ -3630,6 +3630,36 @@ test("blocked Delivery remains observable after leaf termination without cancell
 	assert.equal(owner.status(leafAgentId).run.phase, "dormant");
 });
 
+test("nudging a failed Delivery recipient does not recreate its continuous Message handling", { timeout: 5000 }, async (t) => {
+	const { host, owner, leafAgentId } = await createSilentLeafHarness(t);
+	await controlFromView(host.session, owner, "terminate-before-nudge", {
+		operation: "terminate", agentId: leafAgentId,
+	});
+	const moderator = await waitForModeratorKind(host, "delivery_stall");
+	await waitForCondition(() => SessionManager.open(moderator.path).getEntries().some(
+		entry => entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.stopReason === "stop"));
+	await owner.reachSafeBoundary();
+	let releaseNudge!: () => void;
+	const nudgeGate = new Promise<void>(resolve => { releaseNudge = resolve; });
+	t.after(() => releaseNudge());
+	let nudgeStarted = false;
+	host.model.setResponses([async () => {
+		nudgeStarted = true;
+		await nudgeGate;
+		return fauxAssistantMessage("Nudge processed; the original Request has not arrived.");
+	}]);
+	await sendMessageFromView(host.session, owner, "nudge-stranded-recipient",
+		leafAgentId, "Inspect your current work.");
+	await waitForCondition(() => nudgeStarted);
+	await owner.reachSafeBoundary();
+	releaseNudge();
+	await waitForCondition(() => owner.status(leafAgentId).run.phase === "dormant");
+	await owner.reachSafeBoundary();
+	assert.equal((await findModerators(host)).length, 1,
+		"ordinary recipient work is not progress for the lost Request scheduling");
+});
+
 test("a blocked replacement Moderator preparation receives deadline attention before its Promise completes", async (t) => {
 	const { ProcessChildSessionFactory } = await import("../src/runtime/process-child-session-factory.ts");
 	const original = ProcessChildSessionFactory.prototype.prepareModeratorRun;
