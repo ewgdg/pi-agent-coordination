@@ -1,4 +1,4 @@
-import { OBLIGATION_RESUMED_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
+import { REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
 import { obligationStack, type ObligationFrame } from "../protocol/obligation-focus.ts";
 import { transcriptFromSessionManager } from "./session-manager-transcript.ts";
 import type {
@@ -64,8 +64,17 @@ export function registerParticipantLifecycle(
 			// Record that recovery boundary locally before any new model authorship.
 			pi.appendEntry(OBLIGATION_FOCUS_CUSTOM_TYPE, { frames });
 		}
-		const frame = frames.at(-1);
-		if (frame) presentObligation(pi, frame);
+	});
+	// Context runs before every generation, including native queued turns and retries.
+	// A non-triggering sendMessage at agent_start would not flush until turn_end.
+	pi.on("context", (event, ctx) => {
+		const frames = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId());
+		// Replace earlier continuation snapshots so resolved Requests are not re-presented.
+		const messages = event.messages.filter(message =>
+			message.role !== "custom" || message.customType !== REQUEST_ATTENTION_CUSTOM_TYPE);
+		return { messages: frames.length
+			? [...messages, { role: "custom" as const, ...requestPresentation(frames), timestamp: Date.now() }]
+			: messages };
 	});
 	if (options.registerInput !== false) {
 		registerParticipantInputLifecycle(pi, handlers, {
@@ -106,9 +115,11 @@ export function registerParticipantLifecycle(
 	);
 	// Pi awaits turn_end only after the complete issued tool batch and before it
 	// constructs the next model context, making this the Steer freeze boundary.
-	let answeredThisExecution = false;
+	let answeredLastTurn = false;
+	// Native queued input can run after a terminating Answer in the same execution.
+	// Only the last turn can still need a runtime-supplied continuation.
 	pi.on("turn_end", async (event) => {
-		answeredThisExecution ||= event.toolResults.some(result => {
+		answeredLastTurn = event.toolResults.some(result => {
 			const details = result.details as Record<string, unknown> | undefined;
 			return result.toolName === "agent_message" && !result.isError &&
 				typeof details?.requestMessageId === "string" && typeof details?.messageId === "string" &&
@@ -117,22 +128,31 @@ export function registerParticipantLifecycle(
 		await handlers.safeBoundaryReached();
 	});
 	pi.on("agent_end", async (_event, ctx) => {
-		if (answeredThisExecution) {
-			answeredThisExecution = false;
-			const frame = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId()).at(-1);
-			if (frame) presentObligation(pi, frame, true);
+		if (answeredLastTurn) {
+			answeredLastTurn = false;
+			const frames = obligationStack(transcriptFromSessionManager(ctx.sessionManager).inspect(), ctx.sessionManager.getSessionId());
+			// Answer ends its model/tool loop. Offer remaining work once, unless native
+			// input already provides a continuation; never choose the next task or spin at settlement.
+			if (frames.length && !ctx.hasPendingMessages()) presentRequests(pi, frames, true);
 		}
 		await handlers.executionEnded();
 	});
 }
 
-function presentObligation(pi: ExtensionAPI, frame: ObligationFrame, triggerTurn = false): void {
-	pi.sendMessage({
-		customType: OBLIGATION_RESUMED_CUSTOM_TYPE,
+function requestPresentation(frames: readonly ObligationFrame[]) {
+	return {
+		customType: REQUEST_ATTENTION_CUSTOM_TYPE,
 		display: true,
-		content: `Current Request: ${frame.requestId}\nRequester: ${frame.requesterAgentId}\n${frame.question}`,
-		details: frame,
-	}, { deliverAs: "steer", triggerTurn });
+		content: [
+			"Outstanding Requests. Choose which to work on or answer; attention order does not prescribe execution order.",
+			...frames.map(frame => `Request: ${frame.requestId}\nRequester: ${frame.requesterAgentId}\n${frame.question}`),
+		].join("\n\n"),
+		details: { requests: frames },
+	};
+}
+
+function presentRequests(pi: ExtensionAPI, frames: readonly ObligationFrame[], triggerTurn: boolean): void {
+	pi.sendMessage(requestPresentation(frames), { deliverAs: "steer", triggerTurn });
 }
 
 export function registerParticipantInputLifecycle(

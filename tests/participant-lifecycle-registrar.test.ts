@@ -44,6 +44,11 @@ test("lifecycle Request presentation preserves recovery without becoming Deliver
 	}));
 	const context = { ...createExtensionContext(), sessionManager };
 	await pi.emit("agent_start", { type: "agent_start" }, context);
+	// Continuation remains the durable presentation producer; startup context is projected.
+	await pi.emit("turn_end", { type: "turn_end", toolResults: [{ ...toolResultMessage,
+		toolName: "agent_message", details: { messageId: "answer", requestMessageId: "finished", messageStatus: "sent" },
+	}] }, context);
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
 	const presentation = sessionManager.getLeafEntry();
 	assert.equal(presentation?.type, "custom_message");
 	assert.ok(presentation?.type === "custom_message" && presentation.display);
@@ -57,6 +62,7 @@ test("lifecycle Request presentation preserves recovery without becoming Deliver
 const lifecycleEventNames = [
 	"agent_end",
 	"agent_start",
+	"context",
 	"input",
 	"message_end",
 	"tool_execution_start",
@@ -163,6 +169,62 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		"safe-boundary",
 		"execution-ended",
 	]);
+});
+
+test("each execution presents all outstanding Requests without selecting the next task", async () => {
+	const frames = [
+		{ requestId: "request-a", requesterAgentId: "author-a", question: "Finish A" },
+		{ requestId: "request-b", requesterAgentId: "author-b", question: "Consider B" },
+	];
+	const pi = new CapturedExtensionApi();
+	const context = createExtensionContext();
+	pi.api.appendEntry = (type, data) => { context.sessionManager.appendCustomEntry(type, data); };
+	registerParticipantLifecycle(pi.api, lifecycleHandlers({ async executionStarted() { return frames; } }));
+	await pi.emit("agent_start", { type: "agent_start" }, context);
+	const projected = await pi.emit("context", { type: "context", messages: [] }, context) as {
+		messages: Array<{ content: string; details: unknown }>;
+	};
+	assert.equal(pi.messages.length, 0, "context presentation does not queue another turn");
+	assert.equal(projected.messages.length, 1);
+	const presentation = projected.messages[0]!;
+	assert.deepEqual(presentation.details, { requests: frames });
+	assert.match(presentation.content, /Choose/);
+	assert.match(presentation.content, /Finish A/);
+	assert.match(presentation.content, /Consider B/);
+});
+
+for (const pending of [false, true]) test(`Answer offers one neutral continuation only when needed (pending input: ${pending})`, async () => {
+	const pi = new CapturedExtensionApi();
+	const context = createExtensionContext();
+	context.hasPendingMessages = () => pending;
+	context.sessionManager.appendCustomEntry("agent-coordination.obligation-focus", { frames: [
+		{ requestId: "request-a", requesterAgentId: "author-a", question: "Remaining A" },
+	] });
+	registerParticipantLifecycle(pi.api, lifecycleHandlers());
+	const answer = { ...toolResultMessage, toolName: "agent_message", details: {
+		messageId: "answer-b", requestMessageId: "request-b", messageStatus: "sent",
+	} };
+	await pi.emit("turn_end", { type: "turn_end", toolResults: [answer] }, context);
+	await pi.emit("agent_end", { type: "agent_end", messages: [answer] }, context);
+	assert.equal(pi.messages.length, pending ? 0 : 1);
+	if (!pending) {
+		assert.equal(pi.messages[0]!.options?.triggerTurn, true);
+		assert.match(String(pi.messages[0]!.message.content), /Choose/);
+	}
+	await pi.emit("agent_end", { type: "agent_end", messages: [] }, context);
+	assert.equal(pi.messages.length, pending ? 0 : 1, "settling with outstanding work must not spin");
+});
+
+test("the final Answer does not manufacture a summary continuation", async () => {
+	const pi = new CapturedExtensionApi();
+	const context = createExtensionContext();
+	registerParticipantLifecycle(pi.api, lifecycleHandlers());
+	const answer = { ...toolResultMessage, toolName: "agent_message", details: {
+		messageId: "last-answer", requestMessageId: "last-request", messageStatus: "sent",
+	} };
+	await pi.emit("turn_end", { type: "turn_end", toolResults: [answer] }, context);
+	await pi.emit("agent_end", { type: "agent_end", messages: [answer] }, context);
+	assert.deepEqual(pi.messages, []);
 });
 
 test("ordinary and Moderator extensions preserve local lifecycle operation order", async (t) => {
@@ -477,6 +539,7 @@ type CapturedHandler = (event: never, context: ExtensionContext) => unknown;
 
 class CapturedExtensionApi {
 	readonly handlers = new Map<string, CapturedHandler[]>();
+	readonly messages: Array<{ message: Parameters<ExtensionAPI["sendMessage"]>[0]; options: Parameters<ExtensionAPI["sendMessage"]>[1] }> = [];
 	readonly api = {
 		on: (eventName: string, handler: CapturedHandler) => {
 			const handlers = this.handlers.get(eventName) ?? [];
@@ -486,6 +549,9 @@ class CapturedExtensionApi {
 		registerTool() {},
 		registerCommand() {},
 		registerMessageRenderer() {},
+		sendMessage: (message: Parameters<ExtensionAPI["sendMessage"]>[0], options: Parameters<ExtensionAPI["sendMessage"]>[1]) => {
+			this.messages.push({ message, options });
+		},
 	} as unknown as ExtensionAPI;
 
 	async emit(
@@ -519,9 +585,9 @@ function createExtensionContext(initialEditorText = "") {
 		},
 	};
 	return Object.assign(
-		{ ui, sessionManager },
+		{ ui, sessionManager, hasPendingMessages: () => false },
 		{ notifications },
-	) as unknown as ExtensionContext & { notifications: typeof notifications };
+	) as unknown as ExtensionContext & { sessionManager: SessionManager; notifications: typeof notifications };
 }
 
 async function runExtension(extension: ExtensionFactory, pi: ExtensionAPI): Promise<void> {
