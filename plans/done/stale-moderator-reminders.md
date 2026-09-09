@@ -44,3 +44,8 @@ Validation (all targeted, no full integration suite):
 Evidence lives outside the repo in the agent artifact output for project `pi-agent-coordination`, date `2026-09-09`, task `stale-moderator-reminders`. The native stale-delivery red output is retained there alongside final validation and the baseline-only failure.
 
 The ordering contract is authoritative handling clearance/Resolution versus native transcript commitment, not atomic distributed locking of raw evidence writers. No rollover/continuation/compaction policy changes. Windows real-process cases use the existing platform skip; validation ran on Linux.
+
+## Independent-review follow-up
+Review found that failed reminder preparation released its reservation but did not advance ordinary deliveries admitted behind it. No native turn had started, so no later settlement was guaranteed. Added deterministic actual-scheduler regressions for both an ordinary Message and Request admitted while preparation is held. Both failed first with zero dispatches after failure cleanup; failure now drains eligible pending delivery before release evaluation. No external scheduling boundary is used by either regression.
+
+Follow-up validation: `node --test tests/stale-moderator-reminder-delivery.test.ts` passed all 5 tests; `npm run typecheck` passed. Red/green evidence is retained with the task artifacts.

@@ -756,13 +756,15 @@ export class MessageDeliveryScheduler {
 				const handle = record.host.currentHandle();
 				if (handle) this.#scheduleReleaseEvaluation(record, handle);
 			}),
-			error => record.host.lane.run(() => {
+			error => record.host.lane.run(async () => {
 				if (this.#activeModeratorReminderByAgent.get(agentId) !== active) return;
 				this.#activeModeratorReminderByAgent.delete(agentId);
 				this.#pendingByAgent.get(agentId)?.delete(delivery.messageId);
 				this.#failDeliveryProgress(delivery, error);
 				this.#removeProvenDeliveriesInLane(record);
 				this.#removePendingDeliveryReason(record);
+				// Failed preparation starts no native turn to advance queued deliveries later.
+				await this.#drainInLane(record);
 				const handle = record.host.currentHandle();
 				if (handle) this.#scheduleReleaseEvaluation(record, handle);
 			}),
