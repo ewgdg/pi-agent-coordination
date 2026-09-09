@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
@@ -107,7 +108,7 @@ test("continuation crosses runtime transport and proves a custom entry, never an
 	const { createWorkflowContinuation, inspectWorkflowContinuation } = await import("../src/protocol/workflow-continuation.ts");
 	const { inspectMessageDeliveries } = await import("../src/protocol/message-delivery.ts");
 	const { transcriptFromSessionManager } = await import("../src/pi-integration/session-manager-transcript.ts");
-	const message = createWorkflowContinuation({ agentId: "child", runSequence: 1, requestMessageIds: ["request"] });
+	const message = createWorkflowContinuation({ activationId: randomUUID(), agentId: "child", runSequence: 1, requestMessageIds: ["request"] });
 	assert.equal(Check(agentControlMethods["message.deliver"].request, {
 		runId: "run", delivery: { kind: "custom", message, triggerTurn: true },
 	}), true);
@@ -117,4 +118,34 @@ test("continuation crosses runtime transport and proves a custom entry, never an
 	const transcript = transcriptFromSessionManager(session).inspect();
 	assert.ok(inspectWorkflowContinuation("child", transcript, message));
 	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId: "child", transcript }), []);
+});
+
+test("a cold successor activation does not reuse prior continuation proof at the same Run sequence", async () => {
+	const { SessionManager } = await import("@earendil-works/pi-coding-agent");
+	const { createWorkflowContinuation, inspectWorkflowContinuation } = await import("../src/protocol/workflow-continuation.ts");
+	const { transcriptFromSessionManager } = await import("../src/pi-integration/session-manager-transcript.ts");
+	const options = { agentId: "child", runSequence: 1, requestMessageIds: ["request"] };
+	const previous = createWorkflowContinuation({ ...options, activationId: randomUUID() });
+	const session = SessionManager.inMemory(process.cwd(), { id: "child" });
+	session.appendCustomEntry("agent-coordination.identity", { agentId: "child" });
+	session.appendCustomMessageEntry(previous.customType, previous.content, previous.display);
+	const transcript = transcriptFromSessionManager(session).inspect();
+	const successor = createWorkflowContinuation({ ...options, activationId: randomUUID() });
+	assert.ok(inspectWorkflowContinuation("child", transcript, previous));
+	assert.equal(inspectWorkflowContinuation("child", transcript, successor), undefined);
+	assert.notEqual(JSON.parse(previous.content).activationId, JSON.parse(successor.content).activationId);
+	session.appendCustomMessageEntry(successor.customType, successor.content, successor.display);
+	assert.ok(inspectWorkflowContinuation("child", transcriptFromSessionManager(session).inspect(), successor));
+});
+
+test("fresh host activations at the same Run sequence use different scheduling identities", async () => {
+	const firstHost = harness();
+	const secondHost = harness();
+	await firstHost.activate();
+	await secondHost.activate();
+	const first = firstHost.deliveries[0]!;
+	const second = secondHost.deliveries[0]!;
+	assert.equal(JSON.parse(first.customMessage.content).runSequence, JSON.parse(second.customMessage.content).runSequence);
+	assert.notEqual(first.messageId, second.messageId);
+	assert.notEqual(first.customMessage.content, second.customMessage.content);
 });

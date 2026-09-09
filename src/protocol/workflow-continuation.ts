@@ -13,6 +13,7 @@ export type ModelVisibleWorkflowContinuation = Readonly<{
 }>;
 
 export function createWorkflowContinuation(options: {
+	activationId: string;
 	agentId: string;
 	runSequence: number;
 	requestMessageIds: readonly string[];

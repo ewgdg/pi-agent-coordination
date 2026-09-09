@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createWorkflowContinuation, inspectWorkflowContinuation } from "../protocol/workflow-continuation.ts";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 
@@ -151,13 +152,17 @@ export class RunSupervisor {
 				if (record.host.blocksOrdinaryDelivery()) return "held";
 				const requestMessageIds = outstandingIds();
 				if (requestMessageIds.length === 0) return "resolved";
+				// Run sequences restart with a cold host; retained proof must identify
+				// this activation independently of that process-local counter.
+				const activationId = randomUUID();
 				const customMessage = createWorkflowContinuation({
+					activationId,
 					agentId: record.identity.agentId,
 					runSequence: handle.sequence,
 					requestMessageIds,
 				});
 				const result = await this.#messages.admitCustomDeliveryInLane(record, {
-					messageId: JSON.stringify(["workflow_continuation", record.identity.agentId, handle.sequence]),
+					messageId: JSON.stringify(["workflow_continuation", record.identity.agentId, activationId]),
 					deliveryMode: "deferred",
 					customMessage,
 					inspectProof: () => inspectWorkflowContinuation(
