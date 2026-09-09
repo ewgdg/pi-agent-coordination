@@ -429,7 +429,8 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	});
 };
 
-function createChildRuntimeBinding(
+/** Binds one session generation to its already-connected child Control. */
+export function createChildRuntimeBinding(
 	state: ChildControlState,
 	runtime: AgentSessionRuntime,
 	context: ExtensionContext,
@@ -617,9 +618,8 @@ async function handleOwnerRequest(
 						await binding.turnCompaction.waitForCompaction();
 						checkpoint();
 						admitRun(state, request.payload.runId);
-						const wasActive = !binding.runtime.session.isIdle;
 						if (
-							!wasActive &&
+							binding.runtime.session.isIdle &&
 							request.payload.delivery.kind === "custom" &&
 							request.payload.delivery.triggerTurn
 						) {
@@ -631,6 +631,9 @@ async function handleOwnerRequest(
 						if (request.signal.aborted) {
 							throw requestCancellationError(request.signal);
 						}
+						// Preparation can start an extension-owned turn. Queue acceptance
+						// must not be mistaken for completion of that replacement turn.
+						const wasActive = !binding.runtime.session.isIdle;
 						commit = observeDeliveryCommit(
 							binding.runtime,
 							binding.context.sessionManager,

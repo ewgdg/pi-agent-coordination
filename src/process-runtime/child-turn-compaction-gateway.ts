@@ -193,7 +193,7 @@ export class ChildTurnCompactionGateway {
 		if (usage.tokens <= effectiveThreshold) return;
 
 		try {
-			await this.#session.compact(
+			await this.#compactForTurnPreparation(
 				workingZoneCompactionInstructions(
 					workingZonePreparation.prospectiveRequest.question,
 				),
@@ -214,12 +214,30 @@ export class ChildTurnCompactionGateway {
 
 	async #compactAtNativeThreshold(): Promise<void> {
 		try {
-			await this.#session.compact();
+			await this.#compactForTurnPreparation();
 		} catch (error) {
 			// Existing custom-Delivery threshold preparation treats an
 			// unsummarizable branch as Pi having no native work to perform.
 			if (isNoCompactionWork(error)) return;
 			throw error;
+		}
+	}
+
+	async #compactForTurnPreparation(customInstructions?: string): Promise<void> {
+		let aborted: boolean | undefined;
+		const unsubscribe = this.#session.subscribe((event) => {
+			if (event.type === "compaction_end" && event.reason === "manual") {
+				aborted ??= event.aborted;
+			}
+		});
+		try {
+			await this.#session.compact(customInstructions);
+		} catch (error) {
+			// Pi rejects even when an extension cancels compaction to start its own
+			// turn. Honor Pi's outcome, not error text or extension-specific intent.
+			if (!aborted) throw error;
+		} finally {
+			unsubscribe();
 		}
 	}
 

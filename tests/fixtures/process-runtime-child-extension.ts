@@ -103,7 +103,7 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 	if (process.env.PROCESS_RUNTIME_WORKING_ZONE_COMPACTION === "extension") {
 		pi.on("session_before_compact", async (event) => {
 			if (!event.customInstructions?.includes("prospective Request")) return;
-			if (event.customInstructions.includes("OPTIONAL_FAILURE")) {
+			if (event.customInstructions.includes("DECLINE_COMPACTION")) {
 				return { cancel: true };
 			}
 			const delayMilliseconds = Number(
