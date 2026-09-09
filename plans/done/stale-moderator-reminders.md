@@ -60,3 +60,13 @@ Validation:
 - `node --test --test-name-pattern 'post-commit Moderator startup failure|terminal Moderator Run failure|two committed Moderator failures|a settled Moderator receives one handling reminder|clearing the incident before native reminder' tests/operational-incidents.test.ts`: 5 passed, including failure replacement, handling clearance and dormant release.
 - `npm run typecheck` and whitespace check: passed.
 - New real-process test is classified in the process suite. It uses a native first-start hook gate and actual operational reconciliation; observing generation does not alter admission or Runtime state. The native gate's file publication is atomic, and polling/operation waits are bounded.
+
+## Queued startup termination correction
+Independent review found that separate host-lane acquisitions for initial startup and scheduler admission allowed a queued termination to finish between them; routine-start admission then resurrected the same Moderator as Run 2. Added a real-process regression first: it queues actual termination after first-start readiness while startup owns the lane, drains reconciliation and the host lane, and asserts one start and no current handle. Red failed with two starts instead of one.
+
+Startup and initial custom-delivery admission now share one host-lane transaction. The custom scheduler exposes an in-lane admission counterpart, matching ordinary delivery admission; scheduler ownership and first-turn progress remain unchanged. No Run fencing, replacement policy, timing delay, or unrelated cleanup was added.
+
+Validation:
+- Startup progress and stale-reminder delivery tests: 7 passed, including the queued-termination regression and zero reminders before first settlement/one afterward.
+- Targeted operational incidents tests: 5 passed (startup failure replacement, terminal failure replacement, bounded repeated failures, valid reminders/dormant release, and clearance before commitment).
+- `npm run typecheck` and `git diff --check`: passed.

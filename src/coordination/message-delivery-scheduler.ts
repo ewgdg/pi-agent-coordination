@@ -279,7 +279,7 @@ export class MessageDeliveryScheduler {
 		record: AgentRecord,
 		delivery: ScheduledCustomDelivery,
 	): Promise<MessageDeliveryAdmission> {
-		return record.host.lane.run(() => this.#admitInLane(record, delivery));
+		return record.host.lane.run(() => this.admitCustomInLane(record, delivery));
 	}
 
 	admitCustomInLane(
