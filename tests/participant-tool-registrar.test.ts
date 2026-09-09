@@ -284,28 +284,26 @@ test("Agent Spawn schema accepts conversation forks and rejects extension path a
 	assert.equal("anyOf" in schema, false);
 	assert.equal("allOf" in schema, false);
 	assert.deepEqual(schema.required, ["request"]);
-	assert.match(String(Reflect.get(schema.properties.conversation, "description") ?? ""), /Omit template and config/);
+	assert.match(String(Reflect.get(schema.properties.conversation, "description") ?? ""), /independently of Runtime configuration/);
 	assert.equal(Reflect.get(schema.properties.description, "description"),
 		"Brief scope summary for display and Agent search; not task instructions.");
-	assert.equal(Value.Check(schema, {
-		request: "Continue the completed conversation.",
-		conversation: "fork",
-	}), true);
+	// Conversation inheritance does not constrain Template/configuration selection.
+	for (const configuration of [
+		{},
+		{ template: "reviewer" },
+		{ config: { allowedTools: ["read"] } },
+		{ template: "reviewer", config: { allowedTools: ["read"] } },
+	]) {
+		assert.equal(Value.Check(schema, {
+			request: "Continue the completed conversation.",
+			conversation: "fork",
+			...configuration,
+		}), true);
+	}
 	assert.equal(Value.Check(schema, {
 		request: "Do not accept unknown conversation modes.",
 		conversation: "copy",
 	}), false);
-	assert.equal(Value.Check(schema, {
-		request: "Configure a conversation fork.",
-		conversation: "fork",
-		config: { allowedTools: ["read"] },
-	}), true);
-	assert.equal(Value.Check(schema, {
-		request: "Select a Template for a conversation fork.",
-		conversation: "fork",
-		template: "reviewer",
-		config: { allowedTools: ["read"] },
-	}), true);
 	assert.equal(Value.Check(schema, {
 		request: "Inspect the child Runtime.",
 		config: { extensions: "inherit" },

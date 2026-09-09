@@ -97,7 +97,7 @@ test("unavailable Workflow evidence is explicit and independent work can still b
 });
 
 
-test("nested recovery retains foreground and suspended obligations from the original delegation chain", { timeout: 5_000 }, async t => {
+test("nested recovery preserves attention and Agent-owned outbound dependencies", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	const first = await h.message(h.requester, "first", { operation: "request", targetAgent: "responder", question: "Outer work" });
 	const reverse = await h.message(h.responder, "reverse", { operation: "request", targetAgent: "requester", question: "Need a decision" });
@@ -111,8 +111,19 @@ test("nested recovery retains foreground and suspended obligations from the orig
 	const receipt = await h.resume();
 	assert.deepEqual(receipt.activations.find(item => item.agentId === "responder")?.requestIds, [first.requestMessageId, nested.requestMessageId]);
 	assert.deepEqual(receipt.activations.find(item => item.agentId === "requester")?.requestIds, [reverse.requestMessageId]);
-	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.responder.record), [], "outer dependency remains suspended, not foreground");
-	assert.equal(h.deliveries(h.responder).length, 2);
+	assert.deepEqual(
+		h.messages.obligationFrames("responder").map(frame => frame.requestId),
+		[first.requestMessageId, nested.requestMessageId],
+	);
+	assert.equal(h.messages.foregroundRequestId(h.responder.record), nested.requestMessageId);
+	assert.equal(h.messages.foregroundRequestId(h.requester.record), reverse.requestMessageId);
+	// Attention foreground does not hide dependencies authored under an earlier obligation.
+	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.responder.record), [reverse.requestMessageId]);
+	assert.deepEqual(h.messages.outstandingRequestIdsFor(h.requester.record), [first.requestMessageId, nested.requestMessageId]);
+	assert.deepEqual(
+		h.deliveries(h.responder).map(delivery => delivery.source.toolCallId),
+		["first", "nested"],
+	);
 });
 
 
