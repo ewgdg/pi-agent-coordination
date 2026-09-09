@@ -574,32 +574,32 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 			false,
 		);
 
-		const optionalFailureItem = {
+		const declinedCompactionItem = {
 			source: {
 				agentId: "working-zone-requester",
-				entryId: "optional-failure-entry",
-				toolCallId: "optional-failure-call",
+				entryId: "declined-compaction-entry",
+				toolCallId: "declined-compaction-call",
 			},
 			projection: {
 				kind: "request" as const,
-				requestMessageId: "optional-failure-call",
+				requestMessageId: "declined-compaction-call",
 				fromAgentId: "working-zone-requester",
-				question: "OPTIONAL_FAILURE must warn and continue below the native threshold.",
+				question: "DECLINE_COMPACTION should continue Delivery without a preparation warning.",
 			},
 		};
-		const optionalFailureMessage = createMessageDelivery([optionalFailureItem]);
+		const declinedCompactionMessage = createMessageDelivery([declinedCompactionItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
-			runId: "optional-failure-working-zone-run",
+			runId: "declined-compaction-working-zone-run",
 			delivery: {
 				kind: "custom",
 				message: {
-					...optionalFailureMessage,
-					details: { messages: [...optionalFailureMessage.details.messages] },
+					...declinedCompactionMessage,
+					details: { messages: [...declinedCompactionMessage.details.messages] },
 				},
 				triggerTurn: true,
 				workingZonePreparation: {
 					intent: { workScale: "large", contextDependence: "low" },
-					prospectiveRequest: optionalFailureItem.projection,
+					prospectiveRequest: declinedCompactionItem.projection,
 				},
 			},
 		}), {
@@ -610,13 +610,13 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		});
 		await waitUntil(() => runtimeEvents.some((event) =>
 			event.event === "agent.settled" &&
-			event.payload.runId === "optional-failure-working-zone-run"
+			event.payload.runId === "declined-compaction-working-zone-run"
 		));
 		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
 			entry.type === "custom_message" &&
-			entry.content === optionalFailureMessage.content
+			entry.content === declinedCompactionMessage.content
 		), true);
-		assert.match(frameText(runtime), /Working-Zone Preparation failed/);
+		assert.doesNotMatch(frameText(runtime), /Working-Zone Preparation failed/);
 
 		const cancelledItem = {
 			source: {

@@ -167,7 +167,9 @@ Reuse an existing Agent only when context acquired through its earlier work mate
 
 Omit `contextPreparation` to retain ordinary Pi compaction behavior. When it is present, an idle child with automatic compaction enabled compares current context usage with the cost and runway threshold in [ADR 0003](adr/0003-continuation-working-zone-preparation.md). If preparation is warranted, the child calls the active public compaction strategy once before committing the Request. Pi summarization receives the prospective question only as relevance guidance and is told not to include, paraphrase, or claim receipt of the uncommitted Request. Extension-owned strategies may ignore that guidance and still provide the compaction result.
 
-Unknown context usage and disabled automatic compaction skip the optional attempt. Active Steer Delivery keeps its exact queue order and skips proactive preparation. A below-native optional failure warns in the child and continues Delivery; failure at Pi's native threshold remains blocking. Cancellation or Runtime replacement during preparation fences the exact Delivery.
+Unknown context usage and disabled automatic compaction skip the optional attempt. Active Steer Delivery keeps its exact queue order and skips proactive preparation. A below-native optional failure warns in the child and continues Delivery; failure at Pi's native threshold remains blocking. Coordination cancellation or Runtime replacement during preparation fences the exact Delivery.
+
+A manual compaction attempt that Pi reports as aborted is a neutral outcome, not a preparation failure. Extensions may cancel compaction and start their own turn; Delivery then queues into that active turn and confirms transcript commitment without waiting for replacement work to finish. This follows Pi’s cancellation classification rather than inferring extension intent from error text.
 
 ## Retrieve an Answer
 

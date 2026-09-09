@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 
 import { ChildTurnCompactionGateway } from "../src/process-runtime/child-turn-compaction-gateway.ts";
 import type { WorkingZonePreparation } from "../src/runtime/agent-runtime-host.ts";
@@ -21,10 +21,19 @@ function fakeSession(options: {
 	autoCompactionEnabled?: boolean;
 	settingsEnabled?: boolean;
 	compactError?: Error;
+	compactionAborted?: boolean;
+	onCompact?: () => void;
 }) {
 	const compactInstructions: Array<string | undefined> = [];
+	const listeners = new Set<(event: AgentSessionEvent) => void>();
+	let compacting = false;
 	const session = {
-		isCompacting: false,
+		get isCompacting() { return compacting; },
+		abortCompaction() {},
+		subscribe(listener: (event: AgentSessionEvent) => void) {
+			listeners.add(listener);
+			return () => { listeners.delete(listener); };
+		},
 		isIdle: true,
 		autoCompactionEnabled: options.autoCompactionEnabled ?? true,
 		thinkingLevel: "high",
@@ -42,6 +51,16 @@ function fakeSession(options: {
 		},
 		compact: async (customInstructions?: string) => {
 			compactInstructions.push(customInstructions);
+			compacting = true;
+			options.onCompact?.();
+			compacting = false;
+			for (const listener of listeners) listener({
+				type: "compaction_end",
+				reason: "manual",
+				result: undefined,
+				aborted: options.compactionAborted ?? false,
+				willRetry: false,
+			});
 			if (options.compactError) throw options.compactError;
 			return {
 				summary: "prepared",
@@ -147,3 +166,71 @@ test("failure at Pi's native threshold remains blocking", async () => {
 	);
 	assert.equal(compactInstructions.length, 1);
 });
+
+const preparationPaths = [
+	{ name: "optional working zone", tokens: 100_000, preparation },
+	{ name: "mandatory working zone", tokens: 190_000, preparation },
+	{ name: "native threshold", tokens: 190_000, preparation: undefined },
+] as const;
+
+for (const path of preparationPaths) {
+	test(`${path.name} honors Pi-classified cancellation without warning or failure`, async () => {
+		const { session, compactInstructions } = fakeSession({
+			tokens: path.tokens,
+			// The event, not the rejection's wording, defines Pi's outcome.
+			compactError: new Error("strategy declined compaction"),
+			compactionAborted: true,
+		});
+		const warnings: string[] = [];
+		const gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
+
+		await gateway.admitOwnerTurn("run", () =>
+			gateway.prepareIdleCustomTurn(path.preparation)
+		);
+
+		assert.equal(compactInstructions.length, 1);
+		assert.deepEqual(warnings, []);
+	});
+
+	test(`${path.name} does not infer cancellation from an error string`, async () => {
+		const failure = new Error("Compaction cancelled");
+		const { session } = fakeSession({ tokens: path.tokens, compactError: failure });
+		const warnings: string[] = [];
+		const gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
+		const preparing = gateway.prepareIdleCustomTurn(path.preparation);
+
+		if (path.tokens === 100_000) {
+			await preparing;
+			assert.deepEqual(warnings, [
+				"Working-Zone Preparation failed; continuing Request Delivery: Compaction cancelled",
+			]);
+		} else {
+			await assert.rejects(preparing, (error) => error === failure);
+			assert.deepEqual(warnings, []);
+		}
+	});
+
+	for (const invalidation of ["owner cancellation", "generation disposal"] as const) {
+		test(`${path.name} preserves ${invalidation} when Pi reports cancellation`, async () => {
+			let gateway!: ChildTurnCompactionGateway;
+			const { session } = fakeSession({
+				tokens: path.tokens,
+				compactError: new Error("Compaction cancelled"),
+				compactionAborted: true,
+				onCompact: () => invalidation === "owner cancellation"
+					? gateway.cancelOwnerRun("run")
+					: gateway.dispose(),
+			});
+			const warnings: string[] = [];
+			gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
+
+			await assert.rejects(
+				gateway.admitOwnerTurn("run", () => gateway.prepareIdleCustomTurn(path.preparation)),
+				invalidation === "owner cancellation"
+					? /child_turn_admission_cancelled: run/
+					: /child_turn_compaction_gateway_disposed/,
+			);
+			assert.deepEqual(warnings, []);
+		});
+	}
+}
