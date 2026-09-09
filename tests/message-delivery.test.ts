@@ -154,7 +154,7 @@ test("host-authored obligation reminders do not become Agent Message evidence", 
 			requestMessageId: "request-1",
 			requestSnippet: "Answer the pending Request.",
 			guidance:
-				"You still owe an Answer to this Request. Call agent_message with operation \"answer\" now. Unless another obligation or independent task remains, end the turn immediately afterward.",
+				"This Request still needs an Answer. Choose which outstanding Request to work on or answer; attention order does not prescribe execution order. Send each Answer as a standalone agent_message operation \"answer\" call, then end the turn without a summary.",
 		}),
 		true,
 	);

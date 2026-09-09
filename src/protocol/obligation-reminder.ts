@@ -12,7 +12,7 @@ export { OBLIGATION_REMINDER_CUSTOM_TYPE } from "./custom-entry-types.ts";
 
 export const MAX_OBLIGATION_REMINDER_SNIPPET_CODE_POINTS = 160;
 export const OBLIGATION_REMINDER_GUIDANCE =
-	"You still owe an Answer to this Request. Call agent_message with operation \"answer\" now. Unless another obligation or independent task remains, end the turn immediately afterward.";
+	"This Request still needs an Answer. Choose which outstanding Request to work on or answer; attention order does not prescribe execution order. Send each Answer as a standalone agent_message operation \"answer\" call, then end the turn without a summary.";
 
 export type ObligationReminder = Readonly<{
 	requestMessageId: string;

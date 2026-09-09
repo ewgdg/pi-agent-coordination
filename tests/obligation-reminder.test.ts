@@ -34,6 +34,7 @@ test("Obligation Reminder contains one bounded Request snippet and durable corre
 	]);
 	assert.equal(content.requestMessageId, "request-1");
 	assert.equal(content.guidance, OBLIGATION_REMINDER_GUIDANCE);
+	assert.equal(content.guidance, "This Request still needs an Answer. Choose which outstanding Request to work on or answer; attention order does not prescribe execution order. Send each Answer as a standalone agent_message operation \"answer\" call, then end the turn without a summary.");
 	assert.equal(content.requestSnippet.includes("  "), false);
 	assert.equal([...content.requestSnippet].length, MAX_OBLIGATION_REMINDER_SNIPPET_CODE_POINTS);
 	assert.equal(content.requestSnippet.endsWith("…"), true);
