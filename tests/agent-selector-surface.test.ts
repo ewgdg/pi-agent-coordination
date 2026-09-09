@@ -497,10 +497,10 @@ test("long focused descriptions do not change horizontal padding", async () => {
 	assert.equal(await selection, undefined);
 });
 
-test("Dormant Moderator rows show its active role description while Enter delegates selection", async () => {
+test("Dormant Moderator rows show its incident kind while details preserve its role description", async () => {
 	const harness = surfaceHarness(30);
 	const moderator = selectorAgent({
-		...dormantAgentStatus("moderator-id", "moderator", null),
+		...dormantAgentStatus("moderator-id", "Moderator", null),
 		description: "Moderating obligation stall",
 	}, "moderator-provider", "moderator-model", "high", 0);
 	const selection = openAgentSelectorSurface(harness.ui, {
@@ -513,8 +513,11 @@ test("Dormant Moderator rows show its active role description while Enter delega
 	harness.component.handleInput?.("\t");
 
 	const rendered = renderPanel(harness.component, 80);
-	assert.match(rendered.join("\n"), /Moderating obligation stall/);
+	const moderatorRow = rendered.find((line) => line.includes("Moderator")) ?? "";
+	assert.match(moderatorRow, /Moderator.*dormant · incident: obligation stall/);
+	assert.doesNotMatch(moderatorRow, /Moderating obligation stall/);
 	assert.match(rendered.join("\n"), /moderator-id/);
+	assert.match(rendered.join("\n"), /Moderating obligation stall/);
 	harness.component.handleInput?.("\r");
 	assert.deepEqual(await selection, {
 		kind: "select_agent",
