@@ -538,3 +538,36 @@ test("cancellation while continuation is gated suppresses stale runtime input", 
 	});
 	assert.equal(continuationViews(h.responder).length, 0);
 });
+
+test("unavailable outbound targets do not erase verified responder recovery", { timeout: 5_000 }, async t => {
+	for (const mode of ["running", "dormant"] as const) {
+		const h = harness(t);
+		const outer = await h.message(h.requester, "unrelated-outer", { operation: "request", targetAgent: "responder", question: "Outer" });
+		const inner = await h.message(h.responder, "unrelated-inner", { operation: "request", targetAgent: "worker", question: "Inner" });
+		assert.ok("requestMessageId" in outer && "requestMessageId" in inner);
+		if (mode === "dormant") {
+			await h.message(h.responder, "unrelated-reverse", { operation: "request", targetAgent: "requester", question: "Decision" });
+			h.requester.stop(); h.responder.stop();
+		}
+		await h.recover();
+		h.worker.record.transcript.refresh = async () => { throw new Error("worker transcript unreadable"); };
+		const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+		const receipt = await resumeWorkflow({
+			workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
+			activate: async (record, requestIds, recovery) => {
+				const outcome = await supervisor.continueDormantResponder(record, { requestMessageIds: requestIds, recovery, recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record) });
+				return { agentId: record.identity.agentId, requestIds, disposition: outcome === "activated" ? "admitted" : "skipped", reason: outcome };
+			},
+		});
+		assert.equal(receipt.activations.find(item => item.agentId === "responder")?.reason, mode === "running" ? "already_running" : "activated");
+		const expected = [{ requestMessageId: outer.requestMessageId, targetAgentId: "responder", status: mode === "running" ? "already_running" : "continuation_admitted" }];
+		assert.deepEqual(receipt.outstandingRequests, expected);
+		assert.ok(receipt.indeterminate.some(item => item.agentId === "responder" && item.reason.includes(inner.requestMessageId)));
+		if (mode === "dormant") {
+			assert.deepEqual(continuationViews(h.requester)[0].outstandingRequests, expected);
+			assert.deepEqual(continuationViews(h.responder)[0].outstandingRequests.find((item: { requestMessageId: string }) => item.requestMessageId === inner.requestMessageId), {
+				requestMessageId: inner.requestMessageId, targetAgentId: "worker", status: "indeterminate", reason: "worker transcript unreadable",
+			});
+		}
+	}
+});

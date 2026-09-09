@@ -26,6 +26,9 @@ export async function resumeWorkflow(options: {
 			indeterminate.push({ agentId: record.identity.agentId, reason: recoveryError(error) });
 		}
 	}
+	// Later operational errors may concern an Agent's outbound Messages, not
+	// that Agent's availability as a responder. Keep target evidence separate.
+	const unavailableTargetReasons = new Map(indeterminate.map(item => [item.agentId, item.reason]));
 	const deliveries: WorkflowResumeDelivery[] = [];
 	const activations: WorkflowResumeActivation[] = [];
 	const pending: Message[] = [];
@@ -93,11 +96,11 @@ export async function resumeWorkflow(options: {
 					if (delivery?.reason === "not_created" || delivery?.reason === "request_resolved") return [];
 					const activation = activations.find(item =>
 						item.agentId === request.targetAgentId && item.requestIds.includes(request.messageId));
-					const unknown = indeterminate.find(item => item.agentId === request.targetAgentId);
+					const unavailableReason = unavailableTargetReasons.get(request.targetAgentId);
 					return [Object.freeze({
 						requestMessageId: request.messageId,
 						targetAgentId: request.targetAgentId,
-						...requestRecoveryOutcome(activation, delivery, unknown?.reason),
+						...requestRecoveryOutcome(activation, delivery, unavailableReason),
 					})];
 				});
 			views.set(record.identity.agentId, Object.freeze({ outstandingRequests: Object.freeze(outstandingRequests) }));
