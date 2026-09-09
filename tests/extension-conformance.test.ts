@@ -448,3 +448,14 @@ test("report publication failure remains visible instead of claiming pending or 
 	assert.doesNotMatch(lines.join("\n"), /Report retained|Report pending/);
 	await host.runtime.dispose();
 });
+
+test("Moderator report guidance requires current exact primary evidence", async (t) => {
+	const host = await createTestOwnerHost(t, createModeratorBoundExtension(() => ({} as ModeratorAgentCoordinatorView)));
+	const guidance = host.session.getToolDefinition("report_to_user")?.promptGuidelines?.join("\n") ?? "";
+	assert.match(guidance, /exact toolCallId/);
+	assert.match(guidance, /matching toolResult/);
+	assert.match(guidance, /current physical transcript tail/);
+	assert.match(guidance, /inspectedThrough.*earlier observation/);
+	assert.match(guidance, /unverified.*unavailable/);
+	await host.runtime.dispose();
+});

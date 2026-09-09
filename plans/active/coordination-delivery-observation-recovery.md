@@ -33,3 +33,9 @@ Incident 2026-09-09: blocked review kAwu0w1dLmTOD5_CDQwyXxw6A8D-3b-5lGQedffTlQ8 
 - RED: node --test --test-name-pattern='nudging a failed Delivery' tests/operational-incidents.test.ts reports 2 Moderators versus 1 after terminate -> ordinary nudge -> settlement with original Request unproven.
 - Cause: #deliveryWaitIsLegitimate checks recipient active work before the known-failed flag, suppressing failure observation and releasing the handling key. Move known failure ahead of ordinary work/foreground checks while retaining explicit Human/selection/Hold/capacity exclusions.
 - Initial combined validation exposed a fixture race: model responses were replaced before the first Moderator completed. The regression now waits for its committed assistant result before issuing the nudge. Three isolated repetitions pass (~2.6s each); selection recurrence and terminated-leaf observation also pass. No automatic retry added.
+
+## Checkpoint: report evidence guidance
+- RED: `node --test --test-name-pattern='Moderator report guidance' tests/extension-conformance.test.ts` fails because registered report guidance lacks exact call/result and current tail verification.
+- GREEN: the same contract plus publication-error rendering test pass (2/2, ~0.5s).
+- Moderator report guidance now requires current status/path, exact toolCallId/toolResult matching across the physical transcript, actual tail ID/timestamp, and explicit uncertainty for unavailable evidence. It distinguishes historical inspectedThrough/excerpts from the current tail and missing results from proven crashes. No enforcement or schema added.
+- A separate read-only delivery investigator found no new confirmed defect: all 12 preparation matrix tests pass, and the scheduler's "Recipient Run ended before Delivery proof" is a secondary failure diagnostic, not the originating fault. Tool-driven rollover remains outside that fixture.

@@ -732,6 +732,8 @@ export function registerParticipantCoordinationTools<
 			promptSnippet: "Report suspected runtime defects nonblocking after investigation and autonomous recovery attempts.",
 			promptGuidelines: [
 				"Before report_to_user, investigate, preserve exact evidence, and attempt safe autonomous recovery. Distinguish suspected defects from uncertainty and record recovery outcomes.",
+				"Before claiming a missing result or crash, obtain current Agent status and read its primaryEvidence.transcriptPath. Match the exact toolCallId to its matching toolResult across the physical transcript, and verify the current physical transcript tail, including entry ID and timestamp. inspectedThrough is an earlier observation, not a current end-of-file guarantee; a selected branch or truncated excerpt is not the full transcript.",
+				"Record the exact call/result and verified tail references and what was actually inspected. A missing result alone does not prove a crash. State claims as unverified when current primary evidence is unavailable; do not convert an earlier report or scheduling diagnostic into a confirmed runtime cause.",
 				"Use report_to_user, not ask_user_question, for end-of-investigation runtime defect reporting. Reporting never resolves an unresolved incident or discharges an Answer obligation; use moderator_control only when its resolution predicates clear.",
 			],
 			executionMode: "sequential",
