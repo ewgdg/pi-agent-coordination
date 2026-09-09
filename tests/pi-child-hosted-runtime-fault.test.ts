@@ -355,3 +355,29 @@ test("correlated dispatch rejection completes Delivery failure without inventing
 	assert.deepEqual(events, []);
 	await runtime.dispose();
 });
+
+
+test("orderly disposal drains supervisor dispatch tracking without lifecycle", { timeout: 5_000 }, async () => {
+	const { runtime, emit, settleExit } = createFakeRuntime();
+	const host = AgentRuntimeSupervisor.createChild({
+		agentId: "disposed-dispatch",
+		startSession: async () => ({ runtime, ready: runtime.ready }),
+	});
+	await host.lane.run(() => host.startInLane());
+	const delivery = host.deliverInLane({ kind: "user", content: "Await actual dispatch." });
+	const rejected = assert.rejects(delivery.completion, /child_runtime_disposed/);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	emit(controlEvent("agent.start", { runId: "hosted-run-1", queuedInputCount: 0 }));
+	emit(controlEvent("agent.settled", {
+		runId: "hosted-run-1", queuedInputCount: 0, outcome: "completed",
+	}));
+	const events: HostedRuntimeEvent[] = [];
+	runtime.subscribe((event) => events.push(event));
+	await runtime.dispose();
+	settleExit({ exitCode: 0, signal: 0 });
+	// Real supervisor cleanup joins tracked operations, not just the adapter Promise.
+	await host.lane.run(() => host.discardAndEndInLane("shutdown"));
+	await rejected;
+	assert.equal(host.observe().phase, "dormant");
+	assert.deepEqual(events, [], "orderly disposal must not invent terminal lifecycle");
+});

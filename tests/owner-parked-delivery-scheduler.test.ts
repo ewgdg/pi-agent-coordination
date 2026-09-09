@@ -156,3 +156,90 @@ for (const scenario of ["safe boundary", "replaced reservation", "replaced reser
 		}
 	});
 }
+
+
+for (const scenario of [
+	"safe boundary", "cancelled reservation", "cancelled reservation failure", "replaced Run",
+	"failed settlement", "failed settlement after cancellation", "queued drop", "frozen before dispatch",
+] as const) {
+	test(`Steer settlement revalidates dispatch tracking: ${scenario}`, { timeout: 5_000 }, async () => {
+		let handle: AgentRunHandle = Object.freeze({ sequence: 1 });
+		let settled!: (handle: AgentRunHandle, outcome: "settled" | "failed") => void;
+		let proof: { agentId: string; entryId: string } | undefined;
+		let resolvePrompt!: () => void;
+		let rejectPrompt!: (error: Error) => void;
+		const completion = new Promise<void>((resolve, reject) => {
+			resolvePrompt = resolve; rejectPrompt = reject;
+		});
+		let nextCompletion = completion;
+		const lane = new SerialLane();
+		const failures: string[] = [];
+		const committed: string[] = [];
+		const record = {
+			identity: { agentId: "recipient" },
+			host: {
+				lane,
+				currentHandle: () => handle,
+				isCurrent: (candidate: AgentRunHandle) => candidate === handle,
+				addSettledHandler: (handler: typeof settled) => { settled = handler; return () => {}; },
+				addEndedHandler: () => () => {},
+				addRetentionReason() {},
+				removeRetentionReason() {},
+				blocksOrdinaryDelivery: () => false,
+				currentWorkState: () => "settled",
+				observe: () => ({ phase: "live", work: "settled", attention: "none", retentionReasons: [] }),
+				deliverInLane: () => ({ completion: nextCompletion }),
+				finishIsolatedResumptionInLane() {},
+				discardAndEndInLane: async (cause: string) => { failures.push(cause); },
+				releaseIfEligibleInLane() {},
+			} as unknown as AgentRuntimeHost,
+		} as unknown as AgentRecord;
+		const scheduler = new MessageDeliveryScheduler({
+			workflowPolicy: new WorkflowPolicyStore(),
+			...(scenario === "frozen before dispatch" ? { afterSteerFreeze: () => "defer" as const } : {}),
+		});
+		scheduler.integrate(record);
+		const delivery = (messageId: string) => ({
+			messageId, deliveryMode: "steer" as const,
+			deliveryItem: {
+				source: { agentId: "sender", entryId: messageId, toolCallId: "call" },
+				projection: { kind: "message" as const, messageId, fromAgentId: "sender", content: messageId },
+			},
+			inspectProof: () => proof,
+			afterCommit: () => { committed.push(messageId); },
+		});
+		await scheduler.admit(record, delivery("first"));
+		// Queued-active dispatch may finish on acceptance, before native settlement.
+		if (scenario === "queued drop") resolvePrompt();
+		settled(handle, scenario.startsWith("failed settlement") ? "failed" : "settled");
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		await withTimeout(scheduler.reachSafeBoundary(record), 100);
+		if (scenario === "queued drop" || scenario === "frozen before dispatch") {
+			assert.deepEqual(failures, ["failure"], "unproven terminal input must still fail");
+			return;
+		}
+		assert.deepEqual(failures, [], "preparation settlement must await actual dispatch");
+		const replaced = scenario.startsWith("cancelled") || scenario === "replaced Run" ||
+			scenario === "failed settlement after cancellation";
+		if (replaced) {
+			await lane.run(() => scheduler.prepareInterruptionInLane(record));
+			await lane.run(() => scheduler.discardInLane(record));
+			if (scenario === "replaced Run") handle = Object.freeze({ sequence: 2 });
+			nextCompletion = new Promise(() => {});
+			await scheduler.admit(record, delivery("second"));
+		}
+		proof = { agentId: "recipient", entryId: "proof" };
+		if (scenario === "cancelled reservation failure") rejectPrompt(new Error("cancelled dispatch"));
+		else resolvePrompt();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		await lane.run(() => {});
+		assert.deepEqual(failures, scenario.startsWith("failed settlement") ? ["failure"] : []);
+		if (replaced && !scenario.startsWith("failed settlement")) {
+			assert.equal(scheduler.hasDispatchReservation("recipient", "second"), true);
+			assert.deepEqual(committed, []);
+		} else if (scenario === "safe boundary") {
+			assert.equal(scheduler.hasDispatchReservation("recipient", "first"), false);
+			assert.deepEqual(committed, ["first"]);
+		}
+	});
+}

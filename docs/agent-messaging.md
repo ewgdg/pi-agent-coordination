@@ -104,7 +104,9 @@ Transcript commitment and native prompt completion are separate. The child Contr
 
 Preparation may start and finish an extension-owned Pi cycle before the Request starts another cycle. Both cycles keep their ordinary lifecycle events; transport cycle identity is not logical Agent Run identity. Completion tracking does not suppress settlement or change Run retention/release eligibility.
 
-The scheduler waits for tracked dispatch completion outside the recipient's serial lane so the actual turn can reach awaited safe boundaries. It re-enters the lane and revalidates the exact Run and dispatch reservations before reconciliation; stale tracking cannot consume a newer dispatch.
+Orderly hosted Runtime disposal rejects pending completion tracking before removing its event listener, without synthesizing native lifecycle events.
+
+The scheduler tracks dispatched Steer batches alongside Resume, Deferred, and Wait-preempting deliveries. It waits for dispatch completion outside the recipient's serial lane so the actual turn can reach awaited safe boundaries. It re-enters the lane and revalidates the exact Run and dispatch reservations before reconciliation; stale tracking cannot consume a newer dispatch.
 
 ## Delivery presentation
 

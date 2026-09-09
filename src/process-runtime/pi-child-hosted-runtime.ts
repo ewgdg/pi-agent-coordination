@@ -219,6 +219,9 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	dispose(): Promise<void> {
 		this.#disposePromise ??= (async () => {
 			this.#shutdownExpected = true;
+			// Expected shutdown suppresses transport fencing; tracking must still
+			// terminate before disposal removes the completion-event listener.
+			this.#rejectPendingCompletions(new Error("child_runtime_disposed"));
 			this.#clearCompaction();
 			try {
 				await this.#launch.dispose();
@@ -401,6 +404,13 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#emit({ type: "state_changed" });
 	}
 
+	#rejectPendingCompletions(error: unknown): void {
+		for (const waiter of [...this.#settlementWaiters, ...this.#dispatchCompletions.values()]) {
+			waiter.reject(error);
+		}
+		this.#dispatchCompletions.clear();
+	}
+
 	#endTransport(error: unknown, cause: "failure" | "shutdown" = "failure"): void {
 		if (this.#unavailable) return;
 		const terminalRun = this.#runObserved && cause === "failure";
@@ -409,9 +419,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#compacting = false;
 		this.#workState = "unavailable";
 		this.#currentRunId = undefined;
-		for (const waiter of [...this.#settlementWaiters, ...this.#dispatchCompletions.values()]) {
-			waiter.reject(error);
-		}
+		this.#rejectPendingCompletions(error);
 		if (terminalRun) {
 			this.#emit({ type: "agent_end", outcome: "error", willRetry: false });
 		}
