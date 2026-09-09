@@ -1,3 +1,4 @@
+import type { CommitModeratorReminderIfCurrent, ModeratorReminderOutcome } from "./agent-runtime-host.ts";
 import type { AgentSessionRuntime } from "@earendil-works/pi-coding-agent";
 
 import type { TerminalProjection } from "../presentation/terminal-projection.ts";
@@ -305,6 +306,12 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		this.#runtime!.hasInput = true;
 		this.#trackOperation(dispatched.completion);
 		return dispatched;
+	}
+
+	async deliverModeratorReminderInLane(commitIfCurrent: CommitModeratorReminderIfCurrent): Promise<ModeratorReminderOutcome> {
+		const operation = this.#requireLiveRuntime().deliverModeratorReminder(commitIfCurrent);
+		this.#trackOperation(operation.then(() => undefined));
+		return operation;
 	}
 
 	async beginShutdown(): Promise<boolean> {

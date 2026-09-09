@@ -11,6 +11,7 @@ import {
 import type { MessageDeliveryMode } from "../protocol/message.ts";
 import type { ContextPreparation } from "../policy/working-zone-preparation.ts";
 import type {
+	CommitModeratorReminderIfCurrent,
 	AgentRunHandle,
 	AgentRunSettlement,
 	AgentRuntimeDelivery,
@@ -41,6 +42,7 @@ export type ScheduledMessageDelivery = ScheduledDeliveryBase & Readonly<{
 
 export type ScheduledCustomDelivery = ScheduledDeliveryBase & Readonly<{
 	deliveryMode: "deferred";
+	commitIfCurrent?: CommitModeratorReminderIfCurrent;
 	customMessage: Extract<AgentRuntimeDelivery, { kind: "custom" }>["message"];
 }>;
 
@@ -136,6 +138,7 @@ export class MessageDeliveryScheduler {
 	readonly #progressChanged: () => void;
 	readonly #isWaitingForCapacity: (agentId: string) => boolean;
 	readonly #pendingByAgent = new Map<string, Map<string, ScheduledDelivery>>();
+	readonly #activeModeratorReminderByAgent = new Map<string, { settled: boolean }>();
 	readonly #activeDeferredByAgent = new Map<string, ActiveDeferredDelivery>();
 	readonly #activeWaitPreemptionByAgent = new Map<string, ActiveWaitPreemption>();
 	readonly #frozenSteerByAgent = new Map<string, FrozenSteerBatch>();
@@ -467,6 +470,7 @@ export class MessageDeliveryScheduler {
 	}
 
 	discardInLane(record: AgentRecord): void {
+		this.#activeModeratorReminderByAgent.delete(record.identity.agentId);
 		this.#activeDeferredByAgent.delete(record.identity.agentId);
 		this.#activeWaitPreemptionByAgent.delete(record.identity.agentId);
 		this.#frozenSteerByAgent.delete(record.identity.agentId);
@@ -539,6 +543,8 @@ export class MessageDeliveryScheduler {
 		handle: AgentRunHandle,
 		settlement: AgentRunSettlement,
 	): Promise<void> {
+		const reminder = this.#activeModeratorReminderByAgent.get(record.identity.agentId);
+		if (reminder) reminder.settled = true;
 		const activeResume = this.#activeResumeByAgent.get(record.identity.agentId);
 		if (activeResume) {
 			let failed = false;
@@ -671,6 +677,7 @@ export class MessageDeliveryScheduler {
 			return;
 		}
 		if (
+			this.#activeModeratorReminderByAgent.has(record.identity.agentId) ||
 			this.#activeDeferredByAgent.has(record.identity.agentId) ||
 			this.#hasUnprovenFrozenBatch(record)
 		) return;
@@ -698,6 +705,10 @@ export class MessageDeliveryScheduler {
 			this.#freezeSteerInLane(record, steer);
 			return;
 		}
+		if ("commitIfCurrent" in delivery && delivery.commitIfCurrent) {
+			this.#dispatchModeratorReminderInLane(record, delivery, delivery.commitIfCurrent);
+			return;
+		}
 		// A parked Owner is settled-equivalent but still natively active. After an
 		// Answer, Pi continues from a tool result without first draining followUp;
 		// use its steering queue so this Delivery precedes that continuation.
@@ -719,6 +730,43 @@ export class MessageDeliveryScheduler {
 			completion,
 			deliveryCommitted: false,
 		});
+	}
+
+	#dispatchModeratorReminderInLane(
+		record: AgentRecord, delivery: ScheduledCustomDelivery, commitIfCurrent: CommitModeratorReminderIfCurrent,
+	): void {
+		const agentId = record.identity.agentId;
+		const active = { settled: false };
+		this.#activeModeratorReminderByAgent.set(agentId, active);
+		// Preparation/commit must not hold the scheduler lane: the operational
+		// reconciliation lane orders episode clearance against the native commit ACK.
+		void record.host.deliverModeratorReminderInLane(commitIfCurrent).then(
+			outcome => record.host.lane.run(async () => {
+				if (this.#activeModeratorReminderByAgent.get(agentId) !== active) return;
+				this.#activeModeratorReminderByAgent.delete(agentId);
+				if (outcome !== "busy") {
+					const removed = this.#pendingByAgent.get(agentId)?.delete(delivery.messageId);
+					if (removed && outcome === "committed") delivery.afterCommit?.();
+				}
+				this.#removeProvenDeliveriesInLane(record);
+				this.#removePendingDeliveryReason(record);
+				// A settlement can arrive before the busy response; do not lose that edge.
+				if (outcome !== "busy" || active.settled) await this.#drainInLane(record);
+				else this.#progressChanged();
+				const handle = record.host.currentHandle();
+				if (handle) this.#scheduleReleaseEvaluation(record, handle);
+			}),
+			error => record.host.lane.run(() => {
+				if (this.#activeModeratorReminderByAgent.get(agentId) !== active) return;
+				this.#activeModeratorReminderByAgent.delete(agentId);
+				this.#pendingByAgent.get(agentId)?.delete(delivery.messageId);
+				this.#failDeliveryProgress(delivery, error);
+				this.#removeProvenDeliveriesInLane(record);
+				this.#removePendingDeliveryReason(record);
+				const handle = record.host.currentHandle();
+				if (handle) this.#scheduleReleaseEvaluation(record, handle);
+			}),
+		).catch(error => this.#failDeliveryProgress(delivery, error));
 	}
 
 	#dispatchInLane(
@@ -983,7 +1031,8 @@ export class MessageDeliveryScheduler {
 	}
 
 	hasProgress(record: AgentRecord): boolean {
-		if (this.#activeDeferredByAgent.has(record.identity.agentId) ||
+		if (this.#activeModeratorReminderByAgent.has(record.identity.agentId) ||
+			this.#activeDeferredByAgent.has(record.identity.agentId) ||
 			this.#activeWaitPreemptionByAgent.has(record.identity.agentId) ||
 			this.#reservedResumeByAgent.has(record.identity.agentId) ||
 			this.#activeResumeByAgent.has(record.identity.agentId) ||
@@ -998,7 +1047,8 @@ export class MessageDeliveryScheduler {
 	}
 
 	#hasPendingScheduling(record: AgentRecord): boolean {
-		return this.#activeDeferredByAgent.has(record.identity.agentId) ||
+		return this.#activeModeratorReminderByAgent.has(record.identity.agentId) ||
+			this.#activeDeferredByAgent.has(record.identity.agentId) ||
 			this.#activeWaitPreemptionByAgent.has(record.identity.agentId) ||
 			this.#reservedResumeByAgent.has(record.identity.agentId) ||
 			this.#activeResumeByAgent.has(record.identity.agentId) ||

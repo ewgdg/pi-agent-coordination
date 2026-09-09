@@ -1,3 +1,5 @@
+import { ModeratorReminderAdmission } from "./moderator-reminder-admission.ts";
+import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import { bindChildInteractiveInputLifecycle } from "./child-runtime-interactive-mode.ts";
 
 import * as hostPi from "@earendil-works/pi-coding-agent";
@@ -72,6 +74,7 @@ type ChildRuntimeBinding = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
 	turnCompaction: ChildTurnCompactionGateway;
+	reminderAdmission: ModeratorReminderAdmission;
 	activity: RemoteAgentActivitySource;
 	publishRuntimeSnapshot(): Promise<void>;
 	reinitializePresentation(completionMarker: string): void;
@@ -447,6 +450,36 @@ export function createChildRuntimeBinding(
 		runtime.session,
 		(message) => context.ui.notify(message, "warning"),
 	);
+	const reminderAdmission = new ModeratorReminderAdmission({
+		admit: operation => turnCompaction.admit(operation),
+		prepare: () => turnCompaction.prepareIdleCustomTurn(),
+		isIdle: () => runtime.session.isIdle,
+		async commit(signal) {
+			// Only commit, not preparation, admits a native Run identity.
+			const runId = `native-run-${++state.nativeRunSequence}`;
+			admitRun(state, runId);
+			try {
+				const delivery = {
+					kind: "custom" as const,
+					message: createModelVisibleModeratorObligationReminder(),
+					triggerTurn: true,
+				};
+				const proof = observeDeliveryCommit(runtime, context.sessionManager, delivery, signal);
+				const completion = runtime.session.sendCustomMessage(delivery.message, { triggerTurn: true });
+				void completion.then(
+					() => queueMicrotask(() => proof.settle(false)),
+					error => {
+						proof.reject(error);
+						void failCurrentRun(state, runtime, activity, runId, error);
+					},
+				);
+				// Proof is child-local: no Owner reconciliation or host lane is needed.
+				if (!await proof.result) throw new Error("moderator_reminder_commit_missing");
+			} finally {
+				if (runtime.session.isIdle && state.currentRunId === runId) state.currentRunId = undefined;
+			}
+		},
+	});
 	const removeLifecycleSubscription = runtime.session.subscribe((event) => {
 		if (event.type === "compaction_start") {
 			void state.channel.sendEvent("runtime.compaction.started", {}).catch(() => undefined);
@@ -469,6 +502,7 @@ export function createChildRuntimeBinding(
 		context,
 		runtime,
 		turnCompaction,
+		reminderAdmission,
 		activity,
 		publishRuntimeSnapshot,
 		reinitializePresentation,
@@ -491,6 +525,7 @@ export function createChildRuntimeBinding(
 		dispose() {
 			if (disposed) return;
 			disposed = true;
+			reminderAdmission.cancel();
 			turnCompaction.dispose();
 			if (
 				state.currentBinding === binding &&
@@ -596,6 +631,23 @@ async function handleOwnerRequest(
 				binding.turnCompaction.completeOwnerRun(request.payload.runId);
 			}
 			return { accepted };
+		}
+		case "moderatorReminder.prepare": {
+			const cancel = () => binding.reminderAdmission.cancel();
+			request.signal.addEventListener("abort", cancel, { once: true });
+			try {
+				if (request.signal.aborted) throw requestCancellationError(request.signal);
+				return { prepared: await binding.reminderAdmission.prepare(request.payload.reservationId) };
+			} finally { request.signal.removeEventListener("abort", cancel); }
+		}
+		case "moderatorReminder.finish": {
+			const cancel = () => binding.reminderAdmission.cancel();
+			request.signal.addEventListener("abort", cancel, { once: true });
+			try {
+				if (request.signal.aborted) { cancel(); throw requestCancellationError(request.signal); }
+				const outcome = await binding.reminderAdmission.finish(request.payload.reservationId, request.payload.commit);
+				return { outcome };
+			} finally { request.signal.removeEventListener("abort", cancel); }
 		}
 		case "message.deliver": {
 			let commit: ReturnType<typeof observeDeliveryCommit> | undefined;
@@ -764,6 +816,7 @@ async function handleOwnerRequest(
 			};
 		}
 		case "run.interrupt": {
+			binding.reminderAdmission.cancel();
 			const current = state.currentRunId === request.payload.runId;
 			const known = binding.turnCompaction.hasOwnerRun(request.payload.runId);
 			if (!current && !known && !state.latestRunId) {

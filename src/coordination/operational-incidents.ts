@@ -826,6 +826,14 @@ export class OperationalIncidentCoordinator {
 		// that lane while waiting for this inspection, just as for ordinary reminders.
 		void this.#messages.admitCustomDelivery(recipient, {
 			messageId: moderatorObligationReminderDeliveryId(recipient.identity.agentId),
+			commitIfCurrent: commit => this.#reconciliationLane.run(async () => {
+				if (this.#handlingByKey.get(handling.snapshot.key) !== handling ||
+					handling.moderatorAgentId !== recipient.identity.agentId ||
+					!this.#conditionRemains(handling.snapshot)) return "suppressed";
+				// Clearance/resolve uses this same lane. Only native transcript ACK may
+				// complete this transaction, never enqueueing or model completion.
+				return commit();
+			}),
 			deliveryMode: "deferred",
 			customMessage: createModelVisibleModeratorObligationReminder(),
 			inspectProof,

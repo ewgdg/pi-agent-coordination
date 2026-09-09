@@ -1,3 +1,5 @@
+import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
+import type { CommitModeratorReminderIfCurrent, ModeratorReminderOutcome } from "./agent-runtime-host.ts";
 import type {
 	AgentSession,
 	AgentSessionServices,
@@ -106,6 +108,22 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 			},
 		);
 		return { completion, transcriptCommit };
+	}
+
+	async deliverModeratorReminder(commitIfCurrent: CommitModeratorReminderIfCurrent): Promise<ModeratorReminderOutcome> {
+		if (!this.#session.isIdle) return "busy";
+		return commitIfCurrent(async () => {
+			// Recheck after the reconciliation-lane admission; never enter a native queue.
+			if (!this.#session.isIdle) return "busy";
+			const message = createModelVisibleModeratorObligationReminder();
+			const existing = new Set(this.#session.sessionManager.getEntries().map(entry => entry.id));
+			const dispatched = this.deliver({ kind: "custom", message, triggerTurn: true }, {
+				inspectCommit: () => this.#session.sessionManager.getEntries().some(entry =>
+					!existing.has(entry.id) && entry.type === "custom_message" && entry.customType === message.customType),
+			});
+			if (!await dispatched.transcriptCommit) throw new Error("moderator_reminder_commit_missing");
+			return "committed";
+		});
 	}
 
 	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void {

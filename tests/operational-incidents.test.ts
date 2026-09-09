@@ -1,3 +1,4 @@
+import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import { obligationStack } from "../src/protocol/obligation-focus.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 import { latestRequestFromContext } from "./support/model-requests.ts";
@@ -3816,3 +3817,69 @@ test("a settled Moderator receives one handling reminder turn and releases when 
 	await host.session.abort();
 	await ownerPrompt;
 });
+
+test("clearing the incident before native reminder commitment suppresses delivery and releases the Moderator", { timeout: 5000 }, async (t) => {
+	const prepared = reminderTestDeferred<void>();
+	const allowDecision = reminderTestDeferred<void>();
+	const finished = reminderTestDeferred<string>();
+	const originalDelivery = PiChildHostedRuntime.prototype.deliverModeratorReminder;
+	t.mock.method(PiChildHostedRuntime.prototype, "deliverModeratorReminder", async function (
+		this: PiChildHostedRuntime,
+		commitIfCurrent: Parameters<PiChildHostedRuntime["deliverModeratorReminder"]>[0],
+	) {
+		let wasPrepared = false;
+		const outcome = await originalDelivery.call(this, async commit => {
+			wasPrepared = true;
+			prepared.resolve();
+			await allowDecision.promise;
+			return commitIfCurrent(commit);
+		});
+		if (wasPrepared) finished.resolve(outcome);
+		return outcome;
+	});
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true, processVisibleModel: true, implicitModeratorResponses: false,
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Demonstrate cleared handling." },
+			{ id: "spawn-before-clear" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Delegated."),
+		fauxAssistantMessage("Still owe an Answer."),
+		fauxAssistantMessage("Still owe an Answer after reminder."),
+		fauxAssistantMessage("I forgot to finish moderation."),
+	]);
+	const ownerPrompt = host.session.prompt("Create the stalled Agent.");
+	try {
+		const moderator = await waitForModerator(host);
+		await prepared.promise;
+		const source = host.session.sessionManager.getEntries().find(entry =>
+			entry.type === "message" && entry.message.role === "assistant" &&
+			entry.message.content.some(part => part.type === "toolCall" && part.id === "spawn-before-clear"));
+		assert.ok(source);
+		await executeAndCommitRegisteredTool(host.session, "agent_message", "clear-before-reminder", {
+			operation: "cancel",
+			requestMessageId: deriveMessageIdentity({
+				agentId: host.session.sessionId, entryId: source.id, toolCallId: "spawn-before-clear",
+			}),
+			reason: "Clear the incident before the prepared reminder commits.",
+		});
+		// Observation reconciles the real handling episode while its native admission waits.
+		await observeStatus(host, moderator.id);
+		allowDecision.resolve();
+		assert.equal(await finished.promise, "suppressed");
+		await waitForCondition(async () => (await observeStatus(host, moderator.id)).run.phase === "dormant");
+		assert.equal(SessionManager.open(moderator.path).getEntries().some(entry =>
+			entry.type === "custom_message" &&
+			entry.customType === "agent-coordination.moderator-obligation-reminder"), false);
+	} finally {
+		allowDecision.resolve();
+		await host.session.abort();
+		await ownerPrompt;
+	}
+});
+
+function reminderTestDeferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>(done => { resolve = done; });
+	return { promise, resolve };
+}

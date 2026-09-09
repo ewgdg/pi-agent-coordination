@@ -780,6 +780,14 @@ export const agentControlMethods = {
 			queuedInputCount: QueuedInputCountSchema,
 		}),
 	},
+	"moderatorReminder.prepare": {
+		request: closed({ reservationId: NonEmptyStringSchema }),
+		response: closed({ prepared: Type.Boolean() }),
+	},
+	"moderatorReminder.finish": {
+		request: closed({ reservationId: NonEmptyStringSchema, commit: Type.Boolean() }),
+		response: closed({ outcome: Type.Union([Type.Literal("committed"), Type.Literal("busy"), Type.Literal("suppressed")]) }),
+	},
 	"queue.clear": {
 		request: closed({ runId: NonEmptyStringSchema }),
 		response: closed({

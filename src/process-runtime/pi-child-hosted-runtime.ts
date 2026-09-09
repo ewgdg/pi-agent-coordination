@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type {
+	CommitModeratorReminderIfCurrent,
+	ModeratorReminderOutcome,
 	AgentRuntimeDelivery,
 	AgentRuntimeDeliveryDispatch,
 	AgentRuntimeWorkState,
@@ -55,6 +58,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	#cancellation = new AbortController();
 	#unavailable: unknown;
 	#shutdownExpected = false;
+	#reminderAdmissionAbort: AbortController | undefined;
 	#disposePromise: Promise<void> | undefined;
 
 	constructor(
@@ -188,6 +192,48 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		return { completion, transcriptCommit };
 	}
 
+	async deliverModeratorReminder(
+		commitIfCurrent: CommitModeratorReminderIfCurrent,
+	): Promise<ModeratorReminderOutcome> {
+		if (this.#reminderAdmissionAbort) throw new Error("moderator_reminder_already_reserved");
+		const cancellation = new AbortController();
+		this.#reminderAdmissionAbort = cancellation;
+		const reservationId = randomUUID();
+		let finished = false;
+		let rejectCancellation!: (error: unknown) => void;
+		const cancelled = new Promise<never>((_resolve, reject) => { rejectCancellation = reject; });
+		const onAbort = () => rejectCancellation(cancellation.signal.reason);
+		cancellation.signal.addEventListener("abort", onAbort, { once: true });
+		void cancelled.catch(() => undefined);
+		try {
+			const runtime = await this.#admitted;
+			try {
+				const { prepared } = await runtime.channel.request(
+					"moderatorReminder.prepare", { reservationId }, cancellation.signal,
+				);
+				if (!prepared) return "busy";
+				return await Promise.race([commitIfCurrent(async () => {
+					cancellation.signal.throwIfAborted();
+					const { outcome } = await runtime.channel.request(
+						"moderatorReminder.finish", { reservationId, commit: true }, cancellation.signal,
+					);
+					finished = true;
+					if (outcome === "suppressed") throw new Error("moderator_reminder_commit_suppressed");
+					return outcome;
+				}), cancelled]);
+			} finally {
+				if (!finished) {
+					// Release even if the prepare response was cancelled in transit.
+					// This never clears unrelated native queues.
+					await runtime.channel.request("moderatorReminder.finish", { reservationId, commit: false });
+				}
+			}
+		} finally {
+			cancellation.signal.removeEventListener("abort", onAbort);
+			if (this.#reminderAdmissionAbort === cancellation) this.#reminderAdmissionAbort = undefined;
+		}
+	}
+
 	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void {
 		this.#handlers.add(handler);
 		return () => this.#handlers.delete(handler);
@@ -204,6 +250,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	}
 
 	async abort(): Promise<void> {
+		this.#reminderAdmissionAbort?.abort();
 		const runId = this.#latestRunId;
 		if (!runId) return;
 		await this.#admitted.then((runtime) =>
@@ -222,6 +269,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			// Expected shutdown suppresses transport fencing; tracking must still
 			// terminate before disposal removes the completion-event listener.
 			this.#rejectPendingCompletions(new Error("child_runtime_disposed"));
+			this.#reminderAdmissionAbort?.abort();
 			this.#clearCompaction();
 			try {
 				await this.#launch.dispose();
@@ -415,6 +463,7 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		if (this.#unavailable) return;
 		const terminalRun = this.#runObserved && cause === "failure";
 		this.#unavailable = error;
+		this.#reminderAdmissionAbort?.abort(error);
 		this.#cancellation.abort();
 		this.#compacting = false;
 		this.#workState = "unavailable";

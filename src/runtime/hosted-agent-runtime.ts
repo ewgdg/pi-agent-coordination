@@ -1,4 +1,6 @@
 import type {
+	CommitModeratorReminderIfCurrent,
+	ModeratorReminderOutcome,
 	AgentRuntimeDelivery,
 	AgentRuntimeDeliveryDispatch,
 	AgentRuntimeWorkState,
@@ -33,6 +35,7 @@ export interface HostedAgentRuntime {
 		delivery: AgentRuntimeDelivery,
 		confirmation?: TranscriptCommitConfirmation,
 	): AgentRuntimeDeliveryDispatch;
+	deliverModeratorReminder(commitIfCurrent: CommitModeratorReminderIfCurrent): Promise<ModeratorReminderOutcome>;
 	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void;
 	clearQueue(): Promise<Readonly<{ steering: string[]; followUp: string[] }>>;
 	abort(): Promise<void>;
