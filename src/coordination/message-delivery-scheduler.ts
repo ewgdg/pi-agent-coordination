@@ -118,6 +118,7 @@ type ActiveWaitPreemption = ActiveDeferredDelivery;
 type FrozenSteerBatch = {
 	deliveries: readonly ScheduledMessageDelivery[];
 	dispatched: boolean;
+	completion?: Promise<void>;
 };
 
 type ReservedResume = Readonly<{
@@ -509,10 +510,11 @@ export class MessageDeliveryScheduler {
 		const agentId = record.identity.agentId;
 		const reservations = [
 			[this.#activeResumeByAgent, this.#activeResumeByAgent.get(agentId)],
+			[this.#frozenSteerByAgent, this.#frozenSteerByAgent.get(agentId)],
 			[this.#activeDeferredByAgent, this.#activeDeferredByAgent.get(agentId)],
 			[this.#activeWaitPreemptionByAgent, this.#activeWaitPreemptionByAgent.get(agentId)],
 		] as const;
-		const completions = reservations.flatMap(([, active]) => active ? [active.completion] : []);
+		const completions = reservations.flatMap(([, active]) => active?.completion ? [active.completion] : []);
 		if (completions.length === 0) return this.#finishSettledInLane(record, handle, settlement);
 		// A preparation replacement can settle before the actual Delivery turn.
 		// That turn still needs this lane for awaited safe-boundary callbacks.
@@ -895,9 +897,11 @@ export class MessageDeliveryScheduler {
 		);
 		if (unprovenSteer.length === 0) return;
 		frozen.dispatched = true;
-		this.#dispatchInLane(record, unprovenSteer,
+		// Idle Steer preparation can settle a replacement before this dispatch
+		// finishes, just like Deferred. Keep its completion with the exact batch.
+		frozen.completion = this.#dispatchInLane(record, unprovenSteer,
 			createRuntimeMessageDelivery(unprovenSteer, "steer"),
-		);
+		).completion;
 	}
 
 	#removeProvenDeliveriesInLane(record: AgentRecord): void {

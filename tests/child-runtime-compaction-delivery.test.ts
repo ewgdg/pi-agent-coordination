@@ -8,7 +8,7 @@ import { MessageDeliveryScheduler } from "../src/coordination/message-delivery-s
 import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { WorkflowPolicyStore } from "../src/policy/workflow-policy.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
-import type { AgentRuntimeHost } from "../src/runtime/agent-runtime-host.ts";
+import type { AgentRuntimeDelivery, AgentRuntimeHost } from "../src/runtime/agent-runtime-host.ts";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import type { PiChildProcessLaunch, PiChildProcessRuntime, PiChildRuntimeEvent } from "../src/process-runtime/pi-child-process-runtime.ts";
 import { createChildRuntimeBinding } from "../src/process-runtime/child-runtime-bridge.ts";
@@ -39,12 +39,11 @@ const paths = [
 	{ name: "native threshold", tokens: 190_000, preparation: undefined },
 ] as const;
 const cases = [
-	...paths.flatMap((path) => [false, true].map((replacementFinishesFirst) => ({
-		path, replacementFinishesFirst,
-	}))),
+	...paths.flatMap((path) => [false, true].flatMap((replacementFinishesFirst) =>
+		(["deferred", "steer"] as const).map((deliveryMode) => ({ path, replacementFinishesFirst, deliveryMode })))),
 ];
-for (const { path, replacementFinishesFirst } of cases) {
-	test(`${path.name}: replacement ${replacementFinishesFirst ? "finishes before rejection" : "still active"}`, {
+for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
+	test(`${deliveryMode}, ${path.name}: replacement ${replacementFinishesFirst ? "finishes before rejection" : "still active"}`, {
 		timeout: 5_000,
 	}, async (t) => {
 		let context!: ExtensionContext;
@@ -155,6 +154,7 @@ for (const { path, replacementFinishesFirst } of cases) {
 			dispose: async () => {},
 		} as unknown as PiChildProcessLaunch, []);
 		await parent.ready;
+		const failures: string[] = [];
 		let dispatched!: ReturnType<typeof parent.deliver>;
 		const handle = Object.freeze({ sequence: 1 });
 		const scheduler = new MessageDeliveryScheduler({ workflowPolicy: new WorkflowPolicyStore() });
@@ -172,24 +172,23 @@ for (const { path, replacementFinishesFirst } of cases) {
 				blocksOrdinaryDelivery: () => false,
 				currentWorkState: () => parent.workState(),
 				observe: () => ({ phase: "live", work: parent.workState(), attention: "none", retentionReasons: [] }),
-				deliverInLane: () => dispatched = parent.deliver({
-					kind: "custom",
-					message: deliveryMessage,
-					triggerTurn: true,
-					...(path.preparation ? { workingZonePreparation: path.preparation } : {}),
-				}, { inspectCommit: () => true }),
+				deliverInLane: (input: AgentRuntimeDelivery) => dispatched = parent.deliver(input, { inspectCommit: () => true }),
 				finishIsolatedResumptionInLane() {},
-				discardAndEndInLane: async () => { assert.fail("successful Delivery must not fail its Run"); },
+				discardAndEndInLane: async (cause: string) => { failures.push(cause); },
 				releaseIfEligibleInLane() {},
 			} as unknown as AgentRuntimeHost,
 		} as unknown as AgentRecord;
 		scheduler.integrate(record);
 		safeBoundary = () => scheduler.reachSafeBoundary(record);
 		try {
-			await scheduler.admitCustom(record, {
+			await scheduler.admit(record, {
 				messageId: "actual-request",
-				deliveryMode: "deferred",
-				customMessage: deliveryMessage,
+				deliveryMode,
+				...(path.preparation ? { contextPreparation: path.preparation.intent } : {}),
+				deliveryItem: {
+					source: { agentId: "requester", entryId: "source-entry", toolCallId: "source-call" },
+					projection: preparation.prospectiveRequest,
+				},
 				inspectProof: () => {
 					const entry = session.sessionManager.getEntries().find((entry) =>
 						entry.type === "custom_message" && entry.customType === deliveryMessage.customType);
@@ -204,6 +203,7 @@ for (const { path, replacementFinishesFirst } of cases) {
 			assert.equal(session.isIdle, false);
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			assert.equal(completed, false, "Owner completion must remain pending during the actual Request");
+			assert.deepEqual(failures, [], "replacement settlement must not fail the actual Delivery");
 			assert.equal(parent.workState(), "active");
 			assert.equal(state.currentRunId, replacementFinishesFirst ? "native-run-1" : "hosted-run-1");
 			assert.equal(manualAttempts, 1);
@@ -220,7 +220,11 @@ for (const { path, replacementFinishesFirst } of cases) {
 			finishReplacement();
 			await session.waitForIdle();
 			await dispatched.completion;
-			assert.equal(safeBoundaries, replacementFinishesFirst ? 2 : 1);
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			await record.host.lane.run(() => {});
+			assert.deepEqual(failures, [], "successful Delivery must not fail its Run");
+			// followUp starts after replacement turn_end; steering can join that turn.
+			assert.equal(safeBoundaries, replacementFinishesFirst || deliveryMode === "deferred" ? 2 : 1);
 			assert.equal(parent.workState(), "settled");
 			assert.deepEqual(events.filter(({ event }) => event.startsWith("agent.")).map(({ event, payload }) => [event, (payload as { runId: string }).runId]), [
 				["agent.start", "hosted-run-1"], ["agent.end", "hosted-run-1"], ["agent.settled", "hosted-run-1"],

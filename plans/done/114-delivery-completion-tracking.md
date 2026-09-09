@@ -34,3 +34,11 @@ The original premature completion also masked a lock cycle: actual Pi turn_end a
 
 ## Retrospective
 Transport cycles and logical Agent Runs are separate. Correlating a dispatch Promise is sufficient; native lifecycle events need no admission hold.
+
+## Adversarial-review follow-up
+- Reproduced disposal after receipt/settlement but before dispatch completion with the real supervisor: its tracked-operation join remained pending.
+- Reproduced three fast prepared Steer failures with real Pi, bridge, hosted adapter, and scheduler. Strengthened the failure oracle to record causes and assert them from the test body.
+- Disposal now rejects pending tracking without invoking transport fencing or changing native lifecycle policy.
+- Frozen Steer batches retain their dispatch completion and join the same outside-lane wait/exact-reservation validation. Undispatched batches and terminal queued drops keep their existing failure behavior.
+- Real-Pi matrix now covers Deferred and Steer across all three preparation paths and both replacement timings (12 cases), forwarding the scheduler's actual inputs rather than substituting test-only dispatch options.
+- Validation: 40 focused tracking tests, 14 hosted/queue/preemption tests, 9 selected scheduling/cancellation tests, and typecheck passed. No full suite.
