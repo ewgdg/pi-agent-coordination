@@ -121,3 +121,62 @@ for (const outcome of ["suppressed", "failed"] as const) {
 		} finally { finish.resolve(); scheduler.shutdownProgress(); }
 	});
 }
+
+for (const kind of ["message", "request"] as const) {
+	test(`failed reminder preparation advances an already admitted ${kind} without an external boundary`, { timeout: 5000 }, async () => {
+		const lane = new SerialLane();
+		const handle = { sequence: 1 };
+		const finishPreparation = deferred();
+		const releaseEvaluated = deferred();
+		const delivered: string[] = [];
+		const record = {
+			identity: { agentId: "moderator" },
+			host: {
+				lane, currentHandle: () => handle, isCurrent: () => true,
+				addSettledHandler: () => () => {},
+				addRetentionReason() {}, removeRetentionReason() {},
+				blocksOrdinaryDelivery: () => false,
+				currentWorkState: () => "settled",
+				observe: () => ({ phase: "live", work: "settled", attention: "none", retentionReasons: [] }),
+				releaseIfEligibleInLane: () => releaseEvaluated.resolve(),
+				async deliverModeratorReminderInLane() {
+					await finishPreparation.promise;
+					throw new Error("native preparation failed");
+				},
+				deliverInLane(delivery: { message: { content: string } }) {
+					delivered.push(delivery.message.content);
+					return { completion: Promise.resolve() };
+				},
+			},
+		} as unknown as AgentRecord;
+		const scheduler = new MessageDeliveryScheduler({ workflowPolicy: new WorkflowPolicyStore() });
+		const content = `ordinary ${kind} admitted during reminder preparation`;
+		try {
+			await scheduler.admitCustom(record, {
+				messageId: "reminder", deliveryMode: "deferred",
+				customMessage: createModelVisibleModeratorObligationReminder(),
+				inspectProof: () => undefined,
+				commitIfCurrent: async commit => commit(),
+			});
+			await scheduler.admit(record, {
+				messageId: "ordinary", deliveryMode: "deferred", isIncomingRequest: kind === "request",
+				inspectProof: () => undefined,
+				deliveryItem: {
+					source: { agentId: "sender", entryId: "source", toolCallId: "ordinary" },
+					projection: kind === "message"
+						? { kind, messageId: "ordinary", fromAgentId: "sender", content }
+						: { kind, requestMessageId: "ordinary", fromAgentId: "sender", question: content },
+				},
+			});
+			assert.equal(delivered.length, 0, "preparation still owns the dispatch reservation");
+			finishPreparation.resolve();
+			// Failure completion already evaluates release; observing it does not kick scheduling.
+			await releaseEvaluated.promise;
+			assert.equal(delivered.length, 1, "eligible delivery must advance without another settlement");
+			assert.ok(delivered[0]?.includes(content));
+		} finally {
+			finishPreparation.resolve();
+			scheduler.shutdownProgress();
+		}
+	});
+}
