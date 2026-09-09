@@ -569,6 +569,332 @@ for (const scenario of [
 	});
 }
 
+
+test("hosted child reminder busy releases explicit reservation", { timeout: 5000 }, async () => {
+	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+	let reserved = false;
+	let prepareCalls = 0;
+	let callbackCalls = 0;
+	const calls: Array<{ method: string; payload: unknown }> = [];
+	const admitted = {
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-busy", thinking: "off", toolExecutionModes: [] }),
+		channel: {
+			onClose: () => () => undefined,
+			async request(method: string, payload: unknown) {
+				calls.push({ method, payload });
+				if (method === "moderatorReminder.prepare") {
+					assert.equal(reserved, false);
+					reserved = true;
+					prepareCalls++;
+					return { prepared: prepareCalls > 1 };
+				}
+				if (method === "moderatorReminder.finish") {
+					assert.equal((payload as { commit: boolean }).commit, false);
+					reserved = false;
+					return { outcome: "suppressed" };
+				}
+				throw new Error("unexpected request: " + method);
+			},
+		},
+	} as unknown as PiChildProcessRuntime;
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	try {
+		await runtime.ready;
+		assert.equal(await runtime.deliverModeratorReminder(async () => {
+			callbackCalls++;
+			return "committed";
+		}), "busy");
+		assert.equal(callbackCalls, 0);
+		assert.equal(reserved, false);
+		assert.deepEqual(calls.map(({ method }) => method), [
+			"moderatorReminder.prepare",
+			"moderatorReminder.finish",
+		]);
+
+		assert.equal(await runtime.deliverModeratorReminder(async () => {
+			callbackCalls++;
+			return "suppressed";
+		}), "suppressed");
+		assert.equal(callbackCalls, 1);
+		assert.equal(reserved, false, "a busy reservation must not block its successor");
+	} finally {
+		await runtime.dispose();
+	}
+});
+
+test("hosted child reminder stale callback suppresses and releases reservation", { timeout: 5000 }, async () => {
+	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+	let reserved = false;
+	const calls: Array<{ method: string; payload: unknown }> = [];
+	const admitted = {
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-stale", thinking: "off", toolExecutionModes: [] }),
+		channel: {
+			onClose: () => () => undefined,
+			async request(method: string, payload: unknown) {
+				calls.push({ method, payload });
+				if (method === "moderatorReminder.prepare") {
+					assert.equal(reserved, false);
+					reserved = true;
+					return { prepared: true };
+				}
+				if (method === "moderatorReminder.finish") {
+					const commit = (payload as { commit: boolean }).commit;
+					assert.equal(commit, false, "a stale callback must release, never commit");
+					reserved = false;
+					return { outcome: "suppressed" };
+				}
+				throw new Error("unexpected request: " + method);
+			},
+		},
+	} as unknown as PiChildProcessRuntime;
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	try {
+		await runtime.ready;
+		const outcome = await runtime.deliverModeratorReminder(async (commit) => {
+			assert.equal(typeof commit, "function");
+			return "suppressed";
+		});
+		assert.equal(outcome, "suppressed");
+		assert.equal(reserved, false);
+		assert.equal(calls.filter(({ method, payload }) =>
+			method === "moderatorReminder.finish" && (payload as { commit: boolean }).commit
+		).length, 0);
+		assert.equal(await runtime.deliverModeratorReminder(async () => "suppressed"), "suppressed");
+	} finally {
+		await runtime.dispose();
+	}
+});
+
+test("hosted child reminder throwing callback releases reservation", { timeout: 5000 }, async () => {
+	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+	let reserved = false;
+	let prepareCalls = 0;
+	const callbackError = new Error("reconciliation failed");
+	const admitted = {
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-throw", thinking: "off", toolExecutionModes: [] }),
+		channel: {
+			onClose: () => () => undefined,
+			async request(method: string, payload: unknown) {
+				if (method === "moderatorReminder.prepare") {
+					assert.equal(reserved, false);
+					reserved = true;
+					prepareCalls++;
+					return { prepared: true };
+				}
+				if (method === "moderatorReminder.finish") {
+					assert.equal((payload as { commit: boolean }).commit, false);
+					reserved = false;
+					return { outcome: "suppressed" };
+				}
+				throw new Error("unexpected request: " + method);
+			},
+		},
+	} as unknown as PiChildProcessRuntime;
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	try {
+		await runtime.ready;
+		await assert.rejects(
+			runtime.deliverModeratorReminder(async () => {
+				throw callbackError;
+			}),
+			(error) => error === callbackError,
+		);
+		assert.equal(reserved, false);
+		assert.equal(prepareCalls, 1);
+		assert.equal(await runtime.deliverModeratorReminder(async () => "suppressed"), "suppressed");
+		assert.equal(reserved, false);
+	} finally {
+		await runtime.dispose();
+	}
+});
+
+test("hosted child reminder abort while callback waits releases promptly and late callback cannot commit", { timeout: 5000 }, async () => {
+	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+	let reserved = false;
+	let finishRelease!: () => void;
+	const releaseObserved = new Promise<void>((resolve) => { finishRelease = resolve; });
+	let callbackStarted!: () => void;
+	const callbackEntered = new Promise<void>((resolve) => { callbackStarted = resolve; });
+	let allowLateCallback!: () => void;
+	const lateCallbackAllowed = new Promise<void>((resolve) => { allowLateCallback = resolve; });
+	let callbackFinished!: () => void;
+	const callbackCompleted = new Promise<void>((resolve) => { callbackFinished = resolve; });
+	let lateCommitRejected = false;
+	let finishCommitCalls = 0;
+	const admitted = {
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-abort", thinking: "off", toolExecutionModes: [] }),
+		channel: {
+			onClose: () => () => undefined,
+			async request(method: string, payload: unknown) {
+				if (method === "moderatorReminder.prepare") {
+					assert.equal(reserved, false);
+					reserved = true;
+					return { prepared: true };
+				}
+				if (method === "moderatorReminder.finish") {
+					const commit = (payload as { commit: boolean }).commit;
+					if (commit) {
+						finishCommitCalls++;
+						throw new Error("late commit reached transport");
+					}
+					reserved = false;
+					finishRelease();
+					return { outcome: "suppressed" };
+				}
+				throw new Error("unexpected request: " + method);
+			},
+		},
+	} as unknown as PiChildProcessRuntime;
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	try {
+		await runtime.ready;
+		const reminder = runtime.deliverModeratorReminder(async (commit) => {
+			callbackStarted();
+			await lateCallbackAllowed;
+			try {
+				await commit();
+			} catch {
+				lateCommitRejected = true;
+			}
+			callbackFinished();
+			return "suppressed";
+		});
+		await callbackEntered;
+		await runtime.abort();
+		await assert.rejects(reminder);
+		await releaseObserved;
+		assert.equal(reserved, false);
+		allowLateCallback();
+		await callbackCompleted;
+		assert.equal(lateCommitRejected, true);
+		assert.equal(finishCommitCalls, 0, "an aborted callback cannot commit after release");
+	} finally {
+		allowLateCallback();
+		await runtime.dispose();
+	}
+});
+
+test("hosted child reminder transport rejection does not strand future admission", { timeout: 5000 }, async () => {
+	const prepareError = new Error("prepare transport failed");
+	{
+		const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+		let prepareCalls = 0;
+		let reserved = false;
+		const admitted = {
+			snapshot: fakeRuntimeSnapshot({ modelId: "reminder-prepare-fault", thinking: "off", toolExecutionModes: [] }),
+			channel: {
+				onClose: () => () => undefined,
+				async request(method: string, payload: unknown) {
+					if (method === "moderatorReminder.prepare") {
+						prepareCalls++;
+						if (prepareCalls === 1) throw prepareError;
+						assert.equal(reserved, false);
+						reserved = true;
+						return { prepared: true };
+					}
+					if (method === "moderatorReminder.finish") {
+						reserved = false;
+						return { outcome: "suppressed" };
+					}
+					throw new Error("unexpected request: " + method);
+				},
+			},
+		} as unknown as PiChildProcessRuntime;
+		const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+		try {
+			await runtime.ready;
+			await assert.rejects(runtime.deliverModeratorReminder(async () => "suppressed"), (error) => error === prepareError);
+			assert.equal(await runtime.deliverModeratorReminder(async () => "suppressed"), "suppressed");
+			assert.equal(reserved, false);
+		} finally {
+			await runtime.dispose();
+		}
+	}
+
+	const finishError = new Error("finish transport failed");
+	{
+		const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+		let reserved = false;
+		let finishCommitCalls = 0;
+		const admitted = {
+			snapshot: fakeRuntimeSnapshot({ modelId: "reminder-finish-fault", thinking: "off", toolExecutionModes: [] }),
+			channel: {
+				onClose: () => () => undefined,
+				async request(method: string, payload: unknown) {
+					if (method === "moderatorReminder.prepare") {
+						assert.equal(reserved, false);
+						reserved = true;
+						return { prepared: true };
+					}
+					if (method === "moderatorReminder.finish") {
+						const commit = (payload as { commit: boolean }).commit;
+						if (commit && finishCommitCalls++ === 0) throw finishError;
+						reserved = false;
+						return { outcome: commit ? "committed" : "suppressed" };
+					}
+					throw new Error("unexpected request: " + method);
+				},
+			},
+		} as unknown as PiChildProcessRuntime;
+		const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+		try {
+			await runtime.ready;
+			await assert.rejects(
+				runtime.deliverModeratorReminder(async (commit) => commit()),
+				(error) => error === finishError,
+			);
+			assert.equal(reserved, false, "a failed commit transport must release the reservation");
+			assert.equal(await runtime.deliverModeratorReminder(async (commit) => commit()), "committed");
+			assert.equal(reserved, false);
+		} finally {
+			await runtime.dispose();
+		}
+	}
+});
+
+test("hosted child reminder busy does not create speculative Run id", { timeout: 5000 }, async () => {
+	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
+	let reserved = false;
+	const admitted = {
+		snapshot: fakeRuntimeSnapshot({ modelId: "reminder-no-run", thinking: "off", toolExecutionModes: [] }),
+		channel: {
+			onClose: () => () => undefined,
+			async request(method: string, payload: unknown) {
+				if (method === "moderatorReminder.prepare") {
+					reserved = true;
+					return { prepared: false };
+				}
+				if (method === "moderatorReminder.finish") {
+					assert.equal((payload as { commit: boolean }).commit, false);
+					reserved = false;
+					return { outcome: "suppressed" };
+				}
+				throw new Error("unexpected request: " + method);
+			},
+		},
+	} as unknown as PiChildProcessRuntime;
+	const runtime = new PiChildHostedRuntime(fakeLaunch(admitted, eventHandlers), []);
+	try {
+		await runtime.ready;
+		assert.equal(await runtime.deliverModeratorReminder(async () => "committed"), "busy");
+		assert.equal(reserved, false);
+		for (const handler of eventHandlers) {
+			handler(controlEvent("agent.start", { runId: "native-after-busy", queuedInputCount: 0 }));
+		}
+		assert.equal(runtime.workState(), "active", "busy admission must not create a stale Run identity");
+		for (const handler of eventHandlers) {
+			handler(controlEvent("agent.settled", {
+				runId: "native-after-busy",
+				outcome: "completed",
+				queuedInputCount: 0,
+			}));
+		}
+		assert.equal(runtime.workState(), "settled");
+	} finally {
+		await runtime.dispose();
+	}
+});
+
 function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers<"ordinary"> {
 	const status = {
 		agentId,

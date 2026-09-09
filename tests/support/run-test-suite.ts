@@ -37,6 +37,7 @@ const PROCESS_TEST_FILES = new Set([
 	"owner-settlement-parking.test.ts",
 	"owner-workflow.test.ts",
 	"pi-child-hosted-runtime.test.ts",
+	"pi-child-moderator-reminder.test.ts",
 	"pi-child-process-launch.test.ts",
 	"pi-child-process-runtime.test.ts",
 	"process-child-session-factory.test.ts",

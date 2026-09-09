@@ -99,6 +99,13 @@ export type AgentRuntimeDelivery =
 		content: string | readonly (TextContent | ImageContent)[];
 		deliverAs?: "steer" | "followUp";
 	}>;
+/** The episode owner orders this callback against clearance through native transcript proof. */
+export type ModeratorReminderCommit = () => Promise<"committed" | "busy">;
+export type ModeratorReminderOutcome = "committed" | "busy" | "suppressed";
+export type CommitModeratorReminderIfCurrent = (
+	commit: ModeratorReminderCommit,
+) => Promise<ModeratorReminderOutcome>;
+
 export type TranscriptCommitConfirmation = Readonly<{
 	inspectCommit(): boolean;
 }>;
@@ -126,6 +133,9 @@ export interface AgentRuntimeHost {
 		delivery: AgentRuntimeDelivery,
 		confirmation?: TranscriptCommitConfirmation,
 	): AgentRuntimeDeliveryDispatch;
+	deliverModeratorReminderInLane(
+		commitIfCurrent: CommitModeratorReminderIfCurrent,
+	): Promise<ModeratorReminderOutcome>;
 	startInLane(reasons?: readonly AgentRetentionReason[]): Promise<AgentRunHandle>;
 	prepareInLane(reasons?: readonly AgentRetentionReason[]): Promise<void>;
 	beginShutdown(): Promise<boolean>;
