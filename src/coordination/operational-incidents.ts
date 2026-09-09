@@ -707,12 +707,23 @@ export class OperationalIncidentCoordinator {
 			await moderator.host.lane.run(async () => {
 				if (this.#isShuttingDown()) return;
 				await moderator.host.startInLane(["moderator_handling"]);
-				moderator.host.deliverInLane({
-					kind: "custom",
-					message: createModelVisibleModeratorRoutineStart(),
-					triggerTurn: true,
-				});
 			});
+			if (this.#isShuttingDown()) return;
+			const routineStart = createModelVisibleModeratorRoutineStart();
+			// Startup is already progress before the child reports agent.start.
+			// Scheduler ownership prevents treating this in-flight first turn as a stall.
+			const admission = await this.#messages.admitCustomDelivery(moderator, {
+				messageId: JSON.stringify([routineStart.customType, agentId]),
+				deliveryMode: "deferred",
+				customMessage: routineStart,
+				inspectProof: () => {
+					const entry = coordinationEntries(moderator.transcript.inspect(), agentId,
+						`custom:${routineStart.customType}`).find(entry =>
+						entry.type === "custom_message" && entry.content === routineStart.content);
+					return entry ? { agentId, entryId: entry.id } : undefined;
+				},
+			});
+			if (admission !== "pending") throw new Error(`Moderator startup delivery rejected: ${admission}`);
 		} catch (error) {
 			this.#reportError(error);
 			await this.#handleModeratorFailure(handling, moderator);

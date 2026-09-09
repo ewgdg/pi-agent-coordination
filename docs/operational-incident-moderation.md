@@ -80,6 +80,8 @@ An Operation Review trigger contains only `kind`, the exact `toolCall` pointer, 
 
 ## Moderator handling reminders
 
+The initial Moderator routine-start uses ordinary Deferred custom Delivery scheduling. Its pending native startup is progress even before the child reports `agent.start`; the first handling attempt must not be mistaken for settled, abandoned handling. Native transcript proof and settlement release that initial delivery through the same scheduler lifecycle as other inputs.
+
 A live, settled Moderator that still owns incident handling receives one visible `agent-coordination.moderator-obligation-reminder` when it has no Delivery progress, Human attention, interactive selection, Interruption Hold, unresolved asynchronous call, or outgoing Request path supplying progress. An intentional parked Wait is excluded. The Deferred custom Delivery scheduler retains the reminder until the native Runtime is idle, then starts a model turn rather than merely adding transcript context. Conditional handling reminders never enter a native queue behind active work.
 
 The reminder directs inspection of the original Moderator Input and current affected Agent/Request evidence, continued handling, and `moderator_control` Resolution only after the original condition and the Moderator's Request responsibilities clear. It does not instruct the Moderator to Answer an incident as though it were a Request.
