@@ -261,8 +261,7 @@ test("supervisory recovery does not resurrect rejected, errored, or uncommitted 
 			commit(h.requester, state, "agent_control", { agentId: "responder", messageId, delivery: "rejected", rejectionReason: state });
 		}
 	}
-	const receipt = await h.resume();
-	assert.deepEqual(receipt.outstandingRequests, []);
+	await assert.rejects(h.resume(), /may already be admitted or dispatched.*inspection_incomplete/);
 	assert.equal(h.responder.dispatches.length, 0);
 });
 
@@ -290,8 +289,7 @@ test("recovery coalesces live resume reservations outside ordinary capacity", { 
 	await h.recover();
 	h.responder.clearHold();
 	const newerHold = h.responder.hold();
-	const recovered = await h.resume();
-	assert.deepEqual(recovered.outstandingRequests, []);
+	await assert.rejects(h.resume(), /may already be admitted or dispatched.*capacity_exhausted/);
 	h.policy.publish(Object.freeze({ ...h.policy.current(), maxPendingDeliveriesPerAgent: 2 }));
 	await h.resume();
 	assert.equal(h.responder.record.host.currentInterruptionHold(), newerHold);
@@ -595,4 +593,56 @@ test("recovery releases every admitted recipient before reporting partial dispat
 	}), /may already be admitted or dispatched.*dispatch failed/);
 	assert.deepEqual(released.sort(), ["responder", "worker"]);
 	assert.equal(continuationViews(h.worker).length, 1);
+});
+
+test("non-Request recovery failures surface after admitted responders are released", { timeout: 5_000 }, async t => {
+	for (const [kind, stage] of [["message", "admission"], ["answer", "admission"], ["message", "inspection"], ["message", "enumeration"]] as const) {
+		const h = harness(t);
+		await h.message(h.requester, "non-request-outer", { operation: "request", targetAgent: "responder", question: "Work" });
+		if (kind === "answer") {
+			const request = await h.message(h.requester, "non-request-answered", { operation: "request", targetAgent: "worker", question: "Answer this" });
+			assert.ok("requestMessageId" in request);
+			h.requester.blocked = true;
+			await h.message(h.worker, "non-request-answer", { operation: "answer", requestId: request.requestMessageId, answer: "Completed work" });
+			h.requester.blocked = false;
+		} else {
+			h.worker.blocked = true;
+			await h.message(h.requester, "non-request-message", { operation: "send", targetAgent: "worker", content: "Pending instruction" });
+		}
+		h.responder.stop(); await h.recover();
+		const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+		if (stage === "admission") {
+			const resume = h.messages.resumeMessage.bind(h.messages);
+			h.messages.resumeMessage = async message => {
+				if (message.kind !== "request") throw new Error(`${kind} admission failed`);
+				return resume(message);
+			};
+		} else if (stage === "inspection") {
+			const inspect = h.messages.inspectRecoveryMessage.bind(h.messages);
+			h.messages.inspectRecoveryMessage = message => {
+				if (message.kind !== "request") throw new Error("message inspection failed");
+				return inspect(message);
+			};
+		} else {
+			const candidates = h.messages.recoveryMessageCandidates.bind(h.messages);
+			h.messages.recoveryMessageCandidates = record => {
+				if (record.identity.agentId === "requester") throw new Error("message enumeration failed");
+				return candidates(record);
+			};
+		}
+		await assert.rejects(resumeWorkflow({
+			workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
+			activate: async (record, requestIds, recovery) => {
+				const outcome = await supervisor.continueDormantResponder(record, { requestMessageIds: requestIds, recovery, recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record) });
+				return { agentId: record.identity.agentId, requestIds, disposition: outcome === "activated" ? "admitted" : "skipped", reason: outcome };
+			},
+		}), new RegExp(`may already be admitted or dispatched.*${kind} ${stage} failed`));
+		assert.equal(continuationViews(h.responder).length, 1);
+	}
+});
+
+test("unreadable Owner snapshot is an error rather than an empty outbound view", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	h.requester.record.transcript.refresh = async () => { throw new Error("Owner snapshot unreadable"); };
+	await assert.rejects(h.resume(), /may already be admitted or dispatched.*Owner snapshot unreadable/);
 });

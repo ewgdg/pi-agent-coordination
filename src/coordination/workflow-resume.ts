@@ -19,6 +19,9 @@ export async function resumeWorkflow(options: {
 	const unavailableTargetReasons = new Map([...options.quarantinedAgentIds]
 		.map(agentId => [agentId, "evidence_unavailable: quarantined Agent transcript"]));
 	const requestInspectionFailures = new Map<string, string>();
+	// Failures without a Request projection still need an observable result,
+	// but must not prevent independent admissions or release of prepared inputs.
+	const unscopedFailures: string[] = [];
 	const agentInspectionFailures = new Map<string, string>();
 	const unavailable = new Set(options.quarantinedAgentIds);
 	for (const record of records) {
@@ -27,6 +30,7 @@ export async function resumeWorkflow(options: {
 		} catch (error) {
 			unavailable.add(record.identity.agentId);
 			unavailableTargetReasons.set(record.identity.agentId, recoveryError(error));
+			if (record.identity.agentId === options.ownerAgentId) unscopedFailures.push(recoveryError(error));
 		}
 	}
 	const deliveries: WorkflowResumeDelivery[] = [];
@@ -45,20 +49,25 @@ export async function resumeWorkflow(options: {
 			}
 			try {
 				for (const candidate of options.messages.recoveryMessageCandidates(record)) {
+					let message: Message | undefined;
 					try {
-						const message = options.messages.recoveryMessage(candidate.authorAgentId, candidate.messageId);
+						message = options.messages.recoveryMessage(candidate.authorAgentId, candidate.messageId);
 						if (message.kind === "request") requests.push(message);
 						if (unavailable.has(message.targetAgentId)) throw new Error("evidence_unavailable: recipient transcript");
 						const inspected = options.messages.inspectRecoveryMessage(message);
 						if (inspected) {
 							if (message.kind === "request") deliveries.push(inspected);
+							else if (inspected.disposition === "indeterminate" || inspected.disposition === "blocked") {
+								unscopedFailures.push(`${message.messageId}: ${inspected.reason ?? inspected.disposition}`);
+							}
 						} else pending.push(message);
 					} catch (error) {
-						requestInspectionFailures.set(candidate.messageId, recoveryError(error));
+						if (message?.kind === "request") requestInspectionFailures.set(candidate.messageId, recoveryError(error));
+						else unscopedFailures.push(`${candidate.messageId}: ${recoveryError(error)}`);
 					}
 				}
 			} catch (error) {
-				agentInspectionFailures.set(record.identity.agentId, recoveryError(error));
+				unscopedFailures.push(`${record.identity.agentId}: ${recoveryError(error)}`);
 			}
 		}
 	}, inspections);
@@ -83,8 +92,12 @@ export async function resumeWorkflow(options: {
 			try {
 				const outcome = await options.messages.resumeMessage(message);
 				if (message.kind === "request") deliveries.push(outcome);
+				else if (outcome.disposition === "blocked" || outcome.disposition === "indeterminate") {
+					unscopedFailures.push(`${message.messageId}: ${outcome.reason ?? outcome.disposition}`);
+				}
 			} catch (error) {
 				if (message.kind === "request") deliveries.push({ messageId: message.messageId, targetAgentId: message.targetAgentId, kind: message.kind, disposition: "indeterminate", reason: recoveryError(error) });
+				else unscopedFailures.push(`${message.messageId}: ${recoveryError(error)}`);
 			}
 		}
 	} finally {
@@ -122,6 +135,9 @@ export async function resumeWorkflow(options: {
 				{ cause: failedRelease.reason },
 			);
 		}
+	}
+	if (unscopedFailures.length) {
+		throw new Error(`recovery_incomplete: work may already be admitted or dispatched; ${unscopedFailures.join("; ")}`);
 	}
 	return { workflowId: options.workflowId, ...recoveryFor(options.ownerAgentId).view() };
 }
