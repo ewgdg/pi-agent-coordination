@@ -35,6 +35,11 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	readonly #admitted: Promise<PiChildProcessRuntime>;
 	readonly #handlers = new Set<(event: HostedRuntimeEvent) => void>();
 	readonly #settlementWaiters = new Set<SettlementWaiter>();
+	readonly #dispatchCompletions = new Map<string, {
+		resolve(): void;
+		reject(error: unknown): void;
+	}>();
+	#deliverySequence = 0;
 	readonly #removeEventHandler: () => void;
 	#removeChannelCloseHandler: () => void = () => undefined;
 	#snapshot: EffectiveRuntimeSnapshot | undefined;
@@ -144,8 +149,15 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	): AgentRuntimeDeliveryDispatch {
 		const runId = this.#requireOrCreateRunId();
 		const settlement = this.#waitForSettlement();
+		const deliveryId = `delivery-${++this.#deliverySequence}`;
+		// Preparation may finish a different Pi cycle. Its settlement cannot stand
+		// in for the actual dispatch Promise, even when transport Run IDs coincide.
+		const dispatchCompletion = new Promise<void>((resolve, reject) => {
+			this.#dispatchCompletions.set(deliveryId, { resolve, reject });
+		});
 		const response = this.#admitted.then((runtime) =>
 			runtime.channel.request("message.deliver", {
+				deliveryId,
 				runId,
 				delivery: serializeDelivery(delivery),
 			})
@@ -161,9 +173,14 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			response.then(({ accepted }) => {
 				if (!accepted) throw new Error("child_runtime_delivery_rejected");
 			}),
+			// Queued-active dispatch resolves on acceptance, so keep its native settlement wait.
 			settlement.result,
+			dispatchCompletion,
 		]).then(() => undefined);
-		void completion.catch((error: unknown) => settlement.reject(error));
+		void completion.catch((error: unknown) => {
+			settlement.reject(error);
+			this.#dispatchCompletions.get(deliveryId)?.reject(error);
+		}).finally(() => this.#dispatchCompletions.delete(deliveryId));
 		if (!confirmation) return { completion };
 		const transcriptCommit = response.then((result) =>
 			result.transcriptCommitted && confirmation.inspectCommit()
@@ -247,6 +264,12 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 				this.#shutdownExpected = true;
 				this.#endTransport(new Error("child_runtime_shutdown"), "shutdown");
 			}
+			return;
+		}
+		if (event.event === "message.dispatch.completed") {
+			const dispatch = this.#dispatchCompletions.get(event.payload.deliveryId);
+			if (event.payload.error !== undefined) dispatch?.reject(new Error(event.payload.error));
+			else dispatch?.resolve();
 			return;
 		}
 		if (event.event === "runtime.snapshot.changed") {
@@ -386,7 +409,9 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		this.#compacting = false;
 		this.#workState = "unavailable";
 		this.#currentRunId = undefined;
-		for (const waiter of [...this.#settlementWaiters]) waiter.reject(error);
+		for (const waiter of [...this.#settlementWaiters, ...this.#dispatchCompletions.values()]) {
+			waiter.reject(error);
+		}
 		if (terminalRun) {
 			this.#emit({ type: "agent_end", outcome: "error", willRetry: false });
 		}

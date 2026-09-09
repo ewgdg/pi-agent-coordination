@@ -505,7 +505,31 @@ export class MessageDeliveryScheduler {
 		settlement: AgentRunSettlement,
 	): Promise<void> | void {
 		if (!record.host.isCurrent(handle)) return;
-		return this.#finishSettledInLane(record, handle, settlement);
+		this.endParkingInLane(record, handle);
+		const agentId = record.identity.agentId;
+		const reservations = [
+			[this.#activeResumeByAgent, this.#activeResumeByAgent.get(agentId)],
+			[this.#activeDeferredByAgent, this.#activeDeferredByAgent.get(agentId)],
+			[this.#activeWaitPreemptionByAgent, this.#activeWaitPreemptionByAgent.get(agentId)],
+		] as const;
+		const completions = reservations.flatMap(([, active]) => active ? [active.completion] : []);
+		if (completions.length === 0) return this.#finishSettledInLane(record, handle, settlement);
+		// A preparation replacement can settle before the actual Delivery turn.
+		// That turn still needs this lane for awaited safe-boundary callbacks.
+		void Promise.allSettled(completions).then(() => record.host.lane.run(async () => {
+			if (!record.host.isCurrent(handle)) return;
+			if (reservations.some(([activeByAgent, active]) => activeByAgent.get(agentId) !== active)) {
+				// Cancelled/consumed reservations cannot reconcile a later dispatch.
+				// Failure still belongs to this exact Run even if its tracking changed.
+				if (settlement === "failed") {
+					this.discardInLane(record);
+					await record.host.discardAndEndInLane("failure");
+				}
+				return;
+			}
+			// Every completion awaited by reconciliation is now terminal.
+			await this.#finishSettledInLane(record, handle, settlement);
+		}));
 	}
 
 	async #finishSettledInLane(
@@ -513,7 +537,6 @@ export class MessageDeliveryScheduler {
 		handle: AgentRunHandle,
 		settlement: AgentRunSettlement,
 	): Promise<void> {
-		this.endParkingInLane(record, handle);
 		const activeResume = this.#activeResumeByAgent.get(record.identity.agentId);
 		if (activeResume) {
 			let failed = false;

@@ -98,6 +98,14 @@ Delivery inspection trusts a structurally readable, committed model-visible reco
 
 Writers still deliver the requested content; receipt inspection does not re-prove that writer contract. Queued admission and incomplete transcript entries are not delivery. Delivery means available in the recipient's transcript/context, not necessarily processed by the model. Exact schemas, duplicate rejection, cursor advancement, and retry/Wait/Cancellation ordering are unchanged. Receipts use existing transcript facts, not a separate durable store.
 
+### Runtime completion tracking
+
+Transcript commitment and native prompt completion are separate. The child Control response confirms admission/commitment early; a Delivery-correlated completion event reports the actual dispatch Promise. An idle-started Delivery remains pending through that prompt's native settlement. Queued-active Delivery still waits for native settlement rather than treating queue acceptance as completion.
+
+Preparation may start and finish an extension-owned Pi cycle before the Request starts another cycle. Both cycles keep their ordinary lifecycle events; transport cycle identity is not logical Agent Run identity. Completion tracking does not suppress settlement or change Run retention/release eligibility.
+
+The scheduler waits for tracked dispatch completion outside the recipient's serial lane so the actual turn can reach awaited safe boundaries. It re-enters the lane and revalidates the exact Run and dispatch reservations before reconciliation; stale tracking cannot consume a newer dispatch.
+
 ## Delivery presentation
 
 The recipient transcript renders each delivered item as a readable message block. Its collapsed view shows the Message type, sender label with the final eight characters of the Agent identity, and the first ten terminal-width-aware rows of the body. A standalone dim ellipsis on the following line marks a truncated preview. Outgoing Message and Request tool calls use the same body preview, label, and compact identity format for the receiver. Expanding the block shows the sender label with the full Agent identity and the complete Message, Request question, Answer, or Cancellation reason with Markdown formatting. Batched Deliveries keep each item's sender and type visible instead of presenting the protocol JSON.

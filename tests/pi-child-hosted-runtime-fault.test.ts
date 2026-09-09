@@ -176,6 +176,7 @@ function createFakeRuntime(options: Readonly<{
 }> = {}): Readonly<{
 	runtime: PiChildHostedRuntime;
 	requestedMethods: string[];
+	requestedDeliveryIds: string[];
 	queueClearStarted: Promise<void>;
 	rejectQueueClear(error: unknown): void;
 	emit(event: PiChildRuntimeEvent): void;
@@ -183,6 +184,7 @@ function createFakeRuntime(options: Readonly<{
 }> {
 	const eventHandlers = new Set<(event: PiChildRuntimeEvent) => void>();
 	const requestedMethods: string[] = [];
+	const requestedDeliveryIds: string[] = [];
 	let settleExit!: (exit: Readonly<{ exitCode: number; signal: number }>) => void;
 	const exited = new Promise<Readonly<{ exitCode: number; signal: number }>>((resolve) => {
 		settleExit = resolve;
@@ -214,8 +216,9 @@ function createFakeRuntime(options: Readonly<{
 		},
 		channel: {
 			onClose: () => () => undefined,
-			async request(method: string) {
+			async request(method: string, payload: { deliveryId?: string }) {
 				requestedMethods.push(method);
+				if (method === "message.deliver") requestedDeliveryIds.push(payload.deliveryId!);
 				if (method === "queue.clear" && options.holdQueueClear) {
 					markQueueClearStarted();
 					return await queueClear;
@@ -252,6 +255,7 @@ function createFakeRuntime(options: Readonly<{
 	return {
 		runtime: new PiChildHostedRuntime(launch, []),
 		requestedMethods,
+		requestedDeliveryIds,
 		queueClearStarted,
 		rejectQueueClear,
 		emit(event) {
@@ -307,4 +311,47 @@ test("host presentation observes compaction changes without changing Run state a
  await host.lane.run(() => host.discardAndEndInLane("shutdown"));
  assert.equal(host.isCompacting(), false);
  assert.equal(host.observe().phase, "dormant");
+});
+
+for (const dispatchFinishesFirst of [true, false]) {
+	test(`Delivery completion requires both native settlement and correlated dispatch: dispatch first=${dispatchFinishesFirst}`, { timeout: 5_000 }, async () => {
+		const { runtime, emit, requestedDeliveryIds } = createFakeRuntime();
+		await runtime.ready;
+		emit(controlEvent("agent.start", { runId: "native-run-1", queuedInputCount: 0 }));
+		const first = runtime.deliver({ kind: "user", content: "First queued input.", deliverAs: "steer" });
+		const second = runtime.deliver({ kind: "user", content: "Second queued input.", deliverAs: "steer" });
+		let firstCompleted = false;
+		let secondCompleted = false;
+		void first.completion.then(() => { firstCompleted = true; });
+		void second.completion.then(() => { secondCompleted = true; });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		const settle = () => emit(controlEvent("agent.settled", {
+			runId: "native-run-1", queuedInputCount: 0, outcome: "completed",
+		}));
+		const dispatch = () => emit(controlEvent("message.dispatch.completed", { deliveryId: requestedDeliveryIds[0] }));
+		if (dispatchFinishesFirst) dispatch(); else settle();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(firstCompleted, false);
+		assert.equal(secondCompleted, false);
+		if (dispatchFinishesFirst) settle(); else dispatch();
+		await first.completion;
+		assert.equal(secondCompleted, false, "one dispatch completion cannot resolve another Delivery");
+		emit(controlEvent("message.dispatch.completed", { deliveryId: requestedDeliveryIds[1] }));
+		await second.completion;
+		await runtime.dispose();
+	});
+}
+
+test("correlated dispatch rejection completes Delivery failure without inventing lifecycle", { timeout: 5_000 }, async () => {
+	const { runtime, emit, requestedDeliveryIds } = createFakeRuntime();
+	await runtime.ready;
+	const events: HostedRuntimeEvent[] = [];
+	runtime.subscribe((event) => events.push(event));
+	const delivery = runtime.deliver({ kind: "user", content: "Dispatch rejected." });
+	const rejected = assert.rejects(delivery.completion, /dispatch rejected/);
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	emit(controlEvent("message.dispatch.completed", { deliveryId: requestedDeliveryIds[0], error: "dispatch rejected" }));
+	await rejected;
+	assert.deepEqual(events, []);
+	await runtime.dispose();
 });

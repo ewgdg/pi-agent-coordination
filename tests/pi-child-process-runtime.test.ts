@@ -285,6 +285,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 
 		const lifecycleBeforeDelivery = lifecycle.length;
 		const activeDelivery = runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-1",
 			runId: "process-runtime-delivery-run",
 			delivery: {
 				kind: "user",
@@ -300,6 +301,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			event.payload.runId === "process-runtime-delivery-run"
 		), false);
 		const queuedDelivery = runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-2",
 			runId: "process-runtime-delivery-run",
 			delivery: {
 				kind: "user",
@@ -342,6 +344,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		), true);
 
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-3",
 			runId: "process-runtime-cancelled-delivery-run",
 			delivery: {
 				kind: "user",
@@ -355,6 +358,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		});
 		const cancellation = new AbortController();
 		const cancelledDelivery = runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-4",
 			runId: "process-runtime-cancelled-delivery-run",
 			delivery: {
 				kind: "user",
@@ -374,6 +378,7 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		);
 
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-5",
 			runId: "process-runtime-missing-commit-run",
 			delivery: {
 				kind: "user",
@@ -507,6 +512,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		};
 		const omittedMessage = createMessageDelivery([omittedItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-6",
 			runId: "omitted-working-zone-run",
 			delivery: {
 				kind: "custom",
@@ -541,6 +547,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		};
 		const activeSteerMessage = createMessageDelivery([activeSteerItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-7",
 			runId: "omitted-working-zone-run",
 			delivery: {
 				kind: "custom",
@@ -589,6 +596,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		};
 		const declinedCompactionMessage = createMessageDelivery([declinedCompactionItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-8",
 			runId: "declined-compaction-working-zone-run",
 			delivery: {
 				kind: "custom",
@@ -640,6 +648,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		).length;
 		const cancellation = new AbortController();
 		const cancelledDelivery = runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-9",
 			runId: "cancelled-working-zone-run",
 			delivery: {
 				kind: "custom",
@@ -686,6 +695,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 			event.event === "runtime.compaction.started"
 		).length;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-10",
 			runId: "prepared-working-zone-run",
 			delivery: {
 				kind: "custom",
@@ -846,6 +856,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			},
 		}]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-11",
 			runId: "process-compaction-delivery-run",
 			delivery: {
 				kind: "custom",
@@ -906,6 +917,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			" queued context".repeat(400)
 		}`;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-12",
 			runId: queuedRunId,
 			delivery: { kind: "user", content: activeInput },
 		}), {
@@ -935,6 +947,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 
 		const paddingRunId = "process-compaction-padding-run";
 		await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-13",
 			runId: paddingRunId,
 			delivery: {
 				kind: "user",
@@ -966,6 +979,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		).length;
 		const cancellation = new AbortController();
 		const cancelledDelivery = runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-14",
 			runId: "process-cancelled-compaction-run",
 			delivery: {
 				kind: "custom",
@@ -1009,6 +1023,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			event.event === "runtime.compaction.started"
 		).length;
 		const interruptedDelivery = runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-15",
 			runId: interruptedRunId,
 			delivery: {
 				kind: "custom",
@@ -1056,6 +1071,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			event.event === "runtime.compaction.started"
 		).length;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-16",
 			runId: "process-post-cancellation-run",
 			delivery: {
 				kind: "custom",
@@ -1080,6 +1096,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		const compactionsBeforeUserDelivery = entriesBeforeUserDelivery
 			.filter((entry) => entry.type === "compaction").length;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-17",
 			runId: "process-user-delivery-compaction-run",
 			delivery: { kind: "user", content: userDeliveryInput },
 		}), {
@@ -1110,6 +1127,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 
 		const delayedRunId = "process-delayed-preflight-run";
 		const delayedDelivery = runtime.channel.request("message.deliver", {
+			deliveryId: "test-delivery-18",
 			runId: delayedRunId,
 			delivery: { kind: "user", content: "PROCESS_RUNTIME_DELAYED_INPUT" },
 		});
