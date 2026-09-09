@@ -8,6 +8,7 @@ import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import piAgentCoordination from "../src/index.ts";
 import { OperationalIncidentCoordinator } from "../src/coordination/operational-incidents.ts";
+import type { AgentRecord } from "../src/coordination/agent-record.ts";
 import { MessageDeliveryScheduler } from "../src/coordination/message-delivery-scheduler.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 import { MODERATOR_STARTUP_GATE_DIRECTORY, STARTED_FILE, RELEASE_FILE } from "./fixtures/moderator-startup-gate.ts";
@@ -77,6 +78,61 @@ test("initial Moderator startup counts as progress before native agent.start and
 	} finally {
 		await writeFile(join(gateDirectory, RELEASE_FILE), "");
 		finishFirstModel.resolve();
+		await host.session.abort();
+		await prompt;
+	}
+});
+
+
+test("termination queued behind Moderator startup cannot resurrect its Run", { timeout: 15000 }, async t => {
+	let coordinator!: OperationalIncidentCoordinator;
+	let moderator: AgentRecord | undefined;
+	let starts = 0;
+	const terminated = deferred();
+	const integrate = OperationalIncidentCoordinator.prototype.integrate;
+	t.mock.method(OperationalIncidentCoordinator.prototype, "integrate", function (
+		this: OperationalIncidentCoordinator, ...args: Parameters<typeof integrate>
+	) {
+		coordinator = this;
+		const record = args[0];
+		if (record.identity.metadata.label === "Moderator" && !moderator) {
+			moderator = record;
+			const start = record.host.startInLane.bind(record.host);
+			t.mock.method(record.host, "startInLane", async (...startArgs: Parameters<typeof start>) => {
+				const handle = await start(...startArgs);
+				starts++;
+				if (starts === 1) {
+					// Queue a real termination after readiness while startup still owns the lane.
+					void record.host.lane.run(async () => {
+						await record.host.discardAndEndInLane("termination");
+						terminated.resolve();
+					});
+				}
+				return handle;
+			});
+		}
+		return integrate.apply(this, args);
+	});
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true, processVisibleModel: true, implicitModeratorResponses: false,
+	});
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "Demonstrate a stalled obligation." },
+			{ id: "spawn-for-startup-termination" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Delegated."),
+		fauxAssistantMessage("Still owe an Answer."),
+		fauxAssistantMessage("Still owe an Answer after reminder."),
+		fauxAssistantMessage("Handling."),
+	]);
+	const prompt = host.session.prompt("Create the stalled Agent.");
+	try {
+		await bounded(terminated.promise);
+		// Drain reconciliation and the host lane, rather than relying on a timing grace period.
+		await bounded(coordinator.reachSafeBoundary());
+		await bounded(moderator!.host.lane.run(() => undefined));
+		assert.equal(starts, 1, "initial delivery must not start a second Run after termination");
+		assert.equal(moderator!.host.currentHandle(), undefined);
+	} finally {
 		await host.session.abort();
 		await prompt;
 	}
