@@ -14,7 +14,7 @@ import { participant } from "./support/request-history.ts";
 
 
 import { resumeWorkflow } from "../src/coordination/workflow-resume.ts";
-import type { WorkflowResumeActivation } from "../src/protocol/workflow-resume.ts";
+import type { WorkflowResumeActivation } from "../src/coordination/workflow-recovery-outcomes.ts";
 
 test("recovery schedules original Requests and Messages once, preserving context preparation", { timeout: 5_000 }, async t => {
 	const h = harness(t);
@@ -25,7 +25,6 @@ test("recovery schedules original Requests and Messages once, preserving context
 	h.responder.blocked = false;
 	const receipt = await h.resume();
 	await flush();
-	assert.equal(receipt.deliveries.filter(item => item.disposition === "scheduled").length, 2);
 	assert.equal(receipt.outstandingRequests[0]?.status, "delivery_scheduled");
 	h.responder.settle();
 	await flush();
@@ -48,11 +47,11 @@ test("recovery sends a committed Answer to its original requester and does not a
 	h.requester.blocked = false;
 	const receipt = await h.resume();
 	await flush();
-	assert.equal(receipt.activations.length, 0);
+	assert.deepEqual(receipt.outstandingRequests, []);
 	assert.equal(h.responder.record.host.observe().phase, "dormant");
 	assert.deepEqual(h.deliveries(h.requester).map(item => item.projection.kind), ["answer"]);
 	assert.ok("messageId" in answer);
-	assert.ok(receipt.deliveries.some(item => item.messageId === answer.messageId && item.targetAgentId === "requester" && item.disposition === "scheduled"));
+	assert.equal(h.deliveries(h.requester)[0]?.source.toolCallId, "answer");
 });
 
 test("recovery coalesces held scheduling and suppresses cancelled Requests before dispatch", { timeout: 5_000 }, async t => {
@@ -61,13 +60,13 @@ test("recovery coalesces held scheduling and suppresses cancelled Requests befor
 	const request = await h.message(h.requester, "request", { operation: "request", targetAgent: "responder", question: "Original" });
 	assert.ok("requestMessageId" in request);
 	const receipt = await h.resume();
-	assert.ok(receipt.deliveries.some(item => item.reason === "already_scheduled"));
+	assert.equal(receipt.outstandingRequests[0]?.status, "delivery_scheduled");
 	assert.equal(h.deliveries(h.responder).length, 0);
 	await h.message(h.requester, "cancel", { operation: "cancel", requestMessageId: request.requestMessageId, reason: "No longer needed" });
 	await h.recover();
 	h.responder.blocked = false;
 	const cancelled = await h.resume();
-	assert.ok(cancelled.deliveries.some(item => item.messageId === request.requestMessageId && item.reason === "request_resolved"));
+	assert.deepEqual(cancelled.outstandingRequests, []);
 	assert.equal(h.deliveries(h.responder).filter(item => item.projection.kind === "request").length, 0);
 });
 
@@ -76,25 +75,30 @@ test("snapshot excludes work authored during recovery admission and does not inf
 	h.responder.blocked = true;
 	await h.message(h.requester, "initial", { operation: "send", targetAgent: "responder", content: "Initial" });
 	await h.recover();
+	let admissions = 0;
 	const original = h.messages.resumeMessage.bind(h.messages);
 	h.messages.resumeMessage = async message => {
+		admissions++;
 		const result = await original(message);
 		await h.message(h.requester, "later", { operation: "send", targetAgent: "responder", content: "Later" });
 		return result;
 	};
 	const receipt = await h.resume();
-	assert.equal(receipt.deliveries.length, 1);
-	assert.equal(receipt.activations.length, 0);
+	assert.equal(admissions, 1);
+	assert.deepEqual(receipt.outstandingRequests, []);
 });
 
-test("unavailable Workflow evidence is explicit and independent work can still be recovered", { timeout: 5_000 }, async t => {
+test("unrelated unavailable evidence does not pollute the Owner view or prevent independent recovery", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	h.responder.blocked = true;
 	await h.message(h.requester, "initial", { operation: "send", targetAgent: "responder", content: "Initial" });
 	await h.recover();
 	const receipt = await h.resume(new Set(["missing-agent"]));
-	assert.deepEqual(receipt.indeterminate, [{ agentId: "missing-agent", reason: "evidence_unavailable: quarantined Agent transcript" }]);
-	assert.equal(receipt.deliveries[0]?.disposition, "scheduled");
+	assert.deepEqual(receipt, { workflowId: "requester", outstandingRequests: [] });
+	h.responder.blocked = false;
+	await h.resume();
+	await flush();
+	assert.equal(h.deliveries(h.responder).length, 1);
 });
 
 
@@ -110,8 +114,7 @@ test("nested recovery preserves attention and Agent-owned outbound dependencies"
 	h.responder.stop();
 	await h.recover();
 	const receipt = await h.resume();
-	assert.deepEqual(receipt.activations.find(item => item.agentId === "responder")?.requestIds, [first.requestMessageId, nested.requestMessageId]);
-	assert.deepEqual(receipt.activations.find(item => item.agentId === "requester")?.requestIds, [reverse.requestMessageId]);
+	assert.deepEqual(receipt.outstandingRequests.map(item => item.requestMessageId), [first.requestMessageId, nested.requestMessageId]);
 	assert.deepEqual(
 		h.messages.obligationFrames("responder").map(frame => frame.requestId),
 		[first.requestMessageId, nested.requestMessageId],
@@ -131,14 +134,13 @@ test("nested recovery preserves attention and Agent-owned outbound dependencies"
 test("concurrent resume calls coalesce admission and report pending capacity explicitly", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	h.responder.blocked = true;
-	await h.message(h.requester, "first", { operation: "send", targetAgent: "responder", content: "First" });
-	await h.message(h.requester, "second", { operation: "send", targetAgent: "responder", content: "Second" });
+	await h.message(h.requester, "first", { operation: "request", targetAgent: "responder", question: "First" });
+	await h.message(h.requester, "second", { operation: "request", targetAgent: "responder", question: "Second" });
 	await h.recover();
 	h.policy.publish(Object.freeze({ ...h.policy.current(), maxPendingDeliveriesPerAgent: 1 }));
 	const receipts = await Promise.all([h.resume(), h.resume()]);
-	assert.equal(receipts.flatMap(item => item.deliveries).filter(item => item.disposition === "scheduled").length, 1);
-	assert.ok(receipts.flatMap(item => item.deliveries).some(item => item.reason === "already_scheduled"));
-	assert.ok(receipts.every(item => item.deliveries.some(delivery => delivery.disposition === "blocked" && delivery.reason === "capacity_exhausted")));
+	assert.ok(receipts.every(item => item.outstandingRequests.filter(request => request.status === "delivery_scheduled").length === 1));
+	assert.ok(receipts.every(item => item.outstandingRequests.some(request => request.status === "blocked" && request.reason === "capacity_exhausted")));
 	assert.equal(h.deliveries(h.responder).length, 0);
 });
 
@@ -155,7 +157,7 @@ test("cancellation committed after the snapshot suppresses stale delivery admiss
 		return original(message);
 	};
 	const receipt = await h.resume();
-	assert.deepEqual(receipt.deliveries.map(item => [item.disposition, item.reason]), [["skipped", "request_resolved"]]);
+	assert.deepEqual(receipt.outstandingRequests, []);
 	assert.equal(h.deliveries(h.responder).length, 0);
 });
 
@@ -166,9 +168,9 @@ test("a dormant Agent with only delivered ordinary Messages is not proactively r
 	h.responder.stop();
 	await h.recover();
 	const receipt = await h.resume();
-	assert.equal(receipt.activations.length, 0);
+	assert.deepEqual(receipt.outstandingRequests, []);
 	assert.equal(h.responder.record.host.observe().phase, "dormant");
-	assert.deepEqual(receipt.deliveries.map(item => [item.disposition, item.reason]), [["skipped", "delivered"]]);
+	assert.equal(h.deliveries(h.responder).length, 1);
 });
 
 
@@ -179,9 +181,6 @@ test("a failed durable transcript read is indeterminate rather than guessed as u
 	await h.recover();
 	h.responder.record.transcript = new AgentTranscript({ read() { throw new Error("evidence_unavailable: unreadable transcript"); } });
 	const receipt = await h.resume();
-	assert.ok(receipt.indeterminate.some(item => item.agentId === "responder" && item.reason.includes("unreadable transcript")));
-	assert.equal(receipt.deliveries.length, 0);
-	assert.equal(receipt.activations.length, 0);
 	assert.equal(receipt.outstandingRequests[0]?.status, "indeterminate");
 	assert.match(receipt.outstandingRequests[0]?.reason ?? "", /unreadable transcript/);
 	assert.equal(h.responder.dispatches.length, 0);
@@ -219,7 +218,7 @@ test("blocked sibling successors continue the old foreground once, before or dur
 		const first = await resume();
 		await Promise.all([resume(), resume()]);
 		await flush();
-		assert.equal(first.activations[0]?.disposition, "admitted", timing);
+		assert.equal(first.outstandingRequests[0]?.status, "continuation_admitted", timing);
 		assert.equal(h.responder.dispatches.filter(d => d.kind === "custom" && d.message.customType === "agent-coordination.workflow-continuation").length, 1);
 		assert.deepEqual(h.deliveries(h.responder).map(d => d.source.toolCallId), ["old"]);
 		await h.message(h.responder, "answer-old", { operation: "answer", requestId: old.requestMessageId, answer: "Done" });
@@ -238,20 +237,19 @@ test("recovery reconstructs committed supervisory resume as original ordinary St
 	commit(h.requester, "supervisory", "agent_control", { agentId: "responder", messageId, messageStatus: "sent" });
 	const receipt = await h.resume();
 	await flush();
-	assert.deepEqual(receipt.indeterminate, []);
-	assert.ok(receipt.deliveries.some(d => d.messageId === messageId && d.disposition === "scheduled"));
+	assert.deepEqual(receipt.outstandingRequests, []);
 	assert.equal(h.deliveries(h.responder).length, 1);
 	assert.equal(h.deliveries(h.responder)[0]?.source.toolCallId, "supervisory");
 	assert.deepEqual(h.deliveries(h.responder)[0]?.projection, {
 		kind: "message", messageId, fromAgentId: "requester", content: input.content,
 	});
-	assert.equal(receipt.deliveries[0]?.targetAgentId, "responder");
 	assert.equal(h.responder.dispatches[0]?.kind === "custom" && h.responder.dispatches[0].deliverAs, "steer");
-	assert.equal((await h.resume()).deliveries[0]?.reason, "delivered");
+	await h.resume();
+	assert.equal(h.deliveries(h.responder).length, 1);
 });
 
 
-test("supervisory recovery does not resurrect rejected or errored sources and reports missing commitment", { timeout: 5_000 }, async t => {
+test("supervisory recovery does not resurrect rejected, errored, or uncommitted sources", { timeout: 5_000 }, async t => {
 	const h = harness(t);
 	for (const state of ["not_held", "resume_slot_occupied", "target_unavailable", "error", "unfinished"] as const) {
 		call(h.requester, state, "agent_control", { operation: "resume", agentId: "responder", content: state });
@@ -264,7 +262,7 @@ test("supervisory recovery does not resurrect rejected or errored sources and re
 		}
 	}
 	const receipt = await h.resume();
-	assert.deepEqual(receipt.deliveries.map(d => d.reason), ["not_created", "not_created", "not_created", "not_created", "inspection_incomplete"]);
+	assert.deepEqual(receipt.outstandingRequests, []);
 	assert.equal(h.responder.dispatches.length, 0);
 });
 
@@ -283,7 +281,7 @@ test("recovery coalesces live resume reservations outside ordinary capacity", { 
 	assert.ok("messageStatus" in sent && sent.messageStatus === "sent");
 	commit(h.requester, "supervisory", "agent_control", sent);
 	for (const receipt of await Promise.all([h.resume(), h.resume()])) {
-		assert.equal(receipt.deliveries.find(d => d.messageId === sent.messageId)?.reason, "already_scheduled");
+		assert.deepEqual(receipt.outstandingRequests, []);
 	}
 	assert.equal(h.responder.record.host.currentInterruptionHold(), hold);
 	assert.equal(h.responder.dispatches.length, 0);
@@ -293,7 +291,7 @@ test("recovery coalesces live resume reservations outside ordinary capacity", { 
 	h.responder.clearHold();
 	const newerHold = h.responder.hold();
 	const recovered = await h.resume();
-	assert.equal(recovered.deliveries.find(d => d.messageId === sent.messageId)?.reason, "capacity_exhausted");
+	assert.deepEqual(recovered.outstandingRequests, []);
 	h.policy.publish(Object.freeze({ ...h.policy.current(), maxPendingDeliveriesPerAgent: 2 }));
 	await h.resume();
 	assert.equal(h.responder.record.host.currentInterruptionHold(), newerHold);
@@ -559,10 +557,8 @@ test("unavailable outbound targets do not erase verified responder recovery", { 
 				return { agentId: record.identity.agentId, requestIds, disposition: outcome === "activated" ? "admitted" : "skipped", reason: outcome };
 			},
 		});
-		assert.equal(receipt.activations.find(item => item.agentId === "responder")?.reason, mode === "running" ? "already_running" : "activated");
 		const expected = [{ requestMessageId: outer.requestMessageId, targetAgentId: "responder", status: mode === "running" ? "already_running" : "continuation_admitted" }];
 		assert.deepEqual(receipt.outstandingRequests, expected);
-		assert.ok(receipt.indeterminate.some(item => item.agentId === "responder" && item.reason.includes(inner.requestMessageId)));
 		if (mode === "dormant") {
 			assert.deepEqual(continuationViews(h.requester)[0].outstandingRequests, expected);
 			assert.deepEqual(continuationViews(h.responder)[0].outstandingRequests.find((item: { requestMessageId: string }) => item.requestMessageId === inner.requestMessageId), {
@@ -570,4 +566,33 @@ test("unavailable outbound targets do not erase verified responder recovery", { 
 			});
 		}
 	}
+});
+
+test("Owner recovery returns only its recipient-relative view", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	assert.deepEqual(await h.resume(), { workflowId: "requester", outstandingRequests: [] });
+});
+
+test("recovery releases every admitted recipient before reporting partial dispatch failure", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	await h.message(h.requester, "release-failure-outer", { operation: "request", targetAgent: "responder", question: "Outer" });
+	await h.message(h.responder, "release-failure-inner", { operation: "request", targetAgent: "worker", question: "Inner" });
+	h.responder.stop(); h.worker.stop(); await h.recover();
+	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+	const released: string[] = [];
+	const release = h.messages.deliveryEligibilityChanged.bind(h.messages);
+	h.messages.deliveryEligibilityChanged = record => {
+		released.push(record.identity.agentId);
+		if (record.identity.agentId === "responder") throw new Error("dispatch failed");
+		return release(record);
+	};
+	await assert.rejects(resumeWorkflow({
+		workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
+		activate: async (record, requestIds, recovery) => {
+			const outcome = await supervisor.continueDormantResponder(record, { requestMessageIds: requestIds, recovery, recheckRequestMessageIds: () => h.messages.recoveryRequestIds(record) });
+			return { agentId: record.identity.agentId, requestIds, disposition: outcome === "activated" ? "admitted" : "skipped", reason: outcome };
+		},
+	}), /may already be admitted or dispatched.*dispatch failed/);
+	assert.deepEqual(released.sort(), ["responder", "worker"]);
+	assert.equal(continuationViews(h.worker).length, 1);
 });

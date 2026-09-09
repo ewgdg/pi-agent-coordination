@@ -1,7 +1,8 @@
 import { withAgentTranscriptObservations, type AgentRecord } from "./agent-record.ts";
 import type { MessageCoordinator } from "./messages.ts";
 import type { Message } from "../protocol/message.ts";
-import type { OutstandingRequestRecovery, WorkflowRecoveryView, WorkflowResumeActivation, WorkflowResumeDelivery, WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
+import type { OutstandingRequestRecovery, WorkflowRecoveryView, WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
+import type { WorkflowResumeActivation, WorkflowResumeDelivery } from "./workflow-recovery-outcomes.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 
 /** Snapshot order is Agent ID, then physical source order; it is not the lost volatile queue. */
@@ -15,20 +16,19 @@ export async function resumeWorkflow(options: {
 }): Promise<WorkflowResumeReceipt> {
 	const records = [...options.agents.values()].sort((a, b) => a.identity.agentId.localeCompare(b.identity.agentId));
 	const inspections = new Map<AgentRecord, TranscriptInspection>();
-	const indeterminate: { agentId: string; reason: string }[] = [...options.quarantinedAgentIds]
-		.sort().map(agentId => ({ agentId, reason: "evidence_unavailable: quarantined Agent transcript" }));
+	const unavailableTargetReasons = new Map([...options.quarantinedAgentIds]
+		.map(agentId => [agentId, "evidence_unavailable: quarantined Agent transcript"]));
+	const requestInspectionFailures = new Map<string, string>();
+	const agentInspectionFailures = new Map<string, string>();
 	const unavailable = new Set(options.quarantinedAgentIds);
 	for (const record of records) {
 		try {
 			inspections.set(record, await record.transcript.refresh());
 		} catch (error) {
 			unavailable.add(record.identity.agentId);
-			indeterminate.push({ agentId: record.identity.agentId, reason: recoveryError(error) });
+			unavailableTargetReasons.set(record.identity.agentId, recoveryError(error));
 		}
 	}
-	// Later operational errors may concern an Agent's outbound Messages, not
-	// that Agent's availability as a responder. Keep target evidence separate.
-	const unavailableTargetReasons = new Map(indeterminate.map(item => [item.agentId, item.reason]));
 	const deliveries: WorkflowResumeDelivery[] = [];
 	const activations: WorkflowResumeActivation[] = [];
 	const pending: Message[] = [];
@@ -41,7 +41,7 @@ export async function resumeWorkflow(options: {
 				const requestIds = options.messages.recoveryRequestIds(record);
 				if (requestIds.length) responders.push({ record, requestIds: [...requestIds] });
 			} catch (error) {
-				indeterminate.push({ agentId: record.identity.agentId, reason: recoveryError(error) });
+				agentInspectionFailures.set(record.identity.agentId, recoveryError(error));
 			}
 			try {
 				for (const candidate of options.messages.recoveryMessageCandidates(record)) {
@@ -50,14 +50,15 @@ export async function resumeWorkflow(options: {
 						if (message.kind === "request") requests.push(message);
 						if (unavailable.has(message.targetAgentId)) throw new Error("evidence_unavailable: recipient transcript");
 						const inspected = options.messages.inspectRecoveryMessage(message);
-						if (inspected) deliveries.push(inspected);
-						else pending.push(message);
+						if (inspected) {
+							if (message.kind === "request") deliveries.push(inspected);
+						} else pending.push(message);
 					} catch (error) {
-						indeterminate.push({ agentId: record.identity.agentId, reason: `${candidate.messageId}: ${recoveryError(error)}` });
+						requestInspectionFailures.set(candidate.messageId, recoveryError(error));
 					}
 				}
 			} catch (error) {
-				indeterminate.push({ agentId: record.identity.agentId, reason: recoveryError(error) });
+				agentInspectionFailures.set(record.identity.agentId, recoveryError(error));
 			}
 		}
 	}, inspections);
@@ -80,9 +81,10 @@ export async function resumeWorkflow(options: {
 		}
 		for (const message of pending) {
 			try {
-				deliveries.push(await options.messages.resumeMessage(message));
+				const outcome = await options.messages.resumeMessage(message);
+				if (message.kind === "request") deliveries.push(outcome);
 			} catch (error) {
-				deliveries.push({ messageId: message.messageId, targetAgentId: message.targetAgentId, kind: message.kind, disposition: "indeterminate", reason: recoveryError(error) });
+				if (message.kind === "request") deliveries.push({ messageId: message.messageId, targetAgentId: message.targetAgentId, kind: message.kind, disposition: "indeterminate", reason: recoveryError(error) });
 			}
 		}
 	} finally {
@@ -96,7 +98,10 @@ export async function resumeWorkflow(options: {
 					if (delivery?.reason === "not_created" || delivery?.reason === "request_resolved") return [];
 					const activation = activations.find(item =>
 						item.agentId === request.targetAgentId && item.requestIds.includes(request.messageId));
-					const unavailableReason = unavailableTargetReasons.get(request.targetAgentId);
+					// Outbound inspection errors must not override verified responder activation.
+					const unavailableReason = unavailableTargetReasons.get(request.targetAgentId)
+						?? requestInspectionFailures.get(request.messageId)
+						?? (!activation && !delivery ? agentInspectionFailures.get(request.targetAgentId) : undefined);
 					return [Object.freeze({
 						requestMessageId: request.messageId,
 						targetAgentId: request.targetAgentId,
@@ -108,12 +113,17 @@ export async function resumeWorkflow(options: {
 		// No recipient lane waits here: all admissions finish before any
 		// continuation can dispatch, including cycles of outstanding delegations.
 		ready = true;
-		await Promise.all(responders.map(async ({ record }) => {
-			try { await options.messages.deliveryEligibilityChanged(record); }
-			catch (error) { indeterminate.push({ agentId: record.identity.agentId, reason: recoveryError(error) }); }
-		}));
+		const releases = await Promise.allSettled(responders.map(async ({ record }) =>
+			options.messages.deliveryEligibilityChanged(record)));
+		const failedRelease = releases.find(result => result.status === "rejected");
+		if (failedRelease?.status === "rejected") {
+			throw new Error(
+				`recovery_dispatch_failed: work may already be admitted or dispatched; ${recoveryError(failedRelease.reason)}`,
+				{ cause: failedRelease.reason },
+			);
+		}
 	}
-	return { workflowId: options.workflowId, ...recoveryFor(options.ownerAgentId).view(), deliveries, activations, indeterminate };
+	return { workflowId: options.workflowId, ...recoveryFor(options.ownerAgentId).view() };
 }
 
 function requestRecoveryOutcome(

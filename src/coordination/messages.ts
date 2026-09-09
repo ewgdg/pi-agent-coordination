@@ -1,7 +1,7 @@
 import { findAuthoredSupervisoryResumeMessages } from "../protocol/run-control.ts";
 import { findAuthoredAgentMessageSources, inspectCanonicalRequestResolution } from "../protocol/request-resolution.ts";
 import { compareCommittedToolCallOrder, deriveMessageIdentity } from "../protocol/identities.ts";
-import type { WorkflowResumeDelivery } from "../protocol/workflow-resume.ts";
+import type { WorkflowResumeDelivery } from "./workflow-recovery-outcomes.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import { resolveAgentMessageReferences } from "../protocol/message-reference.ts";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";

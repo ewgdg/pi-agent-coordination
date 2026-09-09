@@ -112,7 +112,7 @@ const agentStatus = {
 const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	ParticipantCoordinationToolHandlers<"moderator"> &
 	ParticipantCoordinationToolHandlers<"owner"> = {
-	async resumeWorkflow() { return { workflowId: "workflow", outstandingRequests: [], deliveries: [], activations: [], indeterminate: [] }; },
+	async resumeWorkflow() { return { workflowId: "workflow", outstandingRequests: [] }; },
 	async message() {
 		return {
 			messageId: "message-1",

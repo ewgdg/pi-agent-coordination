@@ -2,7 +2,7 @@
 ## Goal and intention
 Give each recovering recipient a truthful view of its own outbound Requests so it can avoid duplicate wake-ups.
 ## Scope and constraints
-Preserve workflow-wide operational receipts for reporting, incoming obligation invariants, scheduler ownership and unrelated working-tree changes. No new Pi API dependency.
+Preserve incoming obligation invariants, scheduler ownership and unrelated working-tree changes. No new Pi API dependency.
 ## Decisions
 Parent approved a two-phase scheduler readiness barrier: admit first, finalize all scoped views, then release without awaiting other lanes from inside a lane.
 ## Work plan
@@ -17,7 +17,7 @@ Architecture inspected; existing custom admission can dispatch immediately, requ
 
 ## Completed implementation
 - Added a shared recipient-scoped outstandingRequests contract to Owner receipts and runtime continuations; incoming Request IDs remain internal to admission/suppression.
-- Retained Workflow-wide operational reporting for its existing inspection/rendering purpose.
+- Owner reporting contains workflowId and its own outstandingRequests, matching the resumed-recipient view. Scheduling outcomes stay internal.
 - Scheduler readiness gates admission without holding lanes. Finalized frozen views precede dispatch, including cyclic dependencies; failure cleanup releases gates and normal cancellation/fencing remains authoritative.
 - Generalized the existing delivery-eligibility notification used by Wait so recovery uses the same scheduler seam rather than adding a parallel wrapper.
 - Shared concise recovery guidance and documented statuses and timing in docs/cold-host-recovery.md.

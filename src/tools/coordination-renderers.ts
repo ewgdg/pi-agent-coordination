@@ -22,6 +22,7 @@ import type {
 	AgentWaitResult,
 } from "../protocol/agent-wait.ts";
 import {
+	compactAgentIdentity,
 	formatAgentIdentity,
 	formatKnownAgentIdentity,
 	type AgentLabelResolver,
@@ -58,24 +59,31 @@ export function renderWorkflowResumeResult(
 		return new Text(theme.fg("error", options.expanded ? error : boundedToolPreview(error)), 0, 0);
 	}
 	if (options.isPartial || result.details === undefined) return pending(theme, "resuming Workflow");
-	const details = result.details;
-	const scheduled = details.deliveries.filter(item => item.disposition === "scheduled").length;
-	const admitted = details.activations.filter(item => item.disposition === "admitted").length;
-	const outcomes = [...details.deliveries, ...details.activations];
-	const skipped = outcomes.filter(item => item.disposition === "skipped").length;
-	const blocked = outcomes.filter(item => item.disposition === "blocked").length;
-	const indeterminate = outcomes.filter(item => item.disposition === "indeterminate").length + details.indeterminate.length;
-	const summary = [
-		`${scheduled} Message${scheduled === 1 ? "" : "s"} scheduled`,
-		`${admitted} responder${admitted === 1 ? "" : "s"} admitted`,
-		...(skipped ? [`${skipped} skipped`] : []),
-		...(blocked ? [`${blocked} blocked`] : []),
-		...(indeterminate ? [`${indeterminate} indeterminate`] : []),
-		...(scheduled === 0 && admitted === 0 ? ["no eligible work admitted"] : []),
-	].join(" · ");
-	// Scheduling and responder admission are not Delivery or task completion.
-	return receipt(theme, `admission · ${summary}`, details, options,
-		blocked || indeterminate ? "warning" : scheduled || admitted ? "success" : "dim");
+
+	const requests = result.details.outstandingRequests;
+	if (requests.length === 0) {
+		return new Text(theme.fg("dim", "no outstanding outbound Requests"), 0, 0);
+	}
+	const summary = `${requests.length} outstanding outbound Request${requests.length === 1 ? "" : "s"}`;
+	const needsAttention = requests.some(request => request.status === "blocked" || request.status === "indeterminate");
+	const lines = [theme.fg(needsAttention ? "warning" : "success", summary)];
+	for (const request of requests) {
+		const requestId = formatMessageIdentity(request.requestMessageId, options.expanded);
+		const targetId = options.expanded
+			? request.targetAgentId
+			: compactAgentIdentity(request.targetAgentId);
+		const statusColor: ThemeColor = request.status === "blocked" || request.status === "indeterminate"
+			? "warning"
+			: request.status === "resolved" ? "dim" : "success";
+		const row = [
+			`Request ID: ${requestId}`,
+			`target ID: ${targetId}`,
+			`status: ${request.status}`,
+			...(request.reason ? [`reason: ${options.expanded ? request.reason : boundedToolPreview(request.reason)}`] : []),
+		].join(" · ");
+		lines.push(theme.fg(statusColor, row));
+	}
+	return new Text(lines.join("\n"), 0, 0);
 }
 
 export function renderAgentWaitCall(
