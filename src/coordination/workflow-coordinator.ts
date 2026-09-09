@@ -1,3 +1,5 @@
+import { resumeWorkflow } from "./workflow-resume.ts";
+import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { isDeepStrictEqual } from "node:util";
 import { ModeratorReportStore } from "./moderator-reports.ts";
 import { validateReportToUserInput, type ReportToUserInput, type ReportHistoryItem } from "../protocol/moderator-report.ts";
@@ -219,6 +221,7 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 }>;
 
 export type OrdinaryAgentCoordinatorView = AgentCoordinatorView & Readonly<{
+	resumeWorkflow(toolCallId: string): Promise<WorkflowResumeReceipt>;
 	spawn(toolCallId: string, input: AgentSpawnInput): Promise<AgentSpawnReceipt>;
 	agentTemplateSnapshot(): AgentTemplateCatalogueSnapshot;
 	refreshAgentTemplateSnapshot(): Promise<AgentTemplateCatalogueSnapshot>;
@@ -494,11 +497,44 @@ export class WorkflowCoordinator {
 		this.#requireAgent(agentId);
 		return Object.freeze({
 			...this.#agentView(agentId),
+			resumeWorkflow: (toolCallId) => this.#resumeWorkflow(agentId, toolCallId),
 			spawn: (toolCallId, input) => this.#spawner.spawn(agentId, toolCallId, input),
 			agentTemplateSnapshot: () => this.#sessionFactory.agentTemplateSnapshotFor(
 				this.#requireAgent(agentId),
 			),
 			refreshAgentTemplateSnapshot: () => this.refreshAgentTemplateSnapshot(agentId),
+		});
+	}
+
+	async #resumeWorkflow(agentId: string, toolCallId: string): Promise<WorkflowResumeReceipt> {
+		if (agentId !== this.#ownerIdentity.agentId) throw new Error("wrong_participant: workflow_resume is Owner only");
+		this.#assertAdmissionOpen();
+		const committed = resolveCommittedToolCall({
+			agentId, transcript: this.#requireAgent(agentId).transcript.inspect(), toolCallId, toolName: "workflow_resume",
+		});
+		if (!isDeepStrictEqual(committed.input, {})) throw new Error("invalid_input: workflow_resume accepts only {}");
+		return resumeWorkflow({
+			workflowId: this.#ownerIdentity.workflowId,
+			agents: this.#agents,
+			quarantinedAgentIds: this.#quarantinedWorkflowAgentIds,
+			messages: this.#messages,
+			activate: async (record, requestIds) => {
+				this.#assertAdmissionOpen();
+				const outcome = await this.#runSupervisor.continueDormantResponder(record, {
+					requestMessageIds: requestIds,
+					recheckRequestMessageIds: () => {
+						this.#assertAdmissionOpen();
+						return this.#messages.recoveryRequestIds(record);
+					},
+				});
+				return {
+					agentId: record.identity.agentId,
+					requestIds,
+					disposition: outcome === "activated" ? "admitted"
+						: outcome === "already_running" || outcome === "resolved" ? "skipped" : "blocked",
+					...(outcome === "activated" ? {} : { reason: outcome }),
+				};
+			},
 		});
 	}
 

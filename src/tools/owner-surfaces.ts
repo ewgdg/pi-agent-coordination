@@ -35,6 +35,7 @@ type AgentCoordinatorView =
 type ViewResolver = () => AgentCoordinatorView;
 
 const OWNER_AGENT_TOOL_NAMES = new Set([
+	"workflow_resume",
 	"agent_message",
 	"agent_wait",
 	"agent_spawn",
@@ -276,5 +277,5 @@ export function participantCoordinatorHandlers(
 			askUserQuestion: (toolCallId, input, signal) =>
 				ordinaryView().askHuman(toolCallId, input, signal),
 		}
-		: { ...common, spawn, agentTemplateSnapshot };
+		: { ...common, spawn, agentTemplateSnapshot, resumeWorkflow: (toolCallId) => ordinaryView().resumeWorkflow(toolCallId) };
 }

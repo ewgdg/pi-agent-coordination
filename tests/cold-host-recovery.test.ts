@@ -1225,6 +1225,114 @@ test("cold discovery quarantines malformed Moderator bootstrap evidence", async 
 	await reopened.runtime.dispose();
 });
 
+
+for (const nested of [false, true]) {
+test(`workflow_resume reactivates ${nested ? "nested" : "delivered"} unanswered work once without Request redelivery`, { timeout: 10_000 }, async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true, implicitModeratorResponses: false });
+	await bindTestOwnerHost(host, "tui");
+	host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Pause before restart." }, { id: "pause-resume" }), { stopReason: "toolUse" })]);
+	const spawned = await executeTool(host, "agent_spawn", "resume-child", { request: "Recover this interrupted work." }) as { agentId: string };
+	const file = await waitForSessionFile(workflowSessionDirectory(host), spawned.agentId);
+	await waitForTranscriptEntry(file, entry => entry.type === "message" && entry.message.role === "assistant");
+	const ownerFile = host.session.sessionManager.getSessionFile()!;
+	await host.runtime.dispose();
+	let nestedRequestId: string | undefined;
+	if (nested) {
+		const child = SessionManager.open(file);
+		const owner = SessionManager.open(ownerFile);
+		const appendRequest = (from: SessionManager, to: SessionManager, toolCallId: string, question: string) => {
+			const fromAgentId = from.getSessionId();
+			const targetAgentId = to.getSessionId();
+			const entryId = from.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: targetAgentId, question }, { id: toolCallId }), { stopReason: "toolUse" }));
+			const source = { agentId: fromAgentId, entryId, toolCallId };
+			const requestMessageId = deriveMessageIdentity(source);
+			from.appendMessage({ role: "toolResult", toolName: "agent_message", toolCallId, content: [{ type: "text", text: "sent" }], details: { requestMessageId, targetAgentId, messageStatus: "sent" }, isError: false, timestamp: Date.now() });
+			const delivery = createMessageDelivery([{ source, projection: { kind: "request", requestMessageId, fromAgentId, question } }]);
+			to.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
+			return requestMessageId;
+		};
+		appendRequest(child, owner, "reverse-before-restart", "Need an Owner decision.");
+		nestedRequestId = appendRequest(owner, child, "nested-before-restart", "Clarify before the decision.");
+	}
+	const before = SessionManager.open(file).getEntries().filter(entry => entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery");
+	assert.equal(before.length, nested ? 2 : 1);
+	const reopened = await reopenOwner(t, host, ownerFile, { implicitModeratorResponses: false });
+	let recoveredContext = "";
+	reopened.model.setResponses([(context) => {
+		recoveredContext = JSON.stringify(context.messages);
+		return fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Keep recovery live." }, { id: "pause-recovered" }), { stopReason: "toolUse" });
+	}]);
+	const receipt = await executeTool(reopened, "workflow_resume", "resume-workflow", {}) as { activations: Array<{ agentId: string; disposition: string; requestIds: string[] }> };
+	assert.ok(receipt.activations.some(item => item.agentId === spawned.agentId && item.disposition === "admitted"));
+	if (nestedRequestId) assert.equal(receipt.activations.find(item => item.agentId === spawned.agentId)?.requestIds.at(-1), nestedRequestId);
+	await waitForCondition(async () => recoveredContext.length > 0);
+	assert.match(recoveredContext, /Owner.*continu/i);
+	assert.match(recoveredContext, /side effects/i);
+	await executeTool(reopened, "workflow_resume", "resume-again", {});
+	const after = SessionManager.open(file).getEntries();
+	assert.deepEqual(after.filter(entry => entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery"), before);
+	assert.equal(after.filter(entry => entry.type === "custom_message" && entry.customType.includes("workflow") && entry.customType.includes("continu")).length, 1);
+	await reopened.runtime.dispose();
+	if (!nested) {
+		const reopenedAgain = await reopenOwner(t, reopened, ownerFile, { implicitModeratorResponses: false });
+		let continuedAgain = false;
+		reopenedAgain.model.setResponses([() => {
+			continuedAgain = true;
+			return fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Still unfinished after another restart." }, { id: "pause-second-recovery" }), { stopReason: "toolUse" });
+		}]);
+		await executeTool(reopenedAgain, "workflow_resume", "resume-second-restart", {});
+		await waitForCondition(async () => continuedAgain);
+		assert.equal(SessionManager.open(file).getEntries().filter(entry => entry.type === "custom_message" && entry.customType === "agent-coordination.workflow-continuation").length, 2);
+		await reopenedAgain.runtime.dispose();
+	}
+});
+}
+
+for (const boundary of ["before_request_delivery", "after_answer_commitment"] as const) {
+	test(`workflow_resume restores original identity at ${boundary}`, { timeout: 10_000 }, async t => {
+		const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true, implicitModeratorResponses: false });
+		await bindTestOwnerHost(host, "tui");
+		host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Pause." }, { id: "pause-boundary" }), { stopReason: "toolUse" })]);
+		const spawned = await executeTool(host, "agent_spawn", "boundary-spawn", { request: "Original boundary work." }) as { agentId: string; requestMessageId: string };
+		const file = await waitForSessionFile(workflowSessionDirectory(host), spawned.agentId);
+		await waitForTranscriptEntry(file, entry => entry.type === "message" && entry.message.role === "assistant");
+		const ownerFile = host.session.sessionManager.getSessionFile()!;
+		await host.runtime.dispose();
+		if (boundary === "before_request_delivery") {
+			const lines = (await readFile(file, "utf8")).trimEnd().split("\n");
+			const deliveryIndex = lines.findIndex(line => JSON.parse(line).customType === "agent-coordination.message-delivery");
+			assert.ok(deliveryIndex > 0);
+			await writeFile(file, lines.slice(0, deliveryIndex).join("\n") + "\n");
+		} else {
+			const manager = SessionManager.open(file);
+			const toolCallId = "committed-boundary-answer";
+			const entryId = manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+				operation: "answer", requestId: spawned.requestMessageId, answer: "Original committed Answer.",
+			}, { id: toolCallId }), { stopReason: "toolUse" }));
+			manager.appendMessage({ role: "toolResult", toolCallId, toolName: "agent_message", content: [{ type: "text", text: "Committed" }],
+				details: { messageId: deriveMessageIdentity({ agentId: spawned.agentId, entryId, toolCallId }), requestMessageId: spawned.requestMessageId, messageStatus: "sent" },
+				isError: false, timestamp: Date.now() });
+		}
+		const reopened = await reopenOwner(t, host, ownerFile, { implicitModeratorResponses: false });
+		reopened.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Recovered." }, { id: "hold-boundary-recovered" }), { stopReason: "toolUse" })]);
+		const result = await executeTool(reopened, "workflow_resume", "boundary-resume", {}) as { deliveries: Array<{ messageId: string; kind: string; disposition: string }>; activations: unknown[] };
+		assert.equal(result.activations.length, 0);
+		assert.ok(result.deliveries.some(item => item.kind === (boundary === "before_request_delivery" ? "request" : "answer") && item.disposition === "scheduled"));
+		const recipientFile = boundary === "before_request_delivery" ? file : ownerFile;
+		await waitForTranscriptEntry(recipientFile, entry => entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery");
+		await executeTool(reopened, "workflow_resume", "boundary-resume-again", {});
+		const deliveries = SessionManager.open(recipientFile).getEntries().filter(entry => entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery");
+		assert.equal(deliveries.length, 1);
+		assert.match(JSON.stringify(deliveries), new RegExp(spawned.requestMessageId.replace(/[.*+?^${}()|[\]\\]/g, "\\async function createUnboundTestOwnerHost(")));
+		if (boundary === "after_answer_commitment") {
+			const tool = reopened.session.getToolDefinition("agent_observe")!;
+			const status = await tool.execute("completed-responder", { operation: "status", agentId: spawned.agentId }, undefined, undefined, reopened.session.extensionRunner.createContext());
+			assert.equal((status.details as { run: { phase: string } }).run.phase, "dormant");
+		}
+		await reopened.runtime.dispose();
+	});
+}
+
 async function createUnboundTestOwnerHost(
 	t: TestContext,
 	extension: typeof piAgentCoordination,
@@ -1359,7 +1467,7 @@ async function waitForModeratorSession(
 
 async function executeTool(
 	host: TestOwnerHost,
-	toolName: "agent_spawn" | "agent_message",
+	toolName: "agent_spawn" | "agent_message" | "workflow_resume",
 	toolCallId: string,
 	input: Record<string, unknown>,
 ): Promise<unknown> {

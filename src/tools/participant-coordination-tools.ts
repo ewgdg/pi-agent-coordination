@@ -1,3 +1,4 @@
+import type { WorkflowResumeReceipt } from "../protocol/workflow-resume.ts";
 import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
 import { boundedToolPreview } from "./bounded-preview.ts";
 import { Text } from "@earendil-works/pi-tui";
@@ -178,7 +179,7 @@ export type ParticipantCoordinationToolHandlers<
 		? SpawnParticipantCoordinationToolHandler & HumanParticipantCoordinationToolHandler
 		: Role extends "moderator"
 			? HumanParticipantCoordinationToolHandler & ModeratorParticipantCoordinationToolHandler
-			: SpawnParticipantCoordinationToolHandler
+			: SpawnParticipantCoordinationToolHandler & Readonly<{ resumeWorkflow(toolCallId: string): Promise<WorkflowResumeReceipt> }>
 );
 
 const contextPreparationParameters = Type.Object(
@@ -502,7 +503,10 @@ const reportToUserParameters = Type.Object({
 	evidence: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: "Exact transcript, entry, tool-call, diagnostic or other preserved evidence references." }),
 }, { additionalProperties: false });
 
+const workflowResumeParameters = Type.Object({}, { additionalProperties: false });
+
 export const participantCoordinationToolSchemas = {
+	workflow_resume: workflowResumeParameters,
 	agent_message: agentMessageParameters,
 	agent_wait: agentWaitParameters,
 	agent_spawn: agentSpawnParameters,
@@ -516,7 +520,8 @@ export const participantCoordinationToolSchemas = {
 type AvailableHandlers = CommonParticipantCoordinationToolHandlers &
 	Partial<SpawnParticipantCoordinationToolHandler> &
 	Partial<HumanParticipantCoordinationToolHandler> &
-	Partial<ModeratorParticipantCoordinationToolHandler>;
+	Partial<ModeratorParticipantCoordinationToolHandler> &
+	Readonly<{ resumeWorkflow?(toolCallId: string): Promise<WorkflowResumeReceipt> }>;
 
 export function registerParticipantCoordinationTools<
 	Role extends ParticipantCoordinationRole,
@@ -529,6 +534,23 @@ export function registerParticipantCoordinationTools<
 	resolveAnswerTargetAgent?: (toolCallId: string) => string | undefined,
 ): void {
 	const availableHandlers = handlers as AvailableHandlers;
+	if (role === "owner") {
+		pi.registerTool({
+			name: "workflow_resume",
+			label: "Resume Workflow",
+			description: "Owner only: explicitly resume unfinished coordination in the current Workflow from a fixed verified durable snapshot. Returns recovery admission, not Delivery or completion.",
+			promptSnippet: "Resume the current Workflow after restart without replacement Requests.",
+			promptGuidelines: ["workflow_resume renews Workflow continuation intent. It does not restore interrupted tools or volatile Wait calls; inspect side effects before repeating interrupted work."],
+			executionMode: "sequential",
+			parameters: workflowResumeParameters,
+			renderCall: () => new Text("Resume Workflow", 0, 0),
+			renderResult: (result) => new Text(boundedToolPreview(JSON.stringify(result.details)), 0, 0),
+			async execute(toolCallId) {
+				return toolResult(await availableHandlers.resumeWorkflow!(toolCallId));
+			},
+		});
+	}
+
 	pi.registerTool<typeof agentMessageParameters, AgentMessageReceipt>({
 		name: "agent_message",
 		label: "Message Agent",

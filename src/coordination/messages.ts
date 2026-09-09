@@ -1,3 +1,6 @@
+import { findAuthoredAgentMessageSources, inspectCanonicalRequestResolution } from "../protocol/request-resolution.ts";
+import { compareCommittedToolCallOrder, deriveMessageIdentity } from "../protocol/identities.ts";
+import type { WorkflowResumeDelivery } from "../protocol/workflow-resume.ts";
 import { resolveCommittedToolCall } from "../protocol/identities.ts";
 import { resolveAgentMessageReferences } from "../protocol/message-reference.ts";
 import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
@@ -144,6 +147,83 @@ export class MessageCoordinator {
 			deliveryProgressClock: options.deliveryProgressClock,
 			onDeliveryProgressChanged: options.onDeliveryProgressChanged,
 			isWaitingForCapacity: options.isWaitingForCapacity,
+		});
+	}
+
+
+	/** Fixed candidate membership is captured before recovery admits any work. */
+	recoveryMessageCandidates(record: AgentRecord): readonly { messageId: string; authorAgentId: string }[] {
+		const sources = findAuthoredAgentMessageSources({
+			authorAgentId: record.identity.agentId,
+			transcript: record.transcript.inspect(),
+		});
+		const transcript = record.transcript.inspect();
+		return [
+			...sources.map(({ source }) => source),
+			...[...this.#agents.values()].flatMap(child =>
+				"spawnSource" in child.identity && child.identity.directSpawnerAgentId === record.identity.agentId
+					? [child.identity.spawnSource]
+					: []),
+		].sort((a, b) => compareCommittedToolCallOrder(transcript, a, b))
+			.map(source => ({ messageId: deriveMessageIdentity(source), authorAgentId: record.identity.agentId }));
+	}
+
+	recoveryMessage(authorAgentId: string, messageId: string): Message {
+		return this.#requestEvidence.requireCallerAuthoredMessage(this.#requireAgent(authorAgentId), messageId);
+	}
+
+	recoveryRequestIds(record: AgentRecord): readonly string[] {
+		return this.#requestEvidence.obligationFrames(record).flatMap(frame => {
+			const request = this.#requestEvidence.requireRequest(frame.requestId);
+			const resolution = this.#recoveryResolution(request);
+			return resolution.cancellation || resolution.answer ? [] : [frame.requestId];
+		});
+	}
+
+	inspectRecoveryMessage(message: Message): WorkflowResumeDelivery | undefined {
+		const recipient = this.#requireAgent(message.targetAgentId);
+		const identity = { messageId: message.messageId, targetAgentId: message.targetAgentId, kind: message.kind };
+		const delivery = message.kind === "answer"
+			? inspectAnswerDelivery({ requesterAgentId: message.targetAgentId, transcript: recipient.transcript.inspect(), answer: message })
+			: inspectMessageDelivery({ recipientAgentId: message.targetAgentId, transcript: recipient.transcript.inspect(), message });
+		const canonical = inspectCanonicalMessage({
+			message, authorTranscript: this.#requireAgent(message.fromAgentId).transcript.inspect(), deliveryEvidence: delivery.deliveryEvidence,
+		});
+		if (canonical.state === "not_created") return { ...identity, disposition: "skipped", reason: "not_created" };
+		if (canonical.state === "indeterminate") return { ...identity, disposition: "indeterminate", reason: "inspection_incomplete" };
+		const resolution = message.kind === "request" ? this.#recoveryResolution(message) : undefined;
+		if (resolution?.cancellation || resolution?.answer) {
+			return { ...identity, disposition: "skipped", reason: "request_resolved" };
+		}
+		if (delivery.deliveryEvidence) return { ...identity, disposition: "skipped", reason: "delivered" };
+		return undefined;
+	}
+
+	#recoveryResolution(request: Extract<Message, { kind: "request" }>) {
+		// Recovery candidates require durable commitment, not the live admission bridge.
+		return inspectCanonicalRequestResolution({
+			request,
+			requesterTranscript: this.#requireAgent(request.fromAgentId).transcript.inspect(),
+			responderTranscript: this.#requireAgent(request.targetAgentId).transcript.inspect(),
+		});
+	}
+
+	async resumeMessage(message: Message): Promise<WorkflowResumeDelivery> {
+		const recipient = this.#requireAgent(message.targetAgentId);
+		return recipient.host.lane.run(async () => {
+			const current = this.inspectRecoveryMessage(message);
+			if (current) return current;
+			const identity = { messageId: message.messageId, targetAgentId: message.targetAgentId, kind: message.kind };
+			if (this.#isShuttingDown()) return { ...identity, disposition: "blocked", reason: "host_shutting_down" };
+			const alreadyScheduled = this.#deliveryScheduler.hasScheduling(recipient.identity.agentId, message.messageId);
+			const scheduled = this.#scheduleGeneralMessage(recipient, message);
+			// Cancellation or completion can commit after admission but before dispatch.
+			const delivery = message.kind === "request" ? { ...scheduled, isSuppressed: () =>
+				this.#requestEvidence.findCancellation(message) !== undefined || this.#requestEvidence.findAnswer(message) !== undefined } : scheduled;
+			const admission = await this.#deliveryScheduler.admitInLane(recipient, delivery);
+			return admission === "pending"
+				? { ...identity, disposition: alreadyScheduled ? "skipped" : "scheduled", ...(alreadyScheduled ? { reason: "already_scheduled" } : {}) }
+				: { ...identity, disposition: "blocked", reason: admission };
 		});
 	}
 
@@ -542,6 +622,13 @@ export class MessageCoordinator {
 				}
 			},
 		};
+	}
+
+	admitCustomDeliveryInLane(
+		recipient: AgentRecord,
+		delivery: ScheduledCustomDelivery,
+	): Promise<MessageDeliveryAdmission> {
+		return this.#deliveryScheduler.admitCustomInLane(recipient, delivery);
 	}
 
 	admitCustomDelivery(
