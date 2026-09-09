@@ -1,5 +1,5 @@
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
-import { Key, Text, matchesKey, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
+import { Key, Text, matchesKey, truncateToWidth, type Component, type TuiMouseEvent, type TuiMouseEventResult, type TUI } from "@earendil-works/pi-tui";
 import { formatModeratorReport, type ReportHistoryItem } from "../protocol/moderator-report.ts";
 
 const FIXED_PRESENTATION_ROWS = 3;
@@ -61,7 +61,7 @@ class ModeratorReportSurface implements Component {
 			this.#theme.fg("accent", this.#theme.bold(`Moderator report · read-only · ${this.#read ? "Read" : "Unread"}`)),
 			...body.slice(this.#scrollTop, this.#scrollTop + this.#viewportRows),
 			this.#theme.fg("muted", this.#pending === "reporter" ? "Opening reporter…" : this.#pending ? "Working…" : this.#feedback),
-			this.#theme.fg("dim", "m Mark read · c Copy report · v View reporter · ↑/↓ scroll · PgUp/PgDn · Home/End · Esc/q back"),
+			this.#theme.fg("dim", "m Mark read · c Copy report · v View reporter · ↑/↓/wheel scroll · PgUp/PgDn · Home/End · Esc/q back"),
 		];
 		return lines.slice(0, height).map((line) => truncateToWidth(line, boundedWidth, ""));
 	}
@@ -105,6 +105,20 @@ class ModeratorReportSurface implements Component {
 		else return;
 		this.#scrollTop = Math.max(0, Math.min(this.#scrollTop, this.#maximumScrollTop));
 		this.#tui.requestRender();
+	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "wheel") return undefined;
+		if (this.#closed || this.#pending === "reporter" || !event.wheelDelta) {
+			return { handled: true, render: false };
+		}
+		// Pi owns fullscreen mouse capture; consume wheel input even at the report boundaries.
+		const nextScrollTop = Math.max(0, Math.min(
+			this.#maximumScrollTop, this.#scrollTop + event.wheelDelta,
+		));
+		const changed = nextScrollTop !== this.#scrollTop;
+		this.#scrollTop = nextScrollTop;
+		return { handled: true, render: changed };
 	}
 
 	invalidate(): void { this.#body.invalidate(); }
