@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 
@@ -24,6 +24,50 @@ import {
 	type TestCleanupRegistrar,
 	type TestOwnerHost,
 } from "./support/pi-host.ts";
+
+import { deriveMessageIdentity } from "../src/protocol/identities.ts";
+import { AGENT_IDENTITY_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "../src/protocol/custom-entry-types.ts";
+import { inspectAgentMessageAuthorResult } from "../src/protocol/message.ts";
+import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
+
+test("registered Answer results remain canonical with and without a resumed Request", { timeout: 5_000 }, async (t) => {
+	for (const resumed of [null, "remaining-request"]) {
+		await t.test(resumed ?? "no remaining Request", async (t) => {
+			const requestId = "r".repeat(43);
+			let receipt: { messageId: string; requestMessageId: string; messageStatus: "sent" };
+			const host = await createRegistrarHost(t, "ordinary", {
+				...handlers,
+				async message() { return receipt; },
+			});
+			const manager = host.session.sessionManager;
+			const agentId = manager.getSessionId();
+			manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId });
+			const frame = (id: string) => ({ requestId: id, requesterAgentId: "requester", question: "Finish the Request." });
+			manager.appendCustomEntry(OBLIGATION_FOCUS_CUSTOM_TYPE, {
+				frames: [...(resumed ? [frame(resumed)] : []), frame(requestId)],
+			});
+			const input = { operation: "answer" as const, requestId, answer: "Done." };
+			const toolCallId = "answer-result-roundtrip";
+			const entryId = manager.appendMessage(fauxAssistantMessage(
+				fauxToolCall("agent_message", input, { id: toolCallId }),
+				{ stopReason: "toolUse" },
+			));
+			const source = { agentId, entryId, toolCallId };
+			receipt = { messageId: deriveMessageIdentity(source), requestMessageId: requestId, messageStatus: "sent" };
+			const result = await executeTool(host, "agent_message", toolCallId, input);
+			assert.equal(result.terminate, true);
+			assert.equal((result.details as { resumedRequestMessageId: string | null }).resumedRequestMessageId, resumed);
+			manager.appendMessage({
+				role: "toolResult", toolName: "agent_message", toolCallId,
+				content: result.content, details: result.details, isError: false, timestamp: Date.now(),
+			});
+			assert.equal(inspectAgentMessageAuthorResult({
+				authorAgentId: agentId, transcript: transcriptFromSessionManager(manager).inspect(),
+				source, input, requestId,
+			}), "canonical");
+		});
+	}
+});
 
 const roleToolNames = {
 	ordinary: [

@@ -454,8 +454,16 @@ function validateMessageAuthorResult(
 	}
 	const keys = Object.keys(value).sort();
 	const identityKey = message.kind === "request" ? "requestMessageId" : "messageId";
+	// The registered Answer tool adds presentation metadata to the coordinator receipt.
+	const hasResumedRequest = message.kind === "answer" && "resumedRequestMessageId" in value;
+	if (hasResumedRequest && value.resumedRequestMessageId !== null &&
+		(typeof value.resumedRequestMessageId !== "string" || value.resumedRequestMessageId.length === 0)) {
+		throw new Error(
+			`invariant_violation: Message ${messageId} author result has an invalid shape`,
+		);
+	}
 	const correlationKeys = message.kind === "answer"
-		? ["requestMessageId"]
+		? ["requestMessageId", ...(hasResumedRequest ? ["resumedRequestMessageId"] : [])]
 		: message.kind === "message" ||
 				message.kind === "request" ||
 				message.kind === "request_cancellation"
