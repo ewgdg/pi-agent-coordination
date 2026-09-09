@@ -3,6 +3,8 @@ import test from "node:test";
 
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
+import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
+import { inspectMessageDeliveries } from "../src/protocol/message-delivery.ts";
 import { inspectStandaloneMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createMessageDeliveryItem, inspectMessageDelivery, type Message } from "../src/protocol/message.ts";
@@ -303,4 +305,41 @@ test("receipt trust does not relax exact schemas, visibility or duplicate policy
 			transcript: transcriptFromSessionManager(manager).inspect(), source, identity, subject: "Message" }),
 			scenario === "extra-field" ? /invalid shape/ : scenario === "hidden" ? /model-visible/ : /duplicate Deliveries/);
 	}
+});
+
+test("retained delivery projection consumes report publication and read acknowledgment without Message proof", async () => {
+	const manager = SessionManager.inMemory(process.cwd());
+	const recipientAgentId = manager.getSessionId();
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: recipientAgentId });
+	const transcript = transcriptFromSessionManager(manager);
+	await transcript.refresh();
+	const reports = new ModeratorReportStore({
+		transcript,
+		appendCustomEntry: (type, data) => manager.appendCustomEntry(type, data),
+	});
+	const report = reports.publish({
+		symptom: "Stalled", suspectedDefect: "Lost wake", uncertainty: "Unconfirmed",
+		recoveryActions: "Inspected", recoveryOutcome: "Recovered", evidence: ["entry:call"],
+	}, { agentId: "moderator", label: "Moderator" }, {
+		agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/tmp/moderator.jsonl",
+	});
+	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId, transcript: await transcript.refresh() }), []);
+	reports.markRead(report.reportId);
+	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId, transcript: await transcript.refresh() }), []);
+	assert.ok(reports.history()[0]?.readAt);
+
+	const source = { agentId: "sender", entryId: "message", toolCallId: "send" };
+	const projection = { kind: "message" as const, messageId: deriveMessageIdentity(source), fromAgentId: source.agentId, content: "Continue" };
+	const delivery = createMessageDelivery([{ source, projection }]);
+	const entryId = manager.appendCustomMessageEntry(delivery.customType, delivery.content, delivery.display, delivery.details);
+	const expected = [{ source, projection, deliveryEvidence: { agentId: recipientAgentId, entryId } }];
+	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId, transcript: await transcript.refresh() }), expected);
+	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId, transcript: transcriptFromSessionManager(manager).inspect() }), expected);
+});
+
+test("delivery projection still rejects unknown current-scope coordination entries", () => {
+	const manager = SessionManager.inMemory(process.cwd());
+	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: manager.getSessionId() });
+	manager.appendCustomEntry("agent-coordination.unknown", {});
+	assert.throws(() => inspectMessageDeliveries({ recipientAgentId: manager.getSessionId(), transcript: transcriptFromSessionManager(manager).inspect() }), /unexpected current-scope coordination entry agent-coordination\.unknown/);
 });

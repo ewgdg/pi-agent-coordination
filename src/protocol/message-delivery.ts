@@ -1,3 +1,4 @@
+import { MODERATOR_REPORT_CUSTOM_TYPE, MODERATOR_REPORT_READ_CUSTOM_TYPE } from "./moderator-report.ts";
 import { OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 
@@ -198,8 +199,10 @@ function readMessageDeliveries(options: {
 			for (const entry of [committedEntry]) {
 				if (entry.type !== "custom" && entry.type !== "custom_message") continue;
 				if (!entry.customType.startsWith("agent-coordination.")) continue;
-				// Host-authored reminder, routine, and recovery entries are not Agent Messages.
+				// Host-authored context and report/read records do not establish Agent Message Delivery.
 				if (
+					entry.customType === MODERATOR_REPORT_CUSTOM_TYPE ||
+					entry.customType === MODERATOR_REPORT_READ_CUSTOM_TYPE ||
 					entry.customType === CONVERSATION_FORK_CUSTOM_TYPE ||
 					entry.customType === MODERATOR_ROUTINE_START_CUSTOM_TYPE ||
 					entry.customType === MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE ||

@@ -3,6 +3,8 @@ import type { AgentTranscript } from "../transcript/agent-transcript.ts";
 import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { toolCallPointerKey } from "../protocol/identities.ts";
 import {
+	MODERATOR_REPORT_CUSTOM_TYPE,
+	MODERATOR_REPORT_READ_CUSTOM_TYPE,
 	validateReportToUserInput,
 	type ModeratorReport,
 	type ModeratorReportSource,
@@ -10,9 +12,6 @@ import {
 	type ReportHistoryItem,
 	type ReportToUserInput,
 } from "../protocol/moderator-report.ts";
-
-export const MODERATOR_REPORT_CUSTOM_TYPE = "agent-coordination.moderator-report";
-export const MODERATOR_REPORT_READ_CUSTOM_TYPE = "agent-coordination.moderator-report-read";
 
 export class ModeratorReportStore {
 	readonly #transcript: AgentTranscript;
