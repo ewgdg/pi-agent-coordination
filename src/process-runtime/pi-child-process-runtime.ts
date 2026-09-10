@@ -103,6 +103,7 @@ export class PiChildProcessRuntime {
 	#exitResult: PtyExit | undefined;
 	#exitObserved = false;
 	#channelClosed = false;
+	#presentationRevision = 0;
 
 	readonly channel: PiChildRuntimeChannel;
 	readonly ready: PiChildRuntimeReady;
@@ -459,14 +460,20 @@ export class PiChildProcessRuntime {
 	async beginPhysicalTerminalAttachment(
 		handler: (data: string) => void,
 	): Promise<() => void> {
+		const revision = ++this.#presentationRevision;
 		return beginPhysicalTerminalAttachment(
 			this.#projection,
-			() => this.setPresentationVisible(true),
+			// Native-mode preparation yields. A hide issued in that interval must
+			// invalidate this show, not be overtaken by it after cancellation.
+			() => revision === this.#presentationRevision
+				? this.setPresentationVisible(true)
+				: Promise.resolve(),
 			handler,
 		);
 	}
 
 	hidePresentation(): Promise<void> {
+		++this.#presentationRevision;
 		if (this.#exitObserved) return Promise.resolve();
 		this.#projection.resumeOutput();
 		// A disconnected Control channel already schedules exact process cleanup.
@@ -486,6 +493,7 @@ export class PiChildProcessRuntime {
 	}
 
 	setPresentationVisible(visible: boolean): Promise<void> {
+		++this.#presentationRevision;
 		return this.channel.request("presentation.setVisible", { visible })
 			.then(() => undefined);
 	}

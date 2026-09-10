@@ -12,7 +12,7 @@ import type {
 	TUI,
 } from "@earendil-works/pi-tui";
 
-import type { PhysicalTerminalPort } from "../src/presentation/physical-terminal-attachment.ts";
+import { PhysicalTerminalAttachment, type PhysicalTerminalPort } from "../src/presentation/physical-terminal-attachment.ts";
 import type { TerminalProjection } from "../src/presentation/terminal-projection.ts";
 import {
 	openAgentViewSurface,
@@ -639,7 +639,9 @@ function createProjectionHarness(
 		emitExitRequest() {
 			for (const handler of exitHandlers) handler();
 		},
-		attachedStates: () => attachedStates,
+		// Repeated hide is idempotent; assert state transitions, not cleanup call counts.
+		attachedStates: () => attachedStates.filter((state, index) =>
+			index === 0 || state !== attachedStates[index - 1]),
 		outputPauses: () => outputPauses,
 		outputResumes: () => outputResumes,
 		inputs: () => inputs,
@@ -843,3 +845,86 @@ function createSurfaceHarness(options: Readonly<{
 		ownerRenderRequests: () => ownerRenderRequests,
 	};
 }
+
+test("reselecting a child waits for that child's previous asynchronous hide", { timeout: 5_000 }, async () => {
+	const surface = createSurfaceHarness();
+	const attachment = new PhysicalTerminalAttachment({
+		ownerTui: surface.ownerTui, physicalTerminal: surface.physicalTerminal,
+		fail(error) { throw error; }, requestExit() {},
+	});
+	let releaseHide!: () => void;
+	const hideGate = new Promise<void>(resolve => { releaseHide = resolve; });
+	let visible = false;
+	let hideCount = 0;
+	const first = createProjectionHarness("first").projection;
+	const firstProjection: TerminalProjection = {
+		...first,
+		physicalTerminal: {
+			...first.physicalTerminal,
+			async beginAttachment(handler) {
+				const disconnect = await first.physicalTerminal.beginAttachment(handler);
+				visible = true;
+				return disconnect;
+			},
+			async endAttachment() {
+				if (++hideCount === 1) await hideGate;
+				visible = false;
+			},
+		},
+	};
+	const second = createProjectionHarness("second").projection;
+	try {
+		await attachment.attach(firstProjection);
+		await attachment.attach(second);
+		const reselecting = attachment.attach(firstProjection);
+		await new Promise<void>(resolve => setImmediate(resolve));
+		releaseHide();
+		await reselecting;
+		assert.equal(visible, true, "old cleanup must finish before the selected child shows");
+	} finally {
+		releaseHide();
+		await attachment.close();
+	}
+});
+
+test("cancelling asynchronous attachment hides the child after its eventual show", { timeout: 5_000 }, async () => {
+	const surface = createSurfaceHarness();
+	const attachment = new PhysicalTerminalAttachment({
+		ownerTui: surface.ownerTui, physicalTerminal: surface.physicalTerminal,
+		fail(error) { throw error; }, requestExit() {},
+	});
+	let releaseShow!: () => void;
+	const showGate = new Promise<void>(resolve => { releaseShow = resolve; });
+	let started!: () => void;
+	const showing = new Promise<void>(resolve => { started = resolve; });
+	let visible = false;
+	const child = createProjectionHarness("cancelled").projection;
+	const projection: TerminalProjection = {
+		...child,
+		physicalTerminal: {
+			...child.physicalTerminal,
+			async beginAttachment(handler) {
+				started();
+				await showGate;
+				const disconnect = await child.physicalTerminal.beginAttachment(handler);
+				visible = true;
+				return disconnect;
+			},
+			async endAttachment() { visible = false; },
+		},
+	};
+	try {
+		await attachment.attach(createProjectionHarness("current").projection);
+		const selecting = attachment.attach(projection);
+		await showing;
+		const suspending = attachment.suspend();
+		assert.equal(surface.ownerStarts(), 1, "Owner restoration cannot wait for pending show");
+		releaseShow();
+		await selecting;
+		await suspending;
+		assert.equal(visible, false, "a cancelled child must not render after a late show");
+	} finally {
+		releaseShow();
+		await attachment.close();
+	}
+});
