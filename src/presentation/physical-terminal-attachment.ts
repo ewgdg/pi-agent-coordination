@@ -60,7 +60,7 @@ export class PhysicalTerminalAttachment {
 	#removeExitHandler: () => void = () => undefined;
 	#operationTail = Promise.resolve();
 	#cancelPreparation: (() => Promise<void>) | undefined;
-	readonly #releasingProjections = new Set<Promise<void>>();
+	readonly #releasingProjections = new Map<TerminalProjection, Promise<void>>();
 	#ownerSuspended = false;
 	#closed = false;
 	#closePromise: Promise<void> | undefined;
@@ -108,7 +108,7 @@ export class PhysicalTerminalAttachment {
 		const errors: unknown[] = [];
 		const cancelledPreparation = this.#cancelPreparation?.() ?? Promise.resolve();
 		this.#releaseProjection();
-		const releasedProjection = Promise.allSettled([cancelledPreparation, ...this.#releasingProjections]);
+		const releasedProjection = Promise.allSettled([cancelledPreparation, ...this.#releasingProjections.values()]);
 		this.#restoreOwner(errors);
 		const operation = this.#operationTail.then(async () => {
 			for (const release of await releasedProjection) {
@@ -153,7 +153,7 @@ export class PhysicalTerminalAttachment {
 		const errors: unknown[] = [];
 		const cancelledPreparation = this.#cancelPreparation?.() ?? Promise.resolve();
 		this.#releaseProjection();
-		const releasedProjection = Promise.all([cancelledPreparation, ...this.#releasingProjections]);
+		const releasedProjection = Promise.all([cancelledPreparation, ...this.#releasingProjections.values()]);
 		this.#restoreOwner(errors);
 		await releasedProjection.catch((error) => errors.push(error));
 		const combined = combinedError(errors);
@@ -183,6 +183,11 @@ export class PhysicalTerminalAttachment {
 			this.#inputReady = true;
 			return;
 		}
+		// Other children can take over immediately, but this child's previous hide
+		// must settle before a new show can make it visible again.
+		const previousRelease = this.#releasingProjections.get(projection);
+		if (previousRelease) await previousRelease;
+		if (this.#closed || this.#desiredProjection !== projection) return;
 		const preparedOutput: string[] = [];
 		let cancelled = false;
 		let detachment: Promise<void> | undefined;
@@ -217,6 +222,12 @@ export class PhysicalTerminalAttachment {
 				this.#pendingOutput.push(data);
 				if (this.#outputRoutingActive) this.#drainOutput(projection);
 			});
+			if (cancelled) {
+				// A generic projection may finish showing after cancellation hid it.
+				// Repeat hide after both operations settle, before another attachment.
+				await detachment;
+				detachment = undefined;
+			}
 			if (this.#outputDraining || this.#pendingOutput.length > 0) {
 				await this.#waitForOutputFlush();
 			}
@@ -311,11 +322,15 @@ export class PhysicalTerminalAttachment {
 			const error = combinedError(errors);
 			if (error) throw error;
 		});
-		this.#releasingProjections.add(release);
-		void release.then(
-			() => this.#releasingProjections.delete(release),
-			() => this.#releasingProjections.delete(release),
-		);
+		if (projection) {
+			this.#releasingProjections.set(projection, release);
+			const forgetRelease = () => {
+				if (this.#releasingProjections.get(projection) === release) {
+					this.#releasingProjections.delete(projection);
+				}
+			};
+			void release.then(forgetRelease, forgetRelease);
+		}
 		return release;
 	}
 

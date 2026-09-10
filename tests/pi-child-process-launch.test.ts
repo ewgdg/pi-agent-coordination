@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +7,9 @@ import test from "node:test";
 
 import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
 
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import xtermHeadless from "@xterm/headless";
+import { PhysicalTerminalAttachment } from "../src/presentation/physical-terminal-attachment.ts";
+import { stripTerminalSequences, type TUI } from "@earendil-works/pi-tui";
 
 import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
 import {
@@ -19,6 +21,7 @@ import {
 	PROCESS_RUNTIME_TEST_AGENT_DIR,
 	PROCESS_RUNTIME_TEST_MODEL,
 	PROCESS_RUNTIME_TEST_PROVIDER,
+	PROCESS_RUNTIME_TEST_RESPONSE,
 } from "./fixtures/process-runtime-child-extension.ts";
 
 const TEST_TIMEOUT_MS = 5_000;
@@ -189,3 +192,129 @@ function hasCode(code: string): (error: unknown) => boolean {
 	return (error) => typeof error === "object" && error !== null && "code" in error
 		&& (error as NodeJS.ErrnoException).code === code;
 }
+
+test("cancelled startup attachment stays hidden and retained child reattaches with a complete native frame", {
+	timeout: TEST_TIMEOUT_MS, skip: process.platform === "win32",
+}, async () => {
+	const launchOptions = await createLaunchOptions("cancelled-attachment", 500);
+	const options = { ...launchOptions, agentId: launchOptions.expectedSessionId };
+	await appendFile(options.sessionPath, JSON.stringify({
+		type: "custom", id: "identity", parentId: null,
+		timestamp: new Date().toISOString(), customType: "agent-coordination.identity",
+		data: { agentId: options.agentId, workflowId: options.workflowId,
+			directSpawnerAgentId: options.workflowId, creationPreset: null,
+			spawnSource: { agentId: options.workflowId, entryId: "spawn", toolCallId: "spawn-child" },
+			metadata: { label: "Retained child" } },
+	}) + "\n");
+	const unexpectedOwnerRequest = async (): Promise<never> => {
+		throw new Error("unexpected coordination request in attachment regression");
+	};
+	const launch = await PiChildProcessRuntime.launch({
+		...options,
+		ownerRequestHandlers: {
+			lifecycle: {
+				async executionStarted() { return []; },
+				async humanInputSubmitted() { return "continue"; },
+				async primaryInputQueued() {},
+				async humanInputMode() { return "agent"; },
+				async toolResultCommitting() { return undefined; },
+				async toolExecutionStarted() {},
+				async safeBoundaryReached() {},
+				async executionEnded() {},
+			},
+			presentation: {
+				markReportRead: unexpectedOwnerRequest,
+				async snapshot() { return {
+					live: [{
+						agentId: options.agentId, workflowId: options.workflowId,
+						label: "Retained child", directSpawnerAgentId: null,
+						primaryEvidence: { transcriptPath: options.sessionPath,
+							inspectedThrough: { agentId: options.agentId, entryId: "startup" } },
+						run: { phase: "live", work: "settled", attention: "none",
+							retentionReasons: [{ reason: "interactive_selection", count: 1 }] },
+						model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
+						thinking: "off", compacting: false, queuedInputCount: 0,
+					}], dormant: [], selectedAgentId: options.agentId,
+					humanAttention: [], operationalAttention: [], reports: [],
+				}; },
+				select: unexpectedOwnerRequest,
+			},
+			coordination: {
+				async agentTemplateSnapshot() { return { templates: [] }; },
+				observe: unexpectedOwnerRequest, message: unexpectedOwnerRequest,
+				wait: unexpectedOwnerRequest, control: unexpectedOwnerRequest,
+				spawn: unexpectedOwnerRequest, askUserQuestion: unexpectedOwnerRequest,
+			},
+		},
+		ownerEnvironment: {
+			...options.ownerEnvironment,
+			PROCESS_RUNTIME_VISIBILITY_PROBE: join(dirname(options.sessionPath), "visibility-events"),
+		},
+	});
+	const visibility: boolean[] = [];
+	const observedRuntime = launch.ready().then(runtime => {
+		const setVisible = runtime.setPresentationVisible.bind(runtime);
+		runtime.setPresentationVisible = visible => {
+			visibility.push(visible);
+			return setVisible(visible);
+		};
+		return runtime;
+	});
+	const projection = createPiChildProcessProjection(launch);
+	const display = new xtermHeadless.Terminal({ cols: 80, rows: 60, allowProposedApi: true });
+	display.onData(data => launch.writeInput(data));
+	let ownerRestored = false;
+	const makeAttachment = () => new PhysicalTerminalAttachment({
+		ownerTui: {
+			stop() {}, start() { ownerRestored = true; }, requestRender() {},
+		} as unknown as TUI,
+		physicalTerminal: {
+			supportsPhysicalAttachment: true,
+			columns: () => 80, rows: () => 60, write(data) { display.write(data); return true; },
+			waitForDrain: async () => {}, start() {}, stop() {},
+		},
+		fail(error) { throw error; }, requestExit() {},
+	});
+	const cancelled = makeAttachment();
+	const retained = makeAttachment();
+	try {
+		const selecting = cancelled.attach(projection);
+		await new Promise<void>(resolve => setImmediate(resolve));
+		const closing = cancelled.close();
+		await Promise.all([selecting, closing]);
+		const runtime = await observedRuntime;
+		assert.equal(visibility.at(-1), false, "cancelled admission must end hidden");
+		assert.ok(!visibility.includes(true), "cancelled pending show must be invalidated");
+		// Owner was never suspended for an unprepared child.
+		assert.equal(ownerRestored, false);
+		const settled = new Promise<void>(resolve => {
+			const removeHandler = runtime.onEvent(event => {
+				if (event.event === "agent.settled") { removeHandler(); resolve(); }
+			});
+		});
+		await runtime.prompt({ runId: "retained-work", input: "CANCELLED_RETAINED_WORK", kind: "initial" });
+		await settled;
+		await retained.attach(projection);
+		const screen = () => Array.from({ length: display.rows }, (_, row) =>
+			display.buffer.active.getLine(display.buffer.active.viewportY + row)?.translateToString(true) ?? "").join("\n");
+		const deadline = Date.now() + TEST_TIMEOUT_MS;
+		while (!screen().includes("VISIBILITY_EDITOR_1")) {
+			assert.ok(Date.now() < deadline, "reattachment must publish a complete frame");
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
+		assert.doesNotMatch(screen(), /error:|invariant_violation/);
+		assert.match(screen(), /VISIBILITY_WIDGET_1/);
+		assert.match(await readFile(options.sessionPath, "utf8"), new RegExp(PROCESS_RUNTIME_TEST_RESPONSE));
+		projection.dispatchInput("\x15/runtime-probe RETAINED_INPUT_OK\r");
+		while (!screen().includes("INPUT=RETAINED_INPUT_OK")) {
+			assert.ok(Date.now() < deadline, "retained child must accept native input");
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
+		assert.match(screen(), /SIZE=80x60/);
+	} finally {
+		await cancelled.close();
+		await retained.close();
+		display.dispose();
+		await launch.dispose();
+	}
+});
