@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { ModeratorReminderAdmission } from "./moderator-reminder-admission.ts";
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import { bindChildInteractiveInputLifecycle } from "./child-runtime-interactive-mode.ts";
@@ -70,12 +71,20 @@ const INPUT_MODULE_PATH = fileURLToPath(new URL("./child-runtime-input.ts", impo
 
 type ChildChannel = FramedAgentControlChannel<typeof agentControlProtocol>;
 
+type DeliveryExecution = {
+	admitted: boolean;
+	finished: boolean;
+	started: boolean;
+	signal?: AbortSignal;
+};
+
 type ChildRuntimeBinding = {
 	context: ExtensionContext;
 	runtime: AgentSessionRuntime;
 	turnCompaction: ChildTurnCompactionGateway;
 	reminderAdmission: ModeratorReminderAdmission;
 	pendingDeliveries: Map<string, () => Promise<void>>;
+	deliveryExecution: AsyncLocalStorage<DeliveryExecution>;
 	activity: RemoteAgentActivitySource;
 	publishRuntimeSnapshot(): Promise<void>;
 	setPresentationVisible(visible: boolean): void;
@@ -447,6 +456,26 @@ export function createChildRuntimeBinding(
 	let binding!: ChildRuntimeBinding;
 	let disposed = false;
 	const activity = new RemoteAgentActivitySource(agentId);
+	const deliveryExecution = new AsyncLocalStorage<DeliveryExecution>();
+	const agent = runtime.session.agent;
+	const originalPrompt = agent.prompt;
+	// AgentSession awaits extension agent_start hooks before its subscribers.
+	// Capture the real native signal at the public Agent prompt boundary instead,
+	// using dispatch-local provenance rather than predicting the next cycle.
+	const trackedPrompt: typeof agent.prompt = function (this: typeof agent, ...args) {
+		const execution = deliveryExecution.getStore();
+		const previousSignal = this.signal;
+		const completion = Reflect.apply(originalPrompt, this, args) as Promise<void>;
+		if (
+			execution?.admitted && !execution.finished && !execution.started &&
+			this.signal !== undefined && this.signal !== previousSignal
+		) {
+			execution.started = true;
+			execution.signal = this.signal;
+		}
+		return completion;
+	};
+	agent.prompt = trackedPrompt;
 	const turnCompaction = new ChildTurnCompactionGateway(
 		runtime.session,
 		(message) => context.ui.notify(message, "warning"),
@@ -495,6 +524,7 @@ export function createChildRuntimeBinding(
 		turnCompaction,
 		reminderAdmission,
 		pendingDeliveries: new Map(),
+		deliveryExecution,
 		activity,
 		publishRuntimeSnapshot,
 		setPresentationVisible,
@@ -519,6 +549,8 @@ export function createChildRuntimeBinding(
 			disposed = true;
 			reminderAdmission.cancel();
 			turnCompaction.dispose();
+			if (agent.prompt === trackedPrompt) agent.prompt = originalPrompt;
+			deliveryExecution.disable();
 			removeInputLifecycleObserver();
 			inputSubmissionAcknowledgment.dispose();
 			removeInputSubmissionListener();
@@ -563,14 +595,21 @@ async function handleOwnerRequest(
 		case "message.deliver": {
 			const { deliveryId, delivery } = request.payload;
 			let commit: ReturnType<typeof observeDeliveryCommit> | undefined;
-			let dispatchedRunId: string | undefined;
+			const execution: DeliveryExecution = { admitted: false, finished: false, started: false };
+			let completionTracked = false;
+			const finish = () => {
+				execution.finished = true;
+				binding.pendingDeliveries.delete(deliveryId);
+				binding.turnCompaction.completeDelivery(deliveryId);
+			};
 			const cancel = async () => {
 				binding.turnCompaction.cancelDelivery(deliveryId);
 				if (request.signal.aborted) commit?.reject(requestCancellationError(request.signal));
-				if (!dispatchedRunId) return;
+				if (!execution.signal) return;
 				await sequenceQueueIntention(state, async () => {
-					// A queued cancellation cannot clear or abort a successor.
-					if (state.currentRunId !== dispatchedRunId) return;
+					// Native signal identity covers awaited start hooks as well as
+					// running work, without clearing or aborting a successor.
+					if (binding.runtime.session.agent.signal !== execution.signal) return;
 					binding.runtime.session.clearQueue();
 					await binding.runtime.session.abort();
 				});
@@ -594,9 +633,15 @@ async function handleOwnerRequest(
 					const dispatch = () => {
 						checkpoint();
 						request.signal.throwIfAborted();
-						const dispatched = dispatchDelivery(binding.runtime, delivery, checkpoint);
-						dispatchedRunId = state.currentRunId;
-						return dispatched;
+						// Active queue admission belongs to this actual native execution.
+						execution.signal = binding.runtime.session.agent.signal;
+						execution.admitted = delivery.kind === "custom";
+						return binding.deliveryExecution.run(execution, () =>
+							dispatchDelivery(binding.runtime, delivery, () => {
+								checkpoint();
+								execution.admitted = true;
+							})
+						);
 					};
 					const dispatched = binding.runtime.session.isIdle
 						? dispatch()
@@ -610,6 +655,7 @@ async function handleOwnerRequest(
 					return { completion, commit, modelCycleStarted: !binding.runtime.session.isIdle };
 				});
 				const { completion } = admission;
+				completionTracked = true;
 				commit = admission.commit;
 				void completion.then(
 					() => {
@@ -620,7 +666,7 @@ async function handleOwnerRequest(
 						commit?.reject(error);
 						return state.channel.sendEvent("message.dispatch.completed", { deliveryId, error: errorMessage(error) });
 					},
-				).catch(error => reportFault(state.channel, "delivery_completion_failed", error));
+				).catch(error => reportFault(state.channel, "delivery_completion_failed", error)).finally(finish);
 				return {
 					accepted: true,
 					transcriptCommitted: await commit.result,
@@ -629,9 +675,8 @@ async function handleOwnerRequest(
 				};
 			} finally {
 				request.signal.removeEventListener("abort", onAbort);
-				binding.pendingDeliveries.delete(deliveryId);
 				commit?.settle(false);
-				binding.turnCompaction.completeDelivery(deliveryId);
+				if (!completionTracked) finish();
 			}
 		}
 		case "message.cancel": {

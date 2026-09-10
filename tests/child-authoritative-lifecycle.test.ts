@@ -182,6 +182,12 @@ test("late dispatch rejection cannot fault a real native successor", { timeout: 
 	await host.session.waitForIdle();
 	const successor = host.session.prompt("Native successor.");
 	await successorStarted;
+	const successorSignal = host.session.agent.signal;
+	assert.ok(successorSignal);
+	assert.deepEqual(await binding.handleOwnerRequest({
+		method: "message.cancel", payload: { deliveryId: "delivery-1" }, signal: new AbortController().signal,
+	}), { accepted: true });
+	assert.equal(successorSignal.aborted, false, "an earlier dispatch cannot cancel its successor");
 	rejectEarlier(new Error("Late dispatch rejection"));
 	await rejected;
 	assert.equal(parent.workState(), "active");
@@ -189,4 +195,56 @@ test("late dispatch rejection cannot fault a real native successor", { timeout: 
 	releaseSuccessor();
 	await successor;
 	assert.equal(parent.workState(), "settled");
+});
+
+test("interrupt during awaited agent_start fences the admitted Delivery before model execution", { timeout: 5000 }, async t => {
+	let context!: ExtensionContext;
+	let entered!: () => void;
+	const startEntered = new Promise<void>(resolve => { entered = resolve; });
+	let release!: () => void;
+	const gate = new Promise<void>(resolve => { release = resolve; });
+	t.after(() => release());
+	let modelCalls = 0;
+	const host = await createTestOwnerHost(t, pi => {
+		pi.on("session_start", (_event, ctx) => { context = ctx; });
+		pi.on("agent_start", async () => { entered(); await gate; });
+	});
+	host.model.setResponses([() => { modelCalls++; return fauxAssistantMessage("Must not execute."); }]);
+	const { parent, binding } = await attachRuntime(host, context);
+	t.after(async () => { binding.dispose(); await parent.dispose(); });
+	const delivery = parent.deliver({ kind: "user", content: "Interrupt before model execution." });
+	const completion = delivery.completion.catch(error => {
+		assert.match(String(error), /child_turn_admission_cancelled/);
+	});
+	await startEntered;
+	const interrupted = parent.abort();
+	// Real abort waits for idle; release the hook only after cancellation can run.
+	await new Promise<void>(resolve => setImmediate(resolve));
+	release();
+	await Promise.all([interrupted, completion]);
+	assert.equal(modelCalls, 0, "interruption must survive the admission-to-start transition");
+});
+
+test("Delivery cancellation remains correlated after transcript commit until dispatch settles", { timeout: 5000 }, async t => {
+	let context!: ExtensionContext;
+	let release!: () => void;
+	const gate = new Promise<void>(resolve => { release = resolve; });
+	t.after(() => release());
+	const host = await createTestOwnerHost(t, pi => { pi.on("session_start", (_event, ctx) => { context = ctx; }); });
+	host.model.setResponses([async () => { await gate; return fauxAssistantMessage("Done."); }]);
+	const { parent, binding } = await attachRuntime(host, context);
+	t.after(async () => { binding.dispose(); await parent.dispose(); });
+	const delivery = parent.deliver({ kind: "user", content: "Cancel committed active delivery." }, { inspectCommit: () => true });
+	assert.equal(await delivery.transcriptCommit, true);
+	const signal = host.session.agent.signal;
+	assert.ok(signal);
+	const cancellation = binding.handleOwnerRequest({
+		method: "message.cancel", payload: { deliveryId: "delivery-1" }, signal: new AbortController().signal,
+	});
+	await new Promise<void>(resolve => setImmediate(resolve));
+	const aborted = signal.aborted;
+	release();
+	assert.deepEqual(await cancellation, { accepted: true });
+	await delivery.completion;
+	assert.equal(aborted, true, "cancellation targets the actual native execution after transcript acknowledgment");
 });

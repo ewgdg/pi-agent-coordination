@@ -66,7 +66,7 @@ All Owner input uses `message.deliver`, correlated by a Delivery ID:
 
 - The response reports transcript admission independently of execution completion.
 - `message.dispatch.completed` covers that exact dispatch and native settlement, including input queued into active work. Preparation settlement cannot complete the Delivery.
-- `message.cancel` fences pending preparation or input preflight by Delivery ID. If cancellation must clear already-queued input, it rechecks the child-observed dispatch cycle before clearing or aborting it.
+- `message.cancel` remains available until dispatch completion, independently of transcript acknowledgment. It fences pending preparation or input preflight by Delivery ID. Once native execution starts, the child correlates its actual abort signal at the public Agent prompt boundary, before awaited extension start hooks finish. Cancellation rechecks that exact native signal before clearing queues or aborting; a successor signal is never targeted.
 - `run.interrupt` and `queue.clear` target child-reported cycles and revalidate after waiting, immediately before mutation.
 
 Delivery completion and rejection do not manufacture lifecycle events or fault a successor cycle. Actual lifecycle identity mismatches still fail the transport; unrelated native work is not accepted by bypassing that validation.

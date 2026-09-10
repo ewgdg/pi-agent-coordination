@@ -50,3 +50,15 @@ Use Pi's existing waitForIdle contract rather than duplicating settlement tracki
 
 ## Outcome
 The child owns execution identity end to end. Pending Delivery admission, transcript commitment, cancellation, and correlated completion no longer predict or manufacture execution lifecycle. Maintained guidance is in `docs/run-supervision.md`.
+
+## Admission-to-start cancellation follow-up
+Scope: preserve Delivery cancellation across awaited native start hooks and after transcript acknowledgment, without predicting transport cycles or targeting successors.
+
+- Added permanent tests first. The awaited `agent_start` regression failed with one model invocation instead of zero (23 ms). The post-transcript cancellation regression failed with `accepted: false` instead of true (12 ms).
+- Correlate admitted dispatch-local execution through AsyncLocalStorage. At the public native Agent prompt boundary, capture the newly created actual abort signal rather than waiting for AgentSession subscribers, which run after awaited extension hooks.
+- Keep cancellation registration and gateway ownership until correlated dispatch completion. At queued mutation, compare the native signal exactly; an earlier dispatch cannot abort a successor.
+- Restore the prompt binding and disable the dispatch context on binding disposal.
+- Permanent start-hook test launches abort concurrently and releases the hook after a check phase: genuine Pi abort waits for idle. The original sequential temporary probe must use this ordering to avoid waiting for abort while withholding its settlement gate.
+- Extended the existing late-completion regression to verify earlier Delivery cancellation leaves the real successor signal untouched.
+- Focused bridge/adapter/preparation/reminder/continuation tests: 39/39 passed (5.5 seconds). Typecheck passed.
+- Final selected real process Bridge/compaction contracts: 2/2 passed (8.9 seconds). Final focused group: 39/39 passed (5.4 seconds). Typecheck and diff whitespace checks passed. Evidence is stored beside the earlier logs as `admission-cancellation-{followup,process,typecheck}.txt`. Full suite intentionally not run.
