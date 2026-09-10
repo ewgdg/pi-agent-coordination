@@ -646,3 +646,59 @@ test("unreadable Owner snapshot is an error rather than an empty outbound view",
 	h.requester.record.transcript.refresh = async () => { throw new Error("Owner snapshot unreadable"); };
 	await assert.rejects(h.resume(), /may already be admitted or dispatched.*Owner snapshot unreadable/);
 });
+
+for (const operation of ["send", "request"] as const) {
+	test(`recovery omits ${operation} rejected for an ambiguous target without weakening caller lookup`, { timeout: 5_000 }, async t => {
+		const h = harness(t);
+		const input: AgentMessageInput = operation === "send"
+			? { operation, targetAgent: "Owner", content: "Not created" }
+			: { operation, targetAgent: "Owner", question: "Not created" };
+		const id = `ambiguous-${operation}`;
+		call(h.requester, id, "agent_message", input);
+		await assert.rejects(h.messages.execute("requester", id, input), /ambiguous_target/);
+		h.requester.manager.appendMessage({
+			role: "toolResult", toolCallId: id, toolName: "agent_message",
+			content: [{ type: "text", text: "ambiguous_target: Agent label Owner matches multiple Agents" }],
+			isError: true, timestamp: Date.now(),
+		});
+		await h.recover();
+		const candidate = h.messages.recoveryMessageCandidates(h.requester.record)[0]!;
+		call(h.requester, "poll-failed", "agent_message", { operation: "poll", messageId: candidate.messageId });
+		await assert.rejects(h.messages.execute("requester", "poll-failed", {
+			operation: "poll", messageId: candidate.messageId,
+		}), /unknown_identity/);
+		assert.deepEqual(await h.resume(), { workflowId: "requester", outstandingRequests: [] });
+		assert.equal(h.deliveries(h.responder).length, 0);
+		assert.equal(h.deliveries(h.worker).length, 0);
+	});
+}
+
+test("recovery preserves failed-authoring contradictions and quarantined uncertainty", { timeout: 5_000 }, async t => {
+	for (const evidence of ["delivery", "quarantined"] as const) {
+		const h = harness(t);
+		const id = `failed-with-${evidence}`;
+		const input: AgentMessageInput = { operation: "send", targetAgent: "responder", content: "Inspect all proof" };
+		call(h.requester, id, "agent_message", input);
+		if (evidence === "delivery") {
+			await h.messages.execute("requester", id, input);
+			await flush();
+			assert.equal(h.deliveries(h.responder).length, 1);
+		}
+		h.requester.manager.appendMessage({
+			role: "toolResult", toolCallId: id, toolName: "agent_message",
+			content: [{ type: "text", text: "Authoring failed" }], isError: true, timestamp: Date.now(),
+		});
+		const messages = new MessageCoordinator({
+			agents: h.agents, workflowPolicy: h.policy, isShuttingDown: () => false,
+			quarantinedWorkflowAgentIds: new Set(evidence === "quarantined" ? ["unreadable-peer"] : []),
+		});
+		t.after(() => messages.shutdownDeliveryProgress());
+		await assert.rejects(resumeWorkflow({
+			workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages,
+			quarantinedAgentIds: new Set(),
+			activate: async (record, requestIds) => ({
+				agentId: record.identity.agentId, requestIds, disposition: "skipped", reason: "already_running",
+			}),
+		}), evidence === "delivery" ? /error result and Delivery/ : /evidence_unavailable.*quarantined Agent proof/);
+	}
+});

@@ -52,6 +52,7 @@ export async function resumeWorkflow(options: {
 					let message: Message | undefined;
 					try {
 						message = options.messages.recoveryMessage(candidate.authorAgentId, candidate.messageId);
+						if (!message) continue;
 						if (message.kind === "request") requests.push(message);
 						if (unavailable.has(message.targetAgentId)) throw new Error("evidence_unavailable: recipient transcript");
 						const inspected = options.messages.inspectRecoveryMessage(message);

@@ -624,6 +624,22 @@ export class RequestEvidence {
 			};
 	}
 
+	resolveRecoveryMessage(author: AgentRecord, messageId: string): Message | undefined {
+		const authored = findAuthoredAgentMessageSource({
+			authorAgentId: author.identity.agentId,
+			transcript: author.transcript.inspect(),
+			messageId,
+		});
+		if (authored && (authored.input.operation === "send" || authored.input.operation === "request")) {
+			// Failed authoring is not recovery work, but Delivery or unavailable proof must still be inspected.
+			const target = this.#inspectMessageTarget(
+				author, author.transcript.inspect(), authored.source.toolCallId, authored.input.targetAgent,
+			);
+			if (target.state === "not_created") return undefined;
+		}
+		return this.requireCallerAuthoredMessage(author, messageId);
+	}
+
 	requireCallerAuthoredMessage(caller: AgentRecord, messageId: string): Message {
 		const ownMessage = this.#resolveAuthoredMessage(caller, messageId);
 		if (ownMessage) return ownMessage;

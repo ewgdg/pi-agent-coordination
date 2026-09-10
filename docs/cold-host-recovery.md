@@ -51,7 +51,7 @@ Both the Owner's tool result and each resumed Agent's runtime continuation conta
 - `blocked` or `indeterminate`: inspect the reason before targeted recovery.
 - `resolved`: the delivered obligation resolved during admission.
 
-These are admission-time facts, not promises about later execution. Requests already verified resolved or not created are omitted. Unavailable target evidence is reported on the affected outbound Request. The result is recipient-relative, not a report of every recovery operation in the Workflow. Continuations do not repeat incoming obligation identities or contents: restored Request relationships remain authoritative.
+These are admission-time facts, not promises about later execution. Requests already verified resolved or not created are omitted. Failed Message authoring calls verified not created are also omitted from recovery; contradictory Delivery or unavailable target proof still surfaces as an evidence error. Unavailable target evidence is reported on the affected outbound Request. The result is recipient-relative, not a report of every recovery operation in the Workflow. Continuations do not repeat incoming obligation identities or contents: restored Request relationships remain authoritative.
 
 The tool renders the Owner's outbound Requests with their target, recovery status, and relevant reason. Compact rows abbreviate identities; expanded rows show full identities. An empty view says there are no outstanding outbound Requests for this recipient, not that the Workflow has no unfinished work.
 

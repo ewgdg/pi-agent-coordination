@@ -170,12 +170,12 @@ export class MessageCoordinator {
 			.map(source => ({ messageId: deriveMessageIdentity(source), authorAgentId: record.identity.agentId }));
 	}
 
-	recoveryMessage(authorAgentId: string, messageId: string): Message {
+	recoveryMessage(authorAgentId: string, messageId: string): Message | undefined {
 		const author = this.#requireAgent(authorAgentId);
 		return findAuthoredSupervisoryResumeMessages({
 			workflowId: author.identity.workflowId, authorAgentId, transcript: author.transcript.inspect(),
 		}).find(message => message.messageId === messageId) ??
-			this.#requestEvidence.requireCallerAuthoredMessage(author, messageId);
+			this.#requestEvidence.resolveRecoveryMessage(author, messageId);
 	}
 
 	recoveryRequestIds(record: AgentRecord): readonly string[] {
