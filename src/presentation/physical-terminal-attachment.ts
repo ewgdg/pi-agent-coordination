@@ -222,12 +222,9 @@ export class PhysicalTerminalAttachment {
 			}
 			if (cancelled || this.#closed || this.#desiredProjection !== projection) return;
 
-			// Rebuilding the previous detached terminal can be slow. Its physical
-			// output is already drained; publish the replacement before awaiting it.
-			const releasedProjection = this.#releaseProjection().then(
-				() => undefined,
-				(error: unknown) => ({ error }),
-			);
+			// Hiding the previous native UI is cleanup, not a prerequisite for
+			// selecting the ready replacement. Keep failures observed independently.
+			void this.#releaseProjection().catch((error) => this.#failAttachment(error));
 			this.#projection = projection;
 			this.#removeOutputHandler = removeOutputHandler;
 			this.#removeFailureHandler = removeFailureHandler;
@@ -243,8 +240,6 @@ export class PhysicalTerminalAttachment {
 				this.#inputReady = true;
 				for (const data of this.#pendingInput.splice(0)) this.dispatchInput(data);
 			}
-			const releaseFailure = await releasedProjection;
-			if (releaseFailure) throw releaseFailure.error;
 		} finally {
 			if (this.#cancelPreparation === cancelPreparation) {
 				this.#cancelPreparation = undefined;

@@ -7,6 +7,7 @@ import type {
 	ExtensionFactory,
 	SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 import { PI_TEST_AGENT_DIR } from "../support/pi-test-environment.ts";
@@ -87,6 +88,22 @@ faux.setResponses(process.env.PROCESS_RUNTIME_COORDINATION_TOOLS === "1"
 
 const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 	let queuedPostRunContinuation = false;
+	const visibilityProbe = process.env.PROCESS_RUNTIME_VISIBILITY_PROBE;
+	let visibilityTurn = 0;
+	if (visibilityProbe) {
+		pi.on("session_start", () => appendFileSync(visibilityProbe, "session_start\n"));
+		pi.on("agent_end", (_event, ctx) => {
+			visibilityTurn++;
+			ctx.ui.setEditorText("VISIBILITY_EDITOR_" + visibilityTurn);
+			ctx.ui.setWidget("visibility-probe", () => ({
+				render() {
+					appendFileSync(visibilityProbe, "render\n");
+					return ["VISIBILITY_WIDGET_" + visibilityTurn];
+				},
+				invalidate() {},
+			}));
+		});
+	}
 	pi.registerProvider(PROCESS_RUNTIME_TEST_PROVIDER, {
 		name: "Offline process runtime test",
 		baseUrl: "http://127.0.0.1:1",

@@ -751,8 +751,8 @@ export const agentControlMethods = {
 		request: AgentSelectorActionSchema,
 		response: AgentSelectionResultSchema,
 	},
-	"presentation.reinitialize": {
-		request: closed({ completionMarker: NonEmptyStringSchema }),
+	"presentation.setVisible": {
+		request: closed({ visible: Type.Boolean() }),
 		response: EmptyResponseSchema,
 	},
 	"run.prompt": {

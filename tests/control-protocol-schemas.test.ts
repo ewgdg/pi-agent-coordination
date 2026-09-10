@@ -110,7 +110,7 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 		"coordination.moderatorControl",
 		"presentation.agents.snapshot",
 		"presentation.agents.select",
-		"presentation.reinitialize",
+		"presentation.setVisible",
 		"run.prompt",
 		"message.deliver",
 		"moderatorReminder.prepare",
@@ -140,13 +140,13 @@ test("every version-seven method and event has TypeBox payload/result schemas", 
 	assert.equal(Check(AgentControlMethodSchema, "message.deliver"), true);
 	assert.equal(Check(AgentControlMethodSchema, "queue.clear"), true);
 	assert.equal(Check(AgentControlMethodSchema, "run.interrupt"), true);
-	assert.equal(Check(AgentControlMethodSchema, "presentation.reinitialize"), true);
-	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, {
-		completionMarker: "frame-123",
+	assert.equal(Check(AgentControlMethodSchema, "presentation.setVisible"), true);
+	assert.equal(Check(agentControlMethods["presentation.setVisible"].request, {
+		visible: false,
 	}), true);
-	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, {}), false);
-	assert.equal(Check(agentControlMethods["presentation.reinitialize"].request, {
-		completionMarker: "frame-123",
+	assert.equal(Check(agentControlMethods["presentation.setVisible"].request, {}), false);
+	assert.equal(Check(agentControlMethods["presentation.setVisible"].request, {
+		visible: false,
 		extra: true,
 	}), false);
 	assert.equal(Check(AgentControlMethodSchema, "runtime.unknown"), false);

@@ -29,6 +29,7 @@ test("native Owner clone closes an open Agent view and creates the replacement W
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 	});
 	try {
 		host.model.setResponses([

@@ -52,7 +52,7 @@ export type InteractiveHostBridge = {
 		ui: ExtensionUIContext,
 	): Promise<Readonly<{
 		runtime: AgentSessionRuntime;
-		reinitializePresentation(completionMarker: string): void;
+		setPresentationVisible(visible: boolean): void;
 	}>>;
 };
 
@@ -192,7 +192,7 @@ function bindInteractivePresentation(
 	state.presentationsByRuntime.set(runtime, presentation);
 	return {
 		runtime,
-		reinitializePresentation: presentation.reinitialize,
+		setPresentationVisible: presentation.setVisible,
 	};
 }
 

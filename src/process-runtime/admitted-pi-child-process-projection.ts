@@ -33,13 +33,14 @@ const DEFAULT_CELL_STYLE: TerminalCellStyle = {
 /** Already-admitted Runtime surface consumed by the terminal Adapter. */
 export type AdmittedPiChildProjectionRuntime = Readonly<{
 	exited: Promise<PtyExit>;
+	dimensions(): Readonly<{ columns: number; rows: number }>;
 	frame(): TerminalProjectionFrame;
 	writeInput(data: string | Buffer): void;
 	resize(columns: number, rows: number): void;
 	addChangeHandler(handler: () => void): () => void;
 	addFailureHandler(handler: (error: unknown) => void): () => void;
 	beginPhysicalTerminalAttachment(handler: (data: string) => void): Promise<() => void>;
-	restoreDetachedTerminal(): Promise<void>;
+	hidePresentation(): Promise<void>;
 	pauseOutput(): void;
 	resumeOutput(): void;
 	onEvent(handler: (event: PiChildRuntimeEvent) => void): () => void;
@@ -108,13 +109,13 @@ export function createAdmittedPiChildProcessProjection(
 		physicalTerminal: Object.freeze({
 			beginAttachment: (handler: (data: string) => void) =>
 				runtime.beginPhysicalTerminalAttachment(handler),
-			endAttachment: () => runtime.restoreDetachedTerminal(),
+			endAttachment: () => runtime.hidePresentation(),
 			pauseOutput: () => runtime.pauseOutput(),
 			resumeOutput: () => runtime.resumeOutput(),
 		}),
 		resize(columns, rows) {
-			const frame = runtime.frame();
-			if (columns === frame.columns && rows === frame.rows) return;
+			const dimensions = runtime.dimensions();
+			if (columns === dimensions.columns && rows === dimensions.rows) return;
 			runtime.resize(columns, rows);
 		},
 		dispatchInput(data) {

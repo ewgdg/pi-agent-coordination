@@ -128,6 +128,7 @@ export async function returnAgentViewToOwner(
 		stripTerminalSequences(opened.view.render(80).join("\n")).includes("Tab views")
 	);
 	opened.view.handleInput?.("o");
+	await waitForCondition(() => !host.ui.customSurfaces.includes(opened.view));
 	await opened.command;
 }
 

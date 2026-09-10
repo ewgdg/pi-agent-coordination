@@ -47,7 +47,6 @@ import {
 	type PtyTerminalProjection,
 	type TerminalProjectionFrame,
 } from "./pty-terminal-projection.ts";
-import { createTerminalPresentationBarrierMarker } from "./terminal-presentation-barrier.ts";
 
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 24;
@@ -384,6 +383,15 @@ export class PiChildProcessRuntime {
 							options.sessionPath,
 							exactSystemPromptArtifactPath,
 						);
+						// Startup diagnostics negotiate once; admitted hidden sessions keep only native UI data.
+						await exactProjection.enterNativeTerminalMode();
+						await raceStartup(
+							Promise.race([channel.request("presentation.setVisible", { visible: false }), startupFault]),
+							exactProjection,
+							timeoutMilliseconds,
+							"hidden presentation",
+							cancellation,
+						);
 						return new PiChildProcessRuntime({
 							projection: exactProjection,
 							admissionBroker,
@@ -428,6 +436,10 @@ export class PiChildProcessRuntime {
 		return this.#projection.pid;
 	}
 
+	dimensions(): Readonly<{ columns: number; rows: number }> {
+		return this.#projection.dimensions();
+	}
+
 	frame(): TerminalProjectionFrame {
 		return this.#projection.frame();
 	}
@@ -449,15 +461,20 @@ export class PiChildProcessRuntime {
 	): Promise<() => void> {
 		return beginPhysicalTerminalAttachment(
 			this.#projection,
-			(completionMarker) => this.reinitializePresentation(completionMarker),
+			() => this.setPresentationVisible(true),
 			handler,
 		);
 	}
 
-	restoreDetachedTerminal(): Promise<void> {
-		return this.#projection.rebuildDetachedTerminal(
-			(completionMarker) => this.reinitializePresentation(completionMarker),
-		);
+	hidePresentation(): Promise<void> {
+		if (this.#exitObserved) return Promise.resolve();
+		this.#projection.resumeOutput();
+		// A disconnected Control channel already schedules exact process cleanup.
+		// Hiding that failed view must not add another request against the closed channel.
+		if (this.#channelClosed) return Promise.resolve();
+		return this.setPresentationVisible(false).catch((error) => {
+			if (!this.#channelClosed) throw error;
+		});
 	}
 
 	pauseOutput(): void {
@@ -468,8 +485,8 @@ export class PiChildProcessRuntime {
 		this.#projection.resumeOutput();
 	}
 
-	reinitializePresentation(completionMarker: string): Promise<void> {
-		return this.channel.request("presentation.reinitialize", { completionMarker })
+	setPresentationVisible(visible: boolean): Promise<void> {
+		return this.channel.request("presentation.setVisible", { visible })
 			.then(() => undefined);
 	}
 
@@ -613,6 +630,10 @@ export class PiChildProcessLaunch {
 		return this.#disposed;
 	}
 
+	dimensions(): Readonly<{ columns: number; rows: number }> {
+		return this.#projection.dimensions();
+	}
+
 	frame(): TerminalProjectionFrame {
 		return this.#projection.frame();
 	}
@@ -632,17 +653,12 @@ export class PiChildProcessLaunch {
 	async beginPhysicalTerminalAttachment(
 		handler: (data: string) => void,
 	): Promise<() => void> {
-		return beginPhysicalTerminalAttachment(
-			this.#projection,
-			(completionMarker) => this.reinitializePresentation(completionMarker),
-			handler,
-		);
+		// Preserve startup terminal negotiation until admission has paused native rendering.
+		return this.#readiness.then(runtime => runtime.beginPhysicalTerminalAttachment(handler));
 	}
 
-	restoreDetachedTerminal(): Promise<void> {
-		return this.#projection.rebuildDetachedTerminal(
-			(completionMarker) => this.reinitializePresentation(completionMarker),
-		);
+	hidePresentation(): Promise<void> {
+		return this.#readiness.then(runtime => runtime.hidePresentation());
 	}
 
 	pauseOutput(): void {
@@ -653,9 +669,9 @@ export class PiChildProcessLaunch {
 		this.#projection.resumeOutput();
 	}
 
-	reinitializePresentation(completionMarker: string): Promise<void> {
+	setPresentationVisible(visible: boolean): Promise<void> {
 		return this.#readiness.then(
-			(runtime) => runtime.reinitializePresentation(completionMarker),
+			(runtime) => runtime.setPresentationVisible(visible),
 		);
 	}
 
@@ -872,17 +888,16 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promis
 
 async function beginPhysicalTerminalAttachment(
 	projection: PtyTerminalProjection,
-	reinitializePresentation: (completionMarker: string) => Promise<void>,
+	showPresentation: () => Promise<void>,
 	handler: (data: string) => void,
 ): Promise<() => void> {
-	await projection.enterPhysicalTerminalMode();
+	await projection.enterNativeTerminalMode();
 	const removeOutputHandler = projection.addOutputHandler(handler);
 	try {
-		await reinitializePresentation(createTerminalPresentationBarrierMarker());
+		await showPresentation();
 		return removeOutputHandler;
 	} catch (error) {
 		removeOutputHandler();
-		await projection.abortPhysicalTerminalMode();
 		throw error;
 	}
 }

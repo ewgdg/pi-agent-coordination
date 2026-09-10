@@ -211,7 +211,7 @@ test("admitted process terminal projection maps terminal operations and events w
 	assert.deepEqual(runtime.physicalAttachmentStates, [true, false]);
 	assert.equal(runtime.pauseOutputCount, 1);
 	assert.equal(runtime.resumeOutputCount, 1);
-	assert.equal(runtime.reinitializePresentationCount, 2);
+	assert.equal(runtime.visibilityChangeCount, 2);
 
 	runtime.notifyChange();
 	const terminalFailure = new Error("terminal parser failed");
@@ -381,7 +381,7 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 	readonly physicalAttachmentStates: boolean[] = [];
 	pauseOutputCount = 0;
 	resumeOutputCount = 0;
-	reinitializePresentationCount = 0;
+	visibilityChangeCount = 0;
 	#frame: TerminalProjectionFrame;
 	#settleExit!: (exit: PtyExit) => void;
 	observeWrite: (() => void) | undefined;
@@ -390,6 +390,10 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 
 	constructor(frame: TerminalProjectionFrame) {
 		this.#frame = frame;
+	}
+
+	dimensions() {
+		return { columns: this.#frame.columns, rows: this.#frame.rows };
 	}
 
 	frame(): TerminalProjectionFrame {
@@ -421,14 +425,14 @@ class FakeRuntime implements AdmittedPiChildProjectionRuntime {
 		handler: (data: string) => void,
 	): Promise<() => void> {
 		this.physicalAttachmentStates.push(true);
-		this.reinitializePresentationCount += 1;
+		this.visibilityChangeCount += 1;
 		this.#outputHandlers.add(handler);
 		return Promise.resolve(() => this.#outputHandlers.delete(handler));
 	}
 
-	restoreDetachedTerminal(): Promise<void> {
+	hidePresentation(): Promise<void> {
 		this.physicalAttachmentStates.push(false);
-		this.reinitializePresentationCount += 1;
+		this.visibilityChangeCount += 1;
 		return Promise.resolve();
 	}
 
@@ -497,3 +501,12 @@ class FakeLaunch extends FakeRuntime implements PiChildProjectionLaunch {
 		this.#settleReady();
 	}
 }
+
+test("resize reads dimensions without materializing a terminal frame", () => {
+	const runtime = new FakeRuntime(frameWithText("startup", 80, 24));
+	runtime.frame = () => { throw new Error("resize must not read cells"); };
+	const projection = createAdmittedPiChildProcessProjection(runtime);
+	projection.resize(80, 24);
+	projection.resize(120, 40);
+	assert.deepEqual(runtime.resizes, [{ columns: 120, rows: 40 }]);
+});
