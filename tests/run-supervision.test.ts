@@ -1062,6 +1062,7 @@ test("/agents retains only the viewed exact Run and keeps Owner bound through cl
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 	});
 	host.model.setResponses([
 		fauxAssistantMessage("The viewed child remains available."),

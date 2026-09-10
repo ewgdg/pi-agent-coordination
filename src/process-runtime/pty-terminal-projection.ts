@@ -2,13 +2,6 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import xtermHeadless from "@xterm/headless";
 import * as nodePty from "node-pty";
 
-import {
-	createTerminalPresentationBarrierMarker,
-	DETACHED_FRAME_BARRIER_OSC,
-	DETACHED_FRAME_BARRIER_PREFIX,
-	terminalPresentationBarrierData,
-} from "./terminal-presentation-barrier.ts";
-
 const { Terminal } = xtermHeadless;
 const GENERATED_REPLY_QUIET_MS = 10;
 
@@ -75,15 +68,12 @@ export interface PtyTerminalProjection {
 	readonly pid: number;
 	readonly disposed: boolean;
 	readonly exited: Promise<PtyExit>;
+	dimensions(): Readonly<{ columns: number; rows: number }>;
 	frame(): TerminalProjectionFrame;
 	addChangeHandler(handler: () => void): () => void;
 	addFailureHandler(handler: (error: unknown) => void): () => void;
 	addOutputHandler(handler: (data: string) => void): () => void;
-	enterPhysicalTerminalMode(): Promise<void>;
-	abortPhysicalTerminalMode(): Promise<void>;
-	rebuildDetachedTerminal(
-		renderCompleteFrame: (completionMarker: string) => Promise<void>,
-	): Promise<void>;
+	enterNativeTerminalMode(): Promise<void>;
 	pauseOutput(): void;
 	resumeOutput(): void;
 	writeInput(data: string | Buffer): void;
@@ -130,13 +120,8 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 	readonly #changeHandlers = new Set<() => void>();
 	readonly #failureHandlers = new Set<(error: unknown) => void>();
 	readonly #outputHandlers = new Set<(data: string) => void>();
-	#terminalMode: "detached" | "physical" | "rebuilding" = "detached";
+	#terminalMode: "startup" | "native" = "startup";
 	#terminalTransitionTail = Promise.resolve();
-	#frameBarrierWaiter: Readonly<{
-		expectedData: string;
-		resolve(): void;
-		reject(error: unknown): void;
-	}> | undefined;
 	#cursorVisible = true;
 	#cursorStyle: TerminalCursorStyle = "block";
 	#cursorBlink = false;
@@ -178,17 +163,12 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 				{ final: "c" },
 				() => this.#observeTerminalReset(),
 			),
-			terminal.parser.registerOscHandler(
-				DETACHED_FRAME_BARRIER_OSC,
-				(data) => this.#observeFrameBarrier(data),
-			),
 		);
 		this.exited = new Promise<PtyExit>((resolve) => {
 			this.#subscriptions.push(
 				child.onExit((event) => {
 					this.#exitObserved = true;
 					this.#discardGeneratedReplies();
-					this.#rejectFrameBarrier(new Error("terminal_projection_exited"));
 					void this.#finishExit(event, resolve);
 				}),
 			);
@@ -201,6 +181,11 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 
 	get disposed(): boolean {
 		return this.#disposed;
+	}
+
+	dimensions(): Readonly<{ columns: number; rows: number }> {
+		this.#requireActive();
+		return { columns: this.#child.cols, rows: this.#child.rows };
 	}
 
 	frame(): TerminalProjectionFrame {
@@ -258,54 +243,14 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		return () => this.#outputHandlers.delete(handler);
 	}
 
-	enterPhysicalTerminalMode(): Promise<void> {
+	enterNativeTerminalMode(): Promise<void> {
 		return this.#sequenceTerminalTransition(async () => {
 			this.#requireActive();
-			if (this.#terminalMode === "physical") return;
+			if (this.#terminalMode === "native") return;
 			await this.#waitForParserDrain();
 			this.#requireActive();
-			this.#terminalMode = "physical";
+			this.#terminalMode = "native";
 			this.#discardGeneratedReplies();
-		});
-	}
-
-	abortPhysicalTerminalMode(): Promise<void> {
-		return this.#sequenceTerminalTransition(async () => {
-			this.#requireActive();
-			if (this.#terminalMode !== "physical") return;
-			this.#terminalMode = "detached";
-			this.#resetHeadlessTerminal();
-			this.#notifyChange();
-		});
-	}
-
-	rebuildDetachedTerminal(
-		renderCompleteFrame: (completionMarker: string) => Promise<void>,
-	): Promise<void> {
-		return this.#sequenceTerminalTransition(async () => {
-			this.#requireActive();
-			if (this.#terminalMode === "detached") return;
-			this.#terminalMode = "rebuilding";
-			this.#resetHeadlessTerminal();
-			if (this.#exitObserved) {
-				this.#terminalMode = "detached";
-				this.#notifyChange();
-				return;
-			}
-			const completionMarker = createTerminalPresentationBarrierMarker();
-			const frameBarrier = this.#waitForFrameBarrier(completionMarker);
-			try {
-				await renderCompleteFrame(completionMarker);
-				await frameBarrier;
-				await this.#waitForParserDrain();
-				this.#terminalMode = "detached";
-				this.#notifyChange();
-			} catch (error) {
-				this.#rejectFrameBarrier(error);
-				await frameBarrier.catch(() => undefined);
-				this.#terminalMode = "detached";
-				throw error;
-			}
 		});
 	}
 
@@ -333,13 +278,13 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		this.#requireWritable();
 		requireDimension("columns", columns);
 		requireDimension("rows", rows);
-		if (columns === this.#terminal.cols && rows === this.#terminal.rows) return;
+		if (columns === this.#child.cols && rows === this.#child.rows) return;
 		try {
-			// The child can emit output synchronously in response to SIGWINCH, so the
-			// emulator must expose the new geometry before the PTY is notified.
-			this.#terminal.resize(columns, rows);
+			// Only startup diagnostics need emulator geometry. Native sessions redraw
+			// from their own data and never maintain this offscreen cell grid.
+			if (this.#terminalMode === "startup") this.#terminal.resize(columns, rows);
 			this.#child.resize(columns, rows);
-			this.#notifyChange();
+			if (this.#terminalMode === "startup") this.#notifyChange();
 		} catch (error) {
 			this.#notifyFailure(error);
 			throw error;
@@ -379,12 +324,12 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 				this.#notifyFailure(error);
 			}
 		}
-		if (this.#terminalMode === "physical") return;
+		if (this.#terminalMode === "native") return;
 		this.#pendingWrites += 1;
 		try {
 			this.#terminal.write(data, () => {
 				this.#settleParsedWrite();
-				if (this.#terminalMode !== "rebuilding") this.#notifyChange();
+				this.#notifyChange();
 			});
 		} catch (error) {
 			this.#settleParsedWrite();
@@ -397,7 +342,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			this.#disposed ||
 			this.#disposing ||
 			this.#exitObserved ||
-			this.#terminalMode === "physical"
+			this.#terminalMode === "native"
 		) return;
 		this.#pendingGeneratedReplies.push(Buffer.from(data));
 		if (this.#generatedReplyFlush) clearTimeout(this.#generatedReplyFlush);
@@ -415,7 +360,7 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 			this.#disposed ||
 			this.#disposing ||
 			this.#exitObserved ||
-			this.#terminalMode === "physical"
+			this.#terminalMode === "native"
 		) {
 			this.#pendingGeneratedReplies = [];
 			return;
@@ -468,45 +413,10 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 		return false;
 	}
 
-	#observeFrameBarrier(data: string): boolean {
-		if (!data.startsWith(DETACHED_FRAME_BARRIER_PREFIX)) return false;
-		const waiter = this.#frameBarrierWaiter;
-		if (!waiter || data !== waiter.expectedData) return true;
-		this.#frameBarrierWaiter = undefined;
-		waiter.resolve();
-		return true;
-	}
-
-	#resetHeadlessTerminal(): void {
-		// Physical output was deliberately not retained. Start from an empty emulator
-		// so the following native full render is the only detached-state authority.
-		this.#terminal.reset();
-		this.#resetObservedCursor();
-	}
-
 	#resetObservedCursor(): void {
 		this.#cursorVisible = true;
 		this.#cursorStyle = "block";
 		this.#cursorBlink = false;
-	}
-
-	#waitForFrameBarrier(completionMarker: string): Promise<void> {
-		if (this.#frameBarrierWaiter) {
-			throw new Error("terminal_frame_rebuild_already_pending");
-		}
-		return new Promise<void>((resolve, reject) => {
-			this.#frameBarrierWaiter = {
-				expectedData: terminalPresentationBarrierData(completionMarker),
-				resolve,
-				reject,
-			};
-		});
-	}
-
-	#rejectFrameBarrier(error: unknown): void {
-		const waiter = this.#frameBarrierWaiter;
-		this.#frameBarrierWaiter = undefined;
-		waiter?.reject(error);
 	}
 
 	#sequenceTerminalTransition(operation: () => Promise<void>): Promise<void> {
@@ -522,7 +432,6 @@ class NodePtyTerminalProjection implements PtyTerminalProjection {
 
 	#notifyFailure(error: unknown): void {
 		if (this.#disposed) return;
-		this.#rejectFrameBarrier(error);
 		this.#failure ??= { error };
 		for (const handler of this.#failureHandlers) handler(error);
 	}

@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
+
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 
 import { createPiChildProcessProjection } from "../src/process-runtime/pi-child-process-projection.ts";
@@ -34,21 +36,16 @@ test("launch projects the real startup PTY through runtime admission", {
 		launch = await PiChildProcessRuntime.launch(options);
 		const projection = createPiChildProcessProjection(launch);
 		const readiness = projection.ready();
-		await waitForFrame(launch, "PROCESS_RUNTIME_CHILD_WIDGET");
+		await waitForFrame(launch, "pi v");
 		const startupFrame = projection.presentation.render(80)
 			.map(stripTerminalSequences)
 			.join("\n");
-		assert.match(startupFrame, /PROCESS_RUNTIME_CHILD_WIDGET/);
-		assert.ok(startupFrame.includes(`AGENT_DIR=${PROCESS_RUNTIME_TEST_AGENT_DIR}`));
-		let changes = 0;
-		projection.addChangeHandler(() => changes += 1);
+		assert.match(startupFrame, /pi v/);
 		projection.resize(100, 30);
-		projection.dispatchInput("/runtime-probe STARTUP_INPUT_OK\r");
 		assert.deepEqual(
-			{ columns: launch.frame().columns, rows: launch.frame().rows },
+			launch.dimensions(),
 			{ columns: 100, rows: 30 },
 		);
-		assert.ok(changes > 0);
 		await readiness;
 		const runtime = await launch.ready();
 		assert.equal(runtime.pid, launch.pid);
@@ -57,8 +54,15 @@ test("launch projects the real startup PTY through runtime admission", {
 			mode: "tui",
 			hasUI: true,
 		});
-		await waitForFrame(launch, "INPUT=STARTUP_INPUT_OK");
-		assert.match(frameText(launch), /SIZE=100x30/);
+		await attachNativeChildDisplay(launch);
+		projection.dispatchInput("/runtime-probe STARTUP_INPUT_OK\r");
+		const deadline = Date.now() + TEST_TIMEOUT_MS;
+		while (!nativeChildDisplayText(launch).includes("INPUT=STARTUP_INPUT_OK")) {
+			assert.ok(Date.now() < deadline, "native command did not complete");
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
+		assert.match(nativeChildDisplayText(launch), /PROCESS_RUNTIME_CHILD_WIDGET/);
+		assert.match(nativeChildDisplayText(launch), /SIZE=100x30/);
 	} finally {
 		await launch?.dispose();
 	}

@@ -41,6 +41,7 @@ test("child session_start UI side effects stay detached before, during, and afte
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
@@ -86,6 +87,7 @@ test("repeated Agent view attachment does not replay either session startup life
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});
@@ -121,6 +123,7 @@ test("exact-Run termination of an open Agent view retains the Runtime and view",
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		fauxTokensPerSecond: 1,
 		additionalExtensionPaths: [PROCESS_UI_PROBE],
 	});

@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+
+import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import { PiChildProcessRuntime, type PiChildProcessLaunch } from "../src/process-runtime/pi-child-process-runtime.ts";
@@ -49,6 +51,7 @@ test("real child reminder admission defers active work and serializes clear vers
 	);
 	try {
 		await runtime.ready;
+		await attachNativeChildDisplay(launch);
 		launch.writeInput("Hold a native model cycle.\r");
 		await frameContains(launch, "REMINDER_CONTEXT_HELD");
 		let callbackCalls = 0;
@@ -158,16 +161,12 @@ function nextSettlement(runtime: PiChildHostedRuntime): Promise<void> {
 	}));
 }
 
-function frameContains(launch: PiChildProcessLaunch, marker: string): Promise<void> {
-	return bounded(new Promise((resolve) => {
-		const inspect = () => {
-			if (!launch.frame().lines.some((line) => line.text.includes(marker))) return;
-			remove();
-			resolve();
-		};
-		const remove = launch.addChangeHandler(inspect);
-		inspect();
-	}));
+async function frameContains(launch: PiChildProcessLaunch, marker: string): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	while (!nativeChildDisplayText(launch).includes(marker)) {
+		if (Date.now() > deadline) throw new Error("native child display did not show " + marker);
+		await new Promise(resolve => setTimeout(resolve, 10));
+	}
 }
 
 function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers<"ordinary"> {

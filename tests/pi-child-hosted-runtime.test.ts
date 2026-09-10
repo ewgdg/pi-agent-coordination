@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
+
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
@@ -109,10 +111,9 @@ test("the common Runtime Host supervises one real Control-backed Pi child Runtim
 		assert.equal(host.currentProjection(), runtime.projection);
 		assert.equal(host.currentWorkState(), "settled");
 		assert.equal(host.classifyToolBatch(["read"]), "asynchronous");
+		await attachNativeChildDisplay(launch);
 		launch.writeInput("/runtime-state\r");
-		await waitUntil(() => launch.frame().lines.some(
-			(line) => line.text.includes("PROCESS_RUNTIME_STATE_CHANGED"),
-		));
+		await waitUntil(() => nativeChildDisplayText(launch).includes("PROCESS_RUNTIME_STATE_CHANGED"));
 		// Pi's model_select event updates Owner presentation state without waiting
 		// for a later descendant pull; the complete event snapshot also carries tools.
 		assert.equal(

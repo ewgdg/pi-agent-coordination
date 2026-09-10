@@ -42,7 +42,7 @@ try {
 	await waitForRaw("READY");
 	await projection.drain();
 	const headlessParsingMs = await measureBurst("HEADLESS");
-	await projection.enterPhysicalTerminalMode();
+	await projection.enterNativeTerminalMode();
 	const physicalBypassMs = await measureBurst("PHYSICAL");
 	console.log(JSON.stringify({
 		burstRepetitions: BURST_REPETITIONS,

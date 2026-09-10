@@ -198,7 +198,7 @@ test("retargeting drains accepted physical output before publishing the replacem
 	await opened;
 });
 
-test("a diagnostic host keeps xterm active without reinitializing child presentation", async () => {
+test("a diagnostic host shows the startup snapshot without activating child presentation", async () => {
 	const projection = createProjectionHarness("diagnostic", undefined, true);
 	const view = createViewHarness(projection.projection);
 	const surface = createSurfaceHarness({ supportsPhysicalAttachment: false });
@@ -287,7 +287,11 @@ test("child selector keeps animating until the replacement frame takes over", { 
 		await second.finishReinitialization();
 		await first.waitForDetachment();
 		assert.equal(surface.physicalWrites().at(-1), "complete-second-frame",
-			"the ready replacement must be visible while the old detached view rebuilds");
+			"the ready replacement must be visible while the old view stops rendering");
+		let selectionSettled = false;
+		void selection.then(() => { selectionSettled = true; });
+		await new Promise<void>(resolve => setImmediate(resolve));
+		assert.equal(selectionSettled, true, "selection must not depend on old hidden presentation cleanup");
 		assert.equal(surface.ownerStarts(), 0);
 		first.emitOutput("stale-first-output");
 		assert.equal(surface.physicalWrites().at(-1), "complete-second-frame");

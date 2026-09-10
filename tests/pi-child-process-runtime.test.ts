@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
-import { lstat, mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import xtermHeadless from "@xterm/headless";
+
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+
+import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
 
 import type { ControlEvent } from "../src/control/agent-control-channel.ts";
 import { agentControlProtocol } from "../src/control/agent-control-protocol.ts";
@@ -201,24 +204,12 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		assert.equal((await stat(runtime.bootstrapPath)).mode & 0o777, 0o600);
 
 		await waitForFrame(runtime, "PROCESS_RUNTIME_CHILD_WIDGET");
-		const initialChildFrame = projection.presentation
-			.render(80)
-			.map(stripTerminalSequences)
-			.join("\n");
+		const initialChildFrame = frameText(runtime);
 		assert.match(initialChildFrame, /PROCESS_RUNTIME_CHILD_WIDGET/);
 		assert.match(initialChildFrame, /Process Child.*[0-9a-f]{8}.*idle/);
 		assert.match(frameText(runtime), /HERDR_ENV=undefined/);
 		assert.match(frameText(runtime), /HERDR_SOCKET_PATH=undefined/);
 		assert.match(frameText(runtime), /HERDR_PANE_ID=undefined/);
-
-		const reinitializedOutput: string[] = [];
-		const removeOutputHandler = await runtime.beginPhysicalTerminalAttachment((data) => {
-			reinitializedOutput.push(data);
-		});
-		await waitUntil(() => reinitializedOutput.join("").includes("PROCESS_RUNTIME_CHILD_WIDGET"));
-		assert.match(reinitializedOutput.join(""), /\x1b\[\?1049h/);
-		removeOutputHandler();
-		await runtime.restoreDetachedTerminal();
 
 		projection.dispatchInput("/agents\r");
 		await waitForFrame(runtime, "Tab views");
@@ -399,10 +390,10 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		projection.resize(100, 30);
 		projection.dispatchInput("/runtime-probe OWNER_INPUT_OK\r");
 		await waitForFrame(runtime, "INPUT=OWNER_INPUT_OK");
-		assert.ok(projectionChanges > 0);
+		assert.equal(projectionChanges, 0);
 		assert.match(frameText(runtime), /SIZE=100x30/);
-		assert.equal(runtime.frame().columns, 100);
-		assert.equal(runtime.frame().rows, 30);
+		assert.equal(runtime.dimensions().columns, 100);
+		assert.equal(runtime.dimensions().rows, 30);
 
 		const pid = runtime.pid;
 		const bootstrapPath = runtime.bootstrapPath;
@@ -624,7 +615,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 			entry.type === "custom_message" &&
 			entry.content === declinedCompactionMessage.content
 		), true);
-		assert.doesNotMatch(frameText(runtime), /Working-Zone Preparation failed/);
+		assert.doesNotMatch(JSON.stringify(SessionManager.open(sessionPath).getEntries()), /Working-Zone Preparation failed/);
 
 		const cancelledItem = {
 			source: {
@@ -890,6 +881,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			.filter((entry) => entry.type === "compaction").length;
 
 		const nativeInput = "Admit this native input after deferred compaction.";
+		await attachNativeChildDisplay(runtime);
 		runtime.writeInput(`${nativeInput}\r`);
 		await waitUntil(() => runtimeEvents.some((event) =>
 			event.event === "agent.settled" &&
@@ -1336,6 +1328,7 @@ test("inherited child input preflights run before coordination consumes transfor
 				},
 			}),
 		});
+		await attachNativeChildDisplay(runtime);
 		runtime.writeInput("PROCESS_RUNTIME_HANDLED_INPUT\r");
 		await waitForFrame(runtime, "PROCESS_RUNTIME_INPUT_HANDLED");
 		assert.deepEqual(submittedInputs, []);
@@ -1776,10 +1769,11 @@ function processSelectorSnapshot(childAgentId: string): Awaited<ReturnType<
 }
 
 function frameText(runtime: PiChildProcessRuntime): string {
-	return runtime.frame().lines.map((line) => line.text).join("\n");
+	return nativeChildDisplayText(runtime);
 }
 
 async function waitForFrame(runtime: PiChildProcessRuntime, expected: string): Promise<void> {
+	await attachNativeChildDisplay(runtime);
 	await waitUntil(async () => {
 		await runtime.drain();
 		return frameText(runtime).includes(expected);
@@ -1803,3 +1797,78 @@ function hasFsCode(code: string): (error: unknown) => boolean {
 function hasProcessCode(code: string): (error: unknown) => boolean {
 	return hasFsCode(code);
 }
+
+test("hidden real child persists work without rendering and repeated attachment redraws current native UI", {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pi-visible-child-"));
+	const cwd = join(root, "work");
+	await mkdir(cwd);
+	const sessionId = "019a6b4d-1b22-7000-8000-000000000095";
+	const sessionPath = join(root, "child.jsonl");
+	const probePath = join(root, "render-events.jsonl");
+	await writeFile(sessionPath, JSON.stringify({
+		type: "session", version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd,
+	}) + "\n");
+	const runtime = await PiChildProcessRuntime.start({
+		workflowId: "visible-workflow", agentId: sessionId, role: "ordinary",
+		expectedSessionId: sessionId, sessionPath,
+		configuration: {
+			cwd, model: { provider: PROCESS_RUNTIME_TEST_PROVIDER, modelId: PROCESS_RUNTIME_TEST_MODEL },
+			thinking: "off", allowedTools: [], skills: [], extensions: [CHILD_EXTENSION],
+			loadContextFiles: true,
+		},
+		skillPaths: [], projectTrusted: true, runtimeDirectory: root,
+		ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1",
+			PROCESS_RUNTIME_VISIBILITY_PROBE: probePath, PROCESS_RUNTIME_RESPONSE_DELAY_MS: "100" },
+		ownerRequestHandlers: ordinaryOwnerHandlers({ selectorSnapshot: processSelectorSnapshot(sessionId) }),
+		columns: 80, rows: 24,
+	});
+	t.after(() => runtime.dispose());
+	const output: string[] = [];
+	runtime.addOutputHandler(data => output.push(data));
+	let settled = 0;
+	let changes = 0;
+	runtime.onEvent(event => { if (event.event === "agent.settled") settled++; });
+	runtime.addChangeHandler(() => changes++);
+	const events = async () => (await readFile(probePath, "utf8")).trim().split("\n");
+	await runtime.drain();
+	const initialFrame = runtime.frame();
+	for (let turn = 1; turn <= 2; turn++) {
+		const renderCount = (await events()).filter(line => line === "render").length;
+		output.length = 0;
+		await runtime.prompt({ runId: "visibility-" + turn, input: "HIDDEN_WORK_" + turn, kind: turn === 1 ? "initial" : "successor" });
+		await waitUntil(() => settled === turn);
+		const transcript = JSON.stringify(SessionManager.open(sessionPath).getEntries());
+		assert.match(transcript, new RegExp("HIDDEN_WORK_" + turn));
+		assert.equal(transcript.split(PROCESS_RUNTIME_TEST_RESPONSE).length - 1, turn);
+		assert.equal((await events()).filter(line => line === "render").length, renderCount);
+		assert.equal(changes, 0, "hidden output must not update an offscreen terminal");
+		assert.deepEqual(runtime.frame(), initialFrame);
+		assert.doesNotMatch(output.join(""), /HIDDEN_WORK_|VISIBILITY_WIDGET|\x1b\[\?2026h/);
+
+		const columns = turn === 1 ? 100 : 120;
+		const rows = turn === 1 ? 30 : 40;
+		runtime.resize(columns, rows);
+		const display = new xtermHeadless.Terminal({ cols: columns, rows, allowProposedApi: true });
+		t.after(() => display.dispose());
+		display.onData(data => runtime.writeInput(data));
+		const disconnect = await runtime.beginPhysicalTerminalAttachment(data => display.write(data));
+		const screen = () => Array.from({ length: rows }, (_, row) =>
+			display.buffer.active.getLine(display.buffer.active.viewportY + row)?.translateToString(true) ?? "").join("\n");
+		await waitUntil(() => screen().includes("VISIBILITY_WIDGET_" + turn));
+		assert.match(screen(), new RegExp(PROCESS_RUNTIME_TEST_RESPONSE));
+		assert.match(screen(), new RegExp("VISIBILITY_EDITOR_" + turn));
+		assert.deepEqual(runtime.dimensions(), { columns, rows });
+		runtime.writeInput("\x15/runtime-probe attached-" + turn + "\r");
+		await waitUntil(() => screen().includes("INPUT=attached-" + turn));
+		assert.match(screen(), new RegExp("SIZE=" + columns + "x" + rows));
+		disconnect();
+		await runtime.hidePresentation();
+		changes = 0;
+	}
+	assert.equal((await events()).filter(line => line === "session_start").length, 1);
+	await runtime.shutdown("visibility test complete");
+	await runtime.hidePresentation();
+});

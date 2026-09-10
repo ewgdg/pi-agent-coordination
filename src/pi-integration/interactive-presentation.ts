@@ -1,11 +1,10 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { Container, type TUI } from "@earendil-works/pi-tui";
 
-import { terminalPresentationBarrierSequence } from "../process-runtime/terminal-presentation-barrier.ts";
 import { IncompatiblePiHostError } from "./host-shape.ts";
 
 export type InteractivePresentation = Readonly<{
-	reinitialize(completionMarker: string): void;
+	setVisible(visible: boolean): void;
 	requestFullRender(): void;
 }>;
 
@@ -29,17 +28,20 @@ export function captureInteractivePresentation(
 		throw new IncompatiblePiHostError("ExtensionUIContext.setWidget TUI factory");
 	}
 	const tui = capturedTui;
+	let visible = true;
 	return {
-		reinitialize(completionMarker) {
-			// Restart and render synchronously so the in-band barrier is ordered after
-			// every terminal mode and cell needed to reconstruct the complete frame.
-			tui.stop({ preserveScreen: true });
+		setVisible(nextVisible) {
+			if (visible === nextVisible) return;
+			visible = nextVisible;
+			if (!visible) {
+				tui.stop({ preserveScreen: true });
+				return;
+			}
 			tui.start();
 			tui.renderNow(true);
-			tui.terminal.write(terminalPresentationBarrierSequence(completionMarker));
 		},
 		requestFullRender() {
-			tui.requestRender(true);
+			if (visible) tui.requestRender(true);
 		},
 	};
 }
@@ -52,13 +54,5 @@ function assertInteractiveTui(value: unknown): asserts value is TUI {
 		if (typeof (value as Record<PropertyKey, unknown>)[member] !== "function") {
 			throw new IncompatiblePiHostError(`TUI.${member}`);
 		}
-	}
-	const terminal = (value as Record<PropertyKey, unknown>).terminal;
-	if (
-		typeof terminal !== "object"
-		|| terminal === null
-		|| typeof (terminal as Record<PropertyKey, unknown>).write !== "function"
-	) {
-		throw new IncompatiblePiHostError("TUI.terminal.write");
 	}
 }

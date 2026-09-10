@@ -77,6 +77,7 @@ test("/agents presents the live Agent's native interactive mode while Owner stay
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses([
@@ -204,6 +205,7 @@ test("/agents presents the live Agent's native interactive mode while Owner stay
 		stripTerminalSequences(view.render(80).join("\n")).includes("Tab views")
 	);
 	view.handleInput?.("o");
+	await waitForCondition(() => !host.ui.customSurfaces.includes(view));
 	await command;
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 	assert.equal(await hasRetention(host, agentId, "answer_owed"), true);
@@ -224,6 +226,7 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses(creationAnswerResponses(
@@ -259,6 +262,9 @@ test("a real child editor failure closes the view and reports one Owner diagnost
 	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.filter(
 		(entry) => entry.kind === "failure_trigger" && entry.failureKind === "input" && entry.pid !== process.pid,
 	).length === 1);
+	await waitForCondition(() => host.ui.customSurfaces.length === 0 && host.services.diagnostics.some(
+		({ message }) => message.includes("Agent view failed:"),
+	));
 	assert.equal(host.ui.customSurfaces.length, 0);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
@@ -277,6 +283,7 @@ test("a real child render failure closes the view and restores Owner input", asy
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses(creationAnswerResponses(
@@ -312,6 +319,9 @@ test("a real child render failure closes the view and restores Owner input", asy
 		(entry) => entry.kind === "failure_trigger" && entry.failureKind === "render" && entry.pid !== process.pid,
 	).length === 1);
 	await command;
+	await waitForCondition(() => host.ui.customSurfaces.length === 0 && host.services.diagnostics.some(
+		({ message }) => message.includes("Agent view failed:"),
+	));
 	assert.equal(host.ui.customSurfaces.length, 0);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
@@ -328,6 +338,7 @@ test("a session_start modal is interactive before Agent Run startup settles", as
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses([
@@ -398,6 +409,7 @@ test("a selected Agent whose runtime initialization fails opens a read-only post
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 	});
 	const spawnInput = {
 		request: "Remain visible after this process Runtime cannot initialize.",
@@ -447,6 +459,7 @@ test("an unexpected child-process exit closes the exact selected view", async (t
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses([
@@ -504,6 +517,7 @@ test("a submitted Dormant Agent turn survives returning to the Owner during prom
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -617,6 +631,7 @@ test("termination discards selected native input already in prompt preflight", {
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.deferCleanup(async () => {
@@ -716,6 +731,7 @@ test("termination fences selected input between participant handling and Agent a
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
@@ -788,6 +804,7 @@ test("a handled Dormant Agent input can return to Owner after prompt preflight",
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses([
@@ -851,6 +868,7 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses([
@@ -980,6 +998,7 @@ test("detached Dormant compaction retains its Runtime until queued input starts 
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		cwd: root,
 		agentDir,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
@@ -1080,6 +1099,7 @@ test("a Dormant command activates the already-attached Agent runtime once", asyn
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses([
@@ -1158,6 +1178,7 @@ test("Dormant session_start input activates the same attached Agent runtime", as
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses([
@@ -1218,6 +1239,7 @@ test("closing a Dormant session_start modal cancels view initialization without 
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -1330,6 +1352,7 @@ test("Workflow shutdown cancels unselected Message-started session_start UI befo
 	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -1439,12 +1462,14 @@ test("/agents switches the mounted durable view between independent child modes"
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
-	host.model.setResponses([
-		fauxAssistantMessage("First switch target is ready."),
-		fauxAssistantMessage("Second switch target is ready."),
-	]);
+	// Each unanswered creation Request also receives its native obligation-reminder turn.
+	host.model.setResponses(["First", "Second"].flatMap(label => [
+		fauxAssistantMessage(label + " switch target is ready."),
+		fauxAssistantMessage(label + " switch target is ready."),
+	]));
 	const firstSpawn = await executeAndCommitRegisteredTool(
 		host.session,
 		"agent_spawn",
@@ -1464,8 +1489,9 @@ test("/agents switches the mounted durable view between independent child modes"
 		childProcessSessionStarts(entries, secondAgentId).length === 1
 	);
 	await waitForCondition(async () =>
-		JSON.stringify(await childEntries(host, firstAgentId)).includes("First switch target") &&
-		JSON.stringify(await childEntries(host, secondAgentId)).includes("Second switch target")
+		// Concurrent child admission does not assign the shared offline response queue by label.
+		JSON.stringify(await childEntries(host, firstAgentId)).includes("switch target is ready") &&
+		JSON.stringify(await childEntries(host, secondAgentId)).includes("switch target is ready")
 	);
 
 	const { command, view } = await openSelectedAgentView(host, firstAgentId);
@@ -1543,6 +1569,7 @@ test("later Runtime preparations load current file-backed child configuration wi
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	host.model.setResponses([
@@ -1601,6 +1628,7 @@ test("a terminally failed viewed Run stays open on the durable Dormant Agent", a
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		settings: { retry: { enabled: false } },
 	});
 	let markFailureStarted!: () => void;
@@ -1708,6 +1736,7 @@ test("repeated successor Runs reuse one selected Agent runtime and dispose its m
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		implicitModeratorResponses: false,
 		settings: { retry: { enabled: false } },
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
@@ -1820,6 +1849,7 @@ test("an ordinary Message activates the already-open Agent runtime before execut
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
 	});
 	let releaseInitialFailure!: () => void;
@@ -1945,14 +1975,9 @@ async function openSelectedAgentView(
 		await command;
 		assert.fail(`Agent ${agentId} is absent from the Live selector hierarchy`);
 	}
-	await Promise.race([
-		waitForCondition(() =>
-			host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
-		),
-		command.then(() => {
-			throw new Error("/agents closed before the Agent view opened");
-		}),
-	]);
+	await waitForCondition(() =>
+		host.ui.customSurfaces.length === 1 && host.ui.customSurfaces[0] !== selector
+	);
 	return { command, view: host.ui.customSurfaces[0]! };
 }
 
@@ -2042,7 +2067,7 @@ function selectAgentByLabel(surface: Component, label: string): string | undefin
 			surface.handleInput?.("\r");
 			return agentId;
 		}
-		surface.handleInput?.("j");
+		surface.handleInput?.("k");
 		const nextRender = stripTerminalSequences(surface.render(80).join("\n"));
 		if (nextRender === currentRender || nextRender === firstRender) break;
 		currentRender = nextRender;

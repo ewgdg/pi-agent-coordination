@@ -1,3 +1,4 @@
+import { createPhysicalTestDisplay } from "./physical-test-display.ts";
 import {
 	createFauxCore,
 	fauxAssistantMessage,
@@ -105,6 +106,7 @@ export type TestOwnerHost = {
 export type TestCleanupRegistrar = Pick<TestContext, "after">;
 
 export type TestOwnerHostOptions = {
+	physicalDisplay?: boolean;
 	persistent?: boolean;
 	additionalExtensionPaths?: string[];
 	additionalExtensionFactories?: InlineExtension[];
@@ -290,6 +292,21 @@ async function createUnboundTestOwnerHostWithRuntime(
 			return disposal;
 		},
 	};
+	if (options?.physicalDisplay) {
+		const display = createPhysicalTestDisplay((active) => {
+			const index = ui.customSurfaces.indexOf(display.view);
+			if (active && index < 0) ui.customSurfaces.push(display.view);
+			if (!active && index >= 0) ui.customSurfaces.splice(index, 1);
+		});
+		host.deferCleanup(async () => {
+			// Restore stdio only after the production attachment has released its lease.
+			try {
+				await runtime.dispose();
+			} finally {
+				display.dispose();
+			}
+		});
+	}
 	return host;
 }
 

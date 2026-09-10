@@ -8,9 +8,8 @@ import type {
 import type { Component, TUI } from "@earendil-works/pi-tui";
 
 import { captureInteractivePresentation } from "../src/pi-integration/interactive-presentation.ts";
-import { terminalPresentationBarrierSequence } from "../src/process-runtime/terminal-presentation-barrier.ts";
 
-test("interactive presentation reinitializes through a public zero-line widget TUI", () => {
+test("interactive presentation stops hidden rendering and resumes current native UI", () => {
 	const lifecycle: string[] = [];
 	const tui = {
 		stop(options?: { preserveScreen?: boolean }) {
@@ -44,11 +43,12 @@ test("interactive presentation reinitializes through a public zero-line widget T
 	const presentation = captureInteractivePresentation(ui);
 
 	assert.deepEqual(captureWidget?.render(80), []);
-	presentation.reinitialize("test-completion-marker");
+	presentation.setVisible(false);
+	presentation.requestFullRender();
+	presentation.setVisible(true);
 	assert.deepEqual(lifecycle, [
 		"stop:true",
 		"start",
 		"renderNow:true",
-		`write:${terminalPresentationBarrierSequence("test-completion-marker")}`,
 	]);
 });

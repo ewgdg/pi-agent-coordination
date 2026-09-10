@@ -77,7 +77,7 @@ type ChildRuntimeBinding = {
 	reminderAdmission: ModeratorReminderAdmission;
 	activity: RemoteAgentActivitySource;
 	publishRuntimeSnapshot(): Promise<void>;
-	reinitializePresentation(completionMarker: string): void;
+	setPresentationVisible(visible: boolean): void;
 	handleOwnerRequest(
 		request: Parameters<Parameters<ChildChannel["onRequest"]>[0]>[0],
 	): Promise<unknown>;
@@ -335,7 +335,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			currentState,
 			runtime,
 			ctx,
-			capture.reinitializePresentation,
+			capture.setPresentationVisible,
 			bootstrap.agentId,
 			inputSubmissionAcknowledgment,
 			removeInputSubmissionListener,
@@ -437,7 +437,7 @@ export function createChildRuntimeBinding(
 	state: ChildControlState,
 	runtime: AgentSessionRuntime,
 	context: ExtensionContext,
-	reinitializePresentation: (completionMarker: string) => void,
+	setPresentationVisible: (visible: boolean) => void,
 	agentId: string,
 	inputSubmissionAcknowledgment: TerminalInputSubmissionAcknowledgmentBinding,
 	removeInputSubmissionListener: () => void,
@@ -505,7 +505,7 @@ export function createChildRuntimeBinding(
 		reminderAdmission,
 		activity,
 		publishRuntimeSnapshot,
-		reinitializePresentation,
+		setPresentationVisible,
 		handleOwnerRequest: (request) => handleOwnerRequest(state, binding, request),
 		handleOwnerEvent(event) {
 			if (event.event === "presentation.agents.changed") {
@@ -835,8 +835,8 @@ async function handleOwnerRequest(
 			}
 			return { accepted: true };
 		}
-		case "presentation.reinitialize":
-			binding.reinitializePresentation(request.payload.completionMarker);
+		case "presentation.setVisible":
+			binding.setPresentationVisible(request.payload.visible);
 			return {};
 		case "runtime.shutdown":
 			state.shutdownStarted = true;

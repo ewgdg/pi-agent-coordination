@@ -55,6 +55,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		implicitModeratorResponses: false,
 	});
 	let moderatorTools: string[] = [];
@@ -319,6 +320,7 @@ test("deselecting a genuinely live settled obligation creates an Obligation Stal
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 		implicitModeratorResponses: false,
 	});
 	try {

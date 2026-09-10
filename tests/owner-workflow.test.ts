@@ -175,6 +175,7 @@ test("shutdown with an open Agent view closes it without rebinding stopped inter
 	const host = await createTestOwnerHost(t, piAgentCoordination, {
 		persistent: true,
 		processVisibleModel: true,
+		physicalDisplay: true,
 	});
 	host.model.setResponses([
 		fauxAssistantMessage("Remain retained while shutdown begins from this selection."),
