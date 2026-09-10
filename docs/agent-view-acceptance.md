@@ -5,7 +5,7 @@ This matrix records the production process-backed Agent-view contract and its re
 ## Production paths
 
 - `src/process-runtime/pi-child-process-runtime.ts` — exact Pi CLI process, PTY, Control admission, transcript handoff, and process-group cleanup.
-- `src/process-runtime/pty-terminal-projection.ts` — detached ANSI terminal state, raw output subscription, terminal-reply ownership, input, resize, and exact exit.
+- `src/process-runtime/pty-terminal-projection.ts` — startup ANSI diagnostics, hidden-output drainage, raw output subscription, terminal-reply ownership, input, resize, and exact exit.
 - `src/process-runtime/pi-child-hosted-runtime.ts` — process-neutral Run intentions and lifecycle settlement.
 - `src/process-runtime/child-runtime-bridge.ts` — truthful child TUI binding, lifecycle reporting, coordination tools, activity dock, and `/agents` registration.
 - `src/process-runtime/remote-agent-selector.ts` — scoped selector snapshots and awaited Owner selection actions.
@@ -32,6 +32,7 @@ This matrix records the production process-backed Agent-view contract and its re
 | Child editor, footer, status, widgets, notifications, commands, shortcuts, dialogs, and overlays remain native | `tests/agent-view.test.ts` file-backed process probes |
 | Long transcript navigation, mouse input, streaming, and reflow work through a real PTY | `tests/coordinated-workflow-pty.test.ts` |
 | Raw output and physical input remain buffered until native presentation reinitialization completes; physical-versus-emulated terminal replies, cursor, styles, wide cells, and resize remain separate and exact | physical attachment and PTY Terminal Projection tests |
+| Hidden sessions continue IPC work and persistence without native rendering or background screen parsing; reattachment redraws current native state | Native-presentation and real process Runtime visibility regressions |
 | Startup dialogs are visible before Runtime admission | Agent-view startup modal and process launch tests |
 | Child input/render/initialization/process failures restore the Owner or retain the failed view according to Run state | Agent-view unit and fullscreen failure PTYs |
 | Closing a pending view cannot orphan a hidden startup UI process | Dormant startup cancellation and Workflow shutdown tests |
