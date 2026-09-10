@@ -976,6 +976,7 @@ test("a Dormant Agent keeps commands available and starts one successor on edito
 	);
 	view.handleInput?.("o");
 	await command;
+	await waitForCondition(() => host.ui.customSurfaces.length === 0);
 	assert.equal(await hasRetention(host, agentId, "interactive_selection"), false);
 	assert.equal(host.runtime.session, ownerSession);
 	assert.equal(host.ui.getEditorText(), ownerEditor);
@@ -1996,6 +1997,8 @@ async function returnAgentViewToOwner(
 	);
 	view.handleInput?.("o");
 	await command;
+	// Physical selection commands finish at handoff, before returning to Owner.
+	await waitForCondition(() => host.ui.customSurfaces.length === 0);
 }
 
 async function openDormantAgentView(
