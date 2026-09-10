@@ -54,9 +54,22 @@ The native status call and collapsed result identify the Agent as `label · comp
 
 ## Generation failure
 
-Coordination preserves Pi's user-configured compaction, retry, provider-retry, and transport behavior. A child-local Turn Compaction Gateway cancels threshold compaction requested after a Run only when no raw Pi continuation is queued. The child releases normally and recomputes the same configured threshold before its next idle native prompt, Owner prompt, or custom Delivery. Manual compaction and overflow recovery remain Pi-native. The gateway owns only preparation and input commitment, never the model cycle, and creates no durable pending state or Runtime retention.
+Coordination preserves Pi's user-configured compaction, retry, provider-retry, and transport behavior. A child-local Turn Compaction Gateway cancels threshold compaction requested after a Run only when no raw Pi continuation is queued. The child releases normally and recomputes the same configured threshold before its next idle native prompt or Owner Delivery. Manual compaction and overflow recovery remain Pi-native. The gateway owns only preparation and input commitment, never the model cycle, and creates no durable pending state or Runtime retention.
 
 If Pi's configured native behavior ultimately ends the exact Run with an unresolved Answer Obligation, ordinary Run Failure moderation applies rather than a separate generation-failure or Operation Review mechanism.
+
+## Child execution and Delivery
+
+The child reports transport execution-cycle identities from actual Pi lifecycle events. The Owner adopts those identities; admitting or preparing a Delivery does not reserve the next cycle. Transport cycle IDs are separate from durable Agent Run sequences. Native editor or extension work can therefore start while a Delivery is pending without being mistaken for stale execution.
+
+All Owner input uses `message.deliver`, correlated by a Delivery ID:
+
+- The response reports transcript admission independently of execution completion.
+- `message.dispatch.completed` covers that exact dispatch and native settlement, including input queued into active work. Preparation settlement cannot complete the Delivery.
+- `message.cancel` fences pending preparation or input preflight by Delivery ID. If cancellation must clear already-queued input, it rechecks the child-observed dispatch cycle before clearing or aborting it.
+- `run.interrupt` and `queue.clear` target child-reported cycles and revalidate after waiting, immediately before mutation.
+
+Delivery completion and rejection do not manufacture lifecycle events or fault a successor cycle. Actual lifecycle identity mismatches still fail the transport; unrelated native work is not accepted by bypassing that validation.
 
 ## Interrupt an exact Run
 
