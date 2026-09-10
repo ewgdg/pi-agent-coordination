@@ -53,7 +53,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	#queuedInputCount = 0;
 	#currentRunId: string | undefined;
 	#latestRunId: string | undefined;
-	#runSequence = 0;
 	#runObserved = false;
 	#cancellation = new AbortController();
 	#unavailable: unknown;
@@ -151,38 +150,30 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 		delivery: AgentRuntimeDelivery,
 		confirmation?: TranscriptCommitConfirmation,
 	): AgentRuntimeDeliveryDispatch {
-		const runId = this.#requireOrCreateRunId();
-		const settlement = this.#waitForSettlement();
+		if (this.#unavailable) throw this.#unavailable;
+		this.#runObserved = true;
 		const deliveryId = `delivery-${++this.#deliverySequence}`;
-		// Preparation may finish a different Pi cycle. Its settlement cannot stand
-		// in for the actual dispatch Promise, even when transport Run IDs coincide.
+		// Only the child-correlated completion covers this Delivery, including native
+		// queue settlement. Preparation and unrelated lifecycle edges do not.
 		const dispatchCompletion = new Promise<void>((resolve, reject) => {
 			this.#dispatchCompletions.set(deliveryId, { resolve, reject });
 		});
 		const response = this.#admitted.then((runtime) =>
 			runtime.channel.request("message.deliver", {
 				deliveryId,
-				runId,
 				delivery: serializeDelivery(delivery),
 			})
 		).then((result) => {
 			this.#updateQueuedInputCount(result.queuedInputCount);
-			if (!result.modelCycleStarted) {
-				if (this.#currentRunId === runId) this.#currentRunId = undefined;
-				settlement.resolve();
-			}
 			return result;
 		});
 		const completion = Promise.all([
 			response.then(({ accepted }) => {
 				if (!accepted) throw new Error("child_runtime_delivery_rejected");
 			}),
-			// Queued-active dispatch resolves on acceptance, so keep its native settlement wait.
-			settlement.result,
 			dispatchCompletion,
 		]).then(() => undefined);
 		void completion.catch((error: unknown) => {
-			settlement.reject(error);
 			this.#dispatchCompletions.get(deliveryId)?.reject(error);
 		}).finally(() => this.#dispatchCompletions.delete(deliveryId));
 		if (!confirmation) return { completion };
@@ -252,10 +243,12 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 	async abort(): Promise<void> {
 		this.#reminderAdmissionAbort?.abort();
 		const runId = this.#latestRunId;
-		if (!runId) return;
-		await this.#admitted.then((runtime) =>
-			runtime.channel.request("run.interrupt", { runId })
-		);
+		const deliveryIds = [...this.#dispatchCompletions.keys()];
+		const runtime = await this.#admitted;
+		await Promise.all([
+			...deliveryIds.map(deliveryId => runtime.channel.request("message.cancel", { deliveryId })),
+			...(runId ? [runtime.channel.request("run.interrupt", { runId })] : []),
+		]);
 	}
 
 	waitForIdle(): Promise<void> {
@@ -400,16 +393,6 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			`stale_run: child lifecycle ${runId} does not match ${String(this.#currentRunId)}`,
 		));
 		return false;
-	}
-
-	#requireOrCreateRunId(): string {
-		if (this.#unavailable) throw this.#unavailable;
-		if (this.#currentRunId) return this.#currentRunId;
-		this.#runSequence += 1;
-		this.#runObserved = true;
-		this.#currentRunId = `hosted-run-${this.#runSequence}`;
-		this.#latestRunId = this.#currentRunId;
-		return this.#currentRunId;
 	}
 
 	#waitForSettlement(): SettlementWaiter {

@@ -515,14 +515,6 @@ export class PiChildProcessRuntime {
 		return () => this.#eventHandlers.delete(handler);
 	}
 
-	prompt(payload: Readonly<{
-		runId: string;
-		input: string;
-		kind: "initial" | "successor";
-	}>) {
-		return this.channel.request("run.prompt", payload);
-	}
-
 	shutdown(
 		reason?: string,
 		graceMilliseconds = DEFAULT_SHUTDOWN_GRACE_MILLISECONDS,

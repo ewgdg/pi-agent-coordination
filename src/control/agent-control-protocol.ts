@@ -755,18 +755,9 @@ export const agentControlMethods = {
 		request: closed({ visible: Type.Boolean() }),
 		response: EmptyResponseSchema,
 	},
-	"run.prompt": {
-		request: closed({
-			runId: NonEmptyStringSchema,
-			input: Type.String(),
-			kind: Type.Union([Type.Literal("initial"), Type.Literal("successor")]),
-		}),
-		response: AcknowledgementSchema,
-	},
 	"message.deliver": {
 		request: closed({
 			deliveryId: NonEmptyStringSchema,
-			runId: NonEmptyStringSchema,
 			delivery: AgentRuntimeDeliverySchema,
 		}),
 		response: closed({
@@ -775,6 +766,10 @@ export const agentControlMethods = {
 			modelCycleStarted: Type.Boolean(),
 			queuedInputCount: QueuedInputCountSchema,
 		}),
+	},
+	"message.cancel": {
+		request: closed({ deliveryId: NonEmptyStringSchema }),
+		response: AcknowledgementSchema,
 	},
 	"moderatorReminder.prepare": {
 		request: closed({ reservationId: NonEmptyStringSchema }),

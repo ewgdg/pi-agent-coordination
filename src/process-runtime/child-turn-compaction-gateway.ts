@@ -19,10 +19,9 @@ export class ChildTurnCompactionGateway {
 	#disposed = false;
 	#activeAdmissions = 0;
 	#admissionTail: Promise<void> = Promise.resolve();
-	#activeOwnerRunId: string | undefined;
+	#activeDeliveryId: string | undefined;
 	readonly #generationAbort = new AbortController();
-	readonly #knownOwnerRunIds = new Set<string>();
-	readonly #cancelledOwnerRunIds = new Set<string>();
+	readonly #cancelledDeliveryIds = new Set<string>();
 	readonly #nativeAdmissions = new Map<number, () => void>();
 	readonly #session: AgentSession;
 	readonly #warn: (message: string) => void;
@@ -66,51 +65,41 @@ export class ChildTurnCompactionGateway {
 		return result;
 	}
 
-	admitOwnerTurn<T>(
-		runId: string,
+	admitDelivery<T>(
+		deliveryId: string,
 		operation: (checkpoint: () => void) => T | Promise<T>,
 	): Promise<T> {
-		this.#knownOwnerRunIds.add(runId);
 		return this.admit(async () => {
-			this.#assertOwnerRunCurrent(runId);
-			this.#activeOwnerRunId = runId;
+			this.#assertDeliveryCurrent(deliveryId);
+			this.#activeDeliveryId = deliveryId;
 			try {
-				const result = await operation(() => this.#assertOwnerRunCurrent(runId));
-				this.#assertOwnerRunCurrent(runId);
+				const result = await operation(() => this.#assertDeliveryCurrent(deliveryId));
+				this.#assertDeliveryCurrent(deliveryId);
 				return result;
 			} catch (error) {
-				this.#assertOwnerRunCurrent(runId);
+				this.#assertDeliveryCurrent(deliveryId);
 				throw error;
 			} finally {
-				if (this.#activeOwnerRunId === runId) this.#activeOwnerRunId = undefined;
+				if (this.#activeDeliveryId === deliveryId) this.#activeDeliveryId = undefined;
 			}
 		});
 	}
 
-	cancelOwnerRun(runId: string): void {
-		this.#cancelledOwnerRunIds.add(runId);
-		if (this.#activeOwnerRunId === runId && this.#session.isCompacting) {
+	cancelDelivery(deliveryId: string): void {
+		this.#cancelledDeliveryIds.add(deliveryId);
+		if (this.#activeDeliveryId === deliveryId && this.#session.isCompacting) {
 			this.#session.abortCompaction();
 		}
 	}
 
-	hasOwnerRun(runId: string): boolean {
-		return this.#knownOwnerRunIds.has(runId);
-	}
-
-	isOwnerRunCancelled(runId: string): boolean {
-		return this.#cancelledOwnerRunIds.has(runId);
-	}
-
-	shouldDiscardActiveOwnerInput(): boolean {
+	shouldDiscardActiveDeliveryInput(): boolean {
 		return this.#disposed ||
-			(this.#activeOwnerRunId !== undefined &&
-				this.#cancelledOwnerRunIds.has(this.#activeOwnerRunId));
+			(this.#activeDeliveryId !== undefined &&
+				this.#cancelledDeliveryIds.has(this.#activeDeliveryId));
 	}
 
-	completeOwnerRun(runId: string): void {
-		this.#knownOwnerRunIds.delete(runId);
-		this.#cancelledOwnerRunIds.delete(runId);
+	completeDelivery(deliveryId: string): void {
+		this.#cancelledDeliveryIds.delete(deliveryId);
 	}
 
 	async reserveNativeTurn(submissionSequence: number): Promise<void> {
@@ -285,10 +274,10 @@ export class ChildTurnCompactionGateway {
 		return () => releaseHold();
 	}
 
-	#assertOwnerRunCurrent(runId: string): void {
+	#assertDeliveryCurrent(deliveryId: string): void {
 		this.#assertCurrentGeneration();
-		if (this.#cancelledOwnerRunIds.has(runId)) {
-			throw new Error(`child_turn_admission_cancelled: ${runId}`);
+		if (this.#cancelledDeliveryIds.has(deliveryId)) {
+			throw new Error(`child_turn_admission_cancelled: ${deliveryId}`);
 		}
 	}
 

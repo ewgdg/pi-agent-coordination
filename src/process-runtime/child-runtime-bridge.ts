@@ -75,6 +75,7 @@ type ChildRuntimeBinding = {
 	runtime: AgentSessionRuntime;
 	turnCompaction: ChildTurnCompactionGateway;
 	reminderAdmission: ModeratorReminderAdmission;
+	pendingDeliveries: Map<string, () => Promise<void>>;
 	activity: RemoteAgentActivitySource;
 	publishRuntimeSnapshot(): Promise<void>;
 	setPresentationVisible(visible: boolean): void;
@@ -355,7 +356,7 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			if (
 				input.source === "extension" &&
 				result.action === "continue" &&
-				binding.turnCompaction.shouldDiscardActiveOwnerInput()
+				binding.turnCompaction.shouldDiscardActiveDeliveryInput()
 			) return { action: "handled" };
 			const sequence = currentState.nativeInputIdentity.current();
 			if (
@@ -455,29 +456,19 @@ export function createChildRuntimeBinding(
 		prepare: () => turnCompaction.prepareIdleCustomTurn(),
 		isIdle: () => runtime.session.isIdle,
 		async commit(signal) {
-			// Only commit, not preparation, admits a native Run identity.
-			const runId = `native-run-${++state.nativeRunSequence}`;
-			admitRun(state, runId);
-			try {
-				const delivery = {
-					kind: "custom" as const,
-					message: createModelVisibleModeratorObligationReminder(),
-					triggerTurn: true,
-				};
-				const proof = observeDeliveryCommit(runtime, context.sessionManager, delivery, signal);
-				const completion = runtime.session.sendCustomMessage(delivery.message, { triggerTurn: true });
-				void completion.then(
-					() => queueMicrotask(() => proof.settle(false)),
-					error => {
-						proof.reject(error);
-						void failCurrentRun(state, runtime, activity, runId, error);
-					},
-				);
-				// Proof is child-local: no Owner reconciliation or host lane is needed.
-				if (!await proof.result) throw new Error("moderator_reminder_commit_missing");
-			} finally {
-				if (runtime.session.isIdle && state.currentRunId === runId) state.currentRunId = undefined;
-			}
+			const delivery = {
+				kind: "custom" as const,
+				message: createModelVisibleModeratorObligationReminder(),
+				triggerTurn: true,
+			};
+			const proof = observeDeliveryCommit(runtime, context.sessionManager, delivery, signal);
+			const completion = runtime.session.sendCustomMessage(delivery.message, { triggerTurn: true });
+			void completion.then(
+				() => queueMicrotask(() => proof.settle(false)),
+				error => proof.reject(error),
+			);
+			// Proof is child-local: no Owner reconciliation or host lane is needed.
+			if (!await proof.result) throw new Error("moderator_reminder_commit_missing");
 		},
 	});
 	const removeLifecycleSubscription = runtime.session.subscribe((event) => {
@@ -503,6 +494,7 @@ export function createChildRuntimeBinding(
 		runtime,
 		turnCompaction,
 		reminderAdmission,
+		pendingDeliveries: new Map(),
 		activity,
 		publishRuntimeSnapshot,
 		setPresentationVisible,
@@ -527,15 +519,6 @@ export function createChildRuntimeBinding(
 			disposed = true;
 			reminderAdmission.cancel();
 			turnCompaction.dispose();
-			if (
-				state.currentBinding === binding &&
-				runtime.session.isIdle &&
-				state.currentRunId
-			) {
-				const runId = state.currentRunId;
-				state.currentRunId = undefined;
-				turnCompaction.completeOwnerRun(runId);
-			}
 			removeInputLifecycleObserver();
 			inputSubmissionAcknowledgment.dispose();
 			removeInputSubmissionListener();
@@ -560,78 +543,6 @@ async function handleOwnerRequest(
 	switch (request.method) {
 		case "runtime.snapshot":
 			return runtimeSnapshot(binding.runtime, binding.context);
-		case "run.prompt": {
-			if (state.currentRunId) {
-				throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
-			}
-			const accepted = await binding.turnCompaction.admitOwnerTurn(
-				request.payload.runId,
-				async (checkpoint) => {
-					await binding.turnCompaction.waitForCompaction();
-					if (state.currentRunId) {
-						throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
-					}
-					state.currentRunId = request.payload.runId;
-					state.latestRunId = request.payload.runId;
-					state.currentRunOutcome = "completed";
-					let resolvePreflight!: (accepted: boolean) => void;
-					const preflight = new Promise<boolean>((resolve) => {
-						resolvePreflight = resolve;
-					});
-					void binding.runtime.session.prompt(request.payload.input, {
-						source: "extension",
-						preflightResult(accepted) {
-							try {
-								checkpoint();
-							} catch (error) {
-								resolvePreflight(false);
-								throw error;
-							}
-							resolvePreflight(accepted);
-						},
-					}).catch(async (error: unknown) => {
-						if (
-							binding.turnCompaction.isOwnerRunCancelled(request.payload.runId) ||
-							binding.turnCompaction.signal.aborted
-						) return;
-						await failCurrentRun(
-							state,
-							binding.runtime,
-							binding.activity,
-							request.payload.runId,
-							error,
-						);
-					}).finally(() => {
-						if (binding.turnCompaction.isOwnerRunCancelled(request.payload.runId)) {
-							binding.turnCompaction.completeOwnerRun(request.payload.runId);
-						}
-					});
-					return preflight;
-				},
-			).catch(async (error: unknown) => {
-				if (isTurnAdmissionInvalidation(error)) {
-					if (
-						state.currentBinding === binding &&
-						binding.runtime.session.isIdle &&
-						state.currentRunId === request.payload.runId
-					) state.currentRunId = undefined;
-					throw error;
-				}
-				await failCurrentRun(
-					state,
-					binding.runtime,
-					binding.activity,
-					request.payload.runId,
-					error,
-				);
-				throw error;
-			});
-			if (!accepted && state.currentRunId === request.payload.runId) {
-				state.currentRunId = undefined;
-				binding.turnCompaction.completeOwnerRun(request.payload.runId);
-			}
-			return { accepted };
-		}
 		case "moderatorReminder.prepare": {
 			const cancel = () => binding.reminderAdmission.cancel();
 			request.signal.addEventListener("abort", cancel, { once: true });
@@ -650,190 +561,102 @@ async function handleOwnerRequest(
 			} finally { request.signal.removeEventListener("abort", cancel); }
 		}
 		case "message.deliver": {
+			const { deliveryId, delivery } = request.payload;
 			let commit: ReturnType<typeof observeDeliveryCommit> | undefined;
-			const cancel = () => {
-				binding.turnCompaction.cancelOwnerRun(request.payload.runId);
-				commit?.reject(requestCancellationError(request.signal));
-				if (state.currentRunId !== request.payload.runId) return;
-				binding.runtime.session.clearQueue();
-				void binding.runtime.session.abort().catch((error: unknown) =>
-					reportFault(state.channel, "run_cancellation_failed", error)
-				);
+			let dispatchedRunId: string | undefined;
+			const cancel = async () => {
+				binding.turnCompaction.cancelDelivery(deliveryId);
+				if (request.signal.aborted) commit?.reject(requestCancellationError(request.signal));
+				if (!dispatchedRunId) return;
+				await sequenceQueueIntention(state, async () => {
+					// A queued cancellation cannot clear or abort a successor.
+					if (state.currentRunId !== dispatchedRunId) return;
+					binding.runtime.session.clearQueue();
+					await binding.runtime.session.abort();
+				});
 			};
-			if (request.signal.aborted) cancel();
-			else request.signal.addEventListener("abort", cancel, { once: true });
+			const onAbort = () => {
+				void cancel().catch(error => reportFault(state.channel, "delivery_cancellation_failed", error));
+			};
+			binding.pendingDeliveries.set(deliveryId, cancel);
+			request.signal.addEventListener("abort", onAbort, { once: true });
 			try {
-				const admission = await binding.turnCompaction.admitOwnerTurn(
-					request.payload.runId,
-					async (checkpoint) => {
-						if (request.signal.aborted) throw requestCancellationError(request.signal);
-						await binding.turnCompaction.waitForCompaction();
-						checkpoint();
-						admitRun(state, request.payload.runId);
-						if (
-							binding.runtime.session.isIdle &&
-							request.payload.delivery.kind === "custom" &&
-							request.payload.delivery.triggerTurn
-						) {
-							await binding.turnCompaction.prepareIdleCustomTurn(
-								request.payload.delivery.workingZonePreparation,
-							);
-						}
-						checkpoint();
-						if (request.signal.aborted) {
-							throw requestCancellationError(request.signal);
-						}
-						// Preparation can start an extension-owned turn. Queue acceptance
-						// must not be mistaken for completion of that replacement turn.
-						const wasActive = !binding.runtime.session.isIdle;
-						commit = observeDeliveryCommit(
-							binding.runtime,
-							binding.context.sessionManager,
-							request.payload.delivery,
-							binding.turnCompaction.signal,
-						);
-						const dispatched = wasActive
-							? await sequenceQueueIntention(state, () => {
-								checkpoint();
-								if (request.signal.aborted) {
-									throw requestCancellationError(request.signal);
-								}
-								return dispatchDelivery(
-									binding.runtime,
-									request.payload.delivery,
-									checkpoint,
-								);
-							})
-							: dispatchDelivery(
-								binding.runtime,
-								request.payload.delivery,
-								checkpoint,
-							);
-						await dispatched.preflight;
-						checkpoint();
-						return { wasActive, commit, completion: dispatched.completion };
-					},
-				).catch(async (error: unknown) => {
-					if (request.signal.aborted || isTurnAdmissionInvalidation(error)) {
-						if (
-							!request.signal.aborted &&
-							isTurnAdmissionCancellation(error) &&
-							!binding.runtime.session.isIdle &&
-							commit
-						) {
-							return { wasActive: true, commit, completion: Promise.resolve() };
-						}
-						if (
-							state.currentBinding === binding &&
-							binding.runtime.session.isIdle &&
-							state.currentRunId === request.payload.runId
-						) state.currentRunId = undefined;
-						binding.turnCompaction.completeOwnerRun(request.payload.runId);
-						throw request.signal.aborted
-							? requestCancellationError(request.signal)
-							: error;
+				const admission = await binding.turnCompaction.admitDelivery(deliveryId, async checkpoint => {
+					request.signal.throwIfAborted();
+					await binding.turnCompaction.waitForCompaction();
+					checkpoint();
+					if (binding.runtime.session.isIdle && delivery.kind === "custom" && delivery.triggerTurn) {
+						await binding.turnCompaction.prepareIdleCustomTurn(delivery.workingZonePreparation);
 					}
-					await failCurrentRun(
-						state,
-						binding.runtime,
-						binding.activity,
-						request.payload.runId,
-						error,
-					);
-					throw error;
+					checkpoint();
+					request.signal.throwIfAborted();
+					commit = observeDeliveryCommit(binding.runtime, binding.context.sessionManager, delivery, binding.turnCompaction.signal);
+					const dispatch = () => {
+						checkpoint();
+						request.signal.throwIfAborted();
+						const dispatched = dispatchDelivery(binding.runtime, delivery, checkpoint);
+						dispatchedRunId = state.currentRunId;
+						return dispatched;
+					};
+					const dispatched = binding.runtime.session.isIdle
+						? dispatch()
+						: await sequenceQueueIntention(state, dispatch);
+					// Native queue acceptance is not execution completion. Capture the
+					// session's settlement after dispatch, never preparation's earlier cycle.
+					const completion = dispatched.completion.then(() => binding.runtime.session.waitForIdle());
+					void completion.catch(error => commit?.reject(error));
+					await Promise.race([dispatched.preflight, completion]);
+					checkpoint();
+					return { completion, commit, modelCycleStarted: !binding.runtime.session.isIdle };
 				});
-				const { wasActive, completion } = admission;
-				// Transcript admission stays early; only this exact native dispatch
-				// Promise proves idle-started Delivery completion.
-				void completion.then(
-					() => state.channel.sendEvent("message.dispatch.completed", {
-						deliveryId: request.payload.deliveryId,
-					}),
-					(error: unknown) => state.channel.sendEvent("message.dispatch.completed", {
-						deliveryId: request.payload.deliveryId,
-						error: error instanceof Error ? error.message : String(error),
-					}),
-				).catch((error: unknown) =>
-					reportFault(state.channel, "delivery_completion_failed", error)
-				);
+				const { completion } = admission;
 				commit = admission.commit;
-				if (!wasActive) {
-					void completion.then(
-						() => queueMicrotask(() => commit?.settle(false)),
-						(error: unknown) => commit?.reject(error),
-					);
-				}
-				void completion.catch(async (error: unknown) => {
-					commit?.reject(error);
-					if (
-						binding.turnCompaction.isOwnerRunCancelled(request.payload.runId) ||
-						binding.turnCompaction.signal.aborted
-					) return;
-					await failCurrentRun(
-						state,
-						binding.runtime,
-						binding.activity,
-						request.payload.runId,
-						error,
-					);
-				});
-				const transcriptCommitted = await commit.result;
-				const modelCycleStarted = wasActive || !binding.runtime.session.isIdle;
-				if (
-					!modelCycleStarted &&
-					state.currentRunId === request.payload.runId
-				) {
-					state.currentRunId = undefined;
-					binding.turnCompaction.completeOwnerRun(request.payload.runId);
-				}
+				void completion.then(
+					() => {
+						queueMicrotask(() => commit?.settle(false));
+						return state.channel.sendEvent("message.dispatch.completed", { deliveryId });
+					},
+					error => {
+						commit?.reject(error);
+						return state.channel.sendEvent("message.dispatch.completed", { deliveryId, error: errorMessage(error) });
+					},
+				).catch(error => reportFault(state.channel, "delivery_completion_failed", error));
 				return {
 					accepted: true,
-					transcriptCommitted,
-					modelCycleStarted,
+					transcriptCommitted: await commit.result,
+					modelCycleStarted: admission.modelCycleStarted,
 					queuedInputCount: binding.runtime.session.pendingMessageCount,
 				};
 			} finally {
-				request.signal.removeEventListener("abort", cancel);
+				request.signal.removeEventListener("abort", onAbort);
+				binding.pendingDeliveries.delete(deliveryId);
+				commit?.settle(false);
+				binding.turnCompaction.completeDelivery(deliveryId);
 			}
 		}
+		case "message.cancel": {
+			const cancel = binding.pendingDeliveries.get(request.payload.deliveryId);
+			if (!cancel) return { accepted: false };
+			await cancel();
+			return { accepted: true };
+		}
 		case "queue.clear": {
-			if (
-				!state.currentRunId &&
-				(!state.latestRunId || binding.turnCompaction.hasOwnerRun(request.payload.runId))
-			) {
-				return { steering: [], followUp: [], queuedInputCount: 0 };
-			}
-			requireCurrentOrLatestRun(state, request.payload.runId);
 			const cleared = await binding.turnCompaction.admit(() =>
-				sequenceQueueIntention(
-					state,
-					() => binding.runtime.session.clearQueue(),
-				)
+				sequenceQueueIntention(state, () => {
+					requireCurrentOrLatestRun(state, request.payload.runId);
+					return binding.runtime.session.clearQueue();
+				})
 			);
-			return {
-				...cleared,
-				queuedInputCount: binding.runtime.session.pendingMessageCount,
-			};
+			return { ...cleared, queuedInputCount: binding.runtime.session.pendingMessageCount };
 		}
 		case "run.interrupt": {
 			binding.reminderAdmission.cancel();
-			const current = state.currentRunId === request.payload.runId;
-			const known = binding.turnCompaction.hasOwnerRun(request.payload.runId);
-			if (!current && !known && !state.latestRunId) {
-				state.latestRunId = request.payload.runId;
-				binding.turnCompaction.cancelOwnerRun(request.payload.runId);
-				return { accepted: true };
-			}
-			if (!current && !known) {
-				return {
-					accepted: requireCurrentOrLatestRun(state, request.payload.runId),
-				};
-			}
-			binding.turnCompaction.cancelOwnerRun(request.payload.runId);
-			if (current) {
-				await sequenceQueueIntention(state, () => binding.runtime.session.abort());
-			}
-			return { accepted: true };
+			const accepted = await sequenceQueueIntention(state, async () => {
+				if (!requireCurrentOrLatestRun(state, request.payload.runId)) return false;
+				await binding.runtime.session.abort();
+				return true;
+			});
+			return { accepted };
 		}
 		case "presentation.setVisible":
 			binding.setPresentationVisible(request.payload.visible);
@@ -978,9 +801,7 @@ async function reportRuntimeLifecycle(
 	const { runtime, activity } = binding;
 	if (event.type === "agent_start") {
 		activity.setScopeFailed(false);
-		// Interactive and extension-local Pi input is admitted through the child →
-		// Owner lifecycle request before this awaited event. It has no Owner-issued
-		// run.prompt request from which to inherit a transport cycle identity.
+		// Only actual Pi execution owns transport cycle identity; Delivery admission does not.
 		state.currentRunId ??= `native-run-${++state.nativeRunSequence}`;
 		state.latestRunId = state.currentRunId;
 		await state.channel.sendEvent("agent.start", {
@@ -1023,17 +844,6 @@ async function reportRuntimeLifecycle(
 	});
 	if (state.currentBinding !== binding) return;
 	if (state.currentRunId === runId) state.currentRunId = undefined;
-	binding.turnCompaction.completeOwnerRun(runId);
-}
-
-function admitRun(state: ChildControlState, runId: string): void {
-	if (state.currentRunId && state.currentRunId !== runId) {
-		throw new Error(`child_runtime_busy: run ${state.currentRunId} is still admitted`);
-	}
-	if (state.currentRunId) return;
-	state.currentRunId = runId;
-	state.latestRunId = runId;
-	state.currentRunOutcome = "completed";
 }
 
 function requireCurrentOrLatestRun(state: ChildControlState, runId: string): boolean {
@@ -1134,6 +944,8 @@ function observeDeliveryCommit(
 		settleResult = resolve;
 		rejectResult = reject;
 	});
+	// Dispatch/preflight can reject before admission reaches its commit await.
+	void result.catch(() => undefined);
 	generationSignal.addEventListener("abort", invalidate, { once: true });
 	unsubscribe = runtime.session.subscribe((event) => {
 		if (
@@ -1222,32 +1034,7 @@ async function canonicalFilePath(path: string, cwd: string): Promise<string> {
 	return realpath(isAbsolute(path) ? path : resolve(cwd, path));
 }
 
-async function failCurrentRun(
-	state: ChildControlState,
-	runtime: AgentSessionRuntime,
-	activity: RemoteAgentActivitySource,
-	runId: string,
-	error: unknown,
-): Promise<void> {
-	activity.setScopeFailed(true);
-	await reportFault(state.channel, "run_prompt_failed", error);
-	if (state.currentRunId !== runId) return;
-	await state.channel.sendEvent("agent.end", {
-		runId,
-		outcome: "failed",
-		willRetry: false,
-		queuedInputCount: runtime.session.pendingMessageCount,
-		error: errorMessage(error),
-	}).catch(() => undefined);
-	await state.channel.sendEvent("agent.settled", {
-		runId,
-		outcome: "failed",
-		queuedInputCount: runtime.session.pendingMessageCount,
-	})
-		.catch(() => undefined);
-	if (state.currentRunId === runId) state.currentRunId = undefined;
-	state.currentBinding?.turnCompaction.completeOwnerRun(runId);
-}
+
 
 async function reportFault(channel: ChildChannel, code: string, error: unknown): Promise<void> {
 	await channel.sendEvent("runtime.fault", { code, message: errorMessage(error) })
@@ -1360,15 +1147,6 @@ function errorMessage(error: unknown): string {
 
 function requestCancellationError(signal: AbortSignal): unknown {
 	return signal.reason ?? new DOMException("The Control request was cancelled", "AbortError");
-}
-
-function isTurnAdmissionCancellation(error: unknown): boolean {
-	return error instanceof Error && error.message.startsWith("child_turn_admission_cancelled:");
-}
-
-function isTurnAdmissionInvalidation(error: unknown): boolean {
-	return isTurnAdmissionCancellation(error) ||
-		(error instanceof Error && error.message === "child_turn_compaction_gateway_disposed");
 }
 
 function assertUnreachable(value: never): never {

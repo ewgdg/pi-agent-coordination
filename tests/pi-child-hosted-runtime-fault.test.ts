@@ -314,7 +314,7 @@ test("host presentation observes compaction changes without changing Run state a
 });
 
 for (const dispatchFinishesFirst of [true, false]) {
-	test(`Delivery completion requires both native settlement and correlated dispatch: dispatch first=${dispatchFinishesFirst}`, { timeout: 5_000 }, async () => {
+	test(`Delivery completion follows its child-correlated completion independently of lifecycle ordering: dispatch first=${dispatchFinishesFirst}`, { timeout: 5_000 }, async () => {
 		const { runtime, emit, requestedDeliveryIds } = createFakeRuntime();
 		await runtime.ready;
 		emit(controlEvent("agent.start", { runId: "native-run-1", queuedInputCount: 0 }));
@@ -331,7 +331,7 @@ for (const dispatchFinishesFirst of [true, false]) {
 		const dispatch = () => emit(controlEvent("message.dispatch.completed", { deliveryId: requestedDeliveryIds[0] }));
 		if (dispatchFinishesFirst) dispatch(); else settle();
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		assert.equal(firstCompleted, false);
+		assert.equal(firstCompleted, dispatchFinishesFirst);
 		assert.equal(secondCompleted, false);
 		if (dispatchFinishesFirst) settle(); else dispatch();
 		await first.completion;

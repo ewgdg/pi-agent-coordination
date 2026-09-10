@@ -292,7 +292,7 @@ test("cancelled startup attachment stays hidden and retained child reattaches wi
 				if (event.event === "agent.settled") { removeHandler(); resolve(); }
 			});
 		});
-		await runtime.prompt({ runId: "retained-work", input: "CANCELLED_RETAINED_WORK", kind: "initial" });
+		await runtime.channel.request("message.deliver", { deliveryId: "retained-work", delivery: { kind: "user", content: "CANCELLED_RETAINED_WORK" } });
 		await settled;
 		await retained.attach(projection);
 		const screen = () => Array.from({ length: display.rows }, (_, row) =>

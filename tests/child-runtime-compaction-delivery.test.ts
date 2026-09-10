@@ -234,7 +234,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 			assert.equal(completed, false, "Owner completion must remain pending during the actual Request");
 			assert.deepEqual(failures, [], "replacement settlement must not fail the actual Delivery");
 			assert.equal(parent.workState(), "active");
-			assert.equal(state.currentRunId, replacementFinishesFirst ? "native-run-1" : "hosted-run-2");
+			assert.equal(state.currentRunId, replacementFinishesFirst ? "native-run-3" : "native-run-2");
 			assert.equal(manualAttempts, 1);
 			assert.equal(manualSignal?.aborted, false);
 			assert.deepEqual(host.ui.notifications, []);
@@ -258,8 +258,8 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 				entry.message.role === "toolResult" && entry.message.toolCallId === "replacement-checkpoint" && !entry.message.isError));
 			assert.equal(parent.workState(), "settled");
 			assert.deepEqual(events.filter(({ event }) => event.startsWith("agent.")).map(({ event, payload }) => [event, (payload as { runId: string }).runId]), [
-				["agent.start", "hosted-run-2"], ["agent.end", "hosted-run-2"], ["agent.settled", "hosted-run-2"],
-				...(replacementFinishesFirst ? [["agent.start", "native-run-1"], ["agent.end", "native-run-1"], ["agent.settled", "native-run-1"]] : []),
+				["agent.start", "native-run-2"], ["agent.end", "native-run-2"], ["agent.settled", "native-run-2"],
+				...(replacementFinishesFirst ? [["agent.start", "native-run-3"], ["agent.end", "native-run-3"], ["agent.settled", "native-run-3"]] : []),
 			]);
 			assert.deepEqual(events.filter(({ event }) => event === "runtime.fault"), []);
 		} finally {

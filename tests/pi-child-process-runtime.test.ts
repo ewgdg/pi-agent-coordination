@@ -247,11 +247,10 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			return !frameText(runtime as PiChildProcessRuntime).includes("Tab views");
 		});
 
-		assert.deepEqual(await runtime.prompt({
-			runId: "process-runtime-test-run",
-			input: "Complete the offline process Runtime Bridge test.",
-			kind: "initial",
-		}), { accepted: true });
+		assert.equal((await runtime.channel.request("message.deliver", {
+			deliveryId: "process-runtime-test-run",
+			delivery: { kind: "user", content: "Complete the offline process Runtime Bridge test." },
+		})).accepted, true);
 		await waitUntil(() => lifecycle.includes("agent.settled"));
 		assert.deepEqual(lifecycle.slice(0, 3), ["agent.start", "agent.end", "agent.settled"]);
 		assert.deepEqual(ownerIntentions[0], {
@@ -260,10 +259,10 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		});
 		assert.match(JSON.stringify(SessionManager.open(sessionPath).getEntries()), new RegExp(PROCESS_RUNTIME_TEST_RESPONSE));
 		assert.deepEqual(await runtime.channel.request("queue.clear", {
-			runId: "process-runtime-test-run",
+			runId: latestCycleId(runtimeEvents),
 		}), { steering: [], followUp: [], queuedInputCount: 0 });
 		assert.deepEqual(await runtime.channel.request("run.interrupt", {
-			runId: "process-runtime-test-run",
+			runId: latestCycleId(runtimeEvents),
 		}), { accepted: false });
 		await assert.rejects(
 			runtime.channel.request("queue.clear", { runId: "stale-process-runtime-run" }),
@@ -275,9 +274,9 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		);
 
 		const lifecycleBeforeDelivery = lifecycle.length;
+		const previousCycleId = latestCycleId(runtimeEvents);
 		const activeDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-1",
-			runId: "process-runtime-delivery-run",
 			delivery: {
 				kind: "user",
 				content: "Commit before the delayed model turn settles.",
@@ -285,15 +284,14 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		});
 		await waitUntil(() => runtimeEvents.some((event) =>
 			event.event === "agent.start" &&
-			event.payload.runId === "process-runtime-delivery-run"
+			event.payload.runId !== previousCycleId
 		));
 		assert.equal(runtimeEvents.some((event) =>
 			event.event === "agent.settled" &&
-			event.payload.runId === "process-runtime-delivery-run"
+			event.payload.runId !== previousCycleId
 		), false);
 		const queuedDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-2",
-			runId: "process-runtime-delivery-run",
 			delivery: {
 				kind: "user",
 				content: "Clear this queued direction before it commits.",
@@ -301,10 +299,10 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 			},
 		});
 		const clearedDelivery = runtime.channel.request("queue.clear", {
-			runId: "process-runtime-delivery-run",
+			runId: latestCycleId(runtimeEvents),
 		});
 		const interruptedDelivery = runtime.channel.request("run.interrupt", {
-			runId: "process-runtime-delivery-run",
+			runId: latestCycleId(runtimeEvents),
 		});
 		const activeDeliveryResult = await activeDelivery;
 		assert.equal(activeDeliveryResult.accepted, true);
@@ -329,14 +327,13 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		await waitUntil(() => lifecycle.filter((event) => event === "agent.settled").length === 2);
 		assert.equal(runtimeEvents.some((event) =>
 			event.event === "agent.end" &&
-			event.payload.runId === "process-runtime-delivery-run" &&
+			event.payload.runId !== previousCycleId &&
 			event.payload.outcome === "interrupted" &&
 			event.payload.willRetry === false
 		), true);
 
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-3",
-			runId: "process-runtime-cancelled-delivery-run",
 			delivery: {
 				kind: "user",
 				content: "Start work before the queued Control request is cancelled.",
@@ -350,7 +347,6 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 		const cancellation = new AbortController();
 		const cancelledDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-4",
-			runId: "process-runtime-cancelled-delivery-run",
 			delivery: {
 				kind: "user",
 				content: "This cancelled queued direction must never commit.",
@@ -370,7 +366,6 @@ test("real Pi CLI runs one exact TUI session through the process Runtime Bridge"
 
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-5",
-			runId: "process-runtime-missing-commit-run",
 			delivery: {
 				kind: "user",
 				content: "PROCESS_RUNTIME_DROP_MESSAGE_COMMIT",
@@ -504,7 +499,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		const omittedMessage = createMessageDelivery([omittedItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-6",
-			runId: "omitted-working-zone-run",
 			delivery: {
 				kind: "custom",
 				message: {
@@ -520,8 +514,7 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 			queuedInputCount: 0,
 		});
 		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.start" &&
-			event.payload.runId === "omitted-working-zone-run"
+			event.event === "agent.start"
 		));
 		const activeSteerItem = {
 			source: {
@@ -539,7 +532,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		const activeSteerMessage = createMessageDelivery([activeSteerItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-7",
-			runId: "omitted-working-zone-run",
 			delivery: {
 				kind: "custom",
 				message: {
@@ -563,8 +555,8 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 			event.event === "runtime.compaction.started"
 		), false);
 		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.settled" &&
-			event.payload.runId === "omitted-working-zone-run"
+			event.event === "message.dispatch.completed" &&
+			event.payload.deliveryId === "test-delivery-7"
 		));
 		assert.equal(
 			SessionManager.open(sessionPath).getEntries()
@@ -588,7 +580,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		const declinedCompactionMessage = createMessageDelivery([declinedCompactionItem]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-8",
-			runId: "declined-compaction-working-zone-run",
 			delivery: {
 				kind: "custom",
 				message: {
@@ -608,8 +599,8 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 			queuedInputCount: 0,
 		});
 		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.settled" &&
-			event.payload.runId === "declined-compaction-working-zone-run"
+			event.event === "message.dispatch.completed" &&
+			event.payload.deliveryId === "test-delivery-8"
 		));
 		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
 			entry.type === "custom_message" &&
@@ -640,7 +631,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		const cancellation = new AbortController();
 		const cancelledDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-9",
-			runId: "cancelled-working-zone-run",
 			delivery: {
 				kind: "custom",
 				message: {
@@ -687,7 +677,6 @@ test("an idle prepared Request creates a working zone before exact Delivery comm
 		).length;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-10",
-			runId: "prepared-working-zone-run",
 			delivery: {
 				kind: "custom",
 				message: {
@@ -796,14 +785,13 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		});
 		runtime.onEvent((event) => runtimeEvents.push(event));
 
-		assert.deepEqual(await runtime.prompt({
-			runId: "process-compaction-gateway-run",
-			input: "Create enough history to make threshold compaction eligible.",
-			kind: "initial",
-		}), { accepted: true });
+		assert.equal((await runtime.channel.request("message.deliver", {
+			deliveryId: "process-compaction-gateway-run",
+			delivery: { kind: "user", content: "Create enough history to make threshold compaction eligible." },
+		})).accepted, true);
 		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.settled" &&
-			event.payload.runId === "process-compaction-gateway-run"
+			event.event === "message.dispatch.completed" &&
+			event.payload.deliveryId === "process-compaction-gateway-run"
 		));
 
 		assert.equal(
@@ -812,14 +800,13 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		);
 
 		const nextPrompt = "Admit this prompt only after preparing the existing context.";
-		assert.deepEqual(await runtime.prompt({
-			runId: "process-compaction-next-prompt-run",
-			input: nextPrompt,
-			kind: "initial",
-		}), { accepted: true });
+		assert.equal((await runtime.channel.request("message.deliver", {
+			deliveryId: "process-compaction-next-prompt-run",
+			delivery: { kind: "user", content: nextPrompt },
+		})).accepted, true);
 		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.settled" &&
-			event.payload.runId === "process-compaction-next-prompt-run"
+			event.event === "message.dispatch.completed" &&
+			event.payload.deliveryId === "process-compaction-next-prompt-run"
 		));
 		const entriesAfterPrompt = SessionManager.open(sessionPath).getEntries();
 		const promptCompactionIndex = entriesAfterPrompt.findIndex((entry) =>
@@ -848,7 +835,6 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		}]);
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-11",
-			runId: "process-compaction-delivery-run",
 			delivery: {
 				kind: "custom",
 				message: {
@@ -874,19 +860,17 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		assert.notEqual(compactionIndex, -1);
 		assert.equal(compactionIndex < deliveryIndex, true);
 		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.settled" &&
-			event.payload.runId === "process-compaction-delivery-run"
+			event.event === "message.dispatch.completed" &&
+			event.payload.deliveryId === "test-delivery-11"
 		));
 		const compactionsBeforeNativeInput = SessionManager.open(sessionPath).getEntries()
 			.filter((entry) => entry.type === "compaction").length;
 
+		const eventsBeforeNativeInput = runtimeEvents.length;
 		const nativeInput = "Admit this native input after deferred compaction.";
 		await attachNativeChildDisplay(runtime);
 		runtime.writeInput(`${nativeInput}\r`);
-		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.settled" &&
-			event.payload.runId.startsWith("native-run-")
-		));
+		await waitUntil(() => runtimeEvents.slice(eventsBeforeNativeInput).some(event => event.event === "agent.settled"));
 		const entriesAfterNativeInput = SessionManager.open(sessionPath).getEntries();
 		const nativeInputIndex = entriesAfterNativeInput.findIndex((entry) =>
 			entry.type === "message" &&
@@ -904,13 +888,11 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			compactionsBeforeNativeInput + 1,
 		);
 
-		const queuedRunId = "process-queued-compaction-run";
 		const activeInput = `PROCESS_RUNTIME_QUEUE_AFTER_AGENT_END${
 			" queued context".repeat(400)
 		}`;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-12",
-			runId: queuedRunId,
 			delivery: { kind: "user", content: activeInput },
 		}), {
 			accepted: true,
@@ -919,7 +901,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			queuedInputCount: 0,
 		});
 		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.settled" && event.payload.runId === queuedRunId
+			event.event === "message.dispatch.completed" && event.payload.deliveryId === "test-delivery-12"
 		));
 		const entriesAfterQueuedContinuation = SessionManager.open(sessionPath).getEntries();
 		const activeInputIndex = entriesAfterQueuedContinuation.findIndex((entry) =>
@@ -937,17 +919,15 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			index < queuedDeliveryIndex
 		), true);
 
-		const paddingRunId = "process-compaction-padding-run";
 		await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-13",
-			runId: paddingRunId,
 			delivery: {
 				kind: "user",
 				content: `Leave a large deferred context.${" padding context".repeat(400)}`,
 			},
 		});
 		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.settled" && event.payload.runId === paddingRunId
+			event.event === "message.dispatch.completed" && event.payload.deliveryId === "test-delivery-13"
 		));
 
 		const cancelledMessage = createMessageDelivery([{
@@ -972,7 +952,6 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		const cancellation = new AbortController();
 		const cancelledDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-14",
-			runId: "process-cancelled-compaction-run",
 			delivery: {
 				kind: "custom",
 				message: {
@@ -1010,13 +989,12 @@ test("an idle child defers threshold compaction until later work is admitted", {
 				content: "Interruption must fence this Delivery during preparation.",
 			},
 		}]);
-		const interruptedRunId = "process-interrupted-compaction-run";
+		const failuresBeforeInterruption = runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "failed").length;
 		const compactionStartsBeforeInterruption = runtimeEvents.filter((event) =>
 			event.event === "runtime.compaction.started"
 		).length;
 		const interruptedDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-15",
-			runId: interruptedRunId,
 			delivery: {
 				kind: "custom",
 				message: {
@@ -1033,15 +1011,11 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		await waitUntil(() => runtimeEvents.filter((event) =>
 			event.event === "runtime.compaction.started"
 		).length > compactionStartsBeforeInterruption);
-		assert.deepEqual(await runtime.channel.request("run.interrupt", {
-			runId: interruptedRunId,
+		assert.deepEqual(await runtime.channel.request("message.cancel", {
+			deliveryId: "test-delivery-15",
 		}), { accepted: true });
 		assert.match(String(await interruptedDeliveryOutcome), /child_turn_admission_cancelled/);
-		assert.equal(runtimeEvents.some((event) =>
-			event.event === "agent.end" &&
-			event.payload.runId === interruptedRunId &&
-			event.payload.outcome === "failed"
-		), false);
+		assert.equal(runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "failed").length, failuresBeforeInterruption);
 		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
 			entry.type === "custom_message" && entry.content === interruptedMessage.content
 		), false);
@@ -1064,7 +1038,6 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		).length;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-16",
-			runId: "process-post-cancellation-run",
 			delivery: {
 				kind: "custom",
 				message: {
@@ -1089,7 +1062,6 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			.filter((entry) => entry.type === "compaction").length;
 		assert.deepEqual(await runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-17",
-			runId: "process-user-delivery-compaction-run",
 			delivery: { kind: "user", content: userDeliveryInput },
 		}), {
 			accepted: true,
@@ -1113,14 +1085,13 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			index < userDeliveryIndex
 		), true);
 		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "agent.settled" &&
-			event.payload.runId === "process-user-delivery-compaction-run"
+			event.event === "message.dispatch.completed" &&
+			event.payload.deliveryId === "test-delivery-17"
 		));
 
-		const delayedRunId = "process-delayed-preflight-run";
+		const startsBeforePreflight = runtimeEvents.filter(event => event.event === "agent.start").length;
 		const delayedDelivery = runtime.channel.request("message.deliver", {
 			deliveryId: "test-delivery-18",
-			runId: delayedRunId,
 			delivery: { kind: "user", content: "PROCESS_RUNTIME_DELAYED_INPUT" },
 		});
 		const delayedDeliveryOutcome = delayedDelivery.then(
@@ -1128,8 +1099,8 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			(error: unknown) => error,
 		);
 		await waitForFrame(runtime, "PROCESS_RUNTIME_DELAYED_INPUT_STARTED");
-		assert.deepEqual(await runtime.channel.request("run.interrupt", {
-			runId: delayedRunId,
+		assert.deepEqual(await runtime.channel.request("message.cancel", {
+			deliveryId: "test-delivery-18",
 		}), { accepted: true });
 		assert.match(String(await delayedDeliveryOutcome), /child_turn_admission_cancelled/);
 		await new Promise((resolve) => setTimeout(resolve, 550));
@@ -1138,9 +1109,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			entry.message.role === "user" &&
 			JSON.stringify(entry.message.content).includes("PROCESS_RUNTIME_DELAYED_INPUT")
 		), false);
-		assert.equal(runtimeEvents.some((event) =>
-			event.event === "agent.start" && event.payload.runId === delayedRunId
-		), false);
+		assert.equal(runtimeEvents.filter(event => event.event === "agent.start").length, startsBeforePreflight);
 	} finally {
 		await runtime?.dispose();
 	}
@@ -1499,11 +1468,10 @@ test("real child Observe and Message tools reach the scoped Owner handlers", {
 		});
 		const events: string[] = [];
 		runtime.onEvent((event) => events.push(event.event));
-		assert.deepEqual(await runtime.prompt({
-			runId: "process-coordination-run",
-			input: "Invoke the scripted coordination tools.",
-			kind: "initial",
-		}), { accepted: true });
+		assert.equal((await runtime.channel.request("message.deliver", {
+			deliveryId: "process-coordination-run",
+			delivery: { kind: "user", content: "Invoke the scripted coordination tools." },
+		})).accepted, true);
 		await waitUntil(() => events.includes("agent.settled"));
 
 		assert.deepEqual(ownerCalls.slice(0, 4), [
@@ -1838,7 +1806,7 @@ test("hidden real child persists work without rendering and repeated attachment 
 	for (let turn = 1; turn <= 2; turn++) {
 		const renderCount = (await events()).filter(line => line === "render").length;
 		output.length = 0;
-		await runtime.prompt({ runId: "visibility-" + turn, input: "HIDDEN_WORK_" + turn, kind: turn === 1 ? "initial" : "successor" });
+		await runtime.channel.request("message.deliver", { deliveryId: "visibility-" + turn, delivery: { kind: "user", content: "HIDDEN_WORK_" + turn } });
 		await waitUntil(() => settled === turn);
 		const transcript = JSON.stringify(SessionManager.open(sessionPath).getEntries());
 		assert.match(transcript, new RegExp("HIDDEN_WORK_" + turn));
@@ -1872,3 +1840,9 @@ test("hidden real child persists work without rendering and repeated attachment 
 	await runtime.shutdown("visibility test complete");
 	await runtime.hidePresentation();
 });
+
+function latestCycleId(events: readonly import("../src/process-runtime/pi-child-process-runtime.ts").PiChildRuntimeEvent[]): string {
+	const event = events.findLast(event => event.event === "agent.start");
+	assert.ok(event?.event === "agent.start", "child has reported execution");
+	return event.payload.runId;
+}

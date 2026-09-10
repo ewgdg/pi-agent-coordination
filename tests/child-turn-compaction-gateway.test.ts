@@ -144,7 +144,7 @@ test("Runtime-generation disposal fences a prepared admission after compaction r
 			});
 		};
 	const gateway = new ChildTurnCompactionGateway(session);
-	const admission = gateway.admitOwnerTurn("prepared-run", () =>
+	const admission = gateway.admitDelivery("prepared-run", () =>
 		gateway.prepareIdleCustomTurn(preparation)
 	);
 	while (compactInstructions.length === 0) await new Promise((resolve) => setImmediate(resolve));
@@ -184,7 +184,7 @@ for (const path of preparationPaths) {
 		const warnings: string[] = [];
 		const gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
 
-		await gateway.admitOwnerTurn("run", () =>
+		await gateway.admitDelivery("run", () =>
 			gateway.prepareIdleCustomTurn(path.preparation)
 		);
 
@@ -218,14 +218,14 @@ for (const path of preparationPaths) {
 				compactError: new Error("Compaction cancelled"),
 				compactionAborted: true,
 				onCompact: () => invalidation === "owner cancellation"
-					? gateway.cancelOwnerRun("run")
+					? gateway.cancelDelivery("run")
 					: gateway.dispose(),
 			});
 			const warnings: string[] = [];
 			gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
 
 			await assert.rejects(
-				gateway.admitOwnerTurn("run", () => gateway.prepareIdleCustomTurn(path.preparation)),
+				gateway.admitDelivery("run", () => gateway.prepareIdleCustomTurn(path.preparation)),
 				invalidation === "owner cancellation"
 					? /child_turn_admission_cancelled: run/
 					: /child_turn_compaction_gateway_disposed/,
