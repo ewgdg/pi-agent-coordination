@@ -35,3 +35,16 @@ Implementation and targeted checks complete: 65 lifecycle/PTY/launch/hosted test
 
 ## Retrospective
 The production simplification removes the detached reconstruction module and most PTY mode machinery. Real native-input tests now use explicit physical terminal displays, rather than asking hidden diagnostic snapshots to behave like a selected view. Measured IPC responsiveness is a proxy; no human-perceived latency or broad freeze-elimination claim is made.
+
+## Follow-up: cancellation ordering and selected-view regressions
+Reopened after review reproduced delayed begin/show surviving cancellation and stale hide during A→B→A. First retain failing unit + real-child regressions and fix visibility ordering without delaying Owner restoration. Then diagnose the five remaining Agent-view failures against their observable lifecycle contracts, comparing baseline when needed. Verify the separate operational-incidents powershell tool expectation on baseline but do not change unrelated behavior. Only targeted tests; no PR or push.
+
+- P1 source/runtime/attachment and focused tests exclusively delegated to the original implementor.
+- Agent-view failure diagnosis follows P1 completion; baseline comparison and plan maintenance remain with this agent.
+
+### Follow-up outcome
+Fixed cancelled pending shows with runtime revision invalidation and serialized same-child release/reselection, without delaying Owner restoration. Three new regressions failed before the fix; surface/launch tests now pass 22/22, and independent review reran the three new regressions successfully with no findings. Typecheck and diff checks pass. Commit: b4fe490.
+
+Three Agent-view failures were test synchronization races: physical selection commands finish at handoff, not later Owner return. Tests now await surface closure; all three affected cases pass. Two remaining failures reproduce on baseline 22f255e: later Runtime configuration preparations time out waiting for transcript response, and terminally failed viewed Run expects an extra model response after its Answer ends the loop. These pre-existing failures remain unchanged. The separate operational-incidents moderator tool expectation also fails on baseline because actual tools include powershell; it remains outside scope.
+
+No full suite, PR or push. Follow-up evidence is under agent artifacts for pi-agent-coordination / 2026-09-10 / p1-cancelled-attachment. An early-startup IPC response can persist before native transcript subscription begins; the retained cancellation regression verifies persistence plus current widgets/editor on reattach, not that separate early-response screen behavior.
