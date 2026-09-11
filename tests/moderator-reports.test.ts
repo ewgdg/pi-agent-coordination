@@ -21,22 +21,33 @@ function fixture() {
 	return manager;
 }
 
-test("reports and explicit read acknowledgments survive cold reopen without deletion", () => {
+test("reports and reversible read states survive cold reopen without deletion", () => {
 	const manager = fixture();
 	const reports = store(manager);
 	const report = reports.publish(input, reporter, source);
 	assert.deepEqual(reports.history(), [{ report }]);
 	const reopened = store(SessionManager.open(manager.getSessionFile()!));
 	assert.deepEqual(reopened.get(report.reportId), report);
-	reopened.markRead(report.reportId);
+	reopened.setRead(report.reportId, true);
 	const afterRead = store(SessionManager.open(manager.getSessionFile()!));
 	assert.deepEqual(afterRead.get(report.reportId), report);
 	assert.ok(afterRead.history()[0]?.readAt);
 	const firstRead = afterRead.history()[0]?.readAt;
-	afterRead.markRead(report.reportId);
+	afterRead.setRead(report.reportId, true);
 	assert.equal(afterRead.history()[0]?.readAt, firstRead);
-	assert.throws(() => afterRead.markRead("missing"));
+	assert.throws(() => afterRead.setRead("missing", false));
 	assert.throws(() => afterRead.get("missing"));
+	afterRead.setRead(report.reportId, false);
+	const afterUnread = store(SessionManager.open(manager.getSessionFile()!));
+	assert.deepEqual(afterUnread.history(), [{ report }]);
+	const entryCount = SessionManager.open(manager.getSessionFile()!).getEntries().length;
+	afterUnread.setRead(report.reportId, false);
+	assert.equal(SessionManager.open(manager.getSessionFile()!).getEntries().length, entryCount);
+	assert.deepEqual(afterUnread.history(), [{ report }]);
+	afterUnread.setRead(report.reportId, true);
+	const readAgain = store(SessionManager.open(manager.getSessionFile()!));
+	assert.ok(readAgain.history()[0]?.readAt);
+	assert.deepEqual(readAgain.get(report.reportId), report);
 });
 
 test("publication is source-idempotent and reports cannot be mutated", () => {

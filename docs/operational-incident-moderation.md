@@ -124,13 +124,13 @@ Before claiming a missing tool result or crash, obtain current Agent status, rea
 
 The tool commits an immutable report to the Workflow Owner's durable transcript and immediately returns its report identity and creation timestamp. It does not wait for the user, create a Human Request or Agent Request, discharge an Answer Obligation, terminate the Moderator, or resolve handling. An unresolved incident still requires recovery; `moderator_control` retains its normal Resolution predicates. Reports can also be published after recovery has cleared the original condition.
 
-Every report captures the stable reporting Moderator identity and label, timestamp, original transcript path, assistant entry ID, and exact reporting tool-call ID. Replaying the same committed source returns the original report rather than revising it. Publication and explicit read acknowledgment are separate Owner custom entries; neither depends on the current Moderator Run or incident lifetime.
+Every report captures the stable reporting Moderator identity and label, timestamp, original transcript path, assistant entry ID, and exact reporting tool-call ID. Replaying the same committed source returns the original report rather than revising it. Publication and explicit read-state changes are separate Owner custom entries; neither depends on the current Moderator Run or incident lifetime.
 
 ### Human review
 
 In `/agents`, unread reports appear as `REPORT` items in the **Attention Inbox**. Enter opens a dedicated read-only report view—not a live transcript, new Agent, or new session. The **Reports** tab retains all report history, including read reports.
 
-- **m · Mark read** explicitly acknowledges the report and removes pending report attention. The report remains in history.
+- **m · Mark read / Mark unread** toggles the report’s read state. Mark read removes pending report attention; Mark unread restores it. Use it on a selected report in the Attention Inbox or Reports tab without leaving the menu, or inside the report view. The hint reflects the current state and the report always remains in history.
 - **c · Copy report** copies the full ticket-ready Markdown report, including provenance and evidence.
 - **v · View reporter** switches to the stable reporting Moderator's current context using ordinary Agent selection. The report retains input focus and shows loading until preparation completes; failure stays visible in the report for retry.
 - **Esc/q · Back** closes the report. Opening, closing, copying, or viewing the reporter does not acknowledge it.
@@ -145,4 +145,4 @@ Cold discovery validates committed Moderator Inputs and admits valid Moderators 
 
 Recovery reconstructs no timer, review interval, attendance, live condition, Handling Key, attempt chain, previous Run, exhausted Operational Attention, scheduling, or Moderator reuse. Current live evidence after recovery must establish a fresh condition.
 
-Reports and read acknowledgments are reconstructed from the Owner transcript on cold recovery, independent of whether the original incident still exists. Unread report attention persists; read report history remains accessible. Ephemeral or externally deleted Workflow transcripts cannot provide durable history.
+Reports and their latest read states are reconstructed from the Owner transcript on cold recovery, independent of whether the original incident still exists. Unread report attention persists; read report history remains accessible. Ephemeral or externally deleted Workflow transcripts cannot provide durable history.

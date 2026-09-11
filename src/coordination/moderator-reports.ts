@@ -4,7 +4,7 @@ import { coordinationEntries } from "../transcript/retained-transcript.ts";
 import { toolCallPointerKey } from "../protocol/identities.ts";
 import {
 	MODERATOR_REPORT_CUSTOM_TYPE,
-	MODERATOR_REPORT_READ_CUSTOM_TYPE,
+	MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE,
 	validateReportToUserInput,
 	type ModeratorReport,
 	type ModeratorReportSource,
@@ -47,10 +47,12 @@ export class ModeratorReportStore {
 				const report = freezeReport(entry.data as ModeratorReport);
 				if (reports.has(report.reportId)) throw new Error(`Duplicate Moderator report ${report.reportId}`);
 				reports.set(report.reportId, report);
-			} else if (entry.customType === MODERATOR_REPORT_READ_CUSTOM_TYPE) {
-				const read = entry.data as { reportId: string; readAt: string };
-				if (!read || !reports.has(read.reportId) || typeof read.readAt !== "string" || !Number.isFinite(Date.parse(read.readAt))) throw new Error("Invalid Moderator report read acknowledgment");
-				if (!reads.has(read.reportId)) reads.set(read.reportId, read.readAt);
+			} else if (entry.customType === MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE) {
+				const read = entry.data as { reportId: string; readAt: string | null };
+				if (!read || !reports.has(read.reportId) || (read.readAt !== null && (typeof read.readAt !== "string" || !Number.isFinite(Date.parse(read.readAt))))) throw new Error("Invalid Moderator report read state");
+				// A null timestamp restores attention; transcript order determines current state.
+				if (read.readAt === null) reads.delete(read.reportId);
+				else reads.set(read.reportId, read.readAt);
 			}
 		}
 		return Object.freeze([...reports.values()].map((report) => Object.freeze({ report, ...(reads.has(report.reportId) ? { readAt: reads.get(report.reportId)! } : {}) })));
@@ -62,11 +64,11 @@ export class ModeratorReportStore {
 		return item.report;
 	}
 
-	markRead(reportId: string): void {
+	setRead(reportId: string, read: boolean): void {
 		const item = this.history().find((item) => item.report.reportId === reportId);
 		if (!item) throw new Error(`Unknown Moderator report ${reportId}`);
-		if (item.readAt !== undefined) return;
-		this.#append(MODERATOR_REPORT_READ_CUSTOM_TYPE, Object.freeze({ reportId, readAt: new Date().toISOString() }));
+		if ((item.readAt !== undefined) === read) return;
+		this.#append(MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE, Object.freeze({ reportId, readAt: read ? new Date().toISOString() : null }));
 	}
 }
 

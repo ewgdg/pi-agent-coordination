@@ -1344,3 +1344,65 @@ test("mounted Owner marks only its action label across all tabs and focus", asyn
 	component.handleInput?.("\r");
 	assert.deepEqual(await selection, { kind: "select_agent", agentId: "owner" });
 });
+
+for (const tab of ["live", "reports"] as const) {
+	test(`m marks the selected report read in ${tab} without leaving the menu`, { timeout: 5_000 }, async () => {
+		const harness = surfaceHarness(30);
+		const reports = ["first", "second", "third"].map((id) => ({ report: {
+			reportId: id, createdAt: "2026-01-01T00:00:00Z",
+			reporter: { agentId: "moderator", label: id },
+			source: { agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/tmp/report.jsonl" },
+			symptom: "Delivery stalled", suspectedDefect: "Dispatch race", uncertainty: "Unknown",
+			recoveryActions: "Retried", recoveryOutcome: "Recovered", evidence: [],
+		} }));
+		let finish!: (reports: readonly import("../src/protocol/moderator-report.ts").ReportHistoryItem[]) => void;
+		const marked: [string, boolean][] = [];
+		const errors: unknown[] = [];
+		let fail = true;
+		let closed = false;
+		const selection = openAgentSelectorSurface(harness.ui, {
+			live: [agentStatus("owner", "Owner", null)], dormant: [], selectedAgentId: "owner", reports,
+			setReportRead(reportId, read) {
+				marked.push([reportId, read]);
+				if (fail) throw new Error("Read failed");
+				return new Promise((resolve) => { finish = resolve; });
+			},
+			onSelectionError(error) { errors.push(error); },
+		}).then((result) => { closed = true; return result; });
+		const component = harness.component!;
+		if (tab === "reports") component.handleInput?.("\x1b[Z");
+		component.handleInput?.("j");
+		assert.match(component.render(80).join("\n"), /m Mark read/);
+		component.handleInput?.("m");
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(errors.length, 1);
+		assert.match(component.render(80).join("\n"), /→ REPORT · second/);
+		fail = false;
+		component.handleInput?.("m");
+		component.handleInput?.("m");
+		component.handleInput?.("\r");
+		assert.deepEqual(marked, [["second", true], ["second", true]]);
+		assert.equal(closed, false);
+		finish(reports.map((item) => item.report.reportId === "second" ? { ...item, readAt: "2026-01-02T00:00:00Z" } : item));
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.equal(closed, false);
+		const rendered = component.render(80).join("\n");
+		if (tab === "live") {
+			assert.doesNotMatch(rendered, /REPORT · second/);
+			assert.match(rendered, /→ REPORT · third/);
+		} else {
+			assert.match(rendered, /→ REPORT · second.*Read/);
+			assert.match(rendered, /m Mark unread/);
+			component.handleInput?.("m");
+			assert.deepEqual(marked, [["second", true], ["second", true], ["second", false]]);
+			finish(reports);
+			await new Promise((resolve) => setImmediate(resolve));
+			assert.match(component.render(80).join("\n"), /→ REPORT · second.*Unread/);
+			component.handleInput?.("\t");
+			assert.match(component.render(80).join("\n"), /REPORT · second/);
+			component.handleInput?.("\x1b[Z");
+		}
+		component.handleInput?.("\r");
+		assert.deepEqual(await selection, { kind: "open_report", reportId: tab === "live" ? "third" : "second" });
+	});
+}

@@ -919,7 +919,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 	};
 	return {
 		presentation: {
-			markReportRead: async () => {},
+			setReportRead: async () => {},
 			snapshot: async () => ({
 				live: [status], dormant: [], selectedAgentId: agentId,
 				humanAttention: [], operationalAttention: [], reports: [],

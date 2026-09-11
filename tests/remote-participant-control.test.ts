@@ -226,7 +226,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 	const calls: unknown[] = [];
 	const handlers: OwnerParticipantRequestHandlers<"moderator"> = {
 		presentation: {
-			async markReportRead() {},
+			async setReportRead() {},
 			async snapshot() {
 				return {
 					live: [], dormant: [], selectedAgentId: "remote-agent",
@@ -393,12 +393,27 @@ test("Moderator report transport is nonblocking and ordinary participants cannot
 	} as ControlRequest<typeof agentControlProtocol>), /child_runtime_owner_request_forbidden/);
 });
 
-test("only explicit report Mark read crosses the acknowledgment control boundary", async () => {
+test("explicit report read and unread states cross the control boundary", async () => {
 	const calls: unknown[] = [];
 	const presentation = createControlBackedChildPresentationHandlers((async (method, payload) => {
 		calls.push([method, payload]);
 		return {};
 	}) as ChildParticipantControlRequester);
-	await presentation.markReportRead("retained-report");
-	assert.deepEqual(calls, [["presentation.reports.markRead", { reportId: "retained-report" }]]);
+	await presentation.setReportRead("retained-report", true);
+	await presentation.setReportRead("retained-report", false);
+	assert.deepEqual(calls, [["presentation.reports.setRead", { reportId: "retained-report", read: true }], ["presentation.reports.setRead", { reportId: "retained-report", read: false }]]);
+});
+
+test("Owner dispatch forwards the explicit desired report read state", async () => {
+	const calls: unknown[] = [];
+	const handlers = {
+		presentation: { async setReportRead(reportId: string, read: boolean) { calls.push([reportId, read]); } },
+	} as unknown as OwnerParticipantRequestHandlers<"ordinary">;
+	for (const read of [true, false]) {
+		assert.deepEqual(await dispatchParticipantRequestToOwner(handlers, {
+			method: "presentation.reports.setRead", payload: { reportId: "report", read },
+			signal: new AbortController().signal,
+		} as ControlRequest<typeof agentControlProtocol>), {});
+	}
+	assert.deepEqual(calls, [["report", true], ["report", false]]);
 });

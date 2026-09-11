@@ -1630,7 +1630,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 }> = {}): OwnerParticipantRequestHandlers<"ordinary"> {
 	return {
 		presentation: {
-			markReportRead: async () => {},
+			setReportRead: async () => {},
 			snapshot: async () => {
 				if (options.presentationSnapshotError) throw options.presentationSnapshotError;
 				return options.selectorSnapshot ?? ({

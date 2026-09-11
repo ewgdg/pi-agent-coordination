@@ -1,7 +1,7 @@
 import type { ToolCallPointer } from "./identities.ts";
 
 export const MODERATOR_REPORT_CUSTOM_TYPE = "agent-coordination.moderator-report";
-export const MODERATOR_REPORT_READ_CUSTOM_TYPE = "agent-coordination.moderator-report-read";
+export const MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE = "agent-coordination.moderator-report-read";
 
 export type ReportToUserInput = Readonly<{
 	symptom: string;

@@ -307,7 +307,7 @@ test("receipt trust does not relax exact schemas, visibility or duplicate policy
 	}
 });
 
-test("retained delivery projection consumes report publication and read acknowledgment without Message proof", async () => {
+test("retained delivery projection consumes report publication and read-state changes without Message proof", async () => {
 	const manager = SessionManager.inMemory(process.cwd());
 	const recipientAgentId = manager.getSessionId();
 	manager.appendCustomEntry(AGENT_IDENTITY_CUSTOM_TYPE, { agentId: recipientAgentId });
@@ -324,9 +324,11 @@ test("retained delivery projection consumes report publication and read acknowle
 		agentId: "moderator", entryId: "entry", toolCallId: "call", transcriptPath: "/tmp/moderator.jsonl",
 	});
 	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId, transcript: await transcript.refresh() }), []);
-	reports.markRead(report.reportId);
+	reports.setRead(report.reportId, true);
 	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId, transcript: await transcript.refresh() }), []);
 	assert.ok(reports.history()[0]?.readAt);
+	reports.setRead(report.reportId, false);
+	assert.deepEqual(inspectMessageDeliveries({ recipientAgentId, transcript: await transcript.refresh() }), []);
 
 	const source = { agentId: "sender", entryId: "message", toolCallId: "send" };
 	const projection = { kind: "message" as const, messageId: deriveMessageIdentity(source), fromAgentId: source.agentId, content: "Continue" };

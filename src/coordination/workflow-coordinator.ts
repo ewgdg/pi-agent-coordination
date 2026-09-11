@@ -172,7 +172,7 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	humanAttention(): readonly HumanAttentionItem[];
 	operationalAttention(): readonly OperationalIncidentAttention[];
 	reportHistory(): readonly ReportHistoryItem[];
-	markReportRead(reportId: string): void;
+	setReportRead(reportId: string, read: boolean): void;
 }>;
 
 export type AgentPresentationSelection =
@@ -637,9 +637,9 @@ export class WorkflowCoordinator {
 			humanAttention: () =>
 				this.#humanRequests.attentionItems(this.#ownerIdentity.agentId),
 			reportHistory: () => this.#reports.history(),
-			markReportRead: (reportId) => {
+			setReportRead: (reportId, read) => {
 				this.#assertAdmissionOpen();
-				this.#reports.markRead(reportId);
+				this.#reports.setRead(reportId, read);
 				this.#notifyAgentActivityChanged();
 			},
 			operationalAttention: () =>

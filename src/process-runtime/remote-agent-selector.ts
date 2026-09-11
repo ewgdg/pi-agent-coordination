@@ -134,7 +134,7 @@ export function createOwnerAgentPresentationHandlers(
 	postMortemPresenter?: PostMortemAgentPresenter,
 ): OwnerParticipantPresentationHandlers {
 	return {
-		markReportRead: async (reportId) => resolveView().markReportRead(reportId),
+		setReportRead: async (reportId, read) => resolveView().setReportRead(reportId, read),
 		snapshot: async () => {
 			const view = resolveView();
 			await view.refreshTranscriptFacts();
@@ -214,6 +214,11 @@ export function registerRemoteAgentsCommand(
 							handler(currentSnapshot!);
 							return () => { publishSnapshot = undefined; };
 						},
+						async setReportRead(reportId, read) {
+							await presentation.setReportRead(reportId, read);
+							currentSnapshot = await presentation.snapshot();
+							return currentSnapshot.reports;
+						},
 						async prepareSelection(action) {
 							if (action.kind === "open_report") return;
 							postMortemResult = await presentation.select(
@@ -231,7 +236,7 @@ export function registerRemoteAgentsCommand(
 						const item = currentSnapshot.reports.find(({ report }) => report.reportId === action.reportId);
 						if (!item) throw new Error("Report is unavailable");
 						const outcome = await openModeratorReportSurface(ctx.ui, item, {
-							markRead: () => presentation.markReportRead(item.report.reportId),
+							setRead: (read) => presentation.setReportRead(item.report.reportId, read),
 							copyReport: copyToClipboard,
 							prepareReporter: async () => {
 								postMortemResult = await presentation.select({ kind: "select_agent", agentId: item.report.reporter.agentId });

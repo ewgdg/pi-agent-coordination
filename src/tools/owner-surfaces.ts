@@ -104,6 +104,10 @@ export function registerAgentsCommand(
 					...createAgentSelectorSnapshot(view, selectedAgentId),
 					addChangeHandler: (handler) => view.addAgentActivityChangeHandler(() =>
 						handler(createAgentSelectorSnapshot(view, selectedAgentId))),
+					setReportRead(reportId, read) {
+						view.setReportRead(reportId, read);
+						return view.reportHistory();
+					},
 					prepareSelection,
 					onSelectionError(error) {
 						ctx.ui.notify(
@@ -117,7 +121,7 @@ export function registerAgentsCommand(
 					const item = view.reportHistory().find(({ report }) => report.reportId === reportId);
 					if (!item) throw new Error("Report is unavailable");
 					const outcome = await openModeratorReportSurface(ctx.ui, item, {
-						markRead: () => view.markReportRead(reportId),
+						setRead: (read) => view.setReportRead(reportId, read),
 						copyReport: copyToClipboard,
 						prepareReporter: () => prepareSelection({ kind: "select_agent", agentId: item.report.reporter.agentId }, selectorTui!),
 					});

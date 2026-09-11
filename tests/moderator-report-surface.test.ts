@@ -31,7 +31,7 @@ test("opening, copying, and closing a report do not mark it read", async () => {
 	let reads = 0;
 	let copied = "";
 	const result = openModeratorReportSurface(h.ui, item, {
-		prepareReporter() {}, markRead() { reads++; }, copyReport(text) { copied = text; },
+		prepareReporter() {}, setRead() { reads++; }, copyReport(text) { copied = text; },
 	});
 	assert.match(h.component.render(80).join("\n"), /Unread/);
 	h.component.handleInput?.("c");
@@ -43,12 +43,12 @@ test("opening, copying, and closing a report do not mark it read", async () => {
 	assert.equal(reads, 0);
 });
 
-test("Mark read waits for persistence, is idempotent, and View reporter is separate", async () => {
+test("Read toggles wait for persistence and View reporter is separate", async () => {
 	const h = harness();
 	let reads = 0;
 	let persist!: () => void;
 	const result = openModeratorReportSurface(h.ui, item, {
-		prepareReporter() {}, markRead() { reads++; return new Promise<void>((resolve) => { persist = resolve; }); },
+		prepareReporter() {}, setRead(read) { assert.equal(read, reads === 0); reads++; return new Promise<void>((resolve) => { persist = resolve; }); },
 		copyReport() {},
 	});
 	h.component.handleInput?.("m");
@@ -58,8 +58,13 @@ test("Mark read waits for persistence, is idempotent, and View reporter is separ
 	await flush();
 	assert.match(h.component.render(80).join("\n"), /Read/);
 	assert.doesNotMatch(h.component.render(80).join("\n"), /Unread/);
+	assert.match(h.component.render(80).join("\n"), /m Mark unread/);
 	h.component.handleInput?.("m");
-	assert.equal(reads, 1);
+	assert.equal(reads, 2);
+	persist();
+	await flush();
+	assert.match(h.component.render(80).join("\n"), /Unread/);
+	assert.match(h.component.render(80).join("\n"), /m Mark read/);
 	h.component.handleInput?.("v");
 	assert.equal(await result, "view_reporter");
 });
@@ -68,7 +73,7 @@ test("failed Mark read remains unread and can retry", async () => {
 	const h = harness();
 	let reads = 0;
 	const result = openModeratorReportSurface(h.ui, item, {
-		prepareReporter() {}, markRead() { if (++reads === 1) throw new Error("Disk full"); }, copyReport() {},
+		prepareReporter() {}, setRead() { if (++reads === 1) throw new Error("Disk full"); }, copyReport() {},
 	});
 	h.component.handleInput?.("m");
 	await flush();
@@ -87,7 +92,7 @@ test("the complete report scrolls safely within terminal bounds", async () => {
 		symptom: "Safe\x1b]52;c;attack\x07\x1b[2J\rtext\x85",
 		evidence: Array.from({ length: 30 }, (_, i) => `Evidence ${i} 界`),
 	} };
-	const result = openModeratorReportSurface(h.ui, unsafeItem, { prepareReporter() {}, markRead() {}, copyReport() {} });
+	const result = openModeratorReportSurface(h.ui, unsafeItem, { prepareReporter() {}, setRead() {}, copyReport() {} });
 	const seen: string[] = [];
 	for (let i = 0; i < 100; i++) {
 		const lines = h.component.render(40);
@@ -111,7 +116,7 @@ test("View reporter leaves an unread report unread, and prior read state survive
 		const h = harness();
 		let reads = 0;
 		const result = openModeratorReportSurface(h.ui, historyItem, {
-			prepareReporter() {}, markRead() { reads++; }, copyReport() {},
+			prepareReporter() {}, setRead() { reads++; }, copyReport() {},
 		});
 		assert.match(h.component.render(80).join("\n"), historyItem.readAt ? / · Read/ : / · Unread/);
 		h.component.handleInput?.("v");
@@ -129,7 +134,7 @@ test("wheel scrolls the report, clamps at both ends, and preserves read state", 
 	const h = harness(12);
 	let reads = 0;
 	const result = openModeratorReportSurface(h.ui, item, {
-		prepareReporter() {}, markRead() { reads++; }, copyReport() {},
+		prepareReporter() {}, setRead() { reads++; }, copyReport() {},
 	});
 	const initial = h.component.render(80);
 	assert.deepEqual(h.component.handleMouse?.(wheel(1)), { handled: true, render: true });
@@ -157,7 +162,7 @@ test("wheel does not change the report during reporter handoff or for other poin
 	let ready!: () => void;
 	const result = openModeratorReportSurface(h.ui, item, {
 		prepareReporter: () => new Promise<void>((resolve) => { ready = resolve; }),
-		markRead() {}, copyReport() {},
+		setRead() {}, copyReport() {},
 	});
 	const initial = h.component.render(80);
 	h.component.handleMouse?.({ ...wheel(1), type: "click", button: "left" });
@@ -203,7 +208,7 @@ test("fullscreen terminal wheel input reaches the report overlay and returns to 
 			overlay = tui.showOverlay(component, config.overlayOptions);
 		});
 	} } as unknown as ExtensionUIContext;
-	const result = openModeratorReportSurface(ui, item, { prepareReporter() {}, markRead() {}, copyReport() {} });
+	const result = openModeratorReportSurface(ui, item, { prepareReporter() {}, setRead() {}, copyReport() {} });
 	tui.renderNow();
 	const initial = component.render(80);
 	input("\x1b[<65;3;3M");
@@ -218,4 +223,26 @@ test("fullscreen terminal wheel input reaches the report overlay and returns to 
 	tui.renderNow();
 	input("\x1b[<65;1;1M");
 	assert.equal(underlyingWheels, 1);
+});
+
+test("failed Mark unread preserves the read state and retries the desired state", { timeout: 5_000 }, async () => {
+	const h = harness();
+	let attempts = 0;
+	const result = openModeratorReportSurface(h.ui, { ...item, readAt: "2026-01-02T00:00:00Z" }, {
+		prepareReporter() {}, copyReport() {},
+		setRead(read) {
+			assert.equal(read, false);
+			if (++attempts === 1) throw new Error("Disk full");
+		},
+	});
+	h.component.handleInput?.("m");
+	await flush();
+	assert.match(h.component.render(80).join("\n"), /m Mark unread/);
+	assert.match(h.component.render(80).join("\n"), /Disk full/);
+	h.component.handleInput?.("m");
+	await flush();
+	assert.match(h.component.render(80).join("\n"), /m Mark read/);
+	assert.match(h.component.render(80).join("\n"), /· Unread/);
+	h.component.handleInput?.("q");
+	assert.equal(await result, "back");
 });

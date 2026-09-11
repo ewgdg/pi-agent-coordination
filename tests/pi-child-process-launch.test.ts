@@ -223,7 +223,7 @@ test("cancelled startup attachment stays hidden and retained child reattaches wi
 				async executionEnded() {},
 			},
 			presentation: {
-				markReportRead: unexpectedOwnerRequest,
+				setReportRead: unexpectedOwnerRequest,
 				async snapshot() { return {
 					live: [{
 						agentId: options.agentId, workflowId: options.workflowId,

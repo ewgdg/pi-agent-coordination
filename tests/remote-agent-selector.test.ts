@@ -79,7 +79,7 @@ function presentationView(options: {
 		humanAttention: options.humanAttention ?? (() => []),
 		operationalAttention: () => [],
 		reportHistory: () => [],
-		markReportRead: () => {},
+		setReportRead: () => {},
 		openAgentView: options.openAgentView ?? (async () => undefined),
 		openAgentPresentation: options.openAgentPresentation ?? (async (agentId) => ({
 			kind: "selected",
@@ -147,7 +147,7 @@ test("remote registered /agents owner selects Owner without opening the selector
 	const actions: unknown[] = [];
 	let snapshotCalls = 0;
 	const presentation = {
-		async markReportRead() {},
+		async setReportRead() {},
 		async snapshot() {
 			snapshotCalls += 1;
 			return {
@@ -193,7 +193,7 @@ test("registered /agents rejects unsupported arguments before opening or selecti
 
 	let remoteSnapshotCalls = 0;
 	const remoteCommand = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
-		async markReportRead() {},
+		async setReportRead() {},
 		async snapshot() {
 			remoteSnapshotCalls += 1;
 			return {
@@ -458,7 +458,7 @@ test("remote selector uses completion delivered during snapshot acquisition, not
 	let publish: ((snapshot: RemoteAgentSelectorSnapshot) => void) | undefined;
 	let removed = false;
 	const command = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
-		async markReportRead() {},
+		async setReportRead() {},
 		async snapshot() {
 			// The child receives completion while the older Owner RPC is still pending.
 			await Promise.resolve();
@@ -501,7 +501,7 @@ test("remote selector releases its subscription when snapshot acquisition fails"
 	let subscribed = false;
 	let removed = false;
 	const command = captureCommand((pi) => registerRemoteAgentsCommand(pi, {
-		async markReportRead() {},
+		async setReportRead() {},
 		async snapshot() {
 			assert.equal(subscribed, true);
 			throw new Error("snapshot failed");
@@ -535,7 +535,7 @@ test("local and child /agents open immutable reports before explicitly selecting
 			? captureCommand((pi) => registerAgentsCommand(pi, () => ({
 				...presentationView(),
 				reportHistory: () => [{ report }],
-				markReportRead: () => { acknowledged = true; },
+				setReportRead: () => { acknowledged = true; },
 				addAgentActivityChangeHandler: () => () => {},
 				openAgentPresentation: async (agentId) => {
 					selected.push({ kind: "select_agent", agentId });
@@ -544,7 +544,7 @@ test("local and child /agents open immutable reports before explicitly selecting
 			})))
 			: captureCommand((pi) => registerRemoteAgentsCommand(pi, {
 				snapshot: async () => snapshot,
-				markReportRead: async () => { acknowledged = true; },
+				setReportRead: async () => { acknowledged = true; },
 				select: async (action) => { selected.push(action); return { kind: "selected" }; },
 			}));
 		let surfaces = 0;
@@ -605,7 +605,7 @@ test("local and child View reporter retain focused report UI through delayed pre
 				? captureCommand((pi) => registerAgentsCommand(pi, () => ({
 					...presentationView(),
 					reportHistory: () => [{ report }],
-					markReportRead: () => { reads++; },
+					setReportRead: () => { reads++; },
 					addAgentActivityChangeHandler: () => () => {},
 					openAgentPresentation: prepare,
 				})))
@@ -614,7 +614,7 @@ test("local and child View reporter retain focused report UI through delayed pre
 						live: [ownerStatus, childStatus], dormant: [], selectedAgentId: "child",
 						humanAttention: [], operationalAttention: [], reports: [{ report }],
 					}),
-					markReportRead: async () => { reads++; },
+					setReportRead: async () => { reads++; },
 					select: (action) => {
 						assert.equal(action.kind, "select_agent");
 						return prepare((action as { agentId: string }).agentId);
@@ -671,5 +671,93 @@ test("local and child View reporter retain focused report UI through delayed pre
 			assert.equal(reportClosed, true);
 			assert.equal(reads, 0);
 		});
+	}
+});
+
+test("local and child /agents toggle reports in place across inbox, history, and detail", { timeout: 5_000 }, async () => {
+	const report = {
+		reportId: "report-1", createdAt: "2026-01-01T00:00:00.000Z",
+		reporter: { agentId: "original-moderator", label: "Moderator" },
+		source: { agentId: "original-moderator", entryId: "original-entry", toolCallId: "original-call", transcriptPath: "/sessions/original.jsonl" },
+		symptom: "Delivery stopped", suspectedDefect: "Continuation absent", uncertainty: "Cause unknown",
+		recoveryActions: "Retried delivery", recoveryOutcome: "Still blocked", evidence: ["agent/entry/call"],
+	};
+	for (const mode of ["local", "child"] as const) {
+		const selected: unknown[] = [];
+		let acknowledged = false;
+		const reportHistory = () => [{ report, ...(acknowledged ? { readAt: "2026-01-02T00:00:00Z" } : {}) }];
+		const snapshot = {
+			live: [ownerStatus, childStatus], dormant: [], selectedAgentId: "child",
+			humanAttention: [], operationalAttention: [], reports: [{ report }],
+		};
+		const command = mode === "local"
+			? captureCommand((pi) => registerAgentsCommand(pi, () => ({
+				...presentationView(),
+				reportHistory,
+				setReportRead: (_id, read) => { acknowledged = read; },
+				addAgentActivityChangeHandler: () => () => {},
+				openAgentPresentation: async (agentId) => {
+					selected.push({ kind: "select_agent", agentId });
+					return { kind: "selected" };
+				},
+			})))
+			: captureCommand((pi) => registerRemoteAgentsCommand(pi, {
+				snapshot: async () => ({ ...snapshot, reports: reportHistory() }),
+				setReportRead: async (_id, read) => { acknowledged = read; },
+				select: async (action) => { selected.push(action); return { kind: "selected" }; },
+			}));
+		let surfaces = 0;
+		const ui = {
+			custom<T>(factory: (tui: TUI, theme: Theme, keys: KeybindingsManager, done: (result: T) => void) => Component) {
+				return new Promise<T>((resolve, reject) => {
+					let component: Component & { dispose?(): void };
+					component = factory({
+						terminal: { rows: 40 }, requestRender() {},
+					} as TUI, {
+						fg: (_color: string, text: string) => text,
+						bg: (_color: string, text: string) => text,
+						bold: (text: string) => text,
+					} as Theme, {} as KeybindingsManager, (value) => { component.dispose?.(); resolve(value); });
+					surfaces++;
+					if (surfaces === 1) {
+						assert.match(component.render(100).join("\n"), /REPORT/);
+						void (async () => {
+							component.handleInput?.("m");
+							await new Promise((resolve) => setImmediate(resolve));
+							assert.equal(acknowledged, true);
+							assert.equal(surfaces, 1);
+							assert.doesNotMatch(component.render(100).join("\n"), /REPORT/);
+							component.handleInput?.("\x1b[Z");
+							assert.match(component.render(100).join("\n"), /m Mark unread/);
+							component.handleInput?.("m");
+							await new Promise((resolve) => setImmediate(resolve));
+							assert.equal(acknowledged, false);
+							assert.match(component.render(100).join("\n"), /m Mark read/);
+							component.handleInput?.("\t");
+							assert.match(component.render(100).join("\n"), /REPORT/);
+							component.handleInput?.("\x1b[Z");
+							component.handleInput?.("\r");
+						})().catch(reject);
+					} else {
+						assert.equal(surfaces, 2);
+						assert.deepEqual(selected, []);
+						assert.match(component.render(100).join("\n"), /original-moderator/);
+						assert.match(component.render(100).join("\n"), /· Unread/);
+						void (async () => {
+							component.handleInput?.("m");
+							await new Promise((resolve) => setImmediate(resolve));
+							assert.equal(acknowledged, true);
+							assert.match(component.render(100).join("\n"), /m Mark unread/);
+							component.handleInput?.("v");
+						})().catch(reject);
+					}
+				});
+			},
+			notify(message: string) { throw new Error(message); },
+		} as unknown as ExtensionUIContext;
+		await command.handler("", { ui } as ExtensionCommandContext);
+		assert.deepEqual(selected, [{ kind: "select_agent", agentId: "original-moderator" }], mode);
+		assert.equal(acknowledged, true, mode);
+		assert.equal(surfaces, 2, mode);
 	}
 });

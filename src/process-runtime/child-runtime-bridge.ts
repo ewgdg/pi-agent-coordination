@@ -726,7 +726,7 @@ async function handleOwnerRequest(
 		case "coordination.templateSnapshot":
 		case "coordination.askHuman":
 		case "coordination.reportToUser":
-		case "presentation.reports.markRead":
+		case "presentation.reports.setRead":
 		case "coordination.moderatorControl":
 		case "presentation.agents.snapshot":
 		case "presentation.agents.select":

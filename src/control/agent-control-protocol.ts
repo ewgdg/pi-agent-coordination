@@ -735,8 +735,8 @@ export const agentControlMethods = {
 		request: ToolIntention(participantCoordinationToolSchemas.report_to_user),
 		response: closed({ reportId: NonEmptyStringSchema, createdAt: NonEmptyStringSchema }),
 	},
-	"presentation.reports.markRead": {
-		request: closed({ reportId: NonEmptyStringSchema }),
+	"presentation.reports.setRead": {
+		request: closed({ reportId: NonEmptyStringSchema, read: Type.Boolean() }),
 		response: EmptyResponseSchema,
 	},
 	"coordination.moderatorControl": {

@@ -7,7 +7,7 @@ const PAGE_OVERLAP_ROWS = 1;
 
 export type ModeratorReportSurfaceResult = "back" | "view_reporter";
 export type ModeratorReportSurfaceOptions = Readonly<{
-	markRead(): Promise<void> | void;
+	setRead(read: boolean): Promise<void> | void;
 	copyReport(text: string): Promise<void> | void;
 	prepareReporter(): Promise<void> | void;
 }>;
@@ -61,7 +61,7 @@ class ModeratorReportSurface implements Component {
 			this.#theme.fg("accent", this.#theme.bold(`Moderator report · read-only · ${this.#read ? "Read" : "Unread"}`)),
 			...body.slice(this.#scrollTop, this.#scrollTop + this.#viewportRows),
 			this.#theme.fg("muted", this.#pending === "reporter" ? "Opening reporter…" : this.#pending ? "Working…" : this.#feedback),
-			this.#theme.fg("dim", "m Mark read · c Copy report · v View reporter · ↑/↓/wheel scroll · PgUp/PgDn · Home/End · Esc/q back"),
+			this.#theme.fg("dim", `m Mark ${this.#read ? "unread" : "read"} · c Copy report · v View reporter · ↑/↓/wheel scroll · PgUp/PgDn · Home/End · Esc/q back`),
 		];
 		return lines.slice(0, height).map((line) => truncateToWidth(line, boundedWidth, ""));
 	}
@@ -81,10 +81,11 @@ class ModeratorReportSurface implements Component {
 			return;
 		}
 		if (matchesKey(data, "m")) {
-			if (!this.#read && !this.#pending) void this.#perform(async () => {
-				await this.#options.markRead();
-				this.#read = true;
-				this.#feedback = "Marked read";
+			if (!this.#pending) void this.#perform(async () => {
+				const read = !this.#read;
+				await this.#options.setRead(read);
+				this.#read = read;
+				this.#feedback = read ? "Marked read" : "Marked unread";
 			});
 			return;
 		}

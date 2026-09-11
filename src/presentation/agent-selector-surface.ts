@@ -83,6 +83,7 @@ export type AgentSelectorOptions = Readonly<{
 	selectedAgentId: string;
 	addChangeHandler?(handler: (snapshot: Pick<AgentSelectorOptions, "live" | "dormant" | "humanAttention" | "operationalAttention" | "reports">) => void): () => void;
 	reports?: readonly ReportHistoryItem[];
+	setReportRead?(reportId: string, read: boolean): Promise<readonly ReportHistoryItem[]> | readonly ReportHistoryItem[];
 	humanAttention?: readonly HumanAttentionItem[];
 	operationalAttention?: readonly OperationalIncidentAttention[];
 	prepareSelection?(
@@ -200,6 +201,10 @@ class AgentSelectorSurface implements Component {
 		this.#hoveredAction = undefined;
 		if (matchesKey(data, Key.escape)) {
 			this.#done(undefined);
+			return;
+		}
+		if (matchesKey(data, "m")) {
+			void this.#toggleSelectedReportRead();
 			return;
 		}
 		if (matchesKey(data, "o")) {
@@ -474,6 +479,32 @@ class AgentSelectorSurface implements Component {
 		if (action) void this.#completeSelection(action);
 	}
 
+	async #toggleSelectedReportRead(): Promise<void> {
+		const action = this.#items[this.#selectedIndex]?.action;
+		const setRead = this.#options.setReportRead;
+		if (action?.kind !== "open_report" || !setRead) return;
+		const item = this.#options.reports?.find(({ report }) => report.reportId === action.reportId);
+		if (!item) return;
+		// Live removes the acknowledged row; continue triage at its next neighbor.
+		const nextValue = this.#activeTab === "live"
+			? this.#items[this.#selectedIndex + 1]?.value
+			: this.#items[this.#selectedIndex]?.value;
+		this.#selectionPending = true;
+		this.#startSelectionSpinner();
+		try {
+			const reports = await setRead(action.reportId, item.readAt === undefined);
+			this.#options = { ...this.#options, reports };
+			this.#selectedValueByTab[this.#activeTab] = nextValue;
+			this.#list = this.#createList(true, true);
+		} catch (error) {
+			this.#options.onSelectionError?.(error);
+		} finally {
+			this.#selectionPending = false;
+			this.#stopSelectionSpinner();
+			this.#tui.requestRender();
+		}
+	}
+
 	async #completeSelection(
 		action: AgentSelectorAction,
 		showSelectionSpinner = true,
@@ -639,7 +670,7 @@ class AgentSelectorSurface implements Component {
 				safeLine(report.symptom),
 				`Report ${safeLine(report.reportId)}`,
 				`Created ${safeLine(report.createdAt)}`,
-				readAt === undefined ? "Unread · Enter opens report" : `Read ${safeLine(readAt)} · Enter opens report`,
+				`${readAt === undefined ? "Unread" : `Read ${safeLine(readAt)}`} · ${this.#options.setReportRead ? `m Mark ${readAt === undefined ? "read" : "unread"} · ` : ""}Enter opens report`,
 			],
 		};
 	}

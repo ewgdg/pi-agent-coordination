@@ -40,7 +40,7 @@ export type OwnerParticipantRequestHandlers<Role extends RemoteParticipantRole> 
 
 export type OwnerParticipantPresentationHandlers = Readonly<{
 	snapshot(): Promise<RemoteAgentSelectorSnapshot>;
-	markReportRead(reportId: string): Promise<void>;
+	setReportRead(reportId: string, read: boolean): Promise<void>;
 	select(
 		action: RemoteAgentSelectorAction,
 		signal: AbortSignal,
@@ -51,7 +51,7 @@ export type OwnerParticipantPresentationHandlers = Readonly<{
 export type ControlBackedChildPresentationHandlers = Readonly<{
 	addChangeHandler?(handler: (snapshot: RemoteAgentSelectorSnapshot) => void): () => void;
 	snapshot(): Promise<RemoteAgentSelectorSnapshot>;
-	markReportRead(reportId: string): Promise<void>;
+	setReportRead(reportId: string, read: boolean): Promise<void>;
 	select(
 		action: RemoteAgentSelectorAction,
 		signal?: AbortSignal,
@@ -85,7 +85,7 @@ export function createControlBackedChildPresentationHandlers(
 ): ControlBackedChildPresentationHandlers {
 	return {
 		snapshot: () => request("presentation.agents.snapshot", {}),
-		markReportRead: async (reportId) => { await request("presentation.reports.markRead", { reportId }); },
+		setReportRead: async (reportId, read) => { await request("presentation.reports.setRead", { reportId, read }); },
 		select: (action, signal) => request("presentation.agents.select", action, signal),
 	};
 }
@@ -289,8 +289,8 @@ export async function dispatchParticipantRequestToOwner(
 			if (!("reportToUser" in handlers.coordination)) throw unavailableForRole(request.method);
 			response = await handlers.coordination.reportToUser(request.payload.toolCallId, request.payload.input);
 			break;
-		case "presentation.reports.markRead":
-			await handlers.presentation.markReportRead(request.payload.reportId);
+		case "presentation.reports.setRead":
+			await handlers.presentation.setReportRead(request.payload.reportId, request.payload.read);
 			response = {};
 			break;
 		case "coordination.moderatorControl":
