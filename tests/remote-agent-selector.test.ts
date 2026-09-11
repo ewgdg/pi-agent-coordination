@@ -728,11 +728,11 @@ test("local and child /agents toggle reports in place across inbox, history, and
 							assert.equal(surfaces, 1);
 							assert.doesNotMatch(component.render(100).join("\n"), /REPORT/);
 							component.handleInput?.("\x1b[Z");
-							assert.match(component.render(100).join("\n"), /m Mark unread/);
+							assert.match(component.render(100).join("\n"), /m Toggle read/);
 							component.handleInput?.("m");
 							await new Promise((resolve) => setImmediate(resolve));
 							assert.equal(acknowledged, false);
-							assert.match(component.render(100).join("\n"), /m Mark read/);
+							assert.match(component.render(100).join("\n"), /m Toggle read/);
 							component.handleInput?.("\t");
 							assert.match(component.render(100).join("\n"), /REPORT/);
 							component.handleInput?.("\x1b[Z");
@@ -747,7 +747,7 @@ test("local and child /agents toggle reports in place across inbox, history, and
 							component.handleInput?.("m");
 							await new Promise((resolve) => setImmediate(resolve));
 							assert.equal(acknowledged, true);
-							assert.match(component.render(100).join("\n"), /m Mark unread/);
+							assert.match(component.render(100).join("\n"), /m Toggle read/);
 							component.handleInput?.("v");
 						})().catch(reject);
 					}

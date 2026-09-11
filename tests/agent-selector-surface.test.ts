@@ -1372,7 +1372,7 @@ for (const tab of ["live", "reports"] as const) {
 		const component = harness.component!;
 		if (tab === "reports") component.handleInput?.("\x1b[Z");
 		component.handleInput?.("j");
-		assert.match(component.render(80).join("\n"), /m Mark read/);
+		assert.match(component.render(80).join("\n"), /m Toggle read/);
 		component.handleInput?.("m");
 		await new Promise((resolve) => setImmediate(resolve));
 		assert.equal(errors.length, 1);
@@ -1392,7 +1392,7 @@ for (const tab of ["live", "reports"] as const) {
 			assert.match(rendered, /→ REPORT · third/);
 		} else {
 			assert.match(rendered, /→ REPORT · second.*Read/);
-			assert.match(rendered, /m Mark unread/);
+			assert.match(rendered, /m Toggle read/);
 			component.handleInput?.("m");
 			assert.deepEqual(marked, [["second", true], ["second", true], ["second", false]]);
 			finish(reports);

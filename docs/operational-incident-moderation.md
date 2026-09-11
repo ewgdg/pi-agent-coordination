@@ -130,7 +130,7 @@ Every report captures the stable reporting Moderator identity and label, timesta
 
 In `/agents`, unread reports appear as `REPORT` items in the **Attention Inbox**. Enter opens a dedicated read-only report view—not a live transcript, new Agent, or new session. The **Reports** tab retains all report history, including read reports.
 
-- **m · Mark read / Mark unread** toggles the report’s read state. Mark read removes pending report attention; Mark unread restores it. Use it on a selected report in the Attention Inbox or Reports tab without leaving the menu, or inside the report view. The hint reflects the current state and the report always remains in history.
+- **m Toggle read** toggles the report’s read state. Mark read removes pending report attention; Mark unread restores it. Use it on a selected report in the Attention Inbox or Reports tab without leaving the menu, or inside the report view. The separate Read/Unread status shows the current state and the report always remains in history.
 - **c · Copy report** copies the full ticket-ready Markdown report, including provenance and evidence.
 - **v · View reporter** switches to the stable reporting Moderator's current context using ordinary Agent selection. The report retains input focus and shows loading until preparation completes; failure stays visible in the report for retry.
 - **Esc/q · Back** closes the report. Opening, closing, copying, or viewing the reporter does not acknowledge it.

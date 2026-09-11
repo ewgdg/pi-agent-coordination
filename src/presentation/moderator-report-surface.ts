@@ -61,7 +61,7 @@ class ModeratorReportSurface implements Component {
 			this.#theme.fg("accent", this.#theme.bold(`Moderator report · read-only · ${this.#read ? "Read" : "Unread"}`)),
 			...body.slice(this.#scrollTop, this.#scrollTop + this.#viewportRows),
 			this.#theme.fg("muted", this.#pending === "reporter" ? "Opening reporter…" : this.#pending ? "Working…" : this.#feedback),
-			this.#theme.fg("dim", `m Mark ${this.#read ? "unread" : "read"} · c Copy report · v View reporter · ↑/↓/wheel scroll · PgUp/PgDn · Home/End · Esc/q back`),
+			this.#theme.fg("dim", "m Toggle read · c Copy report · v View reporter · ↑/↓/wheel scroll · PgUp/PgDn · Home/End · Esc/q back"),
 		];
 		return lines.slice(0, height).map((line) => truncateToWidth(line, boundedWidth, ""));
 	}

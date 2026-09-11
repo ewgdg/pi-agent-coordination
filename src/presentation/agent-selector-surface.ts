@@ -670,7 +670,7 @@ class AgentSelectorSurface implements Component {
 				safeLine(report.symptom),
 				`Report ${safeLine(report.reportId)}`,
 				`Created ${safeLine(report.createdAt)}`,
-				`${readAt === undefined ? "Unread" : `Read ${safeLine(readAt)}`} · ${this.#options.setReportRead ? `m Mark ${readAt === undefined ? "read" : "unread"} · ` : ""}Enter opens report`,
+				`${readAt === undefined ? "Unread" : `Read ${safeLine(readAt)}`} · ${this.#options.setReportRead ? "m Toggle read · " : ""}Enter opens report`,
 			],
 		};
 	}
