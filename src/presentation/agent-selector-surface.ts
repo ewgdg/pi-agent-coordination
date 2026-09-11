@@ -412,7 +412,7 @@ class AgentSelectorSurface implements Component {
 
 	#maximumVisibleRows(): number {
 		return Math.max(1, Math.min(
-			this.#items.length - 1, MAX_VISIBLE_ROSTER_ROWS,
+			MAX_VISIBLE_ROSTER_ROWS,
 			this.#maximumOverlayRows() - FIXED_OVERLAY_ROWS - SCROLL_INDICATOR_ROWS,
 		));
 	}
@@ -816,12 +816,13 @@ class AgentSelectorSurface implements Component {
 			...(showEmptyMessage ? [{ text: this.#theme.fg("dim", reportHistory
 				? "  No reports" : this.#activeTab === "live" ? "  No live Agents" : "  No dormant Agents") }] : []),
 		];
-		// Reserve detail slots so moving focus to the footer does not resize the panel.
+		// Share one terminal-bounded budget across tabs, including optional headers,
+		// empty messages and scrolling, so content changes never move the frame.
 		const targetRows = this.#visibleRows + FOCUSED_DETAIL_ROWS +
-			(this.#activeTab === "live" ? MAX_LIVE_SECTION_HEADER_ROWS : 1) +
-			(showEmptyMessage ? 1 : 0);
+			MAX_LIVE_SECTION_HEADER_ROWS + EMPTY_LIVE_AGENT_ROWS + SCROLL_INDICATOR_ROWS;
+		rendered.push(...listLines.slice(visibleItems.length).map((text) => ({ text, roster: true })));
 		while (rendered.length < targetRows) rendered.push({ text: "", roster: true });
-		return [...rendered, ...listLines.slice(visibleItems.length).map((text) => ({ text, roster: true }))];
+		return rendered;
 	}
 
 	#focusedDetailLines(item: AgentSelectorItem, width: number): string[] {

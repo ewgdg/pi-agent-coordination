@@ -1406,3 +1406,35 @@ for (const tab of ["live", "reports"] as const) {
 		assert.deepEqual(await selection, { kind: "open_report", reportId: tab === "live" ? "third" : "second" });
 	});
 }
+
+for (const terminalRows of [10, 24, 40]) {
+	for (const populated of [false, true]) {
+		test(`tab switching preserves panel height (rows=${terminalRows}, populated=${populated})`, { timeout: 5_000 }, async () => {
+			const harness = surfaceHarness(terminalRows);
+			const selection = openAgentSelectorSurface(harness.ui, {
+				live: [agentStatus("owner", "Owner", null), ...(populated
+					? Array.from({ length: 12 }, (_, index) => agentStatus(`live-${index}`, `Live ${index}`, "owner")) : [])],
+				dormant: populated ? [dormantAgentStatus("sleeping", "Sleeping", "owner")] : [],
+				humanAttention: populated ? [{ requestId: "decision", agentId: "live-0", agentLabel: "Live 0", question: "Choose" }] : [],
+				selectedAgentId: "owner",
+			});
+			const component = harness.component!;
+			const panels: string[][] = [];
+			for (let tab = 0; tab < 3; tab += 1) {
+				const panel = renderPanel(component, 80);
+				panels.push(panel);
+				assert.ok(panel.length <= Math.min(Math.floor(terminalRows * 0.9), terminalRows - 2));
+				assert.match(panel[0]!, /^┌─+┐$/);
+				assert.match(panel.at(-1)!, /^└─+┘$/);
+				assert.match(panel.join("\n"), /Go to Owner/);
+				component.handleInput?.("\t");
+			}
+			assert.deepEqual(panels.map(panel => panel.length), Array(3).fill(panels[0]!.length));
+			if (populated && terminalRows === 40) {
+				assert.equal(panels[0]!.filter(line => /→ DECIDE|  Live \d/.test(line)).length, 10);
+			}
+			component.handleInput?.("\x1b");
+			assert.equal(await selection, undefined);
+		});
+	}
+}
