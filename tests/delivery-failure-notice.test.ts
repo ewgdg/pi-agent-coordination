@@ -159,16 +159,29 @@ test("recipient termination before dispatch confirms non-Delivery of this attemp
 });
 
 
-test("asynchronous dispatch failure releases its reservation even without native settlement", { timeout: 5_000 }, async t => {
+for (const evidenceUnavailable of [false, true]) test(
+	"asynchronous dispatch failure releases its reservation without native settlement" + (evidenceUnavailable ? " while evidence is unavailable" : ""),
+	{ timeout: 5_000 }, async t => {
 	const h = harness(t);
 	const receipt = await h.send("send");
 	assert.ok("messageId" in receipt);
+	assert.equal("messageStatus" in receipt && receipt.messageStatus, "sent");
+	const transcript = h.recipient.record.transcript;
+	const inspect = transcript.inspect.bind(transcript);
+	if (evidenceUnavailable) transcript.inspect = () => { throw new EvidenceUnavailableError("recipient evidence temporarily unavailable"); };
 	h.recipient.fail(new Error("remote dispatch rejected"));
 	await flush();
+	assert.equal(h.recipient.record.host.observe().phase, "dormant", "failed dispatch must not strand a live reservation");
+	assert.equal(h.notices()[0].failure.outcome, "uncertain");
+	if (evidenceUnavailable) assert.deepEqual(h.notices()[0].delivery, { disposition: "indeterminate", reason: "inspection_incomplete" });
+	transcript.inspect = inspect;
 	h.recipient.commitOnDispatch = true;
 	await h.message("retry", { operation: "retry", messageId: receipt.messageId });
 	await flush();
 	assert.equal(h.recipient.dispatches.length, 2);
+	const repeated = await h.message("retry-again", { operation: "retry", messageId: receipt.messageId });
+	assert.equal("disposition" in repeated && repeated.disposition, "delivered");
+	assert.equal(h.recipient.dispatches.length, 2, "restored proof prevents duplicate retry Delivery");
 });
 
 function harness(t: { after(fn: () => void): void }, boundaryHooks?: MessageBoundaryHooks) {
@@ -326,4 +339,35 @@ test("missing recipient transcript evidence produces uncertainty, not false non-
 	transcript.inspect = inspect;
 	assert.equal(h.notices()[0].failure.outcome, "uncertain");
 	assert.deepEqual(h.notices()[0].delivery, { disposition: "indeterminate", reason: "inspection_incomplete" });
+});
+
+test("rejected-dispatch cleanup errors remain operational diagnostics without repeated notices", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	const receipt = await h.send("send");
+	assert.ok("messageId" in receipt);
+	h.recipient.record.host.discardAndEndInLane = async () => { throw new Error("runtime disposal failed"); };
+	h.recipient.fail(new Error("dispatch rejected"));
+	await flush();
+	assert.equal(h.notices().length, 1);
+	const failure = h.messages.blockedDeliveries().find(item => item.messageId === receipt.messageId);
+	assert.equal(failure?.reason.kind, "scheduling_failure");
+	assert.match(failure?.reason.kind === "scheduling_failure" ? failure.reason.diagnostic : "", /Delivery failure cleanup failed: runtime disposal failed/);
+});
+
+test("restored original Delivery proof prevents retry after unreadable-evidence cleanup", { timeout: 5_000 }, async t => {
+	const h = harness(t);
+	const receipt = await h.send("send");
+	assert.ok("messageId" in receipt);
+	const transcript = h.recipient.record.transcript;
+	const inspect = transcript.inspect.bind(transcript);
+	transcript.inspect = () => { throw new EvidenceUnavailableError("recipient evidence temporarily unavailable"); };
+	h.recipient.commitLast();
+	h.recipient.fail(new Error("transport lost after possible commitment"));
+	await flush();
+	assert.equal(h.recipient.record.host.observe().phase, "dormant");
+	assert.equal(h.notices()[0].failure.outcome, "uncertain");
+	transcript.inspect = inspect;
+	const retry = await h.message("retry", { operation: "retry", messageId: receipt.messageId });
+	assert.equal("disposition" in retry && retry.disposition, "delivered");
+	assert.equal(h.recipient.dispatches.length, 1);
 });

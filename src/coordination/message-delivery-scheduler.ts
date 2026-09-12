@@ -863,10 +863,24 @@ export class MessageDeliveryScheduler {
 				// this exact failed Run before explicit retry can acquire its identity.
 				void record.host.lane.run(async () => {
 					if (!handle || !record.host.isCurrent(handle)) return;
-					if (!deliveries.some(delivery =>
+					const owned = deliveries.filter(delivery =>
 						this.#progress.get(delivery.messageId)?.delivery === delivery &&
-						this.hasDispatchReservation(record.identity.agentId, delivery.messageId) && !delivery.inspectProof())) return;
-					await this.#finishSettledInLane(record, handle, "failed");
+						this.hasDispatchReservation(record.identity.agentId, delivery.messageId));
+					if (owned.length === 0) return;
+					try {
+						if (!owned.some(delivery => !delivery.inspectProof())) return;
+						await this.#finishSettledInLane(record, handle, "failed");
+					} catch (error) {
+						if (!(error instanceof EvidenceUnavailableError)) throw error;
+						// The rejected dispatch is terminal even when its transcript cannot
+						// be read. Fence this Run, but leave Delivery truth to restored proof.
+						if (!record.host.isCurrent(handle)) return;
+						this.discardInLane(record);
+						await record.host.discardAndEndInLane("failure");
+					}
+				}).catch(error => {
+					for (const delivery of deliveries) this.#failDeliveryProgress(delivery,
+						new Error("Delivery failure cleanup failed: " + (error instanceof Error ? error.message : String(error))));
 				});
 			});
 			return dispatched;
