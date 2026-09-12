@@ -12,6 +12,43 @@ import { AgentTranscript } from "../src/transcript/agent-transcript.ts";
 import { requestHistory } from "./support/request-history.ts";
 import { inspectAnswerDelivery } from "../src/protocol/message.ts";
 
+for (const outcome of [
+	{ messageStatus: "not_sent", reason: "target_unavailable" },
+	{ messageStatus: "not_sent", reason: "host_shutting_down" },
+	{ messageStatus: "not_sent", reason: "capacity_exhausted" },
+	{ messageStatus: "unknown", reason: "confirmation_lost" },
+	{ messageStatus: "sent" },
+] as const) {
+	test(`Request reconstruction distinguishes initial ${outcome.messageStatus} ${"reason" in outcome ? outcome.reason : ""} from retry failure`, () => {
+		const history = requestHistory();
+		const author = history.requester;
+		const toolCallId = "initial-request";
+		const entryId = author.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "request", targetAgent: "responder", question: "Only admitted or uncertain work remains outstanding.",
+		}, { id: toolCallId })));
+		const requestMessageId = deriveMessageIdentity({ agentId: "requester", entryId, toolCallId });
+		author.manager.appendMessage({
+			role: "toolResult", toolName: "agent_message", toolCallId, content: [], isError: false, timestamp: Date.now(),
+			details: { requestMessageId, targetAgentId: "responder", ...outcome },
+		});
+		// A later retry failure cannot redefine the original authoring outcome.
+		author.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+			operation: "retry", messageId: requestMessageId,
+		}, { id: "failed-retry" })));
+		author.manager.appendMessage({
+			role: "toolResult", toolName: "agent_message", toolCallId: "failed-retry", content: [], isError: false, timestamp: Date.now(),
+			details: { requestMessageId, targetAgentId: "responder", messageStatus: "not_sent", reason: "target_unavailable" },
+		});
+		for (let reopen = 0; reopen < 2; reopen++) {
+			const evidence = new RequestEvidence(history.agents);
+			assert.deepEqual(evidence.outstandingRequestIdsFor(author.record), outcome.messageStatus === "not_sent" ? [] : [requestMessageId]);
+			assert.deepEqual(evidence.residualRelationshipsFor(history.responder.record).answerOwedRequestIds, []);
+			if (outcome.messageStatus === "not_sent") assert.throws(() => evidence.requireRequest(requestMessageId), /unknown_identity/);
+			else assert.equal(evidence.requireRequest(requestMessageId).messageId, requestMessageId);
+		}
+	});
+}
+
 test("a backlog arriving during relationship catch-up stays within the physical consumption budget", async () => {
 	const history = requestHistory();
 	for (let i = 0; i < 400; i++) history.answer(history.request());

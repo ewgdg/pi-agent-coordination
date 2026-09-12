@@ -566,6 +566,7 @@ export class MessageCoordinator {
 			}) === "confirmed_failure"
 		) {
 			this.#deliveryScheduler.recordAdmissionFailure(recipient, delivery, new Error("Confirmed Delivery admission failure"));
+			if (message.kind === "request") sender.host.removeRetentionReason("awaiting_answer", message.messageId);
 			return {
 				...identity,
 				messageStatus: "not_sent",
@@ -582,6 +583,7 @@ export class MessageCoordinator {
 				? { ...identity, messageStatus: "unknown", reason: "confirmation_lost" }
 				: { ...identity, messageStatus: "sent" };
 		}
+		if (message.kind === "request") sender.host.removeRetentionReason("awaiting_answer", message.messageId);
 		return {
 			...identity,
 			messageStatus: "not_sent",

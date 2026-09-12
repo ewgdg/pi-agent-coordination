@@ -1,6 +1,7 @@
 import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { join } from "node:path";
+import { mkdir, rename } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -33,6 +34,63 @@ import {
 	createUnboundTestOwnerHost,
 	type TestCleanupRegistrar,
 } from "./support/pi-host.ts";
+
+for (const failure of ["admission rejection", "renamed working directory"] as const) {
+	test(`definite initial Request non-admission leaves no dependency or retryable Request: ${failure}`, async (t) => {
+		const harness = await createDormantChildHarness(t, failure === "admission rejection" ? {
+			beforeDeliveryAdmission: ({ operation }) => operation === "send" ? "confirmed_failure" : undefined,
+		} : {});
+		if (failure === "renamed working directory") {
+			const cwd = join(harness.host.cwd, "responder-project");
+			await mkdir(cwd);
+			const spawnInput = { request: "Wait for work in this project.", config: { cwd } };
+			harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+				fauxToolCall("agent_spawn", spawnInput, { id: "spawn-with-project-cwd" }), { stopReason: "toolUse" },
+			));
+			const child = await harness.view.spawn("spawn-with-project-cwd", spawnInput);
+			if (!("agentId" in child)) throw new Error("Child Identity was not created");
+			harness.childId = child.agentId;
+			await rename(cwd, `${cwd}-renamed`);
+		}
+		const before = retentionCount(harness.view.status().run, "awaiting_answer");
+		const input = { operation: "request" as const, targetAgent: harness.childId, question: "This work was never admitted." };
+		const toolCallId = "request-definite-non-admission";
+		harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+			fauxToolCall("agent_message", input, { id: toolCallId }), { stopReason: "toolUse" },
+		));
+		const receipt = await harness.view.message(toolCallId, input);
+		assert.equal("messageStatus" in receipt && receipt.messageStatus, "not_sent");
+		assert.equal("reason" in receipt && receipt.reason, "target_unavailable");
+		assert.equal(harness.view.status(harness.childId).run.phase, "dormant");
+		if (!("requestMessageId" in receipt)) throw new Error("Missing Request correlation identity");
+		assert.equal(retentionCount(harness.view.status().run, "awaiting_answer"), before);
+		harness.host.session.sessionManager.appendMessage({
+			role: "toolResult", toolCallId, toolName: "agent_message",
+			content: [{ type: "text", text: JSON.stringify(receipt) }], details: receipt,
+			isError: false, timestamp: Date.now(),
+		});
+		harness.view.reconcileCommittedToolResults();
+		assert.equal(retentionCount(harness.view.status().run, "awaiting_answer"), before);
+		const retryInput = { operation: "retry" as const, messageId: receipt.requestMessageId };
+		const retryCallId = "retry-unadmitted-request";
+		harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+			fauxToolCall("agent_message", retryInput, { id: retryCallId }), { stopReason: "toolUse" },
+		));
+		await assert.rejects(harness.view.message(retryCallId, retryInput), /unknown_identity: Request .* was not created/);
+		const waitInput = { requestMessageIds: [receipt.requestMessageId] };
+		harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+			fauxToolCall("agent_wait", waitInput, { id: "wait-unadmitted-request" }), { stopReason: "toolUse" },
+		));
+		await assert.rejects(harness.view.wait("wait-unadmitted-request", waitInput, new AbortController().signal), /is not outstanding/);
+		const cancelInput = { operation: "cancel" as const, requestMessageId: receipt.requestMessageId, reason: "No work exists to cancel." };
+		harness.host.session.sessionManager.appendMessage(fauxAssistantMessage(
+			fauxToolCall("agent_message", cancelInput, { id: "cancel-unadmitted-request" }), { stopReason: "toolUse" },
+		));
+		await assert.rejects(harness.view.message("cancel-unadmitted-request", cancelInput), /unknown_identity: Request .* was not created/);
+		assert.equal(harness.view.status(harness.childId).run.phase, "dormant");
+		await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
+	});
+}
 
 test("Request commitment retains its requester and Delivery obligates its responder", async (t) => {
 	const harness = await createDormantChildHarness(t);
@@ -131,10 +189,7 @@ test("Request commitment retains its requester and Delivery obligates its respon
 });
 
 test("a prepared continuation Request crosses retry scheduling into child working-zone preparation", async (t) => {
-	const harness = await createDormantChildHarness(t, {
-		beforeDeliveryAdmission: ({ operation }) =>
-			operation === "send" ? "confirmed_failure" : undefined,
-	});
+	const harness = await createDormantChildHarness(t);
 	const childSessionFile = await waitForChildSessionFile(harness.host, harness.childId);
 	const childSession = SessionManager.open(childSessionFile);
 	for (const section of ["Earlier", "Later"]) {
@@ -168,8 +223,8 @@ test("a prepared continuation Request crosses retry scheduling into child workin
 			{ stopReason: "toolUse" },
 		),
 	);
-	const initialReceipt = await harness.view.message(toolCallId, input);
-	assert.equal("messageStatus" in initialReceipt && initialReceipt.messageStatus, "not_sent");
+	const initialReceipt = unconfirmedRequestReceipt(harness, toolCallId, input);
+	assert.equal("messageStatus" in initialReceipt && initialReceipt.messageStatus, "unknown");
 	if (!("requestMessageId" in initialReceipt)) {
 		throw new Error("Prepared Request receipt has no identity");
 	}
@@ -674,7 +729,8 @@ test("an explicit Answer resolves its named Request and releases queued Deferred
 
 test("status reports exact Request retention multiplicity", async (t) => {
 	const harness = await createDormantChildHarness(t, {
-		beforeDeliveryAdmission: () => "confirmed_failure",
+		scheduleDeliveryDispatch: () => undefined,
+		afterDeliveryAdmission: () => "confirmation_lost",
 	});
 	assert.equal(retentionCount(harness.view.status().run, "awaiting_answer"), 1);
 
@@ -705,6 +761,7 @@ test("status reports exact Request retention multiplicity", async (t) => {
 			timestamp: Date.now(),
 		});
 	}
+	await harness.view.reachSafeBoundary();
 	assert.equal(retentionCount(harness.view.status().run, "awaiting_answer"), 3);
 
 	const requestId = requestIds[0];
@@ -754,8 +811,6 @@ test("status reports exact Request retention multiplicity", async (t) => {
 
 test("Request retry reports indeterminate when admission confirmation is lost", async (t) => {
 	const harness = await createDormantChildHarness(t, {
-		beforeDeliveryAdmission: ({ operation }) =>
-			operation === "send" ? "confirmed_failure" : undefined,
 		afterDeliveryAdmission: ({ operation }) =>
 			operation === "retry" ? "confirmation_lost" : undefined,
 	});
@@ -763,7 +818,7 @@ test("Request retry reports indeterminate when admission confirmation is lost", 
 	const requestInput = {
 		operation: "request" as const,
 		targetAgent: harness.childId,
-		question: "Retry this same Request after its initial admission fails.",
+		question: "Retry this same Request while its initial admission is uncertain.",
 	};
 	harness.host.session.sessionManager.appendMessage(
 		fauxAssistantMessage(
@@ -771,7 +826,7 @@ test("Request retry reports indeterminate when admission confirmation is lost", 
 			{ stopReason: "toolUse" },
 		),
 	);
-	const request = await harness.view.message(requestToolCallId, requestInput);
+	const request = unconfirmedRequestReceipt(harness, requestToolCallId, requestInput);
 	assert.ok("requestMessageId" in request);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -2523,17 +2578,10 @@ test("an exact-Run fence prevents a resolved Agent Wait from becoming Answer Del
 
 test("an exact-Run fence prevents a preempted Agent Wait result from committing", async (t) => {
 	const waitToolCallId = "fence-preempted-agent-wait";
-	let rejectSelectedRequest = true;
 	let resultCommitBoundaryReached = false;
 	const harness = await createDormantChildHarness(
 		t,
-		{
-			beforeDeliveryAdmission: ({ operation }) => {
-				if (operation !== "send" || !rejectSelectedRequest) return;
-				rejectSelectedRequest = false;
-				return "confirmed_failure";
-			},
-		},
+		{},
 		undefined,
 		{
 			beforeResultCommit: ({ toolCallId, failExactRun }) => {
@@ -2566,10 +2614,7 @@ test("an exact-Run fence prevents a preempted Agent Wait result from committing"
 		entryId: selectedRequestEntry.id,
 		toolCallId: selectedRequestToolCallId,
 	});
-	const selectedReceipt = await harness.view.message(
-		selectedRequestToolCallId,
-		selectedRequestInput,
-	);
+	const selectedReceipt = unconfirmedRequestReceipt(harness, selectedRequestToolCallId, selectedRequestInput);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: selectedRequestToolCallId,
@@ -2689,7 +2734,7 @@ test("Agent Wait parks the Owner Run until the pending Answer commits", async (t
 	};
 	const harness = await createDormantChildHarness(t, {
 		beforeDeliveryAdmission: ({ operation }) =>
-			operation === "send" || operation === "answer"
+			operation === "answer"
 				? "confirmed_failure"
 				: undefined,
 	}, policy, undefined, clock);
@@ -2713,7 +2758,7 @@ test("Agent Wait parks the Owner Run until the pending Answer commits", async (t
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
-	const requestReceipt = await harness.view.message(requestToolCallId, requestInput);
+	const requestReceipt = unconfirmedRequestReceipt(harness, requestToolCallId, requestInput);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: requestToolCallId,
@@ -2726,8 +2771,8 @@ test("Agent Wait parks the Owner Run until the pending Answer commits", async (t
 	assert.deepEqual(requestReceipt, {
 		requestMessageId: requestId,
 		targetAgentId: harness.childId,
-		messageStatus: "not_sent",
-		reason: "target_unavailable",
+		messageStatus: "unknown",
+		reason: "confirmation_lost",
 	});
 
 	const retryToolCallId = "retry-before-owner-waits";
@@ -2916,18 +2961,10 @@ test("primary input in a selected child preempts Agent Wait before its next mode
 });
 
 test("an inbound reverse Request preempts Agent Wait and the requester can re-wait", async (t) => {
-	let responderAgentId: string | undefined;
-	let rejectInitialRequest = true;
 	let moderatorRunStarts = 0;
 	const harness = await createDormantChildHarness(
 		t,
-		{
-			beforeDeliveryAdmission: ({ recipientAgentId }) => {
-				if (recipientAgentId !== responderAgentId || !rejectInitialRequest) return;
-				rejectInitialRequest = false;
-				return "confirmed_failure";
-			},
-		},
+		{},
 		new WorkflowPolicyStore(
 			parseWorkflowPolicy('{"maxConcurrentAgentRuns":1}'),
 		),
@@ -2938,7 +2975,6 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 		},
 	);
 	await cancelHarnessCreationRequest(harness, "cancel-creation-before-reverse-request-wait");
-	responderAgentId = harness.childId;
 	const ownerAgentId = harness.host.session.sessionId;
 	const originalRequestToolCallId = "request-before-reverse-preemption";
 	const originalQuestion = "Ask the requester for one decision before answering.";
@@ -3044,10 +3080,7 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 	};
 	harness.host.model.setResponses(Array.from({ length: 8 }, () => routeModelCall));
 
-	const requestReceipt = await harness.view.message(
-		originalRequestToolCallId,
-		originalRequestInput,
-	);
+	const requestReceipt = unconfirmedRequestReceipt(harness, originalRequestToolCallId, originalRequestInput);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: originalRequestToolCallId,
@@ -3114,18 +3147,12 @@ test("an inbound reverse Request preempts Agent Wait and the requester can re-wa
 });
 
 test("a pending third-party Request preempts a wait for another responder", async (t) => {
-	let rejectSelectedRequest = true;
 	let ownerAgentId: string | undefined;
 	let markInboundRequestAdmitted!: () => void;
 	const inboundRequestAdmitted = new Promise<void>((resolve) => {
 		markInboundRequestAdmitted = resolve;
 	});
 	const harness = await createDormantChildHarness(t, {
-		beforeDeliveryAdmission: ({ operation }) => {
-			if (operation !== "send" || !rejectSelectedRequest) return;
-			rejectSelectedRequest = false;
-			return "confirmed_failure";
-		},
 		afterDeliveryAdmission: ({ recipientAgentId }) => {
 			if (recipientAgentId === ownerAgentId) markInboundRequestAdmitted();
 		},
@@ -3172,10 +3199,7 @@ test("a pending third-party Request preempts a wait for another responder", asyn
 		entryId: selectedRequestEntry.id,
 		toolCallId: selectedRequestToolCallId,
 	});
-	const selectedReceipt = await harness.view.message(
-		selectedRequestToolCallId,
-		selectedRequestInput,
-	);
+	const selectedReceipt = unconfirmedRequestReceipt(harness, selectedRequestToolCallId, selectedRequestInput);
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
 		toolCallId: selectedRequestToolCallId,
@@ -3687,8 +3711,6 @@ test("Agent Wait fallback reconciliation finds an Answer committed without a liv
 
 test("requester Cancellation suppresses an undelivered Request without reviving it", async (t) => {
 	const harness = await createDormantChildHarness(t, {
-		beforeDeliveryAdmission: ({ operation }) =>
-			operation === "send" ? "confirmed_failure" : undefined,
 		afterDeliveryAdmission: ({ operation }) =>
 			operation === "cancel" ? "confirmation_lost" : undefined,
 	});
@@ -3711,15 +3733,12 @@ test("requester Cancellation suppresses an undelivered Request without reviving 
 		entryId: requestEntry.id,
 		toolCallId: requestToolCallId,
 	});
-	const requestReceipt = await harness.view.message(
-		requestToolCallId,
-		requestInput,
-	);
+	const requestReceipt = unconfirmedRequestReceipt(harness, requestToolCallId, requestInput);
 	assert.deepEqual(requestReceipt, {
 		requestMessageId: requestId,
 		targetAgentId: harness.childId,
-		messageStatus: "not_sent",
-		reason: "target_unavailable",
+		messageStatus: "unknown",
+		reason: "confirmation_lost",
 	});
 	harness.host.session.sessionManager.appendMessage({
 		role: "toolResult",
@@ -4622,6 +4641,23 @@ test("Answer Delivery starts a successor Run for a dormant requester", async (t)
 
 	await harness.coordinator.shutdown(async () => harness.host.runtime.dispose());
 });
+
+// Commit uncertain initial admission without scheduling live work; retry/Wait tests
+// own when Delivery resumes. Definitive non-admission cannot stand in for this state.
+function unconfirmedRequestReceipt(
+	harness: DormantChildHarness,
+	toolCallId: string,
+	input: { targetAgent: string },
+) {
+	const entry = harness.host.session.sessionManager.getLeafEntry();
+	assert.ok(entry);
+	return {
+		requestMessageId: deriveMessageId({ agentId: harness.host.session.sessionId, entryId: entry.id, toolCallId }),
+		targetAgentId: input.targetAgent,
+		messageStatus: "unknown" as const,
+		reason: "confirmation_lost" as const,
+	};
+}
 
 async function createDormantChildHarness(
 	t: TestCleanupRegistrar,

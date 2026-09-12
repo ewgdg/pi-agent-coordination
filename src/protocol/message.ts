@@ -391,6 +391,18 @@ function inspectMessageAuthorResult(options: {
 			return "not_created";
 		}
 		validateMessageAuthorResult(result.message.details, identity);
+		// Initial definitive non-admission authors no Request. Retry outcomes are
+		// separate tool calls and cannot withdraw an already-admitted Request.
+		if (
+			identity.kind === "request" &&
+			isRecord(result.message.details) &&
+			result.message.details.messageStatus === "not_sent"
+		) {
+			if (deliveryEvidence) {
+				throw new Error(`invariant_violation: Request ${identity.messageId} has initial non-admission and Delivery`);
+			}
+			return "not_created";
+		}
 		return "canonical";
 	}
 	return deliveryEvidence ? "canonical" : "indeterminate";

@@ -13,6 +13,7 @@ import { inspectCommittedAgentWaitResult, resolveAgentWaitSelection, validateAge
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import {
 	inspectAgentMessageAuthorResult,
+	inspectCanonicalMessage,
 	type Message,
 } from "../src/protocol/message.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../src/protocol/owner-identity.ts";
@@ -23,6 +24,30 @@ import {
 	findAuthoredAgentMessageSources,
 	inspectCanonicalRequestResolution,
 } from "../src/protocol/request-resolution.ts";
+
+test("initial Request non-admission rejects contradictory Delivery while Spawn commitment survives", () => {
+	const history = requestHistory();
+	const author = history.requester;
+	const toolCallId = "rejected-request";
+	const entryId = author.manager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_message", {
+		operation: "request", targetAgent: "responder", question: "Unadmitted work.",
+	}, { id: toolCallId })));
+	const source = { agentId: "requester", entryId, toolCallId };
+	const messageId = deriveMessageIdentity(source);
+	author.manager.appendMessage({
+		role: "toolResult", toolName: "agent_message", toolCallId, content: [], isError: false, timestamp: Date.now(),
+		details: { requestMessageId: messageId, targetAgentId: "responder", messageStatus: "not_sent", reason: "target_unavailable" },
+	});
+	const message: Extract<Message, { kind: "request" }> = {
+		kind: "request", origin: "agent_message", messageId, fromAgentId: "requester", targetAgentId: "responder", workflowId: "requester",
+		source, deliveryMode: "deferred", question: "Unadmitted work.",
+	};
+	const authorTranscript = author.record.transcript.inspect();
+	assert.equal(inspectCanonicalMessage({ message, authorTranscript }).state, "not_created");
+	assert.throws(() => inspectCanonicalMessage({ message, authorTranscript, deliveryEvidence: { agentId: "responder", entryId: "delivery" } }), /initial non-admission and Delivery/);
+	// Spawn's committed child Identity, rather than Delivery admission, authors its Request.
+	assert.equal(inspectCanonicalMessage({ message: { ...message, origin: "agent_spawn" }, authorTranscript }).state, "canonical");
+});
 
 test("an Answer call resolves its target from the correlated delivered Request", () => {
 	const responderAgentId = "answer-render-responder";

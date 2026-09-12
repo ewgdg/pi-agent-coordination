@@ -82,15 +82,17 @@ Use Steer only when the next model turn needs exceptional direction:
 
 At a safe boundary, all Steer Messages already pending for that recipient are frozen in admission order, deduplicated against transcript proof and existing dispatch reservations, and committed as one model-visible batch. A Request already queued to preempt Agent Wait keeps that single dispatch while its Delivery proof is pending. A Message admitted after that freeze waits for the next safe boundary. Steer takes precedence over Deferred when both are pending.
 
-The initial receipt reports live sending only:
+The initial receipt reports admission, not Delivery:
 
 | `messageStatus` | Meaning | Next action |
 | --- | --- | --- |
 | `sent` | The recipient lane admitted the Message for asynchronous Delivery. It may still be queued and is not necessarily delivered. | Poll only when Delivery proof matters. |
-| `not_sent` | This invocation was not admitted. `reason` distinguishes target availability, shutdown, and capacity exhaustion. | Retry the same Message identity after correcting the problem. |
+| `not_sent` | This invocation was not admitted. `reason` distinguishes target availability, shutdown, and capacity exhaustion. | For an initial `request`, correct the problem and author a new Request. For other Messages or later retries, retry the existing identity. |
 | `unknown` | Admission may have happened, but confirmation was lost. | Poll the same Message identity before retrying. |
 
-An ordinary Message receipt returns its source-derived `messageId`. An Agent Request receipt instead returns `requestMessageId`, the Request Message's source-derived identity. Initial author receipts and later retry scheduling receipts also return the resolved full `targetAgentId`.
+A definitive `not_sent` result from the initial `agent_message.request` invocation creates no Request: its correlation ID is not an outstanding dependency, Answer obligation, or retryable Request. Reconstruction and Agent Wait exclude it. After correcting the admission problem, author a new Request. `unknown` is not definitive non-admission and preserves the same Request for inspection/retry. A later retry's `not_sent` never withdraws an already-admitted Request. Creation Requests remain canonical once the child Identity commits, even if startup or Delivery admission fails; Answer and Cancellation commitment likewise survives their Delivery failure.
+
+An ordinary Message receipt returns its source-derived `messageId`. An Agent Request receipt instead returns `requestMessageId`, its source-derived correlation identity; definitive initial non-admission does not make that ID a canonical Request. Initial author receipts and later retry scheduling receipts also return the resolved full `targetAgentId`.
 
 ## Committed delivery receipts
 
@@ -312,7 +314,7 @@ Each recipient admits at most the current Workflow Policy's `maxPendingDeliverie
 
 Waiting Requests consume this same pending Delivery capacity. A Request receipt with `messageStatus: "sent"` means the recipient lane admitted it; the Request may still be waiting behind the responder's active Request before ordinary Deferred or Steer scheduling applies.
 
-When capacity is exhausted, the invocation returns `messageStatus: "not_sent"` with reason `capacity_exhausted`. The canonical author Message remains in the sender transcript and can be retried explicitly after capacity becomes available; there is no hidden overflow or automatic retry.
+When capacity is exhausted, the invocation returns `messageStatus: "not_sent"` with reason `capacity_exhausted`. An initial Agent Request is not created in this case and must be authored anew after capacity becomes available. Other canonical Messages, including already-admitted Requests whose retry failed, remain retryable; there is no hidden overflow or automatic retry.
 
 An exact [Interruption Hold](run-supervision.md) blocks every ordinary Message, Request, Answer, and Cancellation from committing Delivery or invoking the recipient model. Held items remain admitted and consume ordinary capacity. One Supervisory Resume Message uses a separate reserved slot and cannot evict ordinary work.
 

@@ -209,6 +209,9 @@ export class RequestEvidence {
 			if (request.kind !== "request") {
 				throw new Error(`wrong_message_kind: Message ${requestId} is not a Request`);
 			}
+			if (inspectCanonicalMessage({ message: request, authorTranscript }).state === "not_created") {
+				throw new Error(`unknown_identity: Request ${requestId} was not created`);
+			}
 			return request;
 		}
 		this.#throwIfUnavailableDeliveryEvidence(

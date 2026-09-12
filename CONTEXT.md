@@ -107,7 +107,7 @@ The Owner-scoped configuration snapshot governing new host admissions, limits, o
 _Avoid_: Workflow state, Workflow configuration lifecycle
 
 **Agent Request**:
-A Request targeting a known Agent in the same Workflow, with one stable Request Message identity for Answer, Cancellation, retry, and retrieval. Steer brings it to attention at the next safe boundary regardless of ancestry; Deferred preserves admission order among candidates allowed by cooperative foreground ancestry.
+A Request targeting a known Agent in the same Workflow, with one stable Request Message identity for Answer, Cancellation, retry, and retrieval. Definitive initial admission failure creates no Agent Request or outstanding dependency; uncertain admission preserves the Request, and later Delivery or retry failure never withdraws an admitted Request. Steer brings it to attention at the next safe boundary regardless of ancestry; Deferred preserves admission order among candidates allowed by cooperative foreground ancestry.
 
 **Agent Observation Search**:
 A passive lookup over the caller's authorized verified Agent identities. It combines structural scope, stable Agent metadata, and an Agent's current Run phase to return a bounded set of Agent Statuses. It is a live, potentially non-atomic observation and never prepares a Runtime or searches transcript contents.

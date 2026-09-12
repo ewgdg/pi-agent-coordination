@@ -58,7 +58,7 @@ export type ParticipantCoordinationRole = "ordinary" | "moderator" | "owner";
 const AGENT_MESSAGE_PROMPT_GUIDE = `<agent_message>
 For send and request, targetAgent accepts an exact Agent label, full Agent ID, or unique Agent ID suffix. Full IDs and suffixes resolve Workflow-wide. Labels resolve only among the caller, its Direct Spawner, and its direct children; Owner and Moderator labels resolve Workflow-wide. An ambiguous target is rejected rather than guessed.
 
-When agent_message returns messageStatus "sent", the Message was admitted for asynchronous Delivery and may still be queued; it does not mean delivered.
+When agent_message returns messageStatus "sent", the Message was admitted for asynchronous Delivery and may still be queued; it does not mean delivered. An initial request returning "not_sent" creates no Request or dependency: correct the problem and author a new Request rather than retrying its correlation ID. "unknown" preserves uncertain admission; inspect the same identity. Later retry failures do not withdraw an admitted Request.
 
 A delivered Agent Request, including a Creation Request, creates one Answer obligation. Request ordering controls attention, not execution order: choose which delivered unresolved Request to work on or answer. A Steer Request brings new work to attention at the next safe boundary regardless of ancestry; Deferred Requests retain cooperative descendant ordering.
 
