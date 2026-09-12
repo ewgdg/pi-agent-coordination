@@ -20,3 +20,5 @@ export const MODERATOR_OBLIGATION_REMINDER_CUSTOM_TYPE =
 	"agent-coordination.moderator-obligation-reminder";
 
 export const WORKFLOW_CONTINUATION_CUSTOM_TYPE = "agent-coordination.workflow-continuation";
+
+export const DELIVERY_FAILURE_CUSTOM_TYPE = "agent-coordination.delivery-failure";

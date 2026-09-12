@@ -1,3 +1,4 @@
+import type { ModelVisibleDeliveryFailure } from "../protocol/delivery-failure.ts";
 import type { ModelVisibleWorkflowContinuation } from "../protocol/workflow-continuation.ts";
 import type { ModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
@@ -89,7 +90,8 @@ export type AgentRuntimeDelivery =
 			| ModelVisibleModeratorObligationReminder
 			| ModelVisibleObligationReminder
 			| ModelVisibleRunFailureRecovery
-			| ModelVisibleWorkflowContinuation;
+			| ModelVisibleWorkflowContinuation
+			| ModelVisibleDeliveryFailure;
 		triggerTurn: boolean;
 		deliverAs?: "steer" | "followUp";
 		workingZonePreparation?: WorkingZonePreparation;
