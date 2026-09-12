@@ -216,6 +216,61 @@ test("terminating the last progressing child releases Owner parking without an A
 	await withTimeout(host.session.prompt("No further work is needed."), 3_000, "Dormant dependency parked a later Owner response");
 });
 
+test("Owner stays parked while a supervisory resumed child executes in isolation", { timeout: 10_000 }, async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+	let releaseInitial!: () => void;
+	let releaseResumed!: () => void;
+	const initialGate = new Promise<void>((resolve) => { releaseInitial = resolve; });
+	const resumedGate = new Promise<void>((resolve) => { releaseResumed = resolve; });
+	t.after(() => { releaseInitial(); releaseResumed(); });
+	let childStarted = false;
+	let childResumed = false;
+	let agentId = "";
+	const routeResponse = async (context: Context) => {
+		const serialized = JSON.stringify(context.messages);
+		if (serialized.includes("requestMessageId") && !serialized.includes("spawn-to-resume")) {
+			if (!serialized.includes("Continue isolated work.")) {
+				childStarted = true;
+				await initialGate;
+				return fauxAssistantMessage("Interrupted work.");
+			}
+			childResumed = true;
+			await resumedGate;
+			return fauxAssistantMessage(fauxToolCall("agent_message", {
+				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Resumed work complete.",
+			}, { id: "answer-resumed" }), { stopReason: "toolUse" });
+		}
+		if (!serialized.includes("spawn-to-resume")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			request: "Work until interrupted, then resume.",
+		}, { id: "spawn-to-resume" }), { stopReason: "toolUse" });
+		if (!serialized.includes("Resume the held child.")) return fauxAssistantMessage("Waiting for initial work.");
+		if (!serialized.includes("resume-held-child")) return fauxAssistantMessage(fauxToolCall("agent_control", {
+			operation: "resume", agentId, content: "Continue isolated work.",
+		}, { id: "resume-held-child" }), { stopReason: "toolUse" });
+		return fauxAssistantMessage("Waiting for resumed work.");
+	};
+	host.model.setResponses(Array.from({ length: 12 }, () => routeResponse));
+	const initialPrompt = host.session.prompt("Start interruptible work.");
+	await waitUntil(() => childStarted && ownerAssistantTexts(host).includes("Waiting for initial work."));
+	const receipt = host.session.sessionManager.getEntries().find((entry) => entry.type === "message" &&
+		entry.message.role === "toolResult" && entry.message.toolCallId === "spawn-to-resume");
+	assert.ok(receipt?.type === "message" && receipt.message.role === "toolResult");
+	agentId = (receipt.message.details as { agentId: string }).agentId;
+	await executeAndCommitRegisteredTool(host.session, "agent_control", "hold-child", { operation: "interrupt", agentId });
+	releaseInitial();
+	await withTimeout(initialPrompt, 3_000, "Actual Interruption Hold did not release Owner parking");
+	assert.equal(host.session.isIdle, true);
+	let settled = false;
+	const resumedPrompt = host.session.prompt("Resume the held child.").then(() => { settled = true; });
+	await waitUntil(() => childResumed && ownerAssistantTexts(host).includes("Waiting for resumed work."));
+	await new Promise<void>((resolve) => setTimeout(resolve, 50));
+	assert.equal(settled, false, "Owner settled while the isolated resumed response was still gated");
+	assert.equal(host.session.isIdle, false);
+	releaseResumed();
+	await withTimeout(resumedPrompt, 3_000, "Owner did not settle after resumed work answered");
+	assert.equal(host.session.isIdle, true);
+});
+
 test("Owner parks for ordinary background work even after every Request was answered", { timeout: 10_000 }, async (t) => {
 	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
 	let finishWork!: () => void;
