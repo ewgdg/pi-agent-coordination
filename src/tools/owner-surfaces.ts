@@ -260,7 +260,7 @@ export function participantCoordinatorHandlers(
 		const moderatorView = resolveView as () => ModeratorAgentCoordinatorView;
 		return {
 			...common,
-			askUserQuestion: (toolCallId, input, signal) =>
+			askUser: (toolCallId, input, signal) =>
 				moderatorView().askHuman(toolCallId, input, signal),
 			reportToUser: (toolCallId, input) => moderatorView().reportToUser(toolCallId, input),
 			moderatorControl: (toolCallId, input) =>
@@ -278,7 +278,7 @@ export function participantCoordinatorHandlers(
 			...common,
 			spawn,
 			agentTemplateSnapshot,
-			askUserQuestion: (toolCallId, input, signal) =>
+			askUser: (toolCallId, input, signal) =>
 				ordinaryView().askHuman(toolCallId, input, signal),
 		}
 		: { ...common, spawn, agentTemplateSnapshot, resumeWorkflow: (toolCallId) => ordinaryView().resumeWorkflow(toolCallId) };

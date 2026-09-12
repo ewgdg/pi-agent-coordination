@@ -403,7 +403,7 @@ test("an input-required child Run releases capacity until work can resume", asyn
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
-				"ask_user_question",
+				"ask_user",
 				{ question: "May this Run resume after the other child finishes?" },
 				{ id: "input-required-capacity" },
 			),

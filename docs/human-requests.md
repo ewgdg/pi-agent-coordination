@@ -1,9 +1,9 @@
 # Human Requests
 
-Any spawned ordinary Agent or Moderator can call `ask_user_question` to ask the human one free-form question and block its current Run until the native tool call succeeds or is interrupted. The Workflow Owner does not have this tool.
+Any spawned ordinary Agent or Moderator can call `ask_user` to ask the human one free-form question and block its current Run until the native tool call succeeds or is interrupted. The Workflow Owner does not have this tool.
 
 ```ts
-ask_user_question({
+ask_user({
   question: "Which boundary should remain authoritative?"
 })
 ```
@@ -93,7 +93,7 @@ Human Request handling does not capture Escape. The default Pi editor may abort 
 
 ## Commitment and scheduling
 
-The committed `ask_user_question` call is the Human Request. Its matching successful native tool result is the sole Human Answer. Editor submission is only a candidate: `input_required` attention remains until that exact result is present in the transcript.
+The committed `ask_user` call is the Human Request. Its matching successful native tool result is the sole Human Answer. Editor submission is only a candidate: `input_required` attention remains until that exact result is present in the transcript.
 
 The tool runs sequentially, so later sibling calls wait for the Answer or interruption. Steer Messages wait for successful Answer commitment. Deferred and follow-up Messages wait until the answered turn settles. Other Agent Messages cannot answer a Human Request.
 

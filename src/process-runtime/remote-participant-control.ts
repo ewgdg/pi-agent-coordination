@@ -172,14 +172,14 @@ export function createControlBackedChildParticipantHandlers(
 			),
 			spawn: (toolCallId, input) =>
 				request("coordination.spawn", { toolCallId, input }),
-			askUserQuestion: (toolCallId, input, signal) =>
+			askUser: (toolCallId, input, signal) =>
 				request("coordination.askHuman", { toolCallId, input }, signal),
 		};
 		return { lifecycle, coordination };
 	}
 	const coordination: ParticipantCoordinationToolHandlers<"moderator"> = {
 		...common,
-		askUserQuestion: (toolCallId, input, signal) =>
+		askUser: (toolCallId, input, signal) =>
 			request("coordination.askHuman", { toolCallId, input }, signal),
 		reportToUser: (toolCallId, input) => request("coordination.reportToUser", { toolCallId, input: { ...input, evidence: [...input.evidence] } }),
 		moderatorControl: (toolCallId, input) =>
@@ -278,8 +278,8 @@ export async function dispatchParticipantRequestToOwner(
 			response = await handlers.coordination.agentTemplateSnapshot(request.payload.refresh);
 			break;
 		case "coordination.askHuman":
-			if (!("askUserQuestion" in handlers.coordination)) throw unavailableForRole(request.method);
-			response = await handlers.coordination.askUserQuestion(
+			if (!("askUser" in handlers.coordination)) throw unavailableForRole(request.method);
+			response = await handlers.coordination.askUser(
 				request.payload.toolCallId,
 				request.payload.input,
 				request.signal,

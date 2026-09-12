@@ -214,7 +214,7 @@ export class HumanRequestCoordinator {
 	): GuardedHumanToolResult | undefined {
 		if (
 			message.role !== "toolResult" ||
-			message.toolName !== "ask_user_question"
+			message.toolName !== "ask_user"
 		) return undefined;
 		const pending = [...this.#pendingByRequestId.values()].find(
 			(candidate) =>

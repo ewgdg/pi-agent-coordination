@@ -203,7 +203,7 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 				"agent_control",
 				"agent_observe",
 				"agent_spawn",
-				"ask_user_question",
+				"ask_user",
 			]);
 		}
 	});

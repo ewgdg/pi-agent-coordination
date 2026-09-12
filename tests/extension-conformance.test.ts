@@ -28,14 +28,14 @@ const ordinaryTools = [
 	"agent_observe",
 	"agent_spawn",
 	"agent_wait",
-	"ask_user_question",
+	"ask_user",
 ] as const;
 const moderatorTools = [
 	"agent_control",
 	"agent_message",
 	"agent_observe",
 	"agent_wait",
-	"ask_user_question",
+	"ask_user",
 	"moderator_control",
 	"report_to_user",
 ] as const;
@@ -364,7 +364,7 @@ test("Human Request owns a transcript-native question and Answer shell", async (
 			unavailableView as () => OrdinaryAgentCoordinatorView,
 		),
 	);
-	const tool = host.session.getToolDefinition("ask_user_question");
+	const tool = host.session.getToolDefinition("ask_user");
 	assert.ok(tool?.renderCall);
 	assert.ok(tool.renderResult);
 	assert.equal(tool.renderShell, "self");

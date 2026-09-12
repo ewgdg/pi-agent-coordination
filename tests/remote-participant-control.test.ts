@@ -125,7 +125,7 @@ test("Control-backed participant proxies preserve exact lifecycle and tool inten
 	assert.deepEqual(waitUpdates, [waitProgress]);
 	assert.equal(waitProgressRemoved, true);
 	assert.deepEqual(
-		await proxies.coordination.askUserQuestion(
+		await proxies.coordination.askUser(
 			"human-call",
 			{ question: "Proceed?" },
 			cancellation.signal,
@@ -178,7 +178,7 @@ test("aborting a tool call cancels its askHuman Control request", async () => {
 	}) as ChildParticipantControlRequester;
 	const proxies = createControlBackedChildParticipantHandlers("ordinary", request);
 	const cancellation = new AbortController();
-	const pending = proxies.coordination.askUserQuestion(
+	const pending = proxies.coordination.askUser(
 		"cancelled-human-call",
 		{ question: "Wait?" },
 		cancellation.signal,
@@ -266,7 +266,7 @@ test("Owner dispatch invokes scoped process-neutral handlers and returns exact r
 				calls.push(["control", toolCallId, input]);
 				return { agentId: input.agentId, disposition: "not_running" };
 			},
-			async askUserQuestion(toolCallId, input, signal) {
+			async askUser(toolCallId, input, signal) {
 				calls.push(["ask", toolCallId, input, signal]);
 				return { requestId: "human-owner", answer: "Yes" };
 			},

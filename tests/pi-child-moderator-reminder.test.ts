@@ -234,7 +234,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 					reason: "Test child was not created",
 				};
 			},
-			async askUserQuestion() { return { requestId: "unused-human", answer: "unused" }; },
+			async askUser() { return { requestId: "unused-human", answer: "unused" }; },
 		},
 	};
 }

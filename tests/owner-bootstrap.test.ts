@@ -154,7 +154,7 @@ test("an existing Owner Identity without a description is canonicalized without 
 	assert.equal((status.details as { description?: string }).description, "Workflow Owner");
 	assert.ok(host.session.getToolDefinition("agent_observe"));
 	assert.ok(host.session.getToolDefinition("agent_control"));
-	assert.equal(host.session.getToolDefinition("ask_user_question"), undefined);
+	assert.equal(host.session.getToolDefinition("ask_user"), undefined);
 	const ordinaryAgentExtensions = host.services.resourceLoader
 		.getExtensions()
 		.extensions.filter((extension) => extension.tools.has("agent_spawn"));

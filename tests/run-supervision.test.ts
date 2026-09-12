@@ -151,7 +151,7 @@ test("interruption keeps an aborted Human Request Run held when Pi reports an er
 	const toolCallId = "ask-aborted-human-request";
 	harness.host.model.setResponses([
 		fauxAssistantMessage(
-			fauxToolCall("ask_user_question", input, { id: toolCallId }),
+			fauxToolCall("ask_user", input, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("The aborted Human Request must not continue before resumption."),
@@ -588,7 +588,7 @@ test("supervisory interruption settles an active Human Request through its error
 	harness.host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
-				"ask_user_question",
+				"ask_user",
 				{ question: "The supervisor will interrupt this exact Run." },
 				{ id: toolCallId },
 			),

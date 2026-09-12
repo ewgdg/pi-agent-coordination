@@ -49,7 +49,7 @@ test("one native text Answer is the sole result and releases the sequential sibl
 	host.model.setResponses([
 		fauxAssistantMessage(
 			[
-				fauxToolCall("ask_user_question", input, { id: toolCallId }),
+				fauxToolCall("ask_user", input, { id: toolCallId }),
 				fauxToolCall("agent_observe", { operation: "status" }, { id: "after-answer" }),
 			],
 			{ stopReason: "toolUse" },
@@ -134,12 +134,12 @@ test("registered Human Request schema rejects blank and malformed questions befo
 		fauxAssistantMessage(
 			[
 				fauxToolCall(
-					"ask_user_question",
+					"ask_user",
 					{ question: "   \n" },
 					{ id: toolCallIds[0] },
 				),
 				fauxToolCall(
-					"ask_user_question",
+					"ask_user",
 					{ prompt: "Missing required question" },
 					{ id: toolCallIds[1] },
 				),
@@ -177,7 +177,7 @@ test("blank and image-bearing submissions do not resolve as Human Answers", asyn
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
-				"ask_user_question",
+				"ask_user",
 				{ question: "Provide a text-only decision." },
 				{ id: toolCallId },
 			),
@@ -244,7 +244,7 @@ export default function answerModeCommandProbe(pi) {
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
-				"ask_user_question",
+				"ask_user",
 				{ question: "Answer only after queuing later direction." },
 				{ id: toolCallId },
 			),
@@ -306,7 +306,7 @@ test("an unrecognized slash-prefixed string is ordinary Answer text", async (t) 
 	const toolCallId = "ask-for-slash-answer";
 	host.model.setResponses([
 		fauxAssistantMessage(
-			fauxToolCall("ask_user_question", { question: "Give the slash Answer." }, { id: toolCallId }),
+			fauxToolCall("ask_user", { question: "Give the slash Answer." }, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("Slash Answer received."),
@@ -348,7 +348,7 @@ test("primary Enter answers literally while Alt+Enter expands a prompt template"
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
-				"ask_user_question",
+				"ask_user",
 				{ question: "Submit a literal prompt-template command." },
 				{ id: toolCallId },
 			),
@@ -412,7 +412,7 @@ test("different Agents wait and commit Human Answers independently", async (t) =
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
-				"ask_user_question",
+				"ask_user",
 				{ question: "Answer the first Agent independently." },
 				{ id: "first-independent-human-request" },
 			),
@@ -420,7 +420,7 @@ test("different Agents wait and commit Human Answers independently", async (t) =
 		),
 		fauxAssistantMessage(
 			fauxToolCall(
-				"ask_user_question",
+				"ask_user",
 				{ question: "Answer the second Agent independently." },
 				{ id: "second-independent-human-request" },
 			),
@@ -503,7 +503,7 @@ test("a precommit Run fence rejects and restores the provisional Answer", async 
 	const toolCallId = "answer-before-fence";
 	host.model.setResponses([
 		fauxAssistantMessage(
-			fauxToolCall("ask_user_question", { question: "Submit into the fence." }, { id: toolCallId }),
+			fauxToolCall("ask_user", { question: "Submit into the fence." }, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("This continuation must not run."),
@@ -540,7 +540,7 @@ test("a committed Answer remains canonical after later Run failure and reopened 
 	const toolCallId = "answer-before-later-failure";
 	host.model.setResponses([
 		fauxAssistantMessage(
-			fauxToolCall("ask_user_question", input, { id: toolCallId }),
+			fauxToolCall("ask_user", input, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("Fail only after commitment.", {
@@ -606,7 +606,7 @@ test("Human Request fails before input_required when no interactive Agent editor
 	const toolCallId = "ask-without-projection";
 	host.model.setResponses([
 		fauxAssistantMessage(
-			fauxToolCall("ask_user_question", { question: "This cannot be presented." }, { id: toolCallId }),
+			fauxToolCall("ask_user", { question: "This cannot be presented." }, { id: toolCallId }),
 			{ stopReason: "toolUse" },
 		),
 		fauxAssistantMessage("The unavailable request failed."),
@@ -649,12 +649,12 @@ for (const completion of ["answer", "interrupt", "shutdown"] as const) {
 		view = coordinator.forAgent(identity.agentId);
 		await bindTestOwnerHost(host, "tui");
 		host.model.setResponses(Array.from({ length: 8 }, () => (context) => {
-			const answered = context.messages.some((message) => message.role === "toolResult" && message.toolName === "ask_user_question");
+			const answered = context.messages.some((message) => message.role === "toolResult" && message.toolName === "ask_user");
 			return answered
 				? fauxAssistantMessage(fauxToolCall("agent_message", {
 					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Human answered.",
 				}, { id: "answer-creation" }), { stopReason: "toolUse" })
-				: fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Choose an option." },
+				: fauxAssistantMessage(fauxToolCall("ask_user", { question: "Choose an option." },
 					{ id: "ask-option" }), { stopReason: "toolUse" });
 		}));
 		const children: string[] = [];

@@ -34,7 +34,7 @@ for (const explicitWait of [false, true]) {
 			const serialized = JSON.stringify(context.messages);
 			if (serialized.includes("requestMessageId") && !serialized.includes("spawn-needs-human")) {
 				await childGate;
-				return fauxAssistantMessage(fauxToolCall("ask_user_question", {
+				return fauxAssistantMessage(fauxToolCall("ask_user", {
 					question: "Which option should I use?",
 				}, { id: "child-needs-human" }), { stopReason: "toolUse" });
 			}
@@ -109,7 +109,7 @@ for (const independentFinishesFirst of [false, true]) {
 			}
 			if (child && serialized.includes("LEAF_PROGRESS_WORK") && !serialized.includes("spawn-progress-leaf")) {
 				await leafGate;
-				return fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Choose the leaf's next action." },
+				return fauxAssistantMessage(fauxToolCall("ask_user", { question: "Choose the leaf's next action." },
 					{ id: "leaf-needs-human" }), { stopReason: "toolUse" });
 			}
 			if (child) {
@@ -175,7 +175,7 @@ test("Owner stays active through terminal child failure and Moderator recovery, 
 		if (context.tools?.some(({ name }) => name === "moderator_control")) {
 			moderatorStarted = true;
 			await recoveryGate;
-			return fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Recovery needs your decision." },
+			return fauxAssistantMessage(fauxToolCall("ask_user", { question: "Recovery needs your decision." },
 				{ id: "recovery-needs-human" }), { stopReason: "toolUse" });
 		}
 		const serialized = JSON.stringify(context.messages);

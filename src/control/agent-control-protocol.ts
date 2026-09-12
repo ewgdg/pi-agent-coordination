@@ -439,7 +439,7 @@ const AgentSpawnInputSchema = Type.Unsafe<AgentSpawnInput>(
 	participantCoordinationToolSchemas.agent_spawn,
 );
 const HumanRequestInputSchema = Type.Unsafe<HumanRequestInput>(
-	participantCoordinationToolSchemas.ask_user_question,
+	participantCoordinationToolSchemas.ask_user,
 );
 const ModeratorControlInputSchema = Type.Unsafe<ModeratorControlInput>(
 	participantCoordinationToolSchemas.moderator_control,

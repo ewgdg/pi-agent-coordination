@@ -76,14 +76,14 @@ const roleToolNames = {
 		"agent_observe",
 		"agent_wait",
 		"agent_spawn",
-		"ask_user_question",
+		"ask_user",
 	],
 	moderator: [
 		"agent_control",
 		"agent_message",
 		"agent_observe",
 		"agent_wait",
-		"ask_user_question",
+		"ask_user",
 		"moderator_control",
 		"report_to_user",
 	],
@@ -141,7 +141,7 @@ const handlers: ParticipantCoordinationToolHandlers<"ordinary"> &
 	async control() {
 		return { agentId: "child-agent", disposition: "not_running" };
 	},
-	async askUserQuestion() {
+	async askUser() {
 		return { requestId: "request-1", answer: "Answer" };
 	},
 	async reportToUser() { return { reportId: "report-1", createdAt: "2026-01-01T00:00:00.000Z" }; },
@@ -484,7 +484,7 @@ test("participant registrar preserves role-specific tool presentation metadata",
 		promptSnippet: "Supervise any current non-Owner Run needed to restore safe progress.",
 		renderShell: undefined,
 	});
-	assert.deepEqual(toolMetadata(ordinary, "ask_user_question"), {
+	assert.deepEqual(toolMetadata(ordinary, "ask_user"), {
 		label: "Ask User",
 		description:
 			"Ask the human one nonblank free-form question and wait for one nonblank free-form Answer.",
@@ -558,7 +558,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 			calls.push(["control", toolCallId, input]);
 			return controlReceipt;
 		},
-		async askUserQuestion(toolCallId, input, receivedSignal) {
+		async askUser(toolCallId, input, receivedSignal) {
 			calls.push(["ask", toolCallId, input, receivedSignal]);
 			return humanReceipt;
 		},
@@ -575,7 +575,7 @@ test("participant registrar routes intents and returns exact handler receipts", 
 			observeReceipt,
 		],
 		["agent_control", "call-control", { operation: "interrupt", agentId: "child-agent" }, controlReceipt],
-		["ask_user_question", "call-human", { question: "Proceed?" }, humanReceipt],
+		["ask_user", "call-human", { question: "Proceed?" }, humanReceipt],
 	] as const;
 	for (const [toolName, toolCallId, input, receipt] of samples) {
 		const result = await executeTool(

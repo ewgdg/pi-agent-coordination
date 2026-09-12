@@ -243,7 +243,7 @@ test("cancelled startup attachment stays hidden and retained child reattaches wi
 				async agentTemplateSnapshot() { return { templates: [] }; },
 				observe: unexpectedOwnerRequest, message: unexpectedOwnerRequest,
 				wait: unexpectedOwnerRequest, control: unexpectedOwnerRequest,
-				spawn: unexpectedOwnerRequest, askUserQuestion: unexpectedOwnerRequest,
+				spawn: unexpectedOwnerRequest, askUser: unexpectedOwnerRequest,
 			},
 		},
 		ownerEnvironment: {

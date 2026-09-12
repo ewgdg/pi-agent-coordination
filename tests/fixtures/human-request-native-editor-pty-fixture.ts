@@ -89,7 +89,7 @@ const view = {
 	guardToolResult(message: MessageEndEvent["message"]) {
 		if (
 			message.role === "toolResult" &&
-			message.toolName === "ask_user_question" &&
+			message.toolName === "ask_user" &&
 			!message.isError
 		) {
 			pending = false;
@@ -119,7 +119,7 @@ const extension: ExtensionFactory = (pi) => {
 const host = await createManuallyManagedUnboundTestOwnerHost(extension);
 host.model.setResponses([
 	fauxAssistantMessage(
-		fauxToolCall("ask_user_question", { question: QUESTION }, { id: "pty-ask-user" }),
+		fauxToolCall("ask_user", { question: QUESTION }, { id: "pty-ask-user" }),
 		{ stopReason: "toolUse" },
 	),
 	fauxAssistantMessage("The native editor Answer committed."),

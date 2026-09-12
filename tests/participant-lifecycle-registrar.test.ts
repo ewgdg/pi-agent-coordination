@@ -72,7 +72,7 @@ const lifecycleEventNames = [
 const toolResultMessage: MessageEndEvent["message"] = {
 	role: "toolResult",
 	toolCallId: "human-tool-call",
-	toolName: "ask_user_question",
+	toolName: "ask_user",
 	content: [{ type: "text", text: "Answer" }],
 	isError: false,
 	timestamp: 1,

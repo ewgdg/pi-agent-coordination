@@ -50,7 +50,7 @@ export function resolveCommittedHumanRequest(options: {
 		agentId: options.agentId,
 		transcript: options.transcript,
 		toolCallId: options.toolCallId,
-		toolName: "ask_user_question",
+		toolName: "ask_user",
 	});
 	const input = validateHumanRequestInput(committed.input);
 	const provided = validateHumanRequestInput(
@@ -113,7 +113,7 @@ export function inspectCommittedHumanRequestResult(options: {
 	if (!match || match.type !== "message" || match.message.role !== "toolResult") {
 		return { state: "pending" };
 	}
-	if (match.message.toolName !== "ask_user_question") {
+	if (match.message.toolName !== "ask_user") {
 		throw new ProtocolInvariantError(
 			`Human Request ${options.request.requestId} result names ${match.message.toolName}`,
 		);

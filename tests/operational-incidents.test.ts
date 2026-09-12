@@ -168,7 +168,7 @@ test("a settled answer-obligated Agent is reminded once before one atomic Obliga
 		"agent_message",
 		"agent_observe",
 		"agent_wait",
-		"ask_user_question",
+		"ask_user",
 		"bash",
 		"edit",
 		"find",
@@ -1449,13 +1449,13 @@ test("external Answer clearance releases Moderator handling", async (t) => {
 
 	const routePostReminderResponse = (context: Context) => {
 		const transcript = JSON.stringify(context.messages);
-		if (!context.tools?.some(({ name }) => name === "ask_user_question")) {
+		if (!context.tools?.some(({ name }) => name === "ask_user")) {
 			return fauxAssistantMessage("The Owner observed the externally committed Answer.");
 		}
 		if (transcript.includes("answer-after-reminder")) {
 			return fauxAssistantMessage(
 				fauxToolCall(
-					"ask_user_question",
+					"ask_user",
 					{ question: "Keep this Run active after its Answer commits." },
 					{ id: "wait-after-answer-clearance" },
 				),
@@ -2129,7 +2129,7 @@ test("input, Human attention, selection, and Hold prevent a blocked Request-cycl
 			) {
 				return fauxAssistantMessage(
 					fauxToolCall(
-						"ask_user_question",
+						"ask_user",
 						{ question: "Provide input before this Run settles." },
 						{ id: "pause-self-cycle" },
 					),
@@ -2523,7 +2523,7 @@ test("two committed Moderator failures publish bounded Owner Attention until cle
 test("selected-child native quit fences Workflow shutdown before exit and creates no Moderator", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t);
 	harness.host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("ask_user_question", {
+		fauxAssistantMessage(fauxToolCall("ask_user", {
 			question: "Keep this Creation Request open until the human decides.",
 		}, { id: "quit-child-human-request" }), { stopReason: "toolUse" }),
 	]);
@@ -2564,7 +2564,7 @@ test("selected-child native quit fences Workflow shutdown before exit and create
 test("an unselected child's native quit remains Run Failure rather than Workflow shutdown", async (t) => {
 	const harness = await createIncidentBoundaryHarness(t);
 	harness.host.model.setResponses([
-		fauxAssistantMessage(fauxToolCall("ask_user_question", {
+		fauxAssistantMessage(fauxToolCall("ask_user", {
 			question: "Keep the child obligated.",
 		}, { id: "unselected-quit-human-request" }), { stopReason: "toolUse" }),
 		fauxAssistantMessage("Investigate the unexpected child exit."),
@@ -3533,7 +3533,7 @@ test("blocked Delivery upstream Human waiting excludes moderation without timing
 	});
 	host.model.setResponses([
 		fauxAssistantMessage(fauxToolCall("agent_spawn", {request: "Blocked leaf."}, {id: "human-leaf"}), {stopReason: "toolUse"}),
-		fauxAssistantMessage(fauxToolCall("ask_user_question", {question: "Choose whether to continue."}, {id: "human-blocked-parent"}), {stopReason: "toolUse"}),
+		fauxAssistantMessage(fauxToolCall("ask_user", {question: "Choose whether to continue."}, {id: "human-blocked-parent"}), {stopReason: "toolUse"}),
 	]);
 	await spawnFromView(host.session, owner, "human-wait-parent", "Delegate, then ask the Human.");
 	await waitForCondition(() => owner.humanAttention().length === 1);

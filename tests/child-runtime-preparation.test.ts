@@ -117,7 +117,7 @@ test("resolves one process-safe ordinary child creation preparation without eval
 				"agent_control",
 				"agent_observe",
 				"agent_spawn",
-				"ask_user_question",
+				"ask_user",
 			],
 			skills: ["review", "project-audit"],
 			extensions: [extensionPath],
@@ -228,7 +228,7 @@ test("uses current parent trust for the same cwd and saved or global trust for a
 			"agent_wait",
 			"agent_control",
 			"agent_observe",
-			"ask_user_question",
+			"ask_user",
 			"moderator_control",
 			"report_to_user",
 		],
@@ -321,6 +321,6 @@ test("replaces inherited or configured coordination tools with the exact child r
 		"agent_control",
 		"agent_observe",
 		"agent_spawn",
-		"ask_user_question",
+		"ask_user",
 	]);
 });

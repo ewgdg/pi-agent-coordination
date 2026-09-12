@@ -1140,7 +1140,7 @@ test("startup admits extension-controlled active tool order within the configure
 		"agent_control",
 		"agent_observe",
 		"agent_spawn",
-		"ask_user_question",
+		"ask_user",
 	] as const;
 	let runtime: PiChildProcessRuntime | undefined;
 	try {
@@ -1180,7 +1180,7 @@ test("startup admits extension-controlled active tool order within the configure
 			"agent_control",
 			"agent_observe",
 			"agent_spawn",
-			"ask_user_question",
+			"ask_user",
 		]);
 	} finally {
 		await runtime?.dispose();
@@ -1689,7 +1689,7 @@ function ordinaryOwnerHandlers(options: Readonly<{
 					reason: "Test child was not created",
 				};
 			},
-			async askUserQuestion() {
+			async askUser() {
 				return { requestId: "unused-human", answer: "unused" };
 			},
 		},

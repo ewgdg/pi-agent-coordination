@@ -586,7 +586,7 @@ test("opening and closing a cold-recovered answer-obligated Agent keeps it dorma
 	host.model.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall(
-				"ask_user_question",
+				"ask_user",
 				{ question: "Leave the Creation Request unanswered across host loss." },
 				{ id: "pause-before-cold-dormant-inspection" },
 			),
@@ -726,7 +726,7 @@ test("cold successor retains captured template rules after rename and recovers r
 			successorPrompt = context.systemPrompt ?? "";
 			return fauxAssistantMessage(
 				fauxToolCall(
-					"ask_user_question",
+					"ask_user",
 					{ question: "Keep this successor Run observable." },
 					{ id: "hold-recovered-child-run" },
 				),
@@ -1038,7 +1038,7 @@ test("a fresh Owner host rediscovers a standalone Moderator with its captured pr
 		"agent_message",
 		"agent_observe",
 		"agent_wait",
-		"ask_user_question",
+		"ask_user",
 		"moderator_control",
 		"read",
 		"report_to_user",
@@ -1230,7 +1230,7 @@ for (const nested of [false, true]) {
 test(`workflow_resume reactivates ${nested ? "nested" : "delivered"} unanswered work once without Request redelivery`, { timeout: 10_000 }, async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true, implicitModeratorResponses: false });
 	await bindTestOwnerHost(host, "tui");
-	host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Pause before restart." }, { id: "pause-resume" }), { stopReason: "toolUse" })]);
+	host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Pause before restart." }, { id: "pause-resume" }), { stopReason: "toolUse" })]);
 	const spawned = await executeTool(host, "agent_spawn", "resume-child", { request: "Recover this interrupted work." }) as { agentId: string };
 	const file = await waitForSessionFile(workflowSessionDirectory(host), spawned.agentId);
 	await waitForTranscriptEntry(file, entry => entry.type === "message" && entry.message.role === "assistant");
@@ -1260,7 +1260,7 @@ test(`workflow_resume reactivates ${nested ? "nested" : "delivered"} unanswered 
 	let recoveredContext = "";
 	reopened.model.setResponses([(context) => {
 		recoveredContext = JSON.stringify(context.messages);
-		return fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Keep recovery live." }, { id: "pause-recovered" }), { stopReason: "toolUse" });
+		return fauxAssistantMessage(fauxToolCall("ask_user", { question: "Keep recovery live." }, { id: "pause-recovered" }), { stopReason: "toolUse" });
 	}]);
 	const receipt = await executeTool(reopened, "workflow_resume", "resume-workflow", {}) as { activations: Array<{ agentId: string; disposition: string; requestIds: string[] }> };
 	assert.ok(receipt.activations.some(item => item.agentId === spawned.agentId && item.disposition === "admitted"));
@@ -1278,7 +1278,7 @@ test(`workflow_resume reactivates ${nested ? "nested" : "delivered"} unanswered 
 		let continuedAgain = false;
 		reopenedAgain.model.setResponses([() => {
 			continuedAgain = true;
-			return fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Still unfinished after another restart." }, { id: "pause-second-recovery" }), { stopReason: "toolUse" });
+			return fauxAssistantMessage(fauxToolCall("ask_user", { question: "Still unfinished after another restart." }, { id: "pause-second-recovery" }), { stopReason: "toolUse" });
 		}]);
 		await executeTool(reopenedAgain, "workflow_resume", "resume-second-restart", {});
 		await waitForCondition(async () => continuedAgain);
@@ -1292,7 +1292,7 @@ for (const boundary of ["before_request_delivery", "after_answer_commitment"] as
 	test(`workflow_resume restores original identity at ${boundary}`, { timeout: 10_000 }, async t => {
 		const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true, implicitModeratorResponses: false });
 		await bindTestOwnerHost(host, "tui");
-		host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Pause." }, { id: "pause-boundary" }), { stopReason: "toolUse" })]);
+		host.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Pause." }, { id: "pause-boundary" }), { stopReason: "toolUse" })]);
 		const spawned = await executeTool(host, "agent_spawn", "boundary-spawn", { request: "Original boundary work." }) as { agentId: string; requestMessageId: string };
 		const file = await waitForSessionFile(workflowSessionDirectory(host), spawned.agentId);
 		await waitForTranscriptEntry(file, entry => entry.type === "message" && entry.message.role === "assistant");
@@ -1314,7 +1314,7 @@ for (const boundary of ["before_request_delivery", "after_answer_commitment"] as
 				isError: false, timestamp: Date.now() });
 		}
 		const reopened = await reopenOwner(t, host, ownerFile, { implicitModeratorResponses: false });
-		reopened.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Recovered." }, { id: "hold-boundary-recovered" }), { stopReason: "toolUse" })]);
+		reopened.model.setResponses([fauxAssistantMessage(fauxToolCall("ask_user", { question: "Recovered." }, { id: "hold-boundary-recovered" }), { stopReason: "toolUse" })]);
 		const result = await executeTool(reopened, "workflow_resume", "boundary-resume", {}) as { deliveries: Array<{ messageId: string; kind: string; disposition: string }>; activations: unknown[] };
 		assert.equal(result.activations.length, 0);
 		assert.ok(result.deliveries.some(item => item.kind === (boundary === "before_request_delivery" ? "request" : "answer") && item.disposition === "scheduled"));
