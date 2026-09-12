@@ -32,3 +32,9 @@ Use short deterministic Runtime Host fixtures with real transcript commitment, p
 - `npm run typecheck` and `git diff --check`: pass.
 - Full integration suite deliberately not run. No external API or process-runtime implementation changes needed: existing child-correlated completion and transport-loss handling feed the scheduler failure boundary.
 - Documented scheduling, evidence semantics, process-local notification dedup, explicit recovery choices, and relationship to Delivery Stall moderation / Request Wait reconciliation in `docs/agent-messaging.md`.
+
+## Review correction: unavailable evidence during rejected-dispatch cleanup
+- Regression first: extended the no-native-settlement case to make recipient transcript inspection throw `EvidenceUnavailableError` after `sent`, then reject dispatch completion. Before the fix, the failed Run remained live and its reservation stranded retry.
+- Rejected-dispatch cleanup now fences only its still-owned exact Run even when Delivery evidence cannot be read. It does not infer non-Delivery; author evidence remains uncertain/indeterminate, and restored original proof still prevents redelivery.
+- The cleanup lane Promise now has an explicit rejection observer that retains disposal/inspection errors as scheduling diagnostics without repeated author notices.
+- Added a cleanup-disposal error diagnostic test and a restored-original-proof retry test. Focused notice/scheduler/failed-observation/Wait suites, typecheck and diff whitespace validation pass.
