@@ -17,6 +17,8 @@ import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import {
 	createAgentBoundExtension,
 } from "../src/bootstrap/agent-extension.ts";
+import { registerHerdrQuestionAttention } from "../src/pi-integration/herdr-question-attention.ts";
+import { latestRequestFromContext } from "./support/model-requests.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 import { WorkflowCoordinator } from "../src/coordination/workflow-coordinator.ts";
 import {
@@ -625,6 +627,77 @@ test("Human Request fails before input_required when no interactive Agent editor
 
 	await coordinator.shutdown(async () => host.runtime.dispose());
 });
+
+for (const completion of ["answer", "interrupt", "shutdown"] as const) {
+	test(`Herdr coalesces real questions across reload and ${completion}`, { timeout: 10_000 }, async (t) => {
+		let view: ReturnType<WorkflowCoordinator["forAgent"]> | undefined;
+		const attentionEvents: unknown[] = [];
+		const host = await createUnboundTestOwnerHost(t, (pi) => {
+			createAgentBoundExtension(() => view!)(pi);
+			registerHerdrQuestionAttention(pi, () => view);
+		}, {
+			persistent: true, processVisibleModel: true,
+			additionalExtensionFactories: [(pi) => {
+				pi.events.on("herdr:blocked", (data) => attentionEvents.push(data));
+			}],
+		});
+		const identity = adoptOrValidateOwnerIdentity(host.runtime);
+		const coordinator = await createTestWorkflowCoordinator(host, identity, {
+			entryModulePath: "<inline:pi-agent-coordination>",
+			incidentBoundaryHooks: { beforeModeratorRunStart: () => "confirmed_failure" },
+		});
+		view = coordinator.forAgent(identity.agentId);
+		await bindTestOwnerHost(host, "tui");
+		host.model.setResponses(Array.from({ length: 8 }, () => (context) => {
+			const answered = context.messages.some((message) => message.role === "toolResult" && message.toolName === "ask_user_question");
+			return answered
+				? fauxAssistantMessage(fauxToolCall("agent_message", {
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Human answered.",
+				}, { id: "answer-creation" }), { stopReason: "toolUse" })
+				: fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Choose an option." },
+					{ id: "ask-option" }), { stopReason: "toolUse" });
+		}));
+		const children: string[] = [];
+		for (let index = 0; index < 2; index++) {
+			const input = { request: "Ask the human for a decision." };
+			const toolCallId = `spawn-question-${index}`;
+			host.session.sessionManager.appendMessage(fauxAssistantMessage(fauxToolCall("agent_spawn", input, { id: toolCallId }), { stopReason: "toolUse" }));
+			const receipt = await view.spawn(toolCallId, input);
+			assert.ok("agentId" in receipt && receipt.agentId);
+			children.push(receipt.agentId);
+			await waitForInputRequired(view, receipt.agentId);
+		}
+		assert.equal(view.hasPendingHumanQuestions(), true);
+		assert.deepEqual(attentionEvents, [{ active: true, label: "An agent needs your input" }]);
+
+		await host.session.reload();
+		assert.deepEqual(attentionEvents, [
+			{ active: true, label: "An agent needs your input" },
+			{ active: false },
+			{ active: true, label: "An agent needs your input" },
+		]);
+		await coordinator.forAgent(children[0]!).resumeFromHuman("Use option A.", undefined);
+		await waitForCondition(() => view!.humanAttention().length === 1);
+		assert.equal(view.hasPendingHumanQuestions(), true);
+		assert.equal(attentionEvents.length, 3, "answering one question must not clear the other");
+		if (completion === "answer") {
+			await coordinator.forAgent(children[1]!).resumeFromHuman("Use option B.", undefined);
+		} else if (completion === "shutdown") {
+			await coordinator.shutdown(async () => host.runtime.dispose());
+		} else {
+			const cancelInput = { operation: "interrupt" as const, agentId: children[1]! };
+			host.session.sessionManager.appendMessage(fauxAssistantMessage(
+				fauxToolCall("agent_control", cancelInput, { id: "cancel-question" }), { stopReason: "toolUse" },
+			));
+			await view.control("cancel-question", cancelInput);
+		}
+		await waitForCondition(() => !view!.hasPendingHumanQuestions());
+		assert.deepEqual(attentionEvents.at(-1), { active: false });
+		assert.equal(attentionEvents.length, 4);
+		await coordinator.shutdown(async () => host.runtime.dispose());
+		assert.equal(attentionEvents.length, 4, "shutdown must not release someone else's blocker");
+	});
+}
 
 async function createHumanRequestChild(
 	t: TestCleanupRegistrar,

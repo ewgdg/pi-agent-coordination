@@ -294,6 +294,12 @@ export class HumanRequestCoordinator {
 			}));
 	}
 
+	// Fenced calls may remain until their native error result commits, but they
+	// no longer accept an Answer and must not keep human-input presentation active.
+	hasPendingQuestions(): boolean {
+		return [...this.#pendingByRequestId.values()].some(({ phase }) => phase !== "fenced");
+	}
+
 	hasPendingRequest(agentId: string, requestId?: string): boolean {
 		const pending = this.#pendingForAgent(agentId);
 		return pending !== undefined && (

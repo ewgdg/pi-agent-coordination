@@ -170,6 +170,7 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	bindPhysicalAgentSurface(surface: PhysicalAgentViewSurface): () => void;
 	focusHumanAnswer(agentId: string, requestId: string): Promise<void>;
 	humanAttention(): readonly HumanAttentionItem[];
+	hasPendingHumanQuestions(): boolean;
 	operationalAttention(): readonly OperationalIncidentAttention[];
 	reportHistory(): readonly ReportHistoryItem[];
 	setReportRead(reportId: string, read: boolean): void;
@@ -637,6 +638,7 @@ export class WorkflowCoordinator {
 				this.#humanRequests.reconcileCommittedResults(agentId),
 			// These surfaces belong to the human Workflow Owner even while a child
 			// Runtime supplies the selected interactive mode.
+			hasPendingHumanQuestions: () => this.#humanRequests.hasPendingQuestions(),
 			humanAttention: () =>
 				this.#humanRequests.attentionItems(this.#ownerIdentity.agentId),
 			reportHistory: () => this.#reports.history(),

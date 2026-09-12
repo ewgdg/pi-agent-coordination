@@ -65,6 +65,16 @@ DECIDE  Agent label · Which boundary should remain authoritative?…
 
 The row contains a bounded one-line question preview. Selecting it closes the roster, opens the requesting Agent's full-window view at the latest transcript position, and focuses that Agent's native editor. The request remains pending if the human switches to Owner or another Agent.
 
+## Herdr attention
+
+When Herdr's Pi integration is installed, the first pending Human Request immediately reports `blocked` with “An agent needs your input.” Other Agents may continue working: this state means human input is pending, not that all autonomous work has stopped. Herdr's status, state-based waits, and configured request notifications use that semantic blocked state.
+
+The root Pi session emits one `herdr:blocked` activation for the whole pending-question episode. Additional questions or worker activity do not emit additional activations. It clears after the last successful Answer commits, or when the final question is interrupted or its Run is fenced. Submitted Answers remain pending until native result commitment; fenced calls do not keep the notification active while their error results finish committing.
+
+This is a thin event adapter, not a Herdr CLI integration. With no Herdr listener, the events are harmless. It does not wake the Owner, fabricate Pi settlement, change `agent_wait` results, or affect passive parking. It observes coordination Human Requests, not generic Pi UI prompts (selectors, editors, or custom dialogs) or unrelated third-party question tools.
+
+Shutdown releases only this adapter's activation and removes its subscription. Resource reload clears the old binding and reconstructs attention from the retained workflow after all extensions finish `session_start`; host loss does not resurrect historical questions. Herdr owns notification delivery and preferences, including presentation of a restored blocker after reload.
+
 ## Answer mode
 
 A selected Agent with an unresolved Human Request shows one compact line above its native editor:

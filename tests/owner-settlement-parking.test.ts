@@ -15,8 +15,12 @@ import { executeAndCommitRegisteredTool } from "./support/agent-session.ts";
 
 for (const explicitWait of [false, true]) {
 	test(`Human input releases passive parking but not an executing Owner Wait (explicit Wait: ${explicitWait})`, { timeout: 10_000 }, async (t) => {
+		const attentionEvents: unknown[] = [];
 		const host = await createTestOwnerHost(t, piAgentCoordination, {
 			persistent: true, processVisibleModel: true,
+			additionalExtensionFactories: [(pi) => {
+				pi.events.on("herdr:blocked", (data) => attentionEvents.push(data));
+			}],
 		});
 		let askHuman!: () => void;
 		const childGate = new Promise<void>((resolve) => { askHuman = resolve; });
@@ -50,6 +54,7 @@ for (const explicitWait of [false, true]) {
 		assert.equal(host.session.isIdle, false);
 		askHuman();
 		await waitUntil(() => ownerDockText(host).includes("Which option should I use"));
+		assert.deepEqual(attentionEvents, [{ active: true, label: "An agent needs your input" }]);
 		if (explicitWait) {
 			// Agent Wait is still an executing native tool, not an agent_end boundary.
 			// Its result/preemption contract is deliberately outside passive parking.
@@ -63,6 +68,12 @@ for (const explicitWait of [false, true]) {
 		assert.equal(host.session.isIdle, true);
 		assert.deepEqual(lifecycle, ["agent_settled"]);
 		assert.match(ownerDockText(host), /Which option should I use/);
+		await host.session.reload();
+		assert.deepEqual(attentionEvents, [
+			{ active: true, label: "An agent needs your input" },
+			{ active: false },
+			{ active: true, label: "An agent needs your input" },
+		]);
 	});
 }
 
@@ -70,7 +81,13 @@ for (const independentFinishesFirst of [false, true]) {
 	test(`Owner stays parked through nested dependency waits (independent work finishes first: ${independentFinishesFirst})`, {
 		timeout: 10_000,
 	}, async (t) => {
-		const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+		const attentionEvents: unknown[] = [];
+		const host = await createTestOwnerHost(t, piAgentCoordination, {
+			persistent: true, processVisibleModel: true,
+			additionalExtensionFactories: [(pi) => {
+				pi.events.on("herdr:blocked", (data) => attentionEvents.push(data));
+			}],
+		});
 		let askHuman!: () => void;
 		const leafGate = new Promise<void>((resolve) => { askHuman = resolve; });
 		let finishIndependent!: () => void;
@@ -126,6 +143,7 @@ for (const independentFinishesFirst of [false, true]) {
 		}
 		askHuman();
 		await waitUntil(() => ownerDockText(host).includes("Choose the leaf's next action."));
+		assert.deepEqual(attentionEvents, [{ active: true, label: "An agent needs your input" }]);
 		if (!independentFinishesFirst) {
 			assert.equal(host.session.isIdle, false, "independent work must keep the workflow active despite Human Request");
 			assert.deepEqual(lifecycle, []);
