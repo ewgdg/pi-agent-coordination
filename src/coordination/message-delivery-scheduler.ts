@@ -97,12 +97,22 @@ export type IncomingRequestWaitPreemptor = (
 	reserveDelivery: () => boolean,
 ) => Promise<void>;
 
+export type MessageDeliveryFailure = Readonly<{
+	record: AgentRecord;
+	delivery: ScheduledMessageDelivery;
+	reason: string;
+	outcome: "confirmed_not_delivered" | "uncertain";
+}>;
+
 type TrackedDeliveryProgress = {
 	record: AgentRecord;
 	delivery: ScheduledDelivery;
 	watcher: DeliveryProgress;
 	dispatched: boolean;
 	failed: boolean;
+	admitted: boolean;
+	notified: boolean;
+	failure?: { reason: string; outcome: MessageDeliveryFailure["outcome"] };
 };
 
 type BlockedDelivery = Readonly<{
@@ -138,6 +148,7 @@ export class MessageDeliveryScheduler {
 	readonly #progress = new Map<string, TrackedDeliveryProgress>();
 	readonly #progressClock: OperationReviewClock;
 	readonly #progressChanged: () => void;
+	readonly #onDeliveryFailure: ((failure: MessageDeliveryFailure) => void | Promise<void>) | undefined;
 	readonly #isWaitingForCapacity: (agentId: string) => boolean;
 	readonly #pendingByAgent = new Map<string, Map<string, ScheduledDelivery>>();
 	readonly #activeModeratorReminderByAgent = new Map<string, { settled: boolean }>();
@@ -165,8 +176,10 @@ export class MessageDeliveryScheduler {
 		workflowPolicy: WorkflowPolicyStore;
 		deliveryProgressClock?: OperationReviewClock;
 		onDeliveryProgressChanged?(): void;
+		onDeliveryFailure?(failure: MessageDeliveryFailure): void | Promise<void>;
 		isWaitingForCapacity?(agentId: string): boolean;
 	}) {
+		this.#onDeliveryFailure = options.onDeliveryFailure;
 		this.#progressClock = options.deliveryProgressClock ?? SYSTEM_OPERATION_REVIEW_CLOCK;
 		this.#progressChanged = options.onDeliveryProgressChanged ?? (() => undefined);
 		this.#isWaitingForCapacity = options.isWaitingForCapacity ?? (() => false);
@@ -252,7 +265,7 @@ export class MessageDeliveryScheduler {
 	#trackProgress(record: AgentRecord, delivery: ScheduledDelivery): void {
 		if (this.#progress.has(delivery.messageId)) return;
 		this.#progress.set(delivery.messageId, {
-			record, delivery, dispatched: false, failed: false,
+			record, delivery, dispatched: false, failed: false, admitted: false, notified: false,
 			watcher: new DeliveryProgress(this.#progressClock,
 				this.#workflowPolicy.current().deliveryProgressIntervalMs, this.#progressChanged),
 		});
@@ -261,7 +274,7 @@ export class MessageDeliveryScheduler {
 
 	#advanceProgress(delivery: ScheduledDelivery, stage: DeliveryProgressStage): void {
 		const item = this.#progress.get(delivery.messageId);
-		if (!item) return;
+		if (!item || item.delivery !== delivery) return;
 		item.failed = false;
 		if (stage === "dispatched") item.dispatched = true;
 		item.watcher.advance(stage);
@@ -269,9 +282,27 @@ export class MessageDeliveryScheduler {
 
 	#failDeliveryProgress(delivery: ScheduledDelivery, error: unknown): void {
 		const item = this.#progress.get(delivery.messageId);
-		if (!item) return;
+		if (!item || item.delivery !== delivery) return;
 		item.failed = true;
 		item.watcher.fail(error);
+		item.failure ??= {
+			reason: error instanceof Error ? error.message : String(error),
+			outcome: item.dispatched ? "uncertain" : "confirmed_not_delivered",
+		};
+		this.#notifyFailure(item);
+	}
+
+	#notifyFailure(item: TrackedDeliveryProgress): void {
+		if (!item.admitted || item.notified || !item.failure || !("deliveryItem" in item.delivery)) return;
+		item.notified = true;
+		// Notification startup failure remains visible to operational progress; never
+		// recursively notify a notice or retry the original Message.
+		void Promise.resolve(this.#onDeliveryFailure?.({ record: item.record, delivery: item.delivery, ...item.failure }))
+			.catch(error => {
+				if (this.#progress.get(item.delivery.messageId) === item) {
+					item.watcher.fail(new Error(`Author notification failed: ${error instanceof Error ? error.message : String(error)}`));
+				}
+			});
 	}
 
 	integrate(record: AgentRecord): void {
@@ -345,7 +376,17 @@ export class MessageDeliveryScheduler {
 			this.recordAdmissionFailure(record, delivery, new Error("Pending Delivery admission capacity exhausted without a queued continuation"));
 			return "capacity_exhausted";
 		}
+		// A fresh scheduling attempt follows loss of all reservations; old completion
+		// callbacks must not report against the new attempt for the same identity.
+		this.#progress.get(delivery.messageId)?.watcher.dispose();
+		this.#progress.delete(delivery.messageId);
 		this.#trackProgress(record, delivery);
+		if (delivery.isSuppressed?.()) {
+			this.#progress.get(delivery.messageId)?.watcher.dispose();
+			this.#progress.delete(delivery.messageId);
+			if (pending.size === 0) this.#pendingByAgent.delete(record.identity.agentId);
+			return "pending";
+		}
 		if (!record.host.currentHandle()) {
 			try {
 				await record.host.startInLane(["pending_delivery"]);
@@ -377,6 +418,11 @@ export class MessageDeliveryScheduler {
 				this.#removePendingDeliveryReason(record);
 			}
 			throw error;
+		}
+		const progress = this.#progress.get(delivery.messageId);
+		if (progress) {
+			progress.admitted = true;
+			this.#notifyFailure(progress);
 		}
 		return "pending";
 	}
@@ -651,8 +697,11 @@ export class MessageDeliveryScheduler {
 			// Only scheduling still owned by this drain lost its continuation.
 			// A different dispatched Message keeps its existing Pi continuation.
 			for (const delivery of this.#pendingByAgent.get(record.identity.agentId)?.values() ?? []) {
-				if (!this.hasDispatchReservation(record.identity.agentId, delivery.messageId)) this.#failDeliveryProgress(delivery, error);
+				if (this.hasDispatchReservation(record.identity.agentId, delivery.messageId)) continue;
+				this.#failDeliveryProgress(delivery, error);
+				this.#pendingByAgent.get(record.identity.agentId)?.delete(delivery.messageId);
 			}
+			this.#removePendingDeliveryReason(record);
 			throw error;
 		}
 	}
@@ -802,12 +851,23 @@ export class MessageDeliveryScheduler {
 		confirmation?: TranscriptCommitConfirmation,
 	) {
 		try {
-			const dispatched = record.host.deliverInLane(input, confirmation);
+			// Once handed to a Runtime, an exception alone cannot prove non-Delivery.
 			for (const delivery of deliveries) this.#advanceProgress(delivery, "dispatched");
+			const handle = record.host.currentHandle();
+			const dispatched = record.host.deliverInLane(input, confirmation);
 			// The Pi prompt Promise can outlive Delivery proof by an entire model
 			// turn. Observe rejection, but let transcript proof end delivery timing.
 			void dispatched.completion.catch((error: unknown) => {
 				for (const delivery of deliveries) this.#failDeliveryProgress(delivery, error);
+				// Rejection before a native turn starts has no settlement event. Fence
+				// this exact failed Run before explicit retry can acquire its identity.
+				void record.host.lane.run(async () => {
+					if (!handle || !record.host.isCurrent(handle)) return;
+					if (!deliveries.some(delivery =>
+						this.#progress.get(delivery.messageId)?.delivery === delivery &&
+						this.hasDispatchReservation(record.identity.agentId, delivery.messageId) && !delivery.inspectProof())) return;
+					await this.#finishSettledInLane(record, handle, "failed");
+				});
 			});
 			return dispatched;
 		} catch (error) {

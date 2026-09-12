@@ -1,3 +1,4 @@
+import { scheduleDeliveryFailureNotice } from "./delivery-failure-notifications.ts";
 import { findAuthoredSupervisoryResumeMessages } from "../protocol/run-control.ts";
 import { findAuthoredAgentMessageSources, inspectCanonicalRequestResolution } from "../protocol/request-resolution.ts";
 import { compareCommittedToolCallOrder, deriveMessageIdentity } from "../protocol/identities.ts";
@@ -148,6 +149,10 @@ export class MessageCoordinator {
 			deliveryProgressClock: options.deliveryProgressClock,
 			onDeliveryProgressChanged: options.onDeliveryProgressChanged,
 			isWaitingForCapacity: options.isWaitingForCapacity,
+			onDeliveryFailure: failure => scheduleDeliveryFailureNotice({
+				failure, author: this.#requireAgent(failure.delivery.deliveryItem.source.agentId),
+				scheduler: this.#deliveryScheduler, isShuttingDown: this.#isShuttingDown,
+			}),
 		});
 	}
 
