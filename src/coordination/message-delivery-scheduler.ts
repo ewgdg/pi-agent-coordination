@@ -193,6 +193,27 @@ export class MessageDeliveryScheduler {
 		return blocked;
 	}
 
+	hasAutonomousProgress(): boolean {
+		for (const item of this.#progress.values()) {
+			const { record, delivery, watcher } = item;
+			if (delivery.inspectProof() || delivery.isSuppressed?.() || item.failed ||
+				delivery.isReady?.() === false || record.host.blocksOrdinaryDelivery() ||
+				this.#isWaitingForCapacity(record.identity.agentId)) continue;
+			const run = record.host.observe();
+			if (run.phase === "dormant" || (run.phase === "live" && run.attention === "input_required")) continue;
+			if (watcher.observe(this.#deliveryWaitIsLegitimate(item))) continue;
+			if (item.dispatched) return true;
+			if (run.phase === "live" && run.attention === "agent_wait" &&
+				!delivery.isIncomingRequest && !delivery.preemptsAgentWait) continue;
+			// Pending work only counts when its existing scheduling can advance;
+			// dormant recipients and blocked Request ancestry are not recovery.
+			const pending = this.#pendingByAgent.get(record.identity.agentId);
+			if (pending && this.#eligibleDeliveries(pending).includes(delivery) &&
+				(!delivery.isIncomingRequest || !delivery.isIncomingRequestBlocked?.())) return true;
+		}
+		return false;
+	}
+
 	#deliveryWaitIsLegitimate(item: TrackedDeliveryProgress): boolean {
 		const { record, delivery } = item;
 		const run = record.host.observe();

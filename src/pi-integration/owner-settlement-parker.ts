@@ -9,7 +9,8 @@ export type OwnerSettlementParkingBinding = Readonly<{
 
 type OwnerSettlementParkingOptions = Readonly<{
 	agent: Agent;
-	hasOutstandingRequests(): boolean;
+	hasAutonomousProgress(): boolean;
+	subscribeToProgressChanges(handler: () => void): () => void;
 	beginParking(
 		runSignal: AbortSignal,
 	): Promise<(() => void | Promise<void>) | undefined> |
@@ -37,9 +38,10 @@ type InstalledParking = {
 const installedByAgent = new WeakMap<Agent, InstalledParking>();
 
 /**
- * Keep one Owner Agent-core run open until turn-triggering input reaches an
- * active queue. Pi's AgentSession listener is installed in its constructor, so
- * this later subscription runs only after Pi and every extension handler finish.
+ * Keep one Owner Agent-core run open while background work can progress, until
+ * input reaches an active queue or the workflow needs attention. Pi's AgentSession
+ * listener is installed in its constructor, so this later subscription runs
+ * only after Pi and every extension handler finish.
  */
 export function installOwnerSettlementParker(
 	options: OwnerSettlementParkingOptions,
@@ -99,7 +101,7 @@ async function parkAtCandidateBoundary(
 		installed.options.agent.hasQueuedMessages()
 	) return;
 	try {
-		if (!installed.options.hasOutstandingRequests()) return;
+		if (!installed.options.hasAutonomousProgress()) return;
 	} catch (error) {
 		reportParkingError(installed, error);
 		return;
@@ -111,15 +113,38 @@ async function parkAtCandidateBoundary(
 		installed.disposed.signal,
 	]);
 	let leaveParking: (() => void | Promise<void>) | undefined;
+	let unsubscribeProgress: (() => void) | undefined;
+	let checkingProgress = false;
+	let watchingProgress = true;
+	const checkProgress = () => {
+		if (checkingProgress) return;
+		checkingProgress = true;
+		// Run observers fire in subscription order. Let scheduling and recovery
+		// listeners admit their handoff before deciding that progress has ended.
+		queueMicrotask(() => {
+			checkingProgress = false;
+			if (!watchingProgress) return;
+			try {
+				if (!installed.options.hasAutonomousProgress()) waiter.wake();
+			} catch (error) {
+				reportParkingError(installed, error);
+				waiter.wake();
+			}
+		});
+	};
 	try {
+		unsubscribeProgress = installed.options.subscribeToProgressChanges(checkProgress);
 		// The waiter exists before parking entry re-drains scheduler-held Delivery.
 		// The authoritative queue check below closes admission before installation.
 		leaveParking = await installed.options.beginParking(runSignal);
-		if (!leaveParking || installed.options.agent.hasQueuedMessages()) waiter.wake();
+		if (!leaveParking || installed.options.agent.hasQueuedMessages() ||
+			!installed.options.hasAutonomousProgress()) waiter.wake();
 		await waiter.promise;
 	} catch (error) {
 		reportParkingError(installed, error);
 	} finally {
+		watchingProgress = false;
+		unsubscribeProgress?.();
 		waiter.dispose();
 		try {
 			await leaveParking?.();

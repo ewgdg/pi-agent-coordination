@@ -23,7 +23,8 @@ test("Owner parking runs after Pi's awaited listener and wakes only after queue 
 	});
 	const parking = installOwnerSettlementParker({
 		agent: agent.asAgent(),
-		hasOutstandingRequests: () => true,
+		subscribeToProgressChanges: () => () => undefined,
+		hasAutonomousProgress: () => true,
 		async beginParking() {
 			assert.equal(extensionFinished, true);
 			lifecycle.push("park:start");
@@ -42,21 +43,22 @@ test("Owner parking runs after Pi's awaited listener and wakes only after queue 
 	parking.dispose();
 });
 
-test("parking bypasses absent Requests, queued continuation, and non-successful low-level Runs", async () => {
+test("parking bypasses absent progress, queued continuation, and non-successful low-level Runs", async () => {
 	for (const candidate of [
-		{ name: "no Request", outstanding: false, event: cleanAgentEnd(), queued: false },
-		{ name: "queued continuation", outstanding: true, event: cleanAgentEnd(), queued: true },
-		{ name: "error", outstanding: true, event: terminalAgentEnd("error"), queued: false },
-		{ name: "aborted", outstanding: true, event: terminalAgentEnd("aborted"), queued: false },
-		{ name: "overflow length", outstanding: true, event: terminalAgentEnd("length"), queued: false },
-		{ name: "deferred continuation", outstanding: true, event: terminalAgentEnd("deferred"), queued: false },
+		{ name: "no progress", progressing: false, event: cleanAgentEnd(), queued: false },
+		{ name: "queued continuation", progressing: true, event: cleanAgentEnd(), queued: true },
+		{ name: "error", progressing: true, event: terminalAgentEnd("error"), queued: false },
+		{ name: "aborted", progressing: true, event: terminalAgentEnd("aborted"), queued: false },
+		{ name: "overflow length", progressing: true, event: terminalAgentEnd("length"), queued: false },
+		{ name: "deferred continuation", progressing: true, event: terminalAgentEnd("deferred"), queued: false },
 	]) {
 		const agent = new TestAgent();
 		if (candidate.queued) agent.followUp(customMessage("already-queued"));
 		let parkingEntries = 0;
 		const binding = installOwnerSettlementParker({
 			agent: agent.asAgent(),
-			hasOutstandingRequests: () => candidate.outstanding,
+			subscribeToProgressChanges: () => () => undefined,
+			hasAutonomousProgress: () => candidate.progressing,
 			beginParking: () => {
 				parkingEntries += 1;
 				return () => undefined;
@@ -73,7 +75,8 @@ test("failed enqueue does not wake parking and the exact Run abort resolves with
 	let parkingEntries = 0;
 	const binding = installOwnerSettlementParker({
 		agent: agent.asAgent(),
-		hasOutstandingRequests: () => true,
+		subscribeToProgressChanges: () => () => undefined,
+		hasAutonomousProgress: () => true,
 		beginParking: () => {
 			parkingEntries += 1;
 			return () => undefined;
@@ -102,7 +105,8 @@ test("queue observation is installed once, closes the waiter race, and restores 
 	let parkingEntries = 0;
 	const options = {
 		agent: agent.asAgent(),
-		hasOutstandingRequests: () => true,
+		subscribeToProgressChanges: () => () => undefined,
+		hasAutonomousProgress: () => true,
 		async beginParking() {
 			parkingEntries += 1;
 			agent.followUp(customMessage("admitted-during-entry"));
@@ -125,7 +129,7 @@ test("queue observation is installed once, closes the waiter race, and restores 
 	assert.equal(agent.followUp, nativeFollowUp);
 });
 
-test("a reconciled final Answer and parking setup failure both leave Agent listeners non-rejecting", async () => {
+test("vanished progress and parking setup failure both leave Agent listeners non-rejecting", async () => {
 	for (const candidate of [
 		"reconciled" as const,
 		"inspection" as const,
@@ -135,7 +139,8 @@ test("a reconciled final Answer and parking setup failure both leave Agent liste
 		const reported: unknown[] = [];
 		const binding = installOwnerSettlementParker({
 			agent: agent.asAgent(),
-			hasOutstandingRequests: () => {
+			subscribeToProgressChanges: () => () => undefined,
+			hasAutonomousProgress: () => {
 				if (candidate === "inspection") throw new Error("inspection failed");
 				return true;
 			},
@@ -151,13 +156,14 @@ test("a reconciled final Answer and parking setup failure both leave Agent liste
 	}
 });
 
-test("Owner parks again after each resumed low-level response until Requests clear", async () => {
+test("Owner parks again after each resumed low-level response until progress ends", async () => {
 	const agent = new TestAgent();
-	let outstanding = true;
+	let progressing = true;
 	let parkingEntries = 0;
 	const binding = installOwnerSettlementParker({
 		agent: agent.asAgent(),
-		hasOutstandingRequests: () => outstanding,
+		subscribeToProgressChanges: () => () => undefined,
+		hasAutonomousProgress: () => progressing,
 		beginParking: () => {
 			parkingEntries += 1;
 			return () => undefined;
@@ -174,11 +180,50 @@ test("Owner parks again after each resumed low-level response until Requests cle
 	agent.followUp(customMessage("second-wake"));
 	await second;
 	agent.clearAllQueues();
-	outstanding = false;
+	progressing = false;
 	await agent.emit(cleanAgentEnd(), new AbortController().signal);
 	assert.equal(parkingEntries, 2);
 	binding.dispose();
 });
+
+for (const lossDuringEntry of [false, true]) {
+	test(`Owner parking observes progress loss without input (entry race: ${lossDuringEntry})`, async () => {
+		const agent = new TestAgent();
+		let progressing = true;
+		let notify: (() => void) | undefined;
+		let left = 0;
+		const binding = installOwnerSettlementParker({
+			agent: agent.asAgent(),
+			hasAutonomousProgress: () => progressing,
+			subscribeToProgressChanges: (handler) => {
+				notify = handler;
+				return () => { notify = undefined; };
+			},
+			async beginParking() {
+				if (lossDuringEntry) progressing = false;
+				return () => { left += 1; };
+			},
+		});
+		const run = agent.emit(cleanAgentEnd(), new AbortController().signal);
+		if (!lossDuringEntry) {
+			await waitUntil(() => notify !== undefined);
+			assert.equal(await isSettled(run), false);
+			// A handoff within one event must not report workflow completion.
+			progressing = false;
+			notify!();
+			progressing = true;
+			notify!();
+			assert.equal(await isSettled(run), false);
+			progressing = false;
+			notify!();
+		}
+		await run;
+		assert.equal(left, 1);
+		assert.equal(notify, undefined);
+		assert.equal(agent.hasQueuedMessages(), false);
+		binding.dispose();
+	});
+}
 
 class TestAgent {
 	readonly listeners = new Set<(

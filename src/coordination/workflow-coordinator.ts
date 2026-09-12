@@ -394,7 +394,10 @@ export class WorkflowCoordinator {
 			isShuttingDown: () => this.#shuttingDown,
 			boundaryHooks: options.messageBoundaryHooks,
 			deliveryProgressClock: options.deliveryProgressClock,
-			onDeliveryProgressChanged: () => this.#operationalIncidents?.deliveryProgressChanged(),
+			onDeliveryProgressChanged: () => {
+				this.#operationalIncidents?.deliveryProgressChanged();
+				this.#notifyAgentActivityChanged();
+			},
 			isWaitingForCapacity: (agentId) => this.#waitingForExecution.has(agentId),
 			preemptAgentWait: (record, reserveDelivery) =>
 				this.#agentWaits.preemptForInboundRequest(record, reserveDelivery),
@@ -671,9 +674,22 @@ export class WorkflowCoordinator {
 		};
 	}
 
-	hasOutstandingOwnerRequests(): boolean {
-		const owner = this.#requireAgent(this.#ownerIdentity.agentId);
-		return this.#messages.outstandingRequestIdsFor(owner).length > 0;
+	hasAutonomousWorkflowProgress(): boolean {
+		if (this.#shuttingDown) return false;
+		// The entire Workflow matters: a waiting parent contributes no execution,
+		// but its progressing descendant (or a recovering Moderator) still does.
+		for (const record of this.#agents.values()) {
+			if (record.identity.agentId === this.#ownerIdentity.agentId ||
+				this.#waitingForExecution.has(record.identity.agentId) ||
+				record.host.blocksOrdinaryDelivery()) continue;
+			const run = record.host.observe();
+			// Moderator startup belongs to the bounded recovery inspection below.
+			// A hung startup must stop counting when that inspection times out.
+			if ((run.phase === "starting" && !this.#isModerator(record.identity.agentId)) || run.phase === "ending" ||
+				(run.phase === "live" && run.work === "active" && run.attention === "none")) return true;
+		}
+		return this.#messages.hasAutonomousDeliveryProgress() ||
+			this.#operationalIncidents.hasAutonomousRecoveryProgress();
 	}
 
 	ownerShutdownSignal(): AbortSignal {

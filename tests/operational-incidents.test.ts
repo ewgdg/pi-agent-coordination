@@ -3597,7 +3597,7 @@ test("moderation inspection deadline reports Owner attention while the inspectio
 	t.after(() => releaseInspection());
 	let block = false;
 	let started = false;
-	const { owner } = await createIncidentBoundaryHarness(t, {
+	const { owner, coordinator } = await createIncidentBoundaryHarness(t, {
 		beforeEvidenceInspection() {
 			if (!block) return;
 			started = true;
@@ -3610,10 +3610,12 @@ test("moderation inspection deadline reports Owner attention while the inspectio
 	block = true;
 	const boundary = owner.reachSafeBoundary();
 	await waitForCondition(() => started);
+	assert.equal(coordinator.hasAutonomousWorkflowProgress(), true, "an actual recovery inspection is progress until its deadline");
 	clock.advanceBy(999);
 	assert.equal(owner.operationalAttention().length, 0);
 	clock.advanceBy(1);
 	assert.equal(owner.operationalAttention()[0]?.trigger.kind, "moderation_unavailable");
+	assert.equal(coordinator.hasAutonomousWorkflowProgress(), false, "a stuck recovery inspection must not keep Owner parking active");
 	clock.advanceBy(10_000);
 	assert.equal(owner.operationalAttention().length, 1);
 	block = false;
@@ -3689,7 +3691,7 @@ test("a blocked replacement Moderator preparation receives deadline attention be
 		return original.call(this, options);
 	});
 	const clock = new ControllableOperationReviewClock();
-	const { host, owner } = await createIncidentBoundaryHarness(t, {}, {
+	const { host, owner, coordinator } = await createIncidentBoundaryHarness(t, {}, {
 		deliveryProgressClock: clock,
 		workflowPolicy: new WorkflowPolicyStore(parseWorkflowPolicy('{"deliveryProgressIntervalMs":1000}')),
 	});
@@ -3709,6 +3711,7 @@ test("a blocked replacement Moderator preparation receives deadline attention be
 	host.model.setResponses(Array.from({length: 8}, () => route));
 	await spawnFromView(host.session, owner, "replacement-watchdog-parent", "Settle without Answer.");
 	await waitForCondition(() => blocked);
+	assert.equal(coordinator.hasAutonomousWorkflowProgress(), true);
 	clock.advanceBy(999);
 	assert.equal(owner.operationalAttention().length, 0);
 	clock.advanceBy(1);
@@ -3716,6 +3719,7 @@ test("a blocked replacement Moderator preparation receives deadline attention be
 	assert.equal(attention.length, 1);
 	assert.equal(attention[0]?.trigger.kind, "obligation_stall");
 	assert.match(attention[0]?.summary ?? "", /creation blocked/);
+	assert.equal(coordinator.hasAutonomousWorkflowProgress(), false, "hung replacement preparation must not keep the workflow active");
 	const pointer = attention[0]?.diagnostics[0];
 	assert.ok(pointer);
 	assert.ok(host.session.sessionManager.getEntry(pointer.entryId));

@@ -166,6 +166,7 @@ export class OperationalIncidentCoordinator {
 	readonly #integratedAgentIds = new Set<string>();
 	readonly #reconciliationLane = new SerialLane();
 	#pendingReconciliation: Promise<void> | undefined;
+	#inspectionStalled = false;
 
 	constructor(options: {
 		agents: Map<string, AgentRecord>;
@@ -271,6 +272,11 @@ export class OperationalIncidentCoordinator {
 
 	deliveryProgressChanged(): void {
 		void this.#scheduleReconciliation();
+	}
+
+	hasAutonomousRecoveryProgress(): boolean {
+		return !this.#isShuttingDown() && !this.#inspectionStalled &&
+			(this.#pendingReconciliation !== undefined || this.#cancelInspectionDeadline !== undefined);
 	}
 
 	beginExecution(agentId: string): void {
@@ -459,10 +465,15 @@ export class OperationalIncidentCoordinator {
 		// This watches the observation pass itself, not the affected Agent's model
 		// or parked Wait. A hung inspector/bootstrap must not hide Owner attention.
 		const intervalMs = this.#workflowPolicy.current().deliveryProgressIntervalMs;
+		this.#inspectionStalled = false;
 		this.#cancelInspectionDeadline = this.#deliveryProgressClock.schedule(intervalMs, () => {
+			this.#inspectionStalled = true;
 			const handling = this.#activeCreation;
 			this.#presentFault(handling ? `moderation:creation:${handling.snapshot.key}` : "moderation:evidence",
 				new Error(`Moderation ${handling ? "creation" : "evidence inspection"} made no completion within ${intervalMs}ms`), handling);
+			// An existing fault may deduplicate its UI entry, but this inspection
+			// has just ceased to be autonomous progress for a parked Owner.
+			this.#onAttentionChanged();
 		});
 		try {
 			await work();
@@ -472,6 +483,7 @@ export class OperationalIncidentCoordinator {
 			this.#cancelInspectionDeadline?.();
 			this.#cancelInspectionDeadline = undefined;
 			this.#activeCreation = undefined;
+			this.#onAttentionChanged();
 		}
 	}
 

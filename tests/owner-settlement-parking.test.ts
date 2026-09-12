@@ -11,6 +11,254 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
+import { executeAndCommitRegisteredTool } from "./support/agent-session.ts";
+
+for (const explicitWait of [false, true]) {
+	test(`Human input releases passive parking but not an executing Owner Wait (explicit Wait: ${explicitWait})`, { timeout: 10_000 }, async (t) => {
+		const host = await createTestOwnerHost(t, piAgentCoordination, {
+			persistent: true, processVisibleModel: true,
+		});
+		let askHuman!: () => void;
+		const childGate = new Promise<void>((resolve) => { askHuman = resolve; });
+		t.after(askHuman);
+		const lifecycle: string[] = [];
+		let ownerResponded = false;
+		host.session.subscribe((event) => {
+			if (event.type === "agent_settled") lifecycle.push(event.type);
+		});
+		const routeResponse = async (context: Context) => {
+			const serialized = JSON.stringify(context.messages);
+			if (serialized.includes("requestMessageId") && !serialized.includes("spawn-needs-human")) {
+				await childGate;
+				return fauxAssistantMessage(fauxToolCall("ask_user_question", {
+					question: "Which option should I use?",
+				}, { id: "child-needs-human" }), { stopReason: "toolUse" });
+			}
+			if (!serialized.includes("spawn-needs-human")) {
+				return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+					request: "Work until you need a human decision.",
+				}, { id: "spawn-needs-human" }), { stopReason: "toolUse" });
+			}
+			ownerResponded = true;
+			return explicitWait
+				? fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "owner-explicit-wait" }), { stopReason: "toolUse" })
+				: fauxAssistantMessage("The background work can proceed without me.");
+		};
+		host.model.setResponses(Array.from({ length: 8 }, () => routeResponse));
+		const prompt = host.session.prompt("Delegate the work.");
+		await waitUntil(() => ownerResponded && (explicitWait || ownerAssistantTexts(host).includes("The background work can proceed without me.")));
+		assert.equal(host.session.isIdle, false);
+		askHuman();
+		await waitUntil(() => ownerDockText(host).includes("Which option should I use"));
+		if (explicitWait) {
+			// Agent Wait is still an executing native tool, not an agent_end boundary.
+			// Its result/preemption contract is deliberately outside passive parking.
+			assert.equal(host.session.isIdle, false);
+			assert.deepEqual(lifecycle, []);
+			await host.session.abort();
+			await prompt;
+			return;
+		}
+		await withTimeout(prompt, 3_000, "Owner stayed active after its only child required human input");
+		assert.equal(host.session.isIdle, true);
+		assert.deepEqual(lifecycle, ["agent_settled"]);
+		assert.match(ownerDockText(host), /Which option should I use/);
+	});
+}
+
+for (const independentFinishesFirst of [false, true]) {
+	test(`Owner stays parked through nested dependency waits (independent work finishes first: ${independentFinishesFirst})`, {
+		timeout: 10_000,
+	}, async (t) => {
+		const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+		let askHuman!: () => void;
+		const leafGate = new Promise<void>((resolve) => { askHuman = resolve; });
+		let finishIndependent!: () => void;
+		const independentGate = new Promise<void>((resolve) => { finishIndependent = resolve; });
+		t.after(() => { askHuman(); finishIndependent(); });
+		let parentWaiting = false;
+		let independentStarted = false;
+		const lifecycle: string[] = [];
+		host.session.subscribe((event) => { if (event.type === "agent_settled") lifecycle.push(event.type); });
+		const routeResponse = async (context: Context) => {
+			const serialized = JSON.stringify(context.messages);
+			const child = serialized.includes("requestMessageId") && !serialized.includes("spawn-progress-parent");
+			if (child && serialized.includes("INDEPENDENT_PROGRESS_WORK")) {
+				independentStarted = true;
+				await independentGate;
+				return fauxAssistantMessage(fauxToolCall("agent_message", {
+					operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Independent work finished.",
+				}, { id: "independent-answer" }), { stopReason: "toolUse" });
+			}
+			if (child && serialized.includes("LEAF_PROGRESS_WORK") && !serialized.includes("spawn-progress-leaf")) {
+				await leafGate;
+				return fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Choose the leaf's next action." },
+					{ id: "leaf-needs-human" }), { stopReason: "toolUse" });
+			}
+			if (child) {
+				if (!serialized.includes("spawn-progress-leaf")) {
+					return fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "LEAF_PROGRESS_WORK" },
+						{ id: "spawn-progress-leaf" }), { stopReason: "toolUse" });
+				}
+				parentWaiting = true;
+				return fauxAssistantMessage(fauxToolCall("agent_wait", {}, { id: "wait-for-progress-leaf" }), { stopReason: "toolUse" });
+			}
+			if (!serialized.includes("spawn-progress-parent")) {
+				return fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "PARENT_PROGRESS_WORK" },
+					{ id: "spawn-progress-parent" }), { stopReason: "toolUse" });
+			}
+			if (!serialized.includes("spawn-independent-progress")) {
+				return fauxAssistantMessage(fauxToolCall("agent_spawn", { request: "INDEPENDENT_PROGRESS_WORK" },
+					{ id: "spawn-independent-progress" }), { stopReason: "toolUse" });
+			}
+			return fauxAssistantMessage("The Owner has no independent work.");
+		};
+		host.model.setResponses(Array.from({ length: 20 }, () => routeResponse));
+		const prompt = host.session.prompt("Delegate nested and independent work.");
+		await waitUntil(() => parentWaiting && independentStarted && ownerAssistantTexts(host).includes("The Owner has no independent work."));
+		assert.equal(host.session.isIdle, false);
+		assert.deepEqual(lifecycle, []);
+		if (independentFinishesFirst) {
+			finishIndependent();
+			await waitUntil(() => ownerAssistantTexts(host).filter((text) => text === "The Owner has no independent work.").length === 2);
+			assert.equal(host.session.isIdle, false, "the progressing grandchild alone must keep its waiting ancestors active");
+			assert.deepEqual(lifecycle, []);
+		}
+		askHuman();
+		await waitUntil(() => ownerDockText(host).includes("Choose the leaf's next action."));
+		if (!independentFinishesFirst) {
+			assert.equal(host.session.isIdle, false, "independent work must keep the workflow active despite Human Request");
+			assert.deepEqual(lifecycle, []);
+			finishIndependent();
+		}
+		await withTimeout(prompt, 3_000, "Owner did not settle after all autonomous work ended");
+		assert.equal(host.session.isIdle, true);
+		assert.deepEqual(lifecycle, ["agent_settled"]);
+		assert.match(ownerDockText(host), /Choose the leaf's next action/);
+	});
+}
+
+test("Owner stays active through terminal child failure and Moderator recovery, then settles when recovery needs a human", {
+	timeout: 10_000,
+}, async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true, processVisibleModel: true, implicitModeratorResponses: false,
+		settings: { retry: { enabled: false } },
+	});
+	let failChild!: () => void;
+	const childGate = new Promise<void>((resolve) => { failChild = resolve; });
+	let askHuman!: () => void;
+	const recoveryGate = new Promise<void>((resolve) => { askHuman = resolve; });
+	t.after(() => { failChild(); askHuman(); });
+	let moderatorStarted = false;
+	const lifecycle: string[] = [];
+	host.session.subscribe((event) => { if (event.type === "agent_settled") lifecycle.push(event.type); });
+	const routeResponse = async (context: Context) => {
+		if (context.tools?.some(({ name }) => name === "moderator_control")) {
+			moderatorStarted = true;
+			await recoveryGate;
+			return fauxAssistantMessage(fauxToolCall("ask_user_question", { question: "Recovery needs your decision." },
+				{ id: "recovery-needs-human" }), { stopReason: "toolUse" });
+		}
+		const serialized = JSON.stringify(context.messages);
+		if (serialized.includes("requestMessageId") && !serialized.includes("spawn-to-fail")) {
+			await childGate;
+			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "400 invalid_request_error: deterministic child failure" });
+		}
+		if (!serialized.includes("spawn-to-fail")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			request: "Work until the controlled failure.",
+		}, { id: "spawn-to-fail" }), { stopReason: "toolUse" });
+		return fauxAssistantMessage("The Owner has delegated the work.");
+	};
+	host.model.setResponses(Array.from({ length: 12 }, () => routeResponse));
+	const prompt = host.session.prompt("Start background work.");
+	await waitUntil(() => ownerAssistantTexts(host).includes("The Owner has delegated the work."));
+	failChild();
+	await waitUntil(() => moderatorStarted);
+	assert.equal(host.session.isIdle, false);
+	assert.deepEqual(lifecycle, [], "failure-to-recovery handoff must not produce transient completion");
+	askHuman();
+	await withTimeout(prompt, 3_000, "Owner stayed parked after recovery required human input");
+	assert.equal(host.session.isIdle, true);
+	assert.deepEqual(lifecycle, ["agent_settled"]);
+	assert.match(ownerDockText(host), /Recovery needs your decision/);
+});
+
+test("terminating the last progressing child releases Owner parking without an Answer", { timeout: 10_000 }, async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+	let releaseChild!: () => void;
+	const gate = new Promise<void>((resolve) => { releaseChild = resolve; });
+	t.after(releaseChild);
+	const routeResponse = async (context: Context) => {
+		const serialized = JSON.stringify(context.messages);
+		if (serialized.includes("requestMessageId") && !serialized.includes("spawn-to-terminate")) {
+			await gate;
+			return fauxAssistantMessage("Unused after termination.");
+		}
+		if (!serialized.includes("spawn-to-terminate")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			request: "Work in the background.",
+		}, { id: "spawn-to-terminate" }), { stopReason: "toolUse" });
+		return fauxAssistantMessage("Waiting for the background work.");
+	};
+	host.model.setResponses(Array.from({ length: 6 }, () => routeResponse));
+	const prompt = host.session.prompt("Start background work.");
+	await waitUntil(() => ownerAssistantTexts(host).includes("Waiting for the background work."));
+	const receipt = host.session.sessionManager.getEntries().find((entry) => entry.type === "message" &&
+		entry.message.role === "toolResult" && entry.message.toolCallId === "spawn-to-terminate");
+	assert.ok(receipt?.type === "message" && receipt.message.role === "toolResult");
+	const { agentId } = receipt.message.details as { agentId: string };
+	assert.equal(host.session.isIdle, false);
+	await executeAndCommitRegisteredTool(host.session, "agent_control", "terminate-background", { operation: "terminate", agentId });
+	await withTimeout(prompt, 3_000, "Termination left the Owner parked on its unanswered Request");
+	assert.equal(host.session.isIdle, true);
+	const status = await executeAndCommitRegisteredTool(host.session, "agent_observe", "observe-dormant-background", { operation: "status", agentId });
+	assert.equal((status.details as { run: { phase: string } }).run.phase, "dormant");
+	await withTimeout(host.session.prompt("No further work is needed."), 3_000, "Dormant dependency parked a later Owner response");
+});
+
+test("Owner parks for ordinary background work even after every Request was answered", { timeout: 10_000 }, async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination, { persistent: true, processVisibleModel: true });
+	let finishWork!: () => void;
+	const gate = new Promise<void>((resolve) => { finishWork = resolve; });
+	t.after(finishWork);
+	let working = false;
+	const routeResponse = async (context: Context) => {
+		const serialized = JSON.stringify(context.messages);
+		if (serialized.includes("requestMessageId") && !serialized.includes("spawn-message-worker")) {
+			if (serialized.includes("ORDINARY_BACKGROUND_WORK")) {
+				working = true;
+				await gate;
+				return fauxAssistantMessage("Ordinary background work finished.");
+			}
+			return fauxAssistantMessage(fauxToolCall("agent_message", {
+				operation: "answer", requestId: latestRequestFromContext(context).requestMessageId, answer: "Creation work complete.",
+			}, { id: "answer-message-worker" }), { stopReason: "toolUse" });
+		}
+		if (!serialized.includes("spawn-message-worker")) return fauxAssistantMessage(fauxToolCall("agent_spawn", {
+			request: "Answer the creation work.",
+		}, { id: "spawn-message-worker" }), { stopReason: "toolUse" });
+		return fauxAssistantMessage("No Owner work remains.");
+	};
+	host.model.setResponses(Array.from({ length: 12 }, () => routeResponse));
+	await host.session.prompt("Create the worker.");
+	const receipt = host.session.sessionManager.getEntries().find((entry) => entry.type === "message" &&
+		entry.message.role === "toolResult" && entry.message.toolCallId === "spawn-message-worker");
+	assert.ok(receipt?.type === "message" && receipt.message.role === "toolResult");
+	const { agentId } = receipt.message.details as { agentId: string };
+	await executeAndCommitRegisteredTool(host.session, "agent_message", "send-ordinary-work", {
+		operation: "send", targetAgent: agentId, content: "ORDINARY_BACKGROUND_WORK",
+	});
+	await waitUntil(() => working);
+	const status = await executeAndCommitRegisteredTool(host.session, "agent_observe", "observe-no-requests", { operation: "status" });
+	assert.equal((status.details as { run: { retentionReasons: { reason: string }[] } }).run.retentionReasons.some(({ reason }) => reason === "awaiting_answer"), false);
+	const responseCount = ownerAssistantTexts(host).length;
+	const prompt = host.session.prompt("Let the worker finish independently.");
+	await waitUntil(() => ownerAssistantTexts(host).length > responseCount);
+	assert.equal(host.session.isIdle, false);
+	finishWork();
+	await withTimeout(prompt, 3_000, "Owner did not settle when ordinary background work completed");
+	assert.equal(host.session.isIdle, true);
+});
 
 test("primary Owner input preempts Agent Wait before the next model turn", {
 	timeout: 10_000,
@@ -383,6 +631,10 @@ test("native custom input wakes a parked working Owner and remains in model cont
 	await withTimeout(prompt, 5_000, "Owner did not settle after the final Answer");
 	assert.equal(lifecycle.filter((event) => event === "agent_settled").length, 1);
 });
+
+function ownerDockText(host: Awaited<ReturnType<typeof createTestOwnerHost>>): string {
+	return [...host.ui.widgets.values()].flatMap((widget) => "render" in widget ? widget.render(180) : widget).join("\n");
+}
 
 function ownerAssistantTexts(
 	host: Awaited<ReturnType<typeof createTestOwnerHost>>,

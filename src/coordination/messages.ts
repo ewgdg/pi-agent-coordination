@@ -234,6 +234,7 @@ export class MessageCoordinator {
 	}
 
 	blockedDeliveries() { return this.#deliveryScheduler.blockedDeliveries(); }
+	hasAutonomousDeliveryProgress(): boolean { return this.#deliveryScheduler.hasAutonomousProgress(); }
 
 	hasDeliveryProgress(record: AgentRecord): boolean { return this.#deliveryScheduler.hasProgress(record); }
 
@@ -664,9 +665,8 @@ export class MessageCoordinator {
 		if (this.#reconcileCommittedAnswerAuthorship(record)) {
 			await this.#deliveryScheduler.requestQueueAdvancedInLane(record);
 		}
-		// Reconciliation can commit the last Answer Delivery after the listener's
-		// first candidate inspection. Do not retain an obsolete parking boundary.
-		if (this.outstandingRequestIdsFor(record).length === 0) return false;
+		// Workflow activity, not Request retention, owns parking eligibility. A
+		// different child can still be working after the last Answer is reconciled.
 		return this.#deliveryScheduler.beginParkingInLane(record, handle);
 	}
 

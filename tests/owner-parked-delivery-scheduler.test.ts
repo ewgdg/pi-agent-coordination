@@ -9,6 +9,7 @@ import type {
 	AgentRuntimeHost,
 } from "../src/runtime/agent-runtime-host.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
+import { ControllableOperationReviewClock } from "./support/controllable-operation-review-clock.ts";
 
 test("park entry does not await the idle Deferred prompt Promise after Delivery proof commits", async () => {
 	const handle: AgentRunHandle = Object.freeze({ sequence: 1 });
@@ -28,6 +29,7 @@ test("park entry does not await the idle Deferred prompt Promise after Delivery 
 		addRetentionReason: () => undefined,
 		removeRetentionReason: () => undefined,
 		blocksOrdinaryDelivery: () => false,
+		hasRetentionReason: () => false,
 		currentWorkState: () => workState,
 		observe: () => ({
 			phase: "live" as const,
@@ -55,6 +57,7 @@ test("park entry does not await the idle Deferred prompt Promise after Delivery 
 		} as never,
 		inspectProof: () => proof,
 	}), "pending");
+	assert.equal(scheduler.hasAutonomousProgress(), true, "uncommitted dispatch is an autonomous handoff");
 
 	workState = "active";
 	assert.equal(await withTimeout(
@@ -62,6 +65,7 @@ test("park entry does not await the idle Deferred prompt Promise after Delivery 
 		100,
 	), false);
 	proof = { agentId: "owner", entryId: "delivery-proof" };
+	assert.equal(scheduler.hasAutonomousProgress(), false, "native prompt duration after proof is not delivery progress");
 	assert.equal(await withTimeout(
 		lane.run(() => scheduler.beginParkingInLane(record, handle)),
 		100,
@@ -69,6 +73,50 @@ test("park entry does not await the idle Deferred prompt Promise after Delivery 
 
 	resolvePrompt();
 	scheduler.endParkingInLane(record, handle);
+});
+
+test("queued Delivery counts only while it can advance autonomously and before its progress deadline", async () => {
+	const handle: AgentRunHandle = { sequence: 1 };
+	let attention: "none" | "agent_wait" | "input_required" = "none";
+	let work: "active" | "settled" = "active";
+	let held = false;
+	let proof: { agentId: string; entryId: string } | undefined;
+	const clock = new ControllableOperationReviewClock();
+	const record = {
+		identity: { agentId: "recipient" },
+		host: {
+			lane: new SerialLane(), currentHandle: () => handle,
+			isCurrent: (candidate: AgentRunHandle) => candidate === handle,
+			addSettledHandler: () => () => undefined, addEndedHandler: () => () => undefined,
+			addRetentionReason: () => undefined, removeRetentionReason: () => undefined,
+			hasRetentionReason: () => false, blocksOrdinaryDelivery: () => held,
+			currentWorkState: () => work,
+			observe: () => ({ phase: "live", work, attention, retentionReasons: [] }),
+		} as unknown as AgentRuntimeHost,
+	} as AgentRecord;
+	const policy = new WorkflowPolicyStore();
+	const scheduler = new MessageDeliveryScheduler({ workflowPolicy: policy, deliveryProgressClock: clock });
+	await scheduler.admitCustom(record, {
+		messageId: "ordinary-queued-work", deliveryMode: "deferred",
+		customMessage: { customType: "test", content: "Work", display: false } as never,
+		inspectProof: () => proof,
+	});
+	assert.equal(scheduler.hasAutonomousProgress(), true);
+	attention = "agent_wait";
+	assert.equal(scheduler.hasAutonomousProgress(), false, "ordinary input cannot preempt a dependency Wait");
+	attention = "input_required";
+	assert.equal(scheduler.hasAutonomousProgress(), false);
+	attention = "none";
+	held = true;
+	assert.equal(scheduler.hasAutonomousProgress(), false);
+	held = false;
+	work = "settled";
+	assert.equal(scheduler.hasAutonomousProgress(), true);
+	clock.advanceBy(policy.current().deliveryProgressIntervalMs);
+	assert.equal(scheduler.hasAutonomousProgress(), false, "lost eligible scheduling is not indefinite progress");
+	proof = { agentId: "recipient", entryId: "proof" };
+	assert.equal(scheduler.hasAutonomousProgress(), false);
+	scheduler.shutdownProgress();
 });
 
 async function withTimeout<T>(operation: Promise<T>, milliseconds: number): Promise<T> {

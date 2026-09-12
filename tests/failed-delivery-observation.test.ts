@@ -31,8 +31,10 @@ test("a failed Request remains blocked throughout unrelated recipient activity",
 	}, new Error("Recipient Run ended before Delivery proof"));
 	const blocked = scheduler.blockedDeliveries();
 	assert.equal(blocked.length, 1);
+	assert.equal(scheduler.hasAutonomousProgress(), false);
 	run = { phase: "live", work: "active", attention: "none", retentionReasons: [] };
 	assert.deepEqual(scheduler.blockedDeliveries(), blocked, "a nudge cannot restore failed scheduling");
+	assert.equal(scheduler.hasAutonomousProgress(), false, "unrelated execution cannot restore failed Delivery progress");
 	run = { phase: "live", work: "settled", attention: "none", retentionReasons: [] };
 	assert.deepEqual(scheduler.blockedDeliveries(), blocked);
 	selected = true;

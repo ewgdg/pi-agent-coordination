@@ -35,15 +35,25 @@ Agent views suspend Owner rendering and attach the physical terminal directly to
 
 Coordination roles are trusted protocol participants, not a security boundary. Role-scoped tools constrain the intended workflow and keep caller identity out of model-supplied arguments; they do not isolate mutually hostile code or users.
 
-## Passive Request waiting
+## Passive workflow waiting
 
-After a successful Owner response, the runtime keeps Pi's current low-level Run active when canonical transcript evidence still contains an outbound Agent Request without Cancellation or requester-side Answer Delivery proof. Child and Moderator settlement is unchanged. The Owner remains working to session observers, but Message Delivery treats this boundary as idle: queued Deferred work and safe Steer batches can enter Pi's active queues immediately.
+After a successful Owner response, the runtime keeps Pi's current low-level Run active while the Workflow can make autonomous progress. This includes executing, starting, or ending child and Moderator Runs; eligible or dispatched Delivery before proof or its progress deadline; and in-progress operational inspection/recovery before its existing deadline. The whole Workflow is considered, so a waiting parent remains quiet while a grandchild progresses. Ordinary background work also counts after every Request has been answered.
+
+Outstanding Requests alone are not progress. Human-input waits, Interruption Holds, dormant recipients, failed scheduling, exhausted Delivery deadlines, and stalled recovery inspections cannot keep the Owner parked by themselves. A Human Request does not release parking while unrelated work can still proceed. Once no autonomous work remains, lifecycle/progress observation releases the parked Owner even if no Answer or new input arrives. This leaves Requests intact; it does not cancel, retry, or resolve them.
+
+Child and Moderator settlement is unchanged. While parked, the Owner remains working to session observers, but Message Delivery treats this boundary as idle: queued Deferred work and safe Steer batches can enter Pi's active queues immediately. Delivery and recovery handoffs count as progress so the last child finishing does not falsely announce completion while its result or recovery is still in flight.
 
 Coordination dispatches Deferred work admitted at this parked boundary through Pi's native steering queue. This does not change its authored Deferred mode or allow it into active work: admission still waits for the settled-equivalent boundary. It ensures the Delivery is available before Pi resumes from an Answer tool result, where native follow-up input would otherwise wait behind another model turn. If earlier native steering starts Agent Wait first, preemption reuses the Request's existing dispatch reservation rather than queuing another copy.
 
 The first human, Agent, or extension message admitted to Agent core's steering or follow-up queue resumes Pi's existing continuation. Because the parked Owner is natively active, a custom message without an explicit delivery mode keeps Pi's active-Agent behavior and enters the steering queue even when `triggerTurn` is false. Only explicit `deliverAs: "nextTurn"` waits for a later fresh prompt. The parking boundary adds no transcript entry, assistant message, tool call, tool result, or Answer proof.
 
 Pi still owns retry, overflow recovery, compaction, and final settlement. Error, aborted, and length responses bypass parking. Threshold compaction waits behind a parked successful response, then Pi runs its normal post-response compaction check before the next model request. Shutdown, session replacement, or exact-Run abort releases the in-memory waiter without rejecting an Agent listener.
+
+### Attention projection and limits
+
+Native `agent_settled` means ready for input, not successful Workflow completion. A session-state integration such as Herdr can stop showing the Owner as working; the coordination dock/selector distinguishes Human `DECIDE` and Operational `ATTENTION` from completed work. This package neither emits a fabricated native completion nor couples parking to a particular terminal integration. Native settlement alone cannot provide a distinct blocked-versus-done badge.
+
+Passive parking only applies after a successful response reaches `agent_end`. An Owner still executing `agent_wait` has not reached that boundary: its native Pi run remains active until the Wait returns or is interrupted, even if its recipients now need human input. Human attention remains visible in the coordination UI, but the broader native attention contract for explicit Owner Wait is not implemented by passive parking.
 
 See [Human Requests](human-requests.md) for the request and Answer shapes, transcript presentation, editor behavior, commitment boundary, and Run fencing behavior. See [Run supervision](run-supervision.md) for authority, status, exact Holds, isolated resumption, termination, and Agent-view retention.
 
