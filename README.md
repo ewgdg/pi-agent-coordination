@@ -1,4 +1,4 @@
-# pi-agent-coordination
+# pi-durable-subagents
 
 Durable Pi agents that collaborate asynchronously under explicit Owner and Spawner supervision.
 
@@ -29,7 +29,7 @@ Coordination does not override Pi's user-configured compaction, retry, provider-
 Install directly from the Git repository:
 
 ```bash
-pi install git:github.com/ewgdg/pi-agent-coordination
+pi install git:github.com/ewgdg/pi-durable-subagents
 ```
 
 ## Usage
